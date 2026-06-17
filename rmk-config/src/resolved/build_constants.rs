@@ -3,6 +3,13 @@ use serde::Deserialize;
 use crate::{DEFAULT_PASSKEY_ENTRY_TIMEOUT_SECS, MIN_PASSKEY_ENTRY_TIMEOUT_SECS};
 
 const SUBSCRIBER_DEFAULT_CONFIG: &str = include_str!("../default_config/subscriber_default.toml");
+// trouble-host stores a 4-byte header and 6 bytes per CCCD. Keep the table size
+// in sync with the client-att-table-size feature selected in rmk/Cargo.toml.
+const BLE_CLIENT_ATT_TABLE_SIZE: usize = 128;
+const BLE_CLIENT_ATT_TABLE_HEADER_SIZE: usize = 4;
+const BLE_CCCD_STORAGE_SIZE: usize = 6;
+// One Battery Service CCCD and four composite HID report CCCDs.
+const BLE_BASE_CCCD_COUNT: usize = 5;
 
 /// Parsed representation of `subscriber_default.toml`.
 #[derive(Deserialize)]
@@ -45,6 +52,7 @@ pub struct BuildConstants {
     pub vial_channel_size: usize,
     pub flash_channel_size: usize,
     pub split_peripherals_num: usize,
+    pub split_battery_peripheral_ids: Vec<usize>,
     pub ble_profiles_num: usize,
     pub split_central_sleep_timeout_seconds: u32,
     pub protocol_macro_chunk_size: usize,
@@ -82,6 +90,22 @@ impl crate::KeyboardTomlConfig {
         } else {
             rmk.split_peripherals_num
         };
+        let split_battery_peripheral_ids = if active_features.contains(&"split") {
+            match &self.split {
+                Some(split) => split
+                    .peripheral
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(id, peripheral)| peripheral.battery_adc_pin.as_ref().map(|_| id))
+                    .collect(),
+                None => (0..split_peripherals_num).collect(),
+            }
+        } else {
+            Vec::new()
+        };
+        if active_features.contains(&"_ble") {
+            validate_split_battery_gatt_capacity(split_battery_peripheral_ids.len(), active_features)?;
+        }
 
         // Build event channels
         macro_rules! event_channels {
@@ -194,6 +218,7 @@ impl crate::KeyboardTomlConfig {
             vial_channel_size: rmk.vial_channel_size,
             flash_channel_size: rmk.flash_channel_size,
             split_peripherals_num,
+            split_battery_peripheral_ids,
             ble_profiles_num: rmk.ble_profiles_num,
             split_central_sleep_timeout_seconds: rmk.split_central_sleep_timeout_seconds,
             protocol_macro_chunk_size: rmk.protocol_macro_chunk_size,
@@ -203,6 +228,25 @@ impl crate::KeyboardTomlConfig {
             passkey,
         })
     }
+}
+
+fn validate_split_battery_gatt_capacity(count: usize, active_features: &[&str]) -> Result<(), String> {
+    let host_cccd_count = if active_features.contains(&"rynk") {
+        2
+    } else if active_features.contains(&"vial") {
+        1
+    } else {
+        0
+    };
+    let cccd_capacity = (BLE_CLIENT_ATT_TABLE_SIZE - BLE_CLIENT_ATT_TABLE_HEADER_SIZE) / BLE_CCCD_STORAGE_SIZE;
+    let max_peripherals = cccd_capacity - BLE_BASE_CCCD_COUNT - host_cccd_count;
+
+    if count > max_peripherals {
+        return Err(format!(
+            "number of battery-enabled [[split.peripheral]] entries ({count}) exceeds the BLE GATT limit for the enabled host protocol (max {max_peripherals})"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_u8_capability(name: &str, value: usize) -> Result<(), String> {
@@ -262,7 +306,10 @@ fn resolve_passkey_enabled(ble: &crate::BleConfig) -> Result<Passkey, String> {
 #[cfg(test)]
 mod tests {
     use super::{BuildConstants, resolve_passkey_enabled, validate_u8_capability, validate_u16_capability};
-    use crate::{BleConfig, DEFAULT_PASSKEY_ENTRY_TIMEOUT_SECS, KeyboardTomlConfig, MIN_PASSKEY_ENTRY_TIMEOUT_SECS};
+    use crate::{
+        BleConfig, DEFAULT_PASSKEY_ENTRY_TIMEOUT_SECS, KeyboardTomlConfig, MIN_PASSKEY_ENTRY_TIMEOUT_SECS,
+        SplitBoardConfig, SplitConfig,
+    };
 
     #[test]
     fn reserves_led_subscribers_for_display_split_and_dual_rynk_sessions() {
@@ -276,6 +323,98 @@ mod tests {
 
         // Three indicator processors, the display, two split peripherals, and USB/BLE Rynk sessions.
         assert_eq!(led_indicator.subs, 8);
+    }
+
+    #[test]
+    fn split_ble_reserves_peripheral_battery_subscriber() {
+        let config: KeyboardTomlConfig = toml::from_str("").unwrap();
+        let base = config.build_constants(&[]).unwrap();
+        let split_ble = config.build_constants(&["split", "_ble"]).unwrap();
+        let subs = |constants: &BuildConstants| {
+            constants
+                .events
+                .iter()
+                .find(|event| event.name == "peripheral_battery")
+                .unwrap()
+                .subs
+        };
+
+        assert_eq!(subs(&split_ble), subs(&base) + 1);
+    }
+
+    #[test]
+    fn resolves_split_battery_peripheral_ids() {
+        let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
+        config.split = Some(SplitConfig {
+            peripheral: vec![
+                SplitBoardConfig {
+                    battery_adc_pin: Some("P0_02".to_string()),
+                    ..Default::default()
+                },
+                SplitBoardConfig::default(),
+                SplitBoardConfig {
+                    battery_adc_pin: Some("P0_04".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        config.auto_calculate_parameters();
+
+        let constants = config.build_constants(&["split", "_ble"]).unwrap();
+
+        assert_eq!(constants.split_battery_peripheral_ids, [0, 2]);
+    }
+
+    #[test]
+    fn configless_split_assumes_all_peripherals_may_report_battery() {
+        let config: KeyboardTomlConfig = toml::from_str("").unwrap();
+
+        let constants = config.build_constants(&["split", "_ble"]).unwrap();
+
+        assert_eq!(constants.split_battery_peripheral_ids, [0]);
+    }
+
+    #[test]
+    fn validates_split_battery_gatt_capacity_for_each_host_protocol() {
+        let config_with_batteries = |count| {
+            let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
+            config.split = Some(SplitConfig {
+                peripheral: (0..count)
+                    .map(|id| SplitBoardConfig {
+                        battery_adc_pin: Some(format!("P0_{id:02}")),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            });
+            config.auto_calculate_parameters();
+            config
+        };
+
+        assert!(config_with_batteries(15).build_constants(&["split", "_ble"]).is_ok());
+        assert!(
+            config_with_batteries(14)
+                .build_constants(&["split", "_ble", "vial"])
+                .is_ok()
+        );
+        assert!(
+            config_with_batteries(13)
+                .build_constants(&["split", "_ble", "rynk"])
+                .is_ok()
+        );
+
+        let err = config_with_batteries(15)
+            .build_constants(&["split", "_ble", "vial"])
+            .err()
+            .expect("expected Vial GATT capacity validation failure");
+        assert!(err.contains("max 14"), "{err}");
+
+        let err = config_with_batteries(14)
+            .build_constants(&["split", "_ble", "rynk"])
+            .err()
+            .expect("expected Rynk GATT capacity validation failure");
+        assert!(err.contains("max 13"), "{err}");
     }
 
     #[test]

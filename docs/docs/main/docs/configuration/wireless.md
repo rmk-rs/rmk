@@ -86,3 +86,14 @@ Notes:
 
 - If `[split.central]` provides battery ADC settings, they override the top-level `[ble]` battery settings for the central.
 - Peripherals do **not** fall back to `[ble]`; to enable peripheral battery reporting, set ADC values per peripheral.
+
+### Peripheral battery reporting over BLE GATT
+
+When peripherals are configured to sample their batteries (see above), their levels are forwarded to the central over the split BLE links and re-exposed to the host through standard Battery Service instances (UUID `0x180F`) on the central's GATT server. The host sees one Battery Service instance for:
+
+- the central's own battery level, and
+- each `[[split.peripheral]]` that defines `battery_adc_pin`.
+
+Each peripheral's Battery Service uses its peripheral ID to set the description field in the Characteristic Presentation Format descriptor. Peripheral IDs `0`, `1`, and `2` use the Bluetooth SIG ordinal values `first`, `second`, and `third`, respectively. No host-side configuration is required; any host that already reads the central's Battery Level characteristic can discover the additional instances the same way.
+
+The maximum number of battery-enabled peripherals is 15 without a host configurator, 14 with Vial, and 13 with Rynk.

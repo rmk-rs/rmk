@@ -145,10 +145,10 @@ impl KeyboardTomlConfig {
             .unwrap_or_else(|e| panic!("Deserialize {:?} error: {}", path, e))
     }
 
-    /// Load keyboard.toml with event defaults only.
+    /// Load keyboard.toml with event defaults but without chip-specific defaults.
     ///
-    /// This is used in build.rs where we only need [rmk] and [event] constants,
-    /// and should not require `[keyboard.board]`/`[keyboard.chip]`.
+    /// This is used in build.rs to resolve compile-time constants without
+    /// requiring `[keyboard.board]`/`[keyboard.chip]`.
     pub fn new_from_toml_path_with_event_defaults<P: AsRef<Path>>(config_toml_path: P) -> Self {
         let mut config = Self::parse_from_toml_path(config_toml_path, None);
         config.storage_user_set = config

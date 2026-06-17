@@ -106,6 +106,8 @@ events = [
 [[subscriber]]
 features = ["split", "_ble"]
 events = [
+    # ble/battery_service.rs: PeripheralBatteryEvent::subscriber()
+    { name = "peripheral_battery" },
     # split/ble/peripheral.rs: KeyboardEvent::subscriber() (temporary, on timeout)
     { name = "keyboard" },
     # split/peripheral.rs: ChargingStateEvent::subscriber() (cfg _ble)
