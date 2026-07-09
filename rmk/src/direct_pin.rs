@@ -2,7 +2,7 @@ use embassy_time::{Instant, Timer};
 use embedded_hal;
 use embedded_hal::digital::InputPin;
 #[cfg(feature = "async_matrix")]
-use {embassy_futures::select::select_slice, embedded_hal_async::digital::Wait, heapless::Vec};
+use {core::future::pending, embassy_futures::select::select_array, embedded_hal_async::digital::Wait};
 
 use crate::MatrixTrait;
 use crate::debounce::{DebounceState, DebouncerTrait};
@@ -126,8 +126,6 @@ impl<
 {
     #[cfg(feature = "async_matrix")]
     async fn wait_for_key(&mut self) {
-        use core::pin::pin;
-
         if let Some(start_time) = self.scan_start {
             // If no key press over 1ms, stop scanning and wait for interupt
             if start_time.elapsed().as_millis() <= 1 {
@@ -139,23 +137,22 @@ impl<
         Timer::after_micros(1).await;
         info!("Waiting for active level");
 
-        if self.low_active {
-            let mut futs: Vec<_, SIZE> = Vec::new();
-            for direct_pins_row in self.direct_pins.iter_mut() {
-                for direct_pin in direct_pins_row.iter_mut().flatten() {
-                    let _ = futs.push(direct_pin.wait_for_low());
+        let low_active = self.low_active;
+        let futs = self.direct_pins.each_mut().map(|direct_pins_row| {
+            let row_futs = direct_pins_row.each_mut().map(|direct_pin| async move {
+                match (direct_pin, low_active) {
+                    (Some(direct_pin), true) => {
+                        let _ = direct_pin.wait_for_low().await;
+                    }
+                    (Some(direct_pin), false) => {
+                        let _ = direct_pin.wait_for_high().await;
+                    }
+                    (None, _) => pending().await,
                 }
-            }
-            let _ = select_slice(pin!(futs.as_mut_slice())).await;
-        } else {
-            let mut futs: Vec<_, SIZE> = Vec::new();
-            for direct_pins_row in self.direct_pins.iter_mut() {
-                for direct_pin in direct_pins_row.iter_mut().flatten() {
-                    let _ = futs.push(direct_pin.wait_for_high());
-                }
-            }
-            let _ = select_slice(pin!(futs.as_mut_slice())).await;
-        }
+            });
+            select_array(row_futs)
+        });
+        let _ = select_array(futs).await;
         self.scan_start = Some(Instant::now());
     }
 }
