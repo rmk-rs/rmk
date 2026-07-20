@@ -104,6 +104,16 @@ events = [
     { name = "lighting_changed" },
 ]
 
+[[subscriber]]
+features = ["lighting"]
+events = [
+    # lighting/processor.rs: LightingProcessor subscribes to authoritative
+    # keyboard-state invalidations on every lighting-enabled board.
+    { name = "layer_change" },
+    { name = "led_indicator" },
+    { name = "sleep_state" },
+]
+
 # --- Split-gated internal subscribers ---
 
 [[subscriber]]

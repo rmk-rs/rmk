@@ -334,8 +334,9 @@ mod tests {
             .find(|event| event.name == "led_indicator")
             .unwrap();
 
-        // Three indicator processors, the display, two split peripherals, and USB/BLE Rynk sessions.
-        assert_eq!(led_indicator.subs, 8);
+        // Three indicator processors, the display, two split peripherals,
+        // USB/BLE Rynk sessions, and the lighting processor.
+        assert_eq!(led_indicator.subs, 9);
 
         let lighting_changed = constants
             .events
