@@ -65,7 +65,7 @@ ModifierCombination(LCtrl|RGui)           81
 MorseProfile(Normal,200,150)              c8 81 b0 89 0c
 Morse{TAP->Key(A)}                        00 01 02 01 00 04
 MouseButtons(B1|B8)                       81
-ProtocolVersion::CURRENT                  00 01
+ProtocolVersion::CURRENT                  00 02
 ProtocolVersion{1,0}                      01 00
 Result<(),RynkError>::Err(StorageFault)   01 02
 Result<(),RynkError>::Ok                  00

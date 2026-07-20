@@ -22,9 +22,14 @@ use rynk::rmk_types::fork::Fork;
 use rynk::rmk_types::led_indicator::LedIndicator;
 use rynk::rmk_types::morse::Morse;
 use rynk::rmk_types::protocol::rynk::{
-    BehaviorConfig, DeviceCapabilities, DeviceInfo, GetComboBulkResponse, GetKeymapBulkResponse, GetMorseBulkResponse,
-    LockStatus, MacroData, MatrixState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest, SetKeymapBulkRequest,
-    SetMorseBulkRequest, StorageResetMode,
+    AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest, BehaviorConfig,
+    ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest, DeviceCapabilities, DeviceInfo,
+    GetComboBulkResponse, GetKeymapBulkResponse, GetMorseBulkResponse, LightingCapabilities, LightingKeysPage,
+    LightingLedsPage, LightingOutputsPage, LightingOverlayTransaction, LightingPageRequest, LightingPhysicalKeysPage,
+    LightingRoutesPage, LightingState, LightingZoneMembershipsPage, LightingZonesPage, LockStatus, MacroData,
+    MatrixState, PeripheralStatus, ProtocolVersion, PutLightingOverlayChunkRequest, SetComboBulkRequest,
+    SetKeymapBulkRequest, SetLightingOverlayRequest, SetLightingStateRequest, SetMorseBulkRequest, StorageResetMode,
+    UnsetLightingOverlayRequest,
 };
 use rynk::{Client, Driver, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
 use wasm_bindgen::prelude::*;
@@ -157,6 +162,24 @@ endpoints! {
     get_peripheral_status(slot: u8) -> PeripheralStatus,
     get_wpm() -> u16,
     get_sleep_state() -> bool,
+    // lighting
+    get_lighting_capabilities() -> LightingCapabilities,
+    get_lighting_state() -> LightingState,
+    set_lighting_state(request: SetLightingStateRequest) -> LightingState,
+    get_lighting_keys(request: LightingPageRequest) -> LightingKeysPage,
+    get_lighting_physical_keys(request: LightingPageRequest) -> LightingPhysicalKeysPage,
+    get_lighting_leds(request: LightingPageRequest) -> LightingLedsPage,
+    get_lighting_zones(request: LightingPageRequest) -> LightingZonesPage,
+    get_lighting_zone_memberships(request: LightingPageRequest) -> LightingZoneMembershipsPage,
+    get_lighting_outputs(request: LightingPageRequest) -> LightingOutputsPage,
+    get_lighting_routes(request: LightingPageRequest) -> LightingRoutesPage,
+    set_lighting_overlay(request: SetLightingOverlayRequest) -> LightingState,
+    unset_lighting_overlay(request: UnsetLightingOverlayRequest) -> LightingState,
+    clear_lighting_overlay(request: ClearLightingOverlayRequest) -> LightingState,
+    begin_lighting_overlay_replace(request: BeginLightingOverlayReplaceRequest) -> LightingOverlayTransaction,
+    put_lighting_overlay_chunk(request: PutLightingOverlayChunkRequest) -> (),
+    commit_lighting_overlay_replace(request: CommitLightingOverlayReplaceRequest) -> LightingState,
+    abort_lighting_overlay_replace(request: AbortLightingOverlayReplaceRequest) -> (),
     // connection
     get_connection_type() -> ConnectionType,
     get_connection_status() -> ConnectionStatus,

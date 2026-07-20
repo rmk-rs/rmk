@@ -1,0 +1,1100 @@
+//! Native Rynk lighting handlers and bounded replacement transactions.
+
+use embassy_time::Instant;
+use heapless::{String, Vec};
+use rmk_types::protocol::rynk::command::{
+    ClearLightingOverlay, GetLightingCapabilities, GetLightingKeys, GetLightingLeds, GetLightingOutputs,
+    GetLightingPhysicalKeys, GetLightingRoutes, GetLightingState, GetLightingZoneMemberships, GetLightingZones,
+    SetLightingOverlay, SetLightingState, UnsetLightingOverlay,
+};
+use rmk_types::protocol::rynk::{
+    AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest, ClearLightingOverlayRequest,
+    CommitLightingOverlayReplaceRequest, LIGHTING_PAGE_SIZE, LIGHTING_ZONE_NAME_SIZE, LightingCapabilities,
+    LightingCapabilitiesResult, LightingEffectFlags, LightingError, LightingFeatureFlags, LightingKeysPage,
+    LightingKeysPageResult, LightingLed, LightingLedId, LightingLedsPage, LightingLedsPageResult,
+    LightingMatrixPosition, LightingOutput, LightingOutputCapabilities, LightingOutputCoverage, LightingOutputsPage,
+    LightingOutputsPageResult, LightingOverlayCell, LightingOverlayTransaction, LightingOverlayTransactionResult,
+    LightingPageRequest, LightingPhysicalKey, LightingPhysicalKeysPage, LightingPhysicalKeysPageResult, LightingPoint3,
+    LightingResult, LightingRoute, LightingRoutesPage, LightingRoutesPageResult, LightingState, LightingStateResult,
+    LightingUnitResult, LightingZone, LightingZoneId, LightingZoneMembershipsPage, LightingZoneMembershipsPageResult,
+    LightingZonesPage, LightingZonesPageResult, PutLightingOverlayChunkRequest, RynkError, RynkMessage,
+    SetLightingOverlayRequest, SetLightingStateRequest, UnsetLightingOverlayRequest,
+};
+
+use super::super::lighting::{RYNK_LIGHTING_TRANSACTION_CAPACITY, RynkLightingCommand, RynkLightingController};
+use super::super::{RynkService, RynkSession};
+use super::Handle;
+use crate::lighting::OutputCoverage;
+
+const TRANSACTION_TIMEOUT_MS: u64 = 5_000;
+
+fn controller<'a>(service: &RynkService<'a>) -> LightingResult<RynkLightingController<'a>> {
+    service.lighting.ok_or(LightingError::Unsupported)
+}
+
+impl Handle<GetLightingCapabilities> for RynkService<'_> {
+    async fn handle(&self, _: ()) -> Result<LightingCapabilitiesResult, RynkError> {
+        Ok(controller(self).map(capabilities))
+    }
+}
+
+impl Handle<GetLightingState> for RynkService<'_> {
+    async fn handle(&self, _: ()) -> Result<LightingStateResult, RynkError> {
+        Ok(match controller(self) {
+            Ok(controller) => controller.request(RynkLightingCommand::ReadState).await,
+            Err(error) => Err(error),
+        })
+    }
+}
+
+impl Handle<SetLightingState> for RynkService<'_> {
+    async fn handle(&self, req: SetLightingStateRequest) -> Result<LightingStateResult, RynkError> {
+        let result = match controller(self) {
+            Ok(controller) => {
+                controller
+                    .request(RynkLightingCommand::SetState {
+                        expected_revision: req.expected_revision,
+                        state: req.state,
+                    })
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<SetLightingOverlay> for RynkService<'_> {
+    async fn handle(&self, req: SetLightingOverlayRequest) -> Result<LightingStateResult, RynkError> {
+        if let Err(error) = req.cell.validate() {
+            return Ok(Err(error));
+        }
+        let result = match controller(self) {
+            Ok(controller) => {
+                controller
+                    .request(RynkLightingCommand::SetOverlay {
+                        expected_revision: req.expected_revision,
+                        cell: req.cell,
+                    })
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<UnsetLightingOverlay> for RynkService<'_> {
+    async fn handle(&self, req: UnsetLightingOverlayRequest) -> Result<LightingStateResult, RynkError> {
+        let result = match controller(self) {
+            Ok(controller) => {
+                controller
+                    .request(RynkLightingCommand::UnsetOverlay {
+                        expected_revision: req.expected_revision,
+                        led_id: req.led_id,
+                    })
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<ClearLightingOverlay> for RynkService<'_> {
+    async fn handle(&self, req: ClearLightingOverlayRequest) -> Result<LightingStateResult, RynkError> {
+        let result = match controller(self) {
+            Ok(controller) => {
+                controller
+                    .request(RynkLightingCommand::ClearOverlay {
+                        expected_revision: req.expected_revision,
+                    })
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<GetLightingKeys> for RynkService<'_> {
+    async fn handle(&self, req: LightingPageRequest) -> Result<LightingKeysPageResult, RynkError> {
+        Ok(controller(self).and_then(|binding| keys_page(binding, req)))
+    }
+}
+
+impl Handle<GetLightingPhysicalKeys> for RynkService<'_> {
+    async fn handle(&self, req: LightingPageRequest) -> Result<LightingPhysicalKeysPageResult, RynkError> {
+        Ok(controller(self).and_then(|binding| physical_keys_page(binding, req)))
+    }
+}
+
+impl Handle<GetLightingLeds> for RynkService<'_> {
+    async fn handle(&self, req: LightingPageRequest) -> Result<LightingLedsPageResult, RynkError> {
+        Ok(controller(self).and_then(|binding| leds_page(binding, req)))
+    }
+}
+
+impl Handle<GetLightingZones> for RynkService<'_> {
+    async fn handle(&self, req: LightingPageRequest) -> Result<LightingZonesPageResult, RynkError> {
+        Ok(controller(self).and_then(|binding| zones_page(binding, req)))
+    }
+}
+
+impl Handle<GetLightingZoneMemberships> for RynkService<'_> {
+    async fn handle(&self, req: LightingPageRequest) -> Result<LightingZoneMembershipsPageResult, RynkError> {
+        Ok(controller(self).and_then(|binding| zone_memberships_page(binding, req)))
+    }
+}
+
+impl Handle<GetLightingOutputs> for RynkService<'_> {
+    async fn handle(&self, req: LightingPageRequest) -> Result<LightingOutputsPageResult, RynkError> {
+        Ok(controller(self).and_then(|binding| outputs_page(binding, req)))
+    }
+}
+
+impl Handle<GetLightingRoutes> for RynkService<'_> {
+    async fn handle(&self, req: LightingPageRequest) -> Result<LightingRoutesPageResult, RynkError> {
+        Ok(controller(self).and_then(|binding| routes_page(binding, req)))
+    }
+}
+
+fn capabilities(binding: RynkLightingController<'_>) -> LightingCapabilities {
+    let descriptor = binding.descriptor;
+    let topology = descriptor.topology;
+    let routing = descriptor.routing;
+    let mut features = LightingFeatureFlags(
+        LightingFeatureFlags::OVERLAY_TTL
+            | LightingFeatureFlags::ATOMIC_OVERLAY_REPLACE
+            | LightingFeatureFlags::LAYER_AWARE,
+    );
+    if !topology.physical_layout.keys.is_empty() {
+        features.0 |= LightingFeatureFlags::PHYSICAL_GEOMETRY;
+    }
+    if !topology.zones.is_empty() {
+        features.0 |= LightingFeatureFlags::ZONES;
+    }
+    if !routing.routes.is_empty() || !routing.outputs.is_empty() {
+        features.0 |= LightingFeatureFlags::ROUTING;
+    }
+    LightingCapabilities {
+        topology_revision: descriptor.topology_revision,
+        logical_key_count: count(topology.keys.len()),
+        physical_key_count: count(topology.physical_layout.keys.len()),
+        led_count: count(topology.leds.len()),
+        zone_count: count(topology.zones.len()),
+        zone_membership_count: count(topology.zone_memberships.len()),
+        output_count: count(routing.outputs.len()),
+        route_count: count(routing.routes.len()),
+        overlay_capacity: binding.overlay_capacity,
+        page_capacity: LIGHTING_PAGE_SIZE as u8,
+        overlay_chunk_capacity: rmk_types::protocol::rynk::LIGHTING_OVERLAY_CHUNK_SIZE as u8,
+        features,
+        effects: LightingEffectFlags(
+            LightingEffectFlags::SOLID | LightingEffectFlags::BLINK | LightingEffectFlags::BREATHE,
+        ),
+    }
+}
+
+fn count(len: usize) -> u16 {
+    len.min(u16::MAX as usize) as u16
+}
+
+fn check_topology_revision(binding: RynkLightingController<'_>, expected: u32) -> LightingResult<()> {
+    let current = binding.descriptor.topology_revision;
+    if expected == current {
+        Ok(())
+    } else {
+        Err(LightingError::TopologyRevisionConflict { expected, current })
+    }
+}
+
+fn page_range(offset: u16, total: usize) -> core::ops::Range<usize> {
+    let start = (offset as usize).min(total);
+    start..(start + LIGHTING_PAGE_SIZE).min(total)
+}
+
+fn matrix(position: crate::physical_layout::KeyPosition) -> LightingMatrixPosition {
+    LightingMatrixPosition {
+        row: position.row,
+        col: position.col,
+    }
+}
+
+fn point(point: crate::physical_layout::Point3) -> LightingPoint3 {
+    LightingPoint3 {
+        x: point.x.raw(),
+        y: point.y.raw(),
+        z: point.z.raw(),
+    }
+}
+
+fn keys_page(binding: RynkLightingController<'_>, req: LightingPageRequest) -> LightingResult<LightingKeysPage> {
+    check_topology_revision(binding, req.topology_revision)?;
+    let values = binding.descriptor.topology.keys;
+    let mut items = Vec::new();
+    for value in &values[page_range(req.offset, values.len())] {
+        items.push(matrix(*value)).expect("page is bounded");
+    }
+    Ok(LightingKeysPage {
+        topology_revision: req.topology_revision,
+        total_count: count(values.len()),
+        items,
+    })
+}
+
+fn physical_keys_page(
+    binding: RynkLightingController<'_>,
+    req: LightingPageRequest,
+) -> LightingResult<LightingPhysicalKeysPage> {
+    check_topology_revision(binding, req.topology_revision)?;
+    let values = binding.descriptor.topology.physical_layout.keys;
+    let mut items = Vec::new();
+    for value in &values[page_range(req.offset, values.len())] {
+        items
+            .push(LightingPhysicalKey {
+                matrix: matrix(value.matrix),
+                center: point(value.center),
+                size: rmk_types::protocol::rynk::LightingKeySize {
+                    width: value.size.width.raw(),
+                    height: value.size.height.raw(),
+                },
+                rotation: value.rotation.centidegrees(),
+            })
+            .expect("page is bounded");
+    }
+    Ok(LightingPhysicalKeysPage {
+        topology_revision: req.topology_revision,
+        total_count: count(values.len()),
+        items,
+    })
+}
+
+fn leds_page(binding: RynkLightingController<'_>, req: LightingPageRequest) -> LightingResult<LightingLedsPage> {
+    check_topology_revision(binding, req.topology_revision)?;
+    let values = binding.descriptor.topology.leds;
+    let mut items = Vec::new();
+    for value in &values[page_range(req.offset, values.len())] {
+        items
+            .push(LightingLed {
+                id: LightingLedId(value.id.0),
+                key: value.key.map(matrix),
+                position: value.position.map(point),
+                zone_start: value.zones.start,
+                zone_len: value.zones.len,
+            })
+            .expect("page is bounded");
+    }
+    Ok(LightingLedsPage {
+        topology_revision: req.topology_revision,
+        total_count: count(values.len()),
+        items,
+    })
+}
+
+fn zones_page(binding: RynkLightingController<'_>, req: LightingPageRequest) -> LightingResult<LightingZonesPage> {
+    check_topology_revision(binding, req.topology_revision)?;
+    let values = binding.descriptor.topology.zones;
+    let mut items = Vec::new();
+    for value in &values[page_range(req.offset, values.len())] {
+        let mut name = String::<LIGHTING_ZONE_NAME_SIZE>::new();
+        for character in value.name.chars() {
+            if name.push(character).is_err() {
+                break;
+            }
+        }
+        items
+            .push(LightingZone {
+                id: LightingZoneId(value.id.0),
+                name,
+            })
+            .expect("page is bounded");
+    }
+    Ok(LightingZonesPage {
+        topology_revision: req.topology_revision,
+        total_count: count(values.len()),
+        items,
+    })
+}
+
+fn zone_memberships_page(
+    binding: RynkLightingController<'_>,
+    req: LightingPageRequest,
+) -> LightingResult<LightingZoneMembershipsPage> {
+    check_topology_revision(binding, req.topology_revision)?;
+    let values = binding.descriptor.topology.zone_memberships;
+    let mut items = Vec::new();
+    for value in &values[page_range(req.offset, values.len())] {
+        items.push(LightingZoneId(value.0)).expect("page is bounded");
+    }
+    Ok(LightingZoneMembershipsPage {
+        topology_revision: req.topology_revision,
+        total_count: count(values.len()),
+        items,
+    })
+}
+
+fn outputs_page(binding: RynkLightingController<'_>, req: LightingPageRequest) -> LightingResult<LightingOutputsPage> {
+    check_topology_revision(binding, req.topology_revision)?;
+    let values = binding.descriptor.routing.outputs;
+    let mut items = Vec::new();
+    for value in &values[page_range(req.offset, values.len())] {
+        items
+            .push(LightingOutput {
+                node: rmk_types::protocol::rynk::LightingNodeId(value.node.0),
+                id: rmk_types::protocol::rynk::LightingOutputId(value.id.0),
+                pixel_count: value.pixel_count,
+                capabilities: LightingOutputCapabilities(value.capabilities.bits()),
+                coverage: match value.coverage {
+                    OutputCoverage::Complete => LightingOutputCoverage::Complete,
+                    OutputCoverage::Sparse => LightingOutputCoverage::Sparse,
+                },
+            })
+            .expect("page is bounded");
+    }
+    Ok(LightingOutputsPage {
+        topology_revision: req.topology_revision,
+        total_count: count(values.len()),
+        items,
+    })
+}
+
+fn routes_page(binding: RynkLightingController<'_>, req: LightingPageRequest) -> LightingResult<LightingRoutesPage> {
+    check_topology_revision(binding, req.topology_revision)?;
+    let descriptor = binding.descriptor;
+    let values = descriptor.routing.routes;
+    let mut items = Vec::new();
+    for value in &values[page_range(req.offset, values.len())] {
+        let led = descriptor
+            .topology
+            .led(value.slot)
+            .ok_or(LightingError::InvalidRequest)?;
+        items
+            .push(LightingRoute {
+                led_id: LightingLedId(led.id.0),
+                node: rmk_types::protocol::rynk::LightingNodeId(value.node.0),
+                output: rmk_types::protocol::rynk::LightingOutputId(value.output.0),
+                physical_index: value.physical_index,
+            })
+            .expect("page is bounded");
+    }
+    Ok(LightingRoutesPage {
+        topology_revision: req.topology_revision,
+        total_count: count(values.len()),
+        items,
+    })
+}
+
+struct ActiveTransaction {
+    id: u32,
+    expected_revision: u32,
+    expected_count: u16,
+    cells: Vec<LightingOverlayCell, RYNK_LIGHTING_TRANSACTION_CAPACITY>,
+    last_activity_ms: u64,
+}
+
+#[derive(Clone, Copy)]
+struct CachedCommit {
+    id: u32,
+    state: LightingState,
+}
+
+pub(in crate::host::rynk) struct LightingTransactionState {
+    next_id: u32,
+    active: Option<ActiveTransaction>,
+    cached_commit: Option<CachedCommit>,
+    expired_id: Option<u32>,
+}
+
+impl LightingTransactionState {
+    pub(in crate::host::rynk) const fn new() -> Self {
+        Self {
+            next_id: 1,
+            active: None,
+            cached_commit: None,
+            expired_id: None,
+        }
+    }
+
+    fn expire(&mut self, now_ms: u64) {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|transaction| now_ms.saturating_sub(transaction.last_activity_ms) >= TRANSACTION_TIMEOUT_MS)
+        {
+            self.expired_id = self.active.as_ref().map(|transaction| transaction.id);
+            self.active = None;
+        }
+    }
+
+    fn transaction_error(&self, id: u32) -> LightingError {
+        if self.expired_id == Some(id) {
+            LightingError::TransactionExpired
+        } else {
+            LightingError::InvalidTransaction
+        }
+    }
+}
+
+pub(in crate::host::rynk) async fn serve_begin(
+    service: &RynkService<'_>,
+    session: &RynkSession,
+    msg: &mut RynkMessage<'_>,
+) -> Result<(), RynkError> {
+    let req = msg.decode_request::<BeginLightingOverlayReplaceRequest>()?;
+    let result = begin(service, session, req, Instant::now().as_millis()).await;
+    msg.encode_response(&result)
+}
+
+async fn begin(
+    service: &RynkService<'_>,
+    session: &RynkSession,
+    req: BeginLightingOverlayReplaceRequest,
+    now_ms: u64,
+) -> LightingOverlayTransactionResult {
+    let binding = controller(service)?;
+    let capacity = binding.overlay_capacity.min(RYNK_LIGHTING_TRANSACTION_CAPACITY as u16);
+    if req.cell_count > capacity {
+        return Err(LightingError::OverlayFull { capacity });
+    }
+    let mut state = session.lighting.lock().await;
+    state.expire(now_ms);
+    if state.active.is_some() {
+        return Err(LightingError::TransactionBusy);
+    }
+    let id = state.next_id;
+    state.next_id = state.next_id.wrapping_add(1).max(1);
+    state.expired_id = None;
+    state.active = Some(ActiveTransaction {
+        id,
+        expected_revision: req.expected_revision,
+        expected_count: req.cell_count,
+        cells: Vec::new(),
+        last_activity_ms: now_ms,
+    });
+    Ok(LightingOverlayTransaction {
+        id,
+        cell_count: req.cell_count,
+    })
+}
+
+pub(in crate::host::rynk) async fn serve_put(
+    service: &RynkService<'_>,
+    session: &RynkSession,
+    msg: &mut RynkMessage<'_>,
+) -> Result<(), RynkError> {
+    let req = msg.decode_request::<PutLightingOverlayChunkRequest>()?;
+    let result = put(service, session, req, Instant::now().as_millis()).await;
+    msg.encode_response(&result)
+}
+
+async fn put(
+    service: &RynkService<'_>,
+    session: &RynkSession,
+    req: PutLightingOverlayChunkRequest,
+    now_ms: u64,
+) -> LightingUnitResult {
+    controller(service)?;
+    for cell in &req.cells {
+        cell.validate()?;
+    }
+    let mut state = session.lighting.lock().await;
+    state.expire(now_ms);
+    let error = state.transaction_error(req.transaction_id);
+    let transaction = state
+        .active
+        .as_mut()
+        .filter(|transaction| transaction.id == req.transaction_id)
+        .ok_or(error)?;
+    if req.offset as usize != transaction.cells.len()
+        || transaction.cells.len() + req.cells.len() > transaction.expected_count as usize
+    {
+        return Err(LightingError::InvalidRequest);
+    }
+    transaction
+        .cells
+        .extend_from_slice(&req.cells)
+        .map_err(|_| LightingError::OverlayFull {
+            capacity: RYNK_LIGHTING_TRANSACTION_CAPACITY as u16,
+        })?;
+    transaction.last_activity_ms = now_ms;
+    Ok(())
+}
+
+pub(in crate::host::rynk) async fn serve_commit(
+    service: &RynkService<'_>,
+    session: &RynkSession,
+    msg: &mut RynkMessage<'_>,
+) -> Result<(), RynkError> {
+    let req = msg.decode_request::<CommitLightingOverlayReplaceRequest>()?;
+    let result = commit(service, session, req, Instant::now().as_millis()).await;
+    msg.encode_response(&result)
+}
+
+async fn commit(
+    service: &RynkService<'_>,
+    session: &RynkSession,
+    req: CommitLightingOverlayReplaceRequest,
+    now_ms: u64,
+) -> LightingStateResult {
+    let binding = controller(service)?;
+    let (expected_revision, cells) = {
+        let mut state = session.lighting.lock().await;
+        state.expire(now_ms);
+        if let Some(cached) = state.cached_commit.filter(|cached| cached.id == req.transaction_id) {
+            return Ok(cached.state);
+        }
+        let error = state.transaction_error(req.transaction_id);
+        let transaction = state
+            .active
+            .as_ref()
+            .filter(|transaction| transaction.id == req.transaction_id)
+            .ok_or(error)?;
+        if transaction.cells.len() != transaction.expected_count as usize {
+            return Err(LightingError::TransactionIncomplete {
+                expected: transaction.expected_count,
+                received: transaction.cells.len() as u16,
+            });
+        }
+        (transaction.expected_revision, transaction.cells.clone())
+    };
+
+    let result = binding.replace_overlay(expected_revision, &cells).await;
+    if let Ok(state_value) = result {
+        let mut state = session.lighting.lock().await;
+        if state
+            .active
+            .as_ref()
+            .is_some_and(|active| active.id == req.transaction_id)
+        {
+            state.active = None;
+            state.cached_commit = Some(CachedCommit {
+                id: req.transaction_id,
+                state: state_value,
+            });
+            state.expired_id = None;
+        }
+    }
+    result
+}
+
+pub(in crate::host::rynk) async fn serve_abort(
+    service: &RynkService<'_>,
+    session: &RynkSession,
+    msg: &mut RynkMessage<'_>,
+) -> Result<(), RynkError> {
+    let req = msg.decode_request::<AbortLightingOverlayReplaceRequest>()?;
+    let result = abort(service, session, req, Instant::now().as_millis()).await;
+    msg.encode_response(&result)
+}
+
+async fn abort(
+    service: &RynkService<'_>,
+    session: &RynkSession,
+    req: AbortLightingOverlayReplaceRequest,
+    now_ms: u64,
+) -> LightingUnitResult {
+    controller(service)?;
+    let mut state = session.lighting.lock().await;
+    state.expire(now_ms);
+    if state
+        .active
+        .as_ref()
+        .is_some_and(|active| active.id == req.transaction_id)
+    {
+        state.active = None;
+        return Ok(());
+    }
+    Err(state.transaction_error(req.transaction_id))
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate alloc;
+
+    use alloc::boxed::Box;
+    use core::fmt::Debug;
+
+    use embassy_futures::join::join;
+    use rmk_types::action::KeyAction;
+    use rmk_types::protocol::rynk::command::{
+        BeginLightingOverlayReplace, CommitLightingOverlayReplace, GetCapabilities, GetLightingKeys, SetLightingState,
+    };
+    use rmk_types::protocol::rynk::endpoint::Endpoint;
+    use serde::Serialize;
+    use serde::de::DeserializeOwned;
+
+    use super::*;
+    use crate::config::{BehaviorConfig, PositionalConfig, RmkConfig};
+    use crate::host::RynkLightingMailbox;
+    use crate::keymap::{KeyMap, KeymapData};
+    use crate::lighting::{
+        LedId, LedMetadata, LightingNodeId as CoreNodeId, LightingRouting, LightingTopology, MatrixSize, OutputId,
+        OutputMetadata, PhysicalRoute, ZoneSpan,
+    };
+    use crate::physical_layout::{
+        Coordinate, Extent, KeyPosition, KeySize, PhysicalKey, PhysicalLayout, Point3, Rotation,
+    };
+    use crate::test_support::test_block_on as block_on;
+
+    static LOGICAL_KEYS: [KeyPosition; 2] = [KeyPosition::new(0, 0), KeyPosition::new(0, 2)];
+    static PHYSICAL_KEYS: [PhysicalKey; 1] = [PhysicalKey {
+        matrix: KeyPosition::new(0, 0),
+        center: Point3::new(Coordinate::ZERO, Coordinate::ONE, Coordinate::ZERO),
+        size: KeySize::new(Extent::ONE, Extent::ONE),
+        rotation: Rotation::ZERO,
+    }];
+    static LEDS: [LedMetadata; 2] = [
+        LedMetadata {
+            id: LedId(10),
+            key: Some(KeyPosition::new(0, 0)),
+            position: None,
+            zones: ZoneSpan::new(0, 0),
+        },
+        LedMetadata {
+            id: LedId(42),
+            key: None,
+            position: Some(Point3::new(Coordinate::ONE, Coordinate::ZERO, Coordinate::ZERO)),
+            zones: ZoneSpan::new(0, 0),
+        },
+    ];
+    static OUTPUTS: [OutputMetadata; 1] = [OutputMetadata {
+        node: CoreNodeId(0),
+        id: OutputId(0),
+        pixel_count: 2,
+        capabilities: crate::lighting::OutputCapabilities::RGB,
+        coverage: OutputCoverage::Complete,
+    }];
+    static ROUTES: [PhysicalRoute; 2] = [
+        PhysicalRoute {
+            slot: crate::lighting::LedSlot(1),
+            node: CoreNodeId(0),
+            output: OutputId(0),
+            physical_index: 0,
+        },
+        PhysicalRoute {
+            slot: crate::lighting::LedSlot(0),
+            node: CoreNodeId(0),
+            output: OutputId(0),
+            physical_index: 1,
+        },
+    ];
+
+    fn descriptor() -> super::super::super::lighting::RynkLightingDescriptor<'static> {
+        super::super::super::lighting::RynkLightingDescriptor {
+            topology_revision: 7,
+            topology: LightingTopology {
+                matrix: MatrixSize::new(1, 3),
+                keys: &LOGICAL_KEYS,
+                physical_layout: PhysicalLayout::new(&PHYSICAL_KEYS),
+                leds: &LEDS,
+                zones: &[],
+                zone_memberships: &[],
+            },
+            routing: LightingRouting {
+                outputs: &OUTPUTS,
+                routes: &ROUTES,
+            },
+        }
+    }
+
+    fn state(revision: u32, overlay_len: u16) -> LightingState {
+        LightingState {
+            revision,
+            output_enabled: true,
+            output_brightness: 200,
+            background: rmk_types::protocol::rynk::LightingBackgroundState {
+                enabled: true,
+                hue: 1,
+                saturation: 2,
+                value: 3,
+                speed: 4,
+                mode: rmk_types::protocol::rynk::LightingBackgroundMode::Solid,
+            },
+            overlay_len,
+        }
+    }
+
+    fn session() -> RynkSession {
+        RynkSession {
+            lighting: embassy_sync::mutex::Mutex::new(LightingTransactionState::new()),
+        }
+    }
+
+    async fn call<E>(
+        service: &RynkService<'_>,
+        session: &RynkSession,
+        request: &E::Request,
+    ) -> Result<E::Response, RynkError>
+    where
+        E: Endpoint,
+        E::Request: Serialize,
+        E::Response: DeserializeOwned + Debug,
+    {
+        let mut buffer = Box::new([0u8; rmk_types::constants::RYNK_BUFFER_SIZE]);
+        let mut message = RynkMessage::build(&mut buffer[..], E::CMD, 1, request).unwrap();
+        service.dispatch(session, &mut message).await;
+        postcard::from_bytes(message.payload()).unwrap()
+    }
+
+    fn overlay_cell(id: u16) -> LightingOverlayCell {
+        LightingOverlayCell {
+            led_id: LightingLedId(id),
+            effect: rmk_types::protocol::rynk::LightingEffect::Solid {
+                color: rmk_types::protocol::rynk::LightingRgb8 { r: 1, g: 2, b: 3 },
+            },
+            ttl_ms: None,
+        }
+    }
+
+    #[test]
+    fn page_range_clamps_and_preserves_empty_final_page() {
+        assert_eq!(page_range(0, 20), 0..8);
+        assert_eq!(page_range(16, 20), 16..20);
+        assert_eq!(page_range(99, 20), 20..20);
+    }
+
+    #[test]
+    fn transaction_expiry_is_remembered() {
+        let mut state = LightingTransactionState::new();
+        state.active = Some(ActiveTransaction {
+            id: 7,
+            expected_revision: 0,
+            expected_count: 0,
+            cells: Vec::new(),
+            last_activity_ms: 10,
+        });
+        state.expire(10 + TRANSACTION_TIMEOUT_MS);
+        assert!(state.active.is_none());
+        assert_eq!(state.transaction_error(7), LightingError::TransactionExpired);
+        assert_eq!(state.transaction_error(8), LightingError::InvalidTransaction);
+    }
+
+    #[test]
+    fn discovery_is_false_unbound_and_true_only_when_attached() {
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 3> = PositionalConfig::default();
+            let mut data: KeymapData<1, 3, 1, 0> = KeymapData::new([[[KeyAction::No; 3]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut config = RmkConfig::default();
+            config.lock_config.insecure = true;
+            let unbound = RynkService::new(&keymap, &config);
+            let unbound_session = session();
+            let device_caps = call::<GetCapabilities>(&unbound, &unbound_session, &()).await.unwrap();
+            assert!(!device_caps.lighting_enabled);
+            drop(unbound_session);
+
+            let mailbox = RynkLightingMailbox::new();
+            let bound = RynkService::new(&keymap, &config).with_lighting(RynkLightingController::new(
+                &mailbox,
+                descriptor(),
+                128,
+            ));
+            let bound_session = session();
+            let device_caps = call::<GetCapabilities>(&bound, &bound_session, &()).await.unwrap();
+            assert!(device_caps.lighting_enabled);
+            let lighting = capabilities(bound.lighting.unwrap());
+            assert_eq!(lighting.overlay_capacity, RYNK_LIGHTING_TRANSACTION_CAPACITY as u16);
+            assert_eq!(lighting.logical_key_count, 2);
+            assert_eq!(lighting.physical_key_count, 1);
+        });
+    }
+
+    #[test]
+    fn topology_pages_are_revision_pinned_and_keep_keys_separate_from_geometry() {
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 3> = PositionalConfig::default();
+            let mut data: KeymapData<1, 3, 1, 0> = KeymapData::new([[[KeyAction::No; 3]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut config = RmkConfig::default();
+            config.lock_config.insecure = true;
+            let mailbox = RynkLightingMailbox::new();
+            let service = RynkService::new(&keymap, &config).with_lighting(RynkLightingController::new(
+                &mailbox,
+                descriptor(),
+                8,
+            ));
+            let session = session();
+
+            let stale = call::<GetLightingKeys>(
+                &service,
+                &session,
+                &LightingPageRequest {
+                    topology_revision: 6,
+                    offset: 0,
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                stale,
+                Err(LightingError::TopologyRevisionConflict {
+                    expected: 6,
+                    current: 7
+                })
+            );
+
+            let page = call::<GetLightingKeys>(
+                &service,
+                &session,
+                &LightingPageRequest {
+                    topology_revision: 7,
+                    offset: 0,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(page.total_count, 2);
+            assert_eq!(page.items[1], LightingMatrixPosition { row: 0, col: 2 });
+            assert_eq!(descriptor().topology.physical_layout.keys.len(), 1);
+        });
+    }
+
+    #[test]
+    fn stale_mutation_is_a_nested_domain_error() {
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 3> = PositionalConfig::default();
+            let mut data: KeymapData<1, 3, 1, 0> = KeymapData::new([[[KeyAction::No; 3]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut config = RmkConfig::default();
+            config.lock_config.insecure = true;
+            let mailbox = RynkLightingMailbox::new();
+            let service = RynkService::new(&keymap, &config).with_lighting(RynkLightingController::new(
+                &mailbox,
+                descriptor(),
+                8,
+            ));
+            let session = session();
+            let request = SetLightingStateRequest {
+                expected_revision: 3,
+                state: rmk_types::protocol::rynk::LightingMutableState {
+                    output_enabled: false,
+                    output_brightness: 9,
+                    background: state(0, 0).background,
+                },
+            };
+            let (response, ()) = join(call::<SetLightingState>(&service, &session, &request), async {
+                let pending = mailbox.receive().await;
+                assert!(matches!(
+                    pending.command,
+                    RynkLightingCommand::SetState {
+                        expected_revision: 3,
+                        ..
+                    }
+                ));
+                mailbox.reply(
+                    pending.id,
+                    Err(LightingError::StateRevisionConflict {
+                        expected: 3,
+                        current: 4,
+                    }),
+                );
+            })
+            .await;
+            assert_eq!(
+                response.unwrap(),
+                Err(LightingError::StateRevisionConflict {
+                    expected: 3,
+                    current: 4
+                })
+            );
+        });
+    }
+
+    #[test]
+    fn replacement_enforces_order_completion_expiry_and_idempotent_commit() {
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 3> = PositionalConfig::default();
+            let mut data: KeymapData<1, 3, 1, 0> = KeymapData::new([[[KeyAction::No; 3]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut config = RmkConfig::default();
+            config.lock_config.insecure = true;
+            let mailbox = RynkLightingMailbox::new();
+            let service = RynkService::new(&keymap, &config).with_lighting(RynkLightingController::new(
+                &mailbox,
+                descriptor(),
+                8,
+            ));
+            let session = session();
+
+            let transaction = begin(
+                &service,
+                &session,
+                BeginLightingOverlayReplaceRequest {
+                    expected_revision: 5,
+                    cell_count: 2,
+                },
+                10,
+            )
+            .await
+            .unwrap();
+            let mut out_of_order = Vec::new();
+            out_of_order.push(overlay_cell(10)).unwrap();
+            assert_eq!(
+                put(
+                    &service,
+                    &session,
+                    PutLightingOverlayChunkRequest {
+                        transaction_id: transaction.id,
+                        offset: 1,
+                        cells: out_of_order,
+                    },
+                    11,
+                )
+                .await,
+                Err(LightingError::InvalidRequest)
+            );
+            assert_eq!(
+                commit(
+                    &service,
+                    &session,
+                    CommitLightingOverlayReplaceRequest {
+                        transaction_id: transaction.id,
+                    },
+                    12,
+                )
+                .await,
+                Err(LightingError::TransactionIncomplete {
+                    expected: 2,
+                    received: 0
+                })
+            );
+
+            let mut cells = Vec::new();
+            cells.push(overlay_cell(10)).unwrap();
+            cells.push(overlay_cell(42)).unwrap();
+            put(
+                &service,
+                &session,
+                PutLightingOverlayChunkRequest {
+                    transaction_id: transaction.id,
+                    offset: 0,
+                    cells,
+                },
+                13,
+            )
+            .await
+            .unwrap();
+            let committed = state(6, 2);
+            let (response, ()) = join(
+                commit(
+                    &service,
+                    &session,
+                    CommitLightingOverlayReplaceRequest {
+                        transaction_id: transaction.id,
+                    },
+                    14,
+                ),
+                async {
+                    let pending = mailbox.receive().await;
+                    let staged = mailbox.take_replacement(pending.id).await;
+                    match pending.command {
+                        RynkLightingCommand::ReplaceOverlay { expected_revision } => {
+                            assert_eq!(expected_revision, 5);
+                            assert_eq!(staged.len(), 2);
+                        }
+                        _ => panic!("expected replacement"),
+                    }
+                    mailbox.reply(pending.id, Ok(committed));
+                },
+            )
+            .await;
+            assert_eq!(response, Ok(committed));
+            assert_eq!(
+                commit(
+                    &service,
+                    &session,
+                    CommitLightingOverlayReplaceRequest {
+                        transaction_id: transaction.id,
+                    },
+                    15,
+                )
+                .await,
+                Ok(committed),
+                "repeated successful commit is served from the cache"
+            );
+
+            let expiring = begin(
+                &service,
+                &session,
+                BeginLightingOverlayReplaceRequest {
+                    expected_revision: 6,
+                    cell_count: 0,
+                },
+                20,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                abort(
+                    &service,
+                    &session,
+                    AbortLightingOverlayReplaceRequest {
+                        transaction_id: expiring.id,
+                    },
+                    20 + TRANSACTION_TIMEOUT_MS,
+                )
+                .await,
+                Err(LightingError::TransactionExpired)
+            );
+        });
+    }
+
+    #[test]
+    fn zero_cell_replacement_commits_as_one_atomic_empty_batch() {
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 3> = PositionalConfig::default();
+            let mut data: KeymapData<1, 3, 1, 0> = KeymapData::new([[[KeyAction::No; 3]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut config = RmkConfig::default();
+            config.lock_config.insecure = true;
+            let mailbox = RynkLightingMailbox::new();
+            let service = RynkService::new(&keymap, &config).with_lighting(RynkLightingController::new(
+                &mailbox,
+                descriptor(),
+                8,
+            ));
+            let session = session();
+            let transaction = call::<BeginLightingOverlayReplace>(
+                &service,
+                &session,
+                &BeginLightingOverlayReplaceRequest {
+                    expected_revision: 9,
+                    cell_count: 0,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let cleared = state(10, 0);
+            let (response, ()) = join(
+                call::<CommitLightingOverlayReplace>(
+                    &service,
+                    &session,
+                    &CommitLightingOverlayReplaceRequest {
+                        transaction_id: transaction.id,
+                    },
+                ),
+                async {
+                    let pending = mailbox.receive().await;
+                    let staged = mailbox.take_replacement(pending.id).await;
+                    assert!(matches!(
+                        pending.command,
+                        RynkLightingCommand::ReplaceOverlay {
+                            expected_revision: 9,
+                        } if staged.is_empty()
+                    ));
+                    mailbox.reply(pending.id, Ok(cleared));
+                },
+            )
+            .await;
+            assert_eq!(response.unwrap(), Ok(cleared));
+        });
+    }
+}

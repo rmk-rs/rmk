@@ -60,7 +60,10 @@ impl Handle<GetCapabilities> for RynkService<'_> {
 
             // Feature flags
             storage_enabled: cfg!(feature = "storage"),
-            lighting_enabled: false, // TODO Phase 6: surface light_service
+            #[cfg(feature = "lighting")]
+            lighting_enabled: self.lighting.is_some(),
+            #[cfg(not(feature = "lighting"))]
+            lighting_enabled: false,
 
             // Connectivity
             is_split: cfg!(feature = "split"),

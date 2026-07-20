@@ -21,11 +21,16 @@ use rmk_types::fork::Fork;
 use rmk_types::led_indicator::LedIndicator;
 use rmk_types::morse::Morse;
 use rmk_types::protocol::rynk::{
-    BehaviorConfig, Cmd, DeviceCapabilities, DeviceInfo, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest,
-    GetKeymapBulkRequest, GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse,
-    KeyPosition, LockStatus, MacroData, MatrixState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest,
-    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest,
-    SetMorseBulkRequest, SetMorseRequest, StorageResetMode, command,
+    AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest, BehaviorConfig,
+    ClearLightingOverlayRequest, Cmd, CommitLightingOverlayReplaceRequest, DeviceCapabilities, DeviceInfo,
+    GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest, GetKeymapBulkRequest, GetKeymapBulkResponse,
+    GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse, KeyPosition, LightingCapabilities, LightingKeysPage,
+    LightingLedsPage, LightingOutputsPage, LightingOverlayTransaction, LightingPageRequest, LightingPhysicalKeysPage,
+    LightingResult, LightingRoutesPage, LightingState, LightingZoneMembershipsPage, LightingZonesPage, LockStatus,
+    MacroData, MatrixState, PeripheralStatus, ProtocolVersion, PutLightingOverlayChunkRequest, SetComboBulkRequest,
+    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetLightingOverlayRequest,
+    SetLightingStateRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest, StorageResetMode,
+    UnsetLightingOverlayRequest, command,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -62,6 +67,20 @@ impl Client {
         } else {
             Err(RynkHostError::Unsupported(cmd, "BLE not enabled"))
         }
+    }
+
+    /// Reject a lighting command locally when the handshake says the firmware
+    /// has no lighting service.
+    fn require_lighting(&self, cmd: Cmd) -> Result<(), RynkHostError> {
+        if self.capabilities.lighting_enabled {
+            Ok(())
+        } else {
+            Err(RynkHostError::Unsupported(cmd, "lighting not enabled"))
+        }
+    }
+
+    fn flatten_lighting<T>(result: LightingResult<T>) -> Result<T, RynkHostError> {
+        result.map_err(RynkHostError::LightingRejected)
     }
 
     /// Read the firmware's protocol version.
@@ -358,6 +377,132 @@ impl Client {
     /// Read the host LED indicator state (caps/num/scroll lock, etc.).
     pub async fn get_led_indicator(&self) -> Result<LedIndicator, RynkHostError> {
         self.request::<command::GetLedIndicator>(&()).await
+    }
+
+    /// Read lighting limits, supported effects, and topology identity.
+    pub async fn get_lighting_capabilities(&self) -> Result<LightingCapabilities, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingCapabilities)?;
+        Self::flatten_lighting(self.request::<command::GetLightingCapabilities>(&()).await?)
+    }
+
+    /// Read authoritative standard lighting state and its concurrency revision.
+    pub async fn get_lighting_state(&self) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingState)?;
+        Self::flatten_lighting(self.request::<command::GetLightingState>(&()).await?)
+    }
+
+    /// Atomically replace standard mutable state when the revision still matches.
+    pub async fn set_lighting_state(&self, request: SetLightingStateRequest) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingState)?;
+        Self::flatten_lighting(self.request::<command::SetLightingState>(&request).await?)
+    }
+
+    pub async fn get_lighting_physical_keys(
+        &self,
+        request: LightingPageRequest,
+    ) -> Result<LightingPhysicalKeysPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingPhysicalKeys)?;
+        Self::flatten_lighting(self.request::<command::GetLightingPhysicalKeys>(&request).await?)
+    }
+
+    /// Read real logical matrix keys, including keys with no measured geometry.
+    pub async fn get_lighting_keys(&self, request: LightingPageRequest) -> Result<LightingKeysPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingKeys)?;
+        Self::flatten_lighting(self.request::<command::GetLightingKeys>(&request).await?)
+    }
+
+    pub async fn get_lighting_leds(&self, request: LightingPageRequest) -> Result<LightingLedsPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingLeds)?;
+        Self::flatten_lighting(self.request::<command::GetLightingLeds>(&request).await?)
+    }
+
+    pub async fn get_lighting_zones(&self, request: LightingPageRequest) -> Result<LightingZonesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingZones)?;
+        Self::flatten_lighting(self.request::<command::GetLightingZones>(&request).await?)
+    }
+
+    pub async fn get_lighting_zone_memberships(
+        &self,
+        request: LightingPageRequest,
+    ) -> Result<LightingZoneMembershipsPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingZoneMemberships)?;
+        Self::flatten_lighting(self.request::<command::GetLightingZoneMemberships>(&request).await?)
+    }
+
+    pub async fn get_lighting_outputs(
+        &self,
+        request: LightingPageRequest,
+    ) -> Result<LightingOutputsPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingOutputs)?;
+        Self::flatten_lighting(self.request::<command::GetLightingOutputs>(&request).await?)
+    }
+
+    pub async fn get_lighting_routes(&self, request: LightingPageRequest) -> Result<LightingRoutesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingRoutes)?;
+        Self::flatten_lighting(self.request::<command::GetLightingRoutes>(&request).await?)
+    }
+
+    /// Set one transient overlay cell when the state revision matches.
+    pub async fn set_lighting_overlay(
+        &self,
+        request: SetLightingOverlayRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingOverlay)?;
+        Self::flatten_lighting(self.request::<command::SetLightingOverlay>(&request).await?)
+    }
+
+    /// Remove one transient overlay cell when the state revision matches.
+    pub async fn unset_lighting_overlay(
+        &self,
+        request: UnsetLightingOverlayRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::UnsetLightingOverlay)?;
+        Self::flatten_lighting(self.request::<command::UnsetLightingOverlay>(&request).await?)
+    }
+
+    /// Clear the transient overlay when the state revision matches.
+    pub async fn clear_lighting_overlay(
+        &self,
+        request: ClearLightingOverlayRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::ClearLightingOverlay)?;
+        Self::flatten_lighting(self.request::<command::ClearLightingOverlay>(&request).await?)
+    }
+
+    /// Reserve a bounded staging transaction for atomic overlay replacement.
+    pub async fn begin_lighting_overlay_replace(
+        &self,
+        request: BeginLightingOverlayReplaceRequest,
+    ) -> Result<LightingOverlayTransaction, RynkHostError> {
+        self.require_lighting(Cmd::BeginLightingOverlayReplace)?;
+        Self::flatten_lighting(self.request::<command::BeginLightingOverlayReplace>(&request).await?)
+    }
+
+    /// Stage one ordered chunk. It does not mutate the live overlay.
+    pub async fn put_lighting_overlay_chunk(
+        &self,
+        request: PutLightingOverlayChunkRequest,
+    ) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::PutLightingOverlayChunk)?;
+        Self::flatten_lighting(self.request::<command::PutLightingOverlayChunk>(&request).await?)
+    }
+
+    /// Atomically publish a complete staged overlay replacement.
+    pub async fn commit_lighting_overlay_replace(
+        &self,
+        request: CommitLightingOverlayReplaceRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::CommitLightingOverlayReplace)?;
+        Self::flatten_lighting(self.request::<command::CommitLightingOverlayReplace>(&request).await?)
+    }
+
+    /// Discard a staged overlay replacement without changing live state.
+    pub async fn abort_lighting_overlay_replace(
+        &self,
+        request: AbortLightingOverlayReplaceRequest,
+    ) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::AbortLightingOverlayReplace)?;
+        Self::flatten_lighting(self.request::<command::AbortLightingOverlayReplace>(&request).await?)
     }
 
     /// Read the active connection type (USB / BLE).

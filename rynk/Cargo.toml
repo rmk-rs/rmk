@@ -13,7 +13,7 @@ keywords = ["keyboard", "firmware", "rmk", "protocol", "host"]
 [dependencies]
 # No `host` by default: a dongle binary links rmk (firmware) and rynk together, and
 # feature unification must not switch the firmware's bulk types to alloc Vec.
-rmk-types = { path = "../rmk-types", version = "=0.3.0", default-features = false, features = ["rynk", "_ble", "split", "steno"] }
+rmk-types = { path = "../rmk-types", version = "=0.3.0", default-features = false, features = ["rynk", "_ble", "split", "steno", "lighting"] }
 embedded-io-async.workspace = true
 embassy-sync.workspace = true
 embassy-futures = "0.1"

@@ -10,6 +10,8 @@ use rmk_types::protocol::rynk::TopicEvent;
 
 #[cfg(feature = "_ble")]
 use crate::event::BatteryStatusEvent;
+#[cfg(feature = "lighting")]
+use crate::event::LightingChangedEvent;
 use crate::event::{
     ConnectionStatusChangeEvent, EventSubscriber, LayerChangeEvent, LedIndicatorEvent, SleepStateEvent,
     SubscribableEvent, WpmUpdateEvent,
@@ -23,6 +25,8 @@ pub(super) struct TopicSubscribers {
     led: <LedIndicatorEvent as SubscribableEvent>::Subscriber,
     #[cfg(feature = "_ble")]
     battery: <BatteryStatusEvent as SubscribableEvent>::Subscriber,
+    #[cfg(feature = "lighting")]
+    lighting: <LightingChangedEvent as SubscribableEvent>::Subscriber,
 }
 
 impl TopicSubscribers {
@@ -35,6 +39,8 @@ impl TopicSubscribers {
             led: LedIndicatorEvent::subscriber(),
             #[cfg(feature = "_ble")]
             battery: BatteryStatusEvent::subscriber(),
+            #[cfg(feature = "lighting")]
+            lighting: LightingChangedEvent::subscriber(),
         }
     }
 
@@ -49,6 +55,7 @@ impl TopicSubscribers {
             e = self.sleep.next_event().fuse() => TopicEvent::SleepState(*e),
             e = self.led.next_event().fuse() => TopicEvent::LedIndicatorChange(*e),
             with_feature("_ble"): e = self.battery.next_event().fuse() => TopicEvent::BatteryStatusChange(*e),
+            with_feature("lighting"): _ = self.lighting.next_event().fuse() => TopicEvent::LightingChange(rmk_types::protocol::rynk::LightingChanged),
         }
     }
 }

@@ -1,0 +1,45 @@
+# Lighting wire-format FRAME snapshot — DO NOT edit by hand.
+# File: snapshots/lighting_wire_frames.snap
+# Each entry is one complete feature-gated lighting Rynk frame. The nested
+# Ok/Err exemplars pin the outer Rynk result and inner lighting result.
+#   UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features rynk --features lighting lighting_wire_frames
+# Format: <label>  <hex bytes>
+
+AbortLightingOverlayReplace reply                      10 09 01 02 00 00 00
+AbortLightingOverlayReplace request                    10 09 01 01 00 0d
+BeginLightingOverlayReplace reply                      0d 09 01 04 00 00 00 0d 01
+BeginLightingOverlayReplace request                    0d 09 01 02 00 0c 01
+ClearLightingOverlay reply                             0c 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
+ClearLightingOverlay request                           0c 09 01 01 00 0b
+CommitLightingOverlayReplace reply                     0f 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
+CommitLightingOverlayReplace request                   0f 09 01 01 00 0d
+GetLightingCapabilities reply                          01 09 01 0f 00 00 00 01 02 03 04 05 06 07 08 09 08 08 3f 07
+GetLightingCapabilities request                        01 09 01 00 00
+GetLightingKeys reply                                  11 09 01 07 00 00 00 01 01 01 01 02
+GetLightingKeys request                                11 09 01 02 00 01 00
+GetLightingLeds reply                                  05 09 01 12 00 00 00 01 01 01 2a 01 01 02 01 ff 01 80 04 80 01 03 01
+GetLightingLeds request                                05 09 01 02 00 01 00
+GetLightingOutputs reply                               08 09 01 0a 00 00 00 01 01 01 01 02 28 14 00
+GetLightingOutputs request                             08 09 01 02 00 01 00
+GetLightingPhysicalKeys reply                          04 09 01 13 00 00 00 01 01 01 01 02 ff 01 80 04 80 01 80 02 80 03 db 0b
+GetLightingPhysicalKeys request                        04 09 01 02 00 01 00
+GetLightingRoutes reply                                09 09 01 09 00 00 00 01 01 01 2a 01 02 07
+GetLightingRoutes request                              09 09 01 02 00 01 00
+GetLightingState reply                                 02 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
+GetLightingState request                               02 09 01 00 00
+GetLightingZoneMemberships reply                       07 09 01 06 00 00 00 01 01 01 04
+GetLightingZoneMemberships request                     07 09 01 02 00 01 00
+GetLightingZones reply                                 06 09 01 0c 00 00 00 01 01 01 04 05 74 68 75 6d 62
+GetLightingZones request                               06 09 01 02 00 01 00
+LightingChange topic                                   07 80 00 00 00
+PutLightingOverlayChunk inner Err(TransactionExpired)  0e 09 01 03 00 00 01 0a
+PutLightingOverlayChunk reply                          0e 09 01 02 00 00 00
+PutLightingOverlayChunk request                        0e 09 01 10 00 0d 00 01 2a 01 01 02 03 e8 07 fa 01 32 01 88 27
+SetLightingOverlay inner Err(UnknownLed)               0a 09 01 05 00 00 01 06 e7 07
+SetLightingOverlay outer Err(Locked)                   0a 09 01 02 00 01 07
+SetLightingOverlay reply                               0a 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
+SetLightingOverlay request                             0a 09 01 0e 00 09 2a 01 01 02 03 e8 07 fa 01 32 01 88 27
+SetLightingState reply                                 03 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
+SetLightingState request                               03 09 01 09 00 08 01 c8 01 0a 14 1e 28 01
+UnsetLightingOverlay reply                             0b 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
+UnsetLightingOverlay request                           0b 09 01 02 00 0a 2a

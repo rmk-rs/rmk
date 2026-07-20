@@ -5,11 +5,18 @@
 //! ([`HostLock`]) and topic subscriptions, so transports never share either.
 
 mod handlers;
+#[cfg(feature = "lighting")]
+mod lighting;
 mod topics;
 
 use embassy_futures::select::{Either, select};
 use embedded_io_async::{Read, Write};
 use postcard::experimental::max_size::MaxSize;
+#[cfg(feature = "lighting")]
+pub use lighting::{
+    RYNK_LIGHTING_TRANSACTION_CAPACITY, RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox,
+    StandardRynkLightingAdapter,
+};
 use rmk_types::constants::RYNK_BUFFER_SIZE;
 use rmk_types::protocol::rynk::{
     Cmd, Deframer, RYNK_HEADER_SIZE, RynkError, RynkMessage, command, encode_frame, max_wire_size,
@@ -32,7 +39,20 @@ pub struct RynkService<'a> {
     device: DeviceConfig<'static>,
     /// Policy copied into each session's authorization gate.
     lock_config: LockConfig,
+    #[cfg(feature = "lighting")]
+    lighting: Option<RynkLightingController<'a>>,
 }
+
+/// Per-session state that has to outlive a single dispatch. The authorization
+/// gate and the topic table are locals in [`RynkService::run_session`]; the
+/// lighting overlay transaction cannot be, because it spans the
+/// Begin/Put/Commit exchange.
+#[derive(Default)]
+struct RynkSession {
+    #[cfg(feature = "lighting")]
+    lighting: embassy_sync::mutex::Mutex<crate::RawMutex, handlers::lighting::LightingTransactionState>,
+}
+
 
 impl<'a> RynkService<'a> {
     pub fn new(keymap: &'a KeyMap<'a>, config: &RmkConfig<'static>) -> Self {
@@ -43,7 +63,18 @@ impl<'a> RynkService<'a> {
             ctx,
             device: config.device_config,
             lock_config: config.lock_config,
+            #[cfg(feature = "lighting")]
+            lighting: None,
         }
+    }
+
+    /// Attach a concrete lighting controller. Merely compiling the lighting
+    /// feature does not advertise support: discovery turns on only after this
+    /// binding is present and its bridge task is running.
+    #[cfg(feature = "lighting")]
+    pub fn with_lighting(mut self, lighting: RynkLightingController<'a>) -> Self {
+        self.lighting = Some(lighting);
+        self
     }
 
     /// Whether `cmd` needs an unlocked device.
@@ -64,13 +95,27 @@ impl<'a> RynkService<'a> {
             | Cmd::SetKeymapBulk
             | Cmd::SetComboBulk
             | Cmd::SetMorseBulk => self.lock_config.write_requires_unlock,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingState
+            | Cmd::SetLightingOverlay
+            | Cmd::UnsetLightingOverlay
+            | Cmd::ClearLightingOverlay
+            | Cmd::BeginLightingOverlayReplace
+            | Cmd::PutLightingOverlayChunk
+            | Cmd::CommitLightingOverlayReplace
+            | Cmd::AbortLightingOverlayReplace => self.lock_config.write_requires_unlock,
             _ => false,
         }
     }
 
     /// Serve one inbound message: on success the reply frame replaces the
     /// payload in place; on error the caller answers with the error envelope.
-    async fn dispatch(&self, locker: &HostLock<'_>, msg: &mut RynkMessage<'_>) -> Result<(), RynkError> {
+    async fn dispatch(
+        &self,
+        locker: &HostLock<'_>,
+        session: &RynkSession,
+        msg: &mut RynkMessage<'_>,
+    ) -> Result<(), RynkError> {
         let cmd = msg.header().cmd;
 
         if self.requires_unlock(cmd) && !locker.is_unlocked() {
@@ -136,6 +181,41 @@ impl<'a> RynkService<'a> {
 
             Cmd::GetLayout => serve::<command::GetLayout, _>(self, msg).await,
 
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingCapabilities => Serve::<command::GetLightingCapabilities, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingState => Serve::<command::GetLightingState, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingState => Serve::<command::SetLightingState, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingKeys => Serve::<command::GetLightingKeys, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingPhysicalKeys => Serve::<command::GetLightingPhysicalKeys, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingLeds => Serve::<command::GetLightingLeds, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingZones => Serve::<command::GetLightingZones, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingZoneMemberships => Serve::<command::GetLightingZoneMemberships, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingOutputs => Serve::<command::GetLightingOutputs, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingRoutes => Serve::<command::GetLightingRoutes, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingOverlay => Serve::<command::SetLightingOverlay, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::UnsetLightingOverlay => Serve::<command::UnsetLightingOverlay, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::ClearLightingOverlay => Serve::<command::ClearLightingOverlay, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::BeginLightingOverlayReplace => handlers::lighting::serve_begin(self, session, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::PutLightingOverlayChunk => handlers::lighting::serve_put(self, session, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::CommitLightingOverlayReplace => handlers::lighting::serve_commit(self, session, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::AbortLightingOverlayReplace => handlers::lighting::serve_abort(self, session, msg).await,
+
             _ => Err(RynkError::UnknownCmd),
         }
     }
@@ -151,6 +231,7 @@ impl<'a> RynkService<'a> {
             RYNK_UNLOCK_WINDOW,
         );
         let mut topics = TopicSubscribers::new();
+        let session = RynkSession::default();
         let mut buf = [0u8; RYNK_BUFFER_SIZE];
         let mut df = Deframer::new();
         // Mute topics until the client completes the version handshake.
@@ -170,7 +251,7 @@ impl<'a> RynkService<'a> {
                     // Hosts never send topic-range cmds; drop without a reply.
                     warn!("Rynk: dropping topic-range request {:?}", cmd);
                 } else {
-                    let served = self.dispatch(&locker, &mut msg).await;
+                    let served = self.dispatch(&locker, &session, &mut msg).await;
                     // The version handshake completes on GetCapabilities.
                     handshaked |= cmd == Cmd::GetCapabilities;
                     let written = match served {

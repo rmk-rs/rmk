@@ -1017,6 +1017,430 @@ fn wire_frames_locked() {
     snapshot::assert_snapshot("snapshots/wire_frames.snap", actual);
 }
 
+/// Lighting has its own feature-gated golden file so the base Rynk snapshots
+/// remain identical for firmware builds that do not include lighting.
+#[cfg(feature = "lighting")]
+#[test]
+fn lighting_wire_frames_locked() {
+    const SEQ: u8 = 1;
+
+    fn one<T, const N: usize>(item: T) -> heapless::Vec<T, N> {
+        let mut items = heapless::Vec::new();
+        assert!(items.push(item).is_ok());
+        items
+    }
+
+    let matrix = LightingMatrixPosition { row: 1, col: 2 };
+    let point = LightingPoint3 { x: -128, y: 256, z: 64 };
+    let physical_key = LightingPhysicalKey {
+        matrix,
+        center: point,
+        size: LightingKeySize {
+            width: 256,
+            height: 384,
+        },
+        rotation: -750,
+    };
+    let led = LightingLed {
+        id: LightingLedId(42),
+        key: Some(matrix),
+        position: Some(point),
+        zone_start: 3,
+        zone_len: 1,
+    };
+    let zone = LightingZone {
+        id: LightingZoneId(4),
+        name: heapless::String::try_from("thumb").unwrap(),
+    };
+    let output = LightingOutput {
+        node: LightingNodeId(1),
+        id: LightingOutputId(2),
+        pixel_count: 40,
+        capabilities: LightingOutputCapabilities(
+            LightingOutputCapabilities::RGB | LightingOutputCapabilities::ADDRESSABLE,
+        ),
+        coverage: LightingOutputCoverage::Complete,
+    };
+    let route = LightingRoute {
+        led_id: led.id,
+        node: output.node,
+        output: output.id,
+        physical_index: 7,
+    };
+    let capabilities = LightingCapabilities {
+        topology_revision: 1,
+        logical_key_count: 2,
+        physical_key_count: 3,
+        led_count: 4,
+        zone_count: 5,
+        zone_membership_count: 6,
+        output_count: 7,
+        route_count: 8,
+        overlay_capacity: 9,
+        page_capacity: LIGHTING_PAGE_SIZE as u8,
+        overlay_chunk_capacity: LIGHTING_OVERLAY_CHUNK_SIZE as u8,
+        features: LightingFeatureFlags(
+            LightingFeatureFlags::PHYSICAL_GEOMETRY
+                | LightingFeatureFlags::ZONES
+                | LightingFeatureFlags::ROUTING
+                | LightingFeatureFlags::OVERLAY_TTL
+                | LightingFeatureFlags::ATOMIC_OVERLAY_REPLACE
+                | LightingFeatureFlags::LAYER_AWARE,
+        ),
+        effects: LightingEffectFlags(
+            LightingEffectFlags::SOLID | LightingEffectFlags::BLINK | LightingEffectFlags::BREATHE,
+        ),
+    };
+    let background = LightingBackgroundState {
+        enabled: true,
+        hue: 10,
+        saturation: 20,
+        value: 30,
+        speed: 40,
+        mode: LightingBackgroundMode::Breathe,
+    };
+    let state = LightingState {
+        revision: 9,
+        output_enabled: true,
+        output_brightness: 200,
+        background,
+        overlay_len: 1,
+    };
+    let mutable_state = LightingMutableState {
+        output_enabled: state.output_enabled,
+        output_brightness: state.output_brightness,
+        background,
+    };
+    let page_request = LightingPageRequest {
+        topology_revision: capabilities.topology_revision,
+        offset: 0,
+    };
+    let keys_page = LightingPhysicalKeysPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(physical_key),
+    };
+    let logical_keys_page = LightingKeysPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(matrix),
+    };
+    let leds_page = LightingLedsPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(led),
+    };
+    let zones_page = LightingZonesPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(zone),
+    };
+    let memberships_page = LightingZoneMembershipsPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(LightingZoneId(4)),
+    };
+    let outputs_page = LightingOutputsPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(output),
+    };
+    let routes_page = LightingRoutesPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(route),
+    };
+    let overlay_cell = LightingOverlayCell {
+        led_id: led.id,
+        effect: LightingEffect::Blink {
+            color: LightingRgb8 { r: 1, g: 2, b: 3 },
+            period_ms: 1000,
+            phase_ms: 250,
+            duty: 50,
+        },
+        ttl_ms: Some(5000),
+    };
+    let set_state = SetLightingStateRequest {
+        expected_revision: 8,
+        state: mutable_state,
+    };
+    let set_overlay = SetLightingOverlayRequest {
+        expected_revision: 9,
+        cell: overlay_cell,
+    };
+    let unset_overlay = UnsetLightingOverlayRequest {
+        expected_revision: 10,
+        led_id: led.id,
+    };
+    let clear_overlay = ClearLightingOverlayRequest { expected_revision: 11 };
+    let begin = BeginLightingOverlayReplaceRequest {
+        expected_revision: 12,
+        cell_count: 1,
+    };
+    let transaction = LightingOverlayTransaction { id: 13, cell_count: 1 };
+    let put = PutLightingOverlayChunkRequest {
+        transaction_id: transaction.id,
+        offset: 0,
+        cells: one(overlay_cell),
+    };
+    let commit = CommitLightingOverlayReplaceRequest {
+        transaction_id: transaction.id,
+    };
+    let abort = AbortLightingOverlayReplaceRequest {
+        transaction_id: transaction.id,
+    };
+
+    let entries: alloc::vec::Vec<(&str, alloc::vec::Vec<u8>)> = alloc::vec![
+        (
+            "GetLightingCapabilities request",
+            encode_frame(Cmd::GetLightingCapabilities, SEQ, &())
+        ),
+        (
+            "GetLightingCapabilities reply",
+            encode_frame(
+                Cmd::GetLightingCapabilities,
+                SEQ,
+                &Ok::<LightingCapabilitiesResult, RynkError>(Ok(capabilities))
+            )
+        ),
+        (
+            "GetLightingState request",
+            encode_frame(Cmd::GetLightingState, SEQ, &())
+        ),
+        (
+            "GetLightingState reply",
+            encode_frame(
+                Cmd::GetLightingState,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "SetLightingState request",
+            encode_frame(Cmd::SetLightingState, SEQ, &set_state)
+        ),
+        (
+            "SetLightingState reply",
+            encode_frame(
+                Cmd::SetLightingState,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "GetLightingPhysicalKeys request",
+            encode_frame(Cmd::GetLightingPhysicalKeys, SEQ, &page_request)
+        ),
+        (
+            "GetLightingPhysicalKeys reply",
+            encode_frame(
+                Cmd::GetLightingPhysicalKeys,
+                SEQ,
+                &Ok::<LightingPhysicalKeysPageResult, RynkError>(Ok(keys_page))
+            )
+        ),
+        (
+            "GetLightingKeys request",
+            encode_frame(Cmd::GetLightingKeys, SEQ, &page_request)
+        ),
+        (
+            "GetLightingKeys reply",
+            encode_frame(
+                Cmd::GetLightingKeys,
+                SEQ,
+                &Ok::<LightingKeysPageResult, RynkError>(Ok(logical_keys_page))
+            )
+        ),
+        (
+            "GetLightingLeds request",
+            encode_frame(Cmd::GetLightingLeds, SEQ, &page_request)
+        ),
+        (
+            "GetLightingLeds reply",
+            encode_frame(
+                Cmd::GetLightingLeds,
+                SEQ,
+                &Ok::<LightingLedsPageResult, RynkError>(Ok(leds_page))
+            )
+        ),
+        (
+            "GetLightingZones request",
+            encode_frame(Cmd::GetLightingZones, SEQ, &page_request)
+        ),
+        (
+            "GetLightingZones reply",
+            encode_frame(
+                Cmd::GetLightingZones,
+                SEQ,
+                &Ok::<LightingZonesPageResult, RynkError>(Ok(zones_page))
+            )
+        ),
+        (
+            "GetLightingZoneMemberships request",
+            encode_frame(Cmd::GetLightingZoneMemberships, SEQ, &page_request)
+        ),
+        (
+            "GetLightingZoneMemberships reply",
+            encode_frame(
+                Cmd::GetLightingZoneMemberships,
+                SEQ,
+                &Ok::<LightingZoneMembershipsPageResult, RynkError>(Ok(memberships_page))
+            )
+        ),
+        (
+            "GetLightingOutputs request",
+            encode_frame(Cmd::GetLightingOutputs, SEQ, &page_request)
+        ),
+        (
+            "GetLightingOutputs reply",
+            encode_frame(
+                Cmd::GetLightingOutputs,
+                SEQ,
+                &Ok::<LightingOutputsPageResult, RynkError>(Ok(outputs_page))
+            )
+        ),
+        (
+            "GetLightingRoutes request",
+            encode_frame(Cmd::GetLightingRoutes, SEQ, &page_request)
+        ),
+        (
+            "GetLightingRoutes reply",
+            encode_frame(
+                Cmd::GetLightingRoutes,
+                SEQ,
+                &Ok::<LightingRoutesPageResult, RynkError>(Ok(routes_page))
+            )
+        ),
+        (
+            "SetLightingOverlay request",
+            encode_frame(Cmd::SetLightingOverlay, SEQ, &set_overlay)
+        ),
+        (
+            "SetLightingOverlay reply",
+            encode_frame(
+                Cmd::SetLightingOverlay,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "UnsetLightingOverlay request",
+            encode_frame(Cmd::UnsetLightingOverlay, SEQ, &unset_overlay)
+        ),
+        (
+            "UnsetLightingOverlay reply",
+            encode_frame(
+                Cmd::UnsetLightingOverlay,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "ClearLightingOverlay request",
+            encode_frame(Cmd::ClearLightingOverlay, SEQ, &clear_overlay)
+        ),
+        (
+            "ClearLightingOverlay reply",
+            encode_frame(
+                Cmd::ClearLightingOverlay,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "BeginLightingOverlayReplace request",
+            encode_frame(Cmd::BeginLightingOverlayReplace, SEQ, &begin)
+        ),
+        (
+            "BeginLightingOverlayReplace reply",
+            encode_frame(
+                Cmd::BeginLightingOverlayReplace,
+                SEQ,
+                &Ok::<LightingOverlayTransactionResult, RynkError>(Ok(transaction))
+            )
+        ),
+        (
+            "PutLightingOverlayChunk request",
+            encode_frame(Cmd::PutLightingOverlayChunk, SEQ, &put)
+        ),
+        (
+            "PutLightingOverlayChunk reply",
+            encode_frame(
+                Cmd::PutLightingOverlayChunk,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Ok(()))
+            )
+        ),
+        (
+            "CommitLightingOverlayReplace request",
+            encode_frame(Cmd::CommitLightingOverlayReplace, SEQ, &commit)
+        ),
+        (
+            "CommitLightingOverlayReplace reply",
+            encode_frame(
+                Cmd::CommitLightingOverlayReplace,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "AbortLightingOverlayReplace request",
+            encode_frame(Cmd::AbortLightingOverlayReplace, SEQ, &abort)
+        ),
+        (
+            "AbortLightingOverlayReplace reply",
+            encode_frame(
+                Cmd::AbortLightingOverlayReplace,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Ok(()))
+            )
+        ),
+        (
+            "SetLightingOverlay inner Err(UnknownLed)",
+            encode_frame(
+                Cmd::SetLightingOverlay,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Err(LightingError::UnknownLed {
+                    led_id: LightingLedId(999)
+                }))
+            )
+        ),
+        (
+            "SetLightingOverlay outer Err(Locked)",
+            encode_frame(
+                Cmd::SetLightingOverlay,
+                SEQ,
+                &Err::<LightingStateResult, RynkError>(RynkError::Locked)
+            )
+        ),
+        (
+            "PutLightingOverlayChunk inner Err(TransactionExpired)",
+            encode_frame(
+                Cmd::PutLightingOverlayChunk,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Err(LightingError::TransactionExpired))
+            )
+        ),
+        (
+            "LightingChange topic",
+            encode_frame(Cmd::LightingChange, 0, &LightingChanged)
+        ),
+    ];
+    let view: alloc::vec::Vec<(&str, &[u8])> = entries
+        .iter()
+        .map(|(label, bytes)| (*label, bytes.as_slice()))
+        .collect();
+    let actual = snapshot::format_value_snapshot(
+        "snapshots/lighting_wire_frames.snap",
+        "Lighting wire-format FRAME snapshot",
+        "# Each entry is one complete feature-gated lighting Rynk frame. The nested\n\
+         # Ok/Err exemplars pin the outer Rynk result and inner lighting result.",
+        "--features lighting lighting_wire_frames",
+        &view,
+    );
+    snapshot::assert_snapshot("snapshots/lighting_wire_frames.snap", actual);
+}
+
 /// The human-readable protocol reference under `docs/`, rendered from the
 /// `ENDPOINT_META`/`TOPIC_META` tables. Those tables are not feature-gated, so
 /// every feature set renders identical output; a diff fails CI (regenerate with
@@ -1209,6 +1633,7 @@ mod protocol_reference {
              ```\n\n\
              On the wire the whole frame is COBS-encoded and terminated by a single `0x00` delimiter, so the byte stream is self-synchronizing.\n\n\
              - **Requests** use CMD `0x0000..=0x7FFF`. The response echoes CMD and SEQ and wraps its payload in postcard `Result<T, RynkError>` (`T = ()` for `Set*`).\n\
+             - **Lighting responses** use a `Lighting*Result` as `T`, preserving domain-specific `LightingError` detail inside the outer Rynk result.\n\
              - **Topics** use CMD `0x8000..=0xFFFF` (server → host push, SEQ `0`, bare payload).\n\n\
              Which commands a firmware answers depends on the RMK Cargo features it was built with: a row with no **Feature** is present once `rynk` is on, and the rest need their feature (`_ble`, `split`, …) compiled in. A command the firmware wasn't built with answers `UnknownCmd`.\n\n\
              ## Transports\n\n\

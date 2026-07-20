@@ -32,6 +32,15 @@ use crate::led_indicator::LedIndicator;
 use crate::morse::Morse;
 #[cfg(feature = "split")]
 use crate::protocol::rynk::PeripheralStatus;
+#[cfg(feature = "lighting")]
+use crate::protocol::rynk::{
+    AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest, ClearLightingOverlayRequest,
+    CommitLightingOverlayReplaceRequest, LightingCapabilitiesResult, LightingChanged, LightingKeysPageResult,
+    LightingLedsPageResult, LightingOutputsPageResult, LightingOverlayTransactionResult, LightingPageRequest,
+    LightingPhysicalKeysPageResult, LightingRoutesPageResult, LightingStateResult, LightingUnitResult,
+    LightingZoneMembershipsPageResult, LightingZonesPageResult, PutLightingOverlayChunkRequest,
+    SetLightingOverlayRequest, SetLightingStateRequest, UnsetLightingOverlayRequest,
+};
 
 /// CMD high bit marking a topic (server → host push).
 const RYNK_TOPIC_BIT: u16 = 0x8000;
@@ -337,8 +346,43 @@ endpoints! {
     GetSleepState = 0x0806: () => bool;
     /// Latest HID LED bitmap, sourced from the `LedIndicatorChange` topic snapshot.
     GetLedIndicator = 0x0807: () => LedIndicator;
-
-    // 0x09xx is reserved for a relay to answer for itself; nothing needs it yet.
+    // Lighting (0x09xx). Lighting-domain errors are nested inside Rynk's
+    // outer protocol result so hosts retain precise rejection reasons.
+    #[cfg(feature = "lighting")]
+    GetLightingCapabilities = 0x0901: () => LightingCapabilitiesResult;
+    #[cfg(feature = "lighting")]
+    GetLightingState = 0x0902: () => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    SetLightingState = 0x0903: SetLightingStateRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    GetLightingPhysicalKeys = 0x0904: LightingPageRequest => LightingPhysicalKeysPageResult;
+    #[cfg(feature = "lighting")]
+    GetLightingLeds = 0x0905: LightingPageRequest => LightingLedsPageResult;
+    #[cfg(feature = "lighting")]
+    GetLightingZones = 0x0906: LightingPageRequest => LightingZonesPageResult;
+    #[cfg(feature = "lighting")]
+    GetLightingZoneMemberships = 0x0907: LightingPageRequest => LightingZoneMembershipsPageResult;
+    #[cfg(feature = "lighting")]
+    GetLightingOutputs = 0x0908: LightingPageRequest => LightingOutputsPageResult;
+    #[cfg(feature = "lighting")]
+    GetLightingRoutes = 0x0909: LightingPageRequest => LightingRoutesPageResult;
+    #[cfg(feature = "lighting")]
+    SetLightingOverlay = 0x090A: SetLightingOverlayRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    UnsetLightingOverlay = 0x090B: UnsetLightingOverlayRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    ClearLightingOverlay = 0x090C: ClearLightingOverlayRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    BeginLightingOverlayReplace = 0x090D: BeginLightingOverlayReplaceRequest => LightingOverlayTransactionResult;
+    #[cfg(feature = "lighting")]
+    PutLightingOverlayChunk = 0x090E: PutLightingOverlayChunkRequest => LightingUnitResult;
+    #[cfg(feature = "lighting")]
+    CommitLightingOverlayReplace = 0x090F: CommitLightingOverlayReplaceRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    AbortLightingOverlayReplace = 0x0910: AbortLightingOverlayReplaceRequest => LightingUnitResult;
+    /// Logical matrix keys are distinct from optional physical geometry.
+    #[cfg(feature = "lighting")]
+    GetLightingKeys = 0x0911: LightingPageRequest => LightingKeysPageResult;
 }
 
 // Define topics: `Name = value: Payload;`
@@ -351,6 +395,8 @@ topics! {
     LedIndicatorChange = 0x8005: LedIndicator;
     #[cfg(feature = "_ble")]
     BatteryStatusChange = 0x8006: BatteryStatus;
+    #[cfg(feature = "lighting")]
+    LightingChange = 0x8007: LightingChanged;
 }
 
 /// The payload budget advertised to hosts must cover the largest payload
