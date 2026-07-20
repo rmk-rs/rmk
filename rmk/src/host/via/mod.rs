@@ -12,20 +12,29 @@ use crate::keymap::KeyMap;
 use crate::{MACRO_SPACE_SIZE, boot};
 
 pub(crate) mod keycode_convert;
+pub mod rgb_matrix;
 mod vial;
 
-pub struct VialService<'a> {
+pub struct VialService<'a, RgbMatrix = rgb_matrix::Unsupported> {
     ctx: KeyboardContext<'a>,
     vial_config: VialConfig<'static>,
+    rgb_matrix: RgbMatrix,
     #[cfg(feature = "host_lock")]
     locker: crate::host::lock::HostLock<'a>,
 }
 
-impl<'a> VialService<'a> {
+impl<'a> VialService<'a, rgb_matrix::Unsupported> {
     pub fn new(keymap: &'a KeyMap<'a>, config: &RmkConfig<'static>) -> Self {
+        Self::new_with_rgb_matrix(keymap, config, rgb_matrix::Unsupported)
+    }
+}
+
+impl<'a, RgbMatrix> VialService<'a, RgbMatrix> {
+    pub fn new_with_rgb_matrix(keymap: &'a KeyMap<'a>, config: &RmkConfig<'static>, rgb_matrix: RgbMatrix) -> Self {
         Self {
             ctx: KeyboardContext::new(keymap),
             vial_config: config.vial_config,
+            rgb_matrix,
             // Vial's poll cadence is ~100 ms (`VialCommand::UnlockPoll`).
             #[cfg(feature = "host_lock")]
             locker: crate::host::lock::HostLock::new(
@@ -36,7 +45,30 @@ impl<'a> VialService<'a> {
             ),
         }
     }
+}
 
+#[cfg(feature = "lighting")]
+impl<'a, const OVERLAY_CAP: usize, const MAILBOX_CAP: usize>
+    VialService<'a, rgb_matrix::StandardControl<'a, OVERLAY_CAP, MAILBOX_CAP>>
+{
+    /// Explicitly bind VIA RGB Matrix controls to an already-running standard
+    /// lighting processor. Constructing the ordinary service does not create
+    /// an unserviced mailbox.
+    pub fn new_with_standard_lighting(
+        keymap: &'a KeyMap<'a>,
+        config: &RmkConfig<'static>,
+        mailbox: &'a crate::lighting::processor::LightingMailbox<
+            crate::lighting::standard::StandardCommand<OVERLAY_CAP>,
+            crate::lighting::standard::StandardState,
+            crate::lighting::standard::StandardError,
+            MAILBOX_CAP,
+        >,
+    ) -> Self {
+        Self::new_with_rgb_matrix(keymap, config, rgb_matrix::StandardControl::new(mailbox))
+    }
+}
+
+impl<RgbMatrix: rgb_matrix::ViaRgbMatrixControl> VialService<'_, RgbMatrix> {
     async fn process_via_packet(&self, report: &mut ViaReport) {
         let command_id = report.output_data[0];
 
@@ -125,17 +157,8 @@ impl<'a> VialService<'a> {
             ViaCommand::DynamicKeymapReset => {
                 warn!("Dynamic keymap reset -- not supported")
             }
-            ViaCommand::CustomSetValue => {
-                // backlight/rgblight/rgb matrix/led matrix/audio settings here
-                warn!("Custom set value -- not supported")
-            }
-            ViaCommand::CustomGetValue => {
-                // backlight/rgblight/rgb matrix/led matrix/audio settings here
-                warn!("Custom get value -- not supported")
-            }
-            ViaCommand::CustomSave => {
-                // backlight/rgblight/rgb matrix/led matrix/audio settings here
-                warn!("Custom get value -- not supported")
+            ViaCommand::CustomSetValue | ViaCommand::CustomGetValue | ViaCommand::CustomSave => {
+                rgb_matrix::process_packet(&self.rgb_matrix, &report.output_data, &mut report.input_data).await;
             }
             ViaCommand::EepromReset => {
                 warn!("Resetting storage..");
@@ -248,7 +271,7 @@ impl<'a> VialService<'a> {
     }
 }
 
-impl VialService<'_> {
+impl<RgbMatrix: rgb_matrix::ViaRgbMatrixControl> VialService<'_, RgbMatrix> {
     /// Drive one Vial session against `rx`/`tx` (32-byte request → 32-byte
     /// response, processed in place). Returns on any read/write error;
     /// transport-specific reconnect lives in the caller.
@@ -301,6 +324,38 @@ mod tests {
             input_data: output_data,
             output_data,
         }
+    }
+
+    #[test]
+    fn advertises_channel_qualified_custom_value_protocol() {
+        with_service(|service| {
+            let mut output_data = [0u8; 32];
+            output_data[0] = ViaCommand::GetProtocolVersion as u8;
+            let mut report = ViaReport {
+                input_data: output_data,
+                output_data,
+            };
+            block_on(service.process_via_packet(&mut report));
+            assert_eq!(BigEndian::read_u16(&report.input_data[1..3]), 0x000B);
+        });
+    }
+
+    #[test]
+    fn unbound_service_does_not_claim_rgb_matrix_or_save_support() {
+        with_service(|service| {
+            for command in [ViaCommand::CustomGetValue, ViaCommand::CustomSave] {
+                let mut output_data = [0u8; 32];
+                output_data[0] = command as u8;
+                output_data[1] = rgb_matrix::CHANNEL;
+                output_data[2] = 1;
+                let mut report = ViaReport {
+                    input_data: output_data,
+                    output_data,
+                };
+                block_on(service.process_via_packet(&mut report));
+                assert_eq!(report.input_data[0], ViaCommand::Unhandled as u8);
+            }
+        });
     }
 
     // `output_data` is [u8; 32], so the handler slices `output_data[4..4 + size]`.
