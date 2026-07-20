@@ -29,5 +29,8 @@ pub use rynk::{
     RYNK_LIGHTING_TRANSACTION_CAPACITY, RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox,
     StandardRynkLightingAdapter,
 };
+/// RMK's semantic version, available to downstream firmware build labels.
+#[cfg(feature = "rynk")]
+pub use rynk::{RMK_VERSION, RMK_VERSION_STRING};
 #[cfg(feature = "vial")]
 pub use via::VialService as HostService;

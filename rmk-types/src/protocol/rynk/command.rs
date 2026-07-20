@@ -14,11 +14,11 @@ use serde::de::DeserializeOwned;
 
 use super::message::{RynkHeader, encode_frame};
 use super::{
-    BehaviorConfig, DeviceCapabilities, DeviceInfo, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest,
-    GetKeymapBulkRequest, GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse,
-    KeyPosition, LayoutChunk, LockStatus, MacroData, MatrixState, ProtocolVersion, RynkError, SetComboBulkRequest,
-    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest,
-    SetMorseBulkRequest, SetMorseRequest, StorageResetMode,
+    BehaviorConfig, BuildInfo, DeviceCapabilities, DeviceInfo, GetComboBulkRequest, GetComboBulkResponse,
+    GetEncoderRequest, GetKeymapBulkRequest, GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest,
+    GetMorseBulkResponse, KeyPosition, LayoutChunk, LockStatus, MacroData, MatrixState, ProtocolVersion, RynkError,
+    SetComboBulkRequest, SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest,
+    SetMacroRequest, SetMorseBulkRequest, SetMorseRequest, StorageResetMode,
 };
 use crate::action::{EncoderAction, KeyAction};
 #[cfg(feature = "_ble")]
@@ -287,6 +287,8 @@ endpoints! {
     GetLayout = 0x0009: u32 => LayoutChunk;
     /// Identity strings and USB ids; feature gating stays in `GetCapabilities`.
     GetDeviceInfo = 0x000A: () => DeviceInfo;
+    /// Application-defined diagnostic build label; never used for compatibility.
+    GetBuildInfo = 0x000B: () => BuildInfo;
 
     // Keymap (0x01xx) — includes encoder.
     GetKeyAction = 0x0101: KeyPosition => KeyAction;

@@ -33,6 +33,7 @@ BleState::Advertising                     00
 BleState::Connected                       01
 BleState::Inactive                        02
 BleStatus{2,Connected}                    02 01
+BuildInfo{my-firmware..}                  1f 6d 79 2d 66 69 72 6d 77 61 72 65 20 76 34 2e 35 2e 36 20 2f 20 52 4d 4b 20 76 31 2e 32 2e 33
 ChargeState::Charging                     00
 ChargeState::Discharging                  01
 ChargeState::Unknown                      02

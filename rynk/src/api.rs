@@ -28,9 +28,9 @@ use rmk_types::protocol::rynk::{
     LightingLedsPage, LightingOutputsPage, LightingOverlayTransaction, LightingPageRequest, LightingPhysicalKeysPage,
     LightingResult, LightingRoutesPage, LightingState, LightingZoneMembershipsPage, LightingZonesPage, LockStatus,
     MacroData, MatrixState, PeripheralStatus, ProtocolVersion, PutLightingOverlayChunkRequest, SetComboBulkRequest,
-    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetLightingOverlayRequest,
-    SetLightingStateRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest, StorageResetMode,
-    UnsetLightingOverlayRequest, command,
+    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest,
+    SetLightingOverlayRequest, SetLightingStateRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest,
+    StorageResetMode, UnsetLightingOverlayRequest, command, BuildInfo,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -97,6 +97,11 @@ impl Client {
     /// Read the firmware and device identity.
     pub async fn get_device_info(&self) -> Result<DeviceInfo, RynkHostError> {
         self.request::<command::GetDeviceInfo>(&()).await
+    }
+
+    /// Read the application-defined diagnostic build label.
+    pub async fn get_build_info(&self) -> Result<BuildInfo, RynkHostError> {
+        self.request::<command::GetBuildInfo>(&()).await
     }
 
     /// Reboot the device. The firmware resets before it can reply, so `Ok(())` only

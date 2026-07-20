@@ -19,7 +19,8 @@ pub use lighting::{
 };
 use rmk_types::constants::RYNK_BUFFER_SIZE;
 use rmk_types::protocol::rynk::{
-    Cmd, Deframer, RYNK_HEADER_SIZE, RynkError, RynkMessage, command, encode_frame, max_wire_size,
+    BuildInfo, Cmd, Deframer, FirmwareVersion, RYNK_HEADER_SIZE, RynkError, RynkMessage, command, encode_frame,
+    max_wire_size,
 };
 
 use self::handlers::{serve, serve_bulk};
@@ -32,6 +33,43 @@ use crate::keymap::KeyMap;
 /// Unlock attempts live long enough for BLE WebHID round trips.
 const RYNK_UNLOCK_WINDOW: embassy_time::Duration = embassy_time::Duration::from_millis(500);
 
+/// The `rmk` crate version baked into the firmware, so hosts can key
+/// version-specific behavior off the library release, not the user's app.
+pub const RMK_VERSION: FirmwareVersion = {
+    const fn component(s: &str) -> u8 {
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        let mut value = 0u8;
+        while i < bytes.len() {
+            value = value * 10 + (bytes[i] - b'0');
+            i += 1;
+        }
+        value
+    }
+
+    FirmwareVersion {
+        major: component(env!("CARGO_PKG_VERSION_MAJOR")),
+        minor: component(env!("CARGO_PKG_VERSION_MINOR")),
+        patch: component(env!("CARGO_PKG_VERSION_PATCH")),
+    }
+};
+
+/// String form of [`RMK_VERSION`] for application-defined build labels.
+pub const RMK_VERSION_STRING: &str = env!("CARGO_PKG_VERSION");
+
+const DEFAULT_BUILD_LABEL: &str = concat!("RMK v", env!("CARGO_PKG_VERSION"));
+
+/// Copy a string into a bounded wire value without splitting UTF-8.
+fn truncated<const N: usize>(s: &str) -> heapless::String<N> {
+    let mut out = heapless::String::new();
+    for c in s.chars() {
+        if out.push(c).is_err() {
+            break;
+        }
+    }
+    out
+}
+
 /// Transport-agnostic Rynk service.
 pub struct RynkService<'a> {
     ctx: KeyboardContext<'a>,
@@ -41,6 +79,8 @@ pub struct RynkService<'a> {
     lock_config: LockConfig,
     #[cfg(feature = "lighting")]
     lighting: Option<RynkLightingController<'a>>,
+    /// Human-readable firmware identity served by `GetBuildInfo`.
+    build_info: BuildInfo,
 }
 
 /// Per-session state that has to outlive a single dispatch. The authorization
@@ -65,6 +105,9 @@ impl<'a> RynkService<'a> {
             lock_config: config.lock_config,
             #[cfg(feature = "lighting")]
             lighting: None,
+            build_info: BuildInfo {
+                label: truncated(DEFAULT_BUILD_LABEL),
+            },
         }
     }
 
@@ -74,6 +117,15 @@ impl<'a> RynkService<'a> {
     #[cfg(feature = "lighting")]
     pub fn with_lighting(mut self, lighting: RynkLightingController<'a>) -> Self {
         self.lighting = Some(lighting);
+        self
+    }
+
+    /// Replace the diagnostic build label advertised by `GetBuildInfo`.
+    ///
+    /// The label is for display and support diagnostics only. Protocol
+    /// compatibility continues to use `GetVersion`.
+    pub fn with_build_label(mut self, label: &str) -> Self {
+        self.build_info.label = truncated(label);
         self
     }
 
@@ -132,6 +184,7 @@ impl<'a> RynkService<'a> {
             Cmd::UnlockPoll => serve::<command::UnlockPoll, _>(locker, msg).await,
             Cmd::Lock => serve::<command::Lock, _>(locker, msg).await,
             Cmd::GetDeviceInfo => serve::<command::GetDeviceInfo, _>(self, msg).await,
+            Cmd::GetBuildInfo => serve::<command::GetBuildInfo, _>(self, msg).await,
 
             Cmd::GetKeyAction => serve::<command::GetKeyAction, _>(self, msg).await,
             Cmd::SetKeyAction => serve::<command::SetKeyAction, _>(self, msg).await,
@@ -182,31 +235,31 @@ impl<'a> RynkService<'a> {
             Cmd::GetLayout => serve::<command::GetLayout, _>(self, msg).await,
 
             #[cfg(feature = "lighting")]
-            Cmd::GetLightingCapabilities => Serve::<command::GetLightingCapabilities, _>::serve(self, msg).await,
+            Cmd::GetLightingCapabilities => serve::<command::GetLightingCapabilities, _>(self, msg).await,
             #[cfg(feature = "lighting")]
-            Cmd::GetLightingState => Serve::<command::GetLightingState, _>::serve(self, msg).await,
+            Cmd::GetLightingState => serve::<command::GetLightingState, _>(self, msg).await,
             #[cfg(feature = "lighting")]
-            Cmd::SetLightingState => Serve::<command::SetLightingState, _>::serve(self, msg).await,
+            Cmd::SetLightingState => serve::<command::SetLightingState, _>(self, msg).await,
             #[cfg(feature = "lighting")]
-            Cmd::GetLightingKeys => Serve::<command::GetLightingKeys, _>::serve(self, msg).await,
+            Cmd::GetLightingKeys => serve::<command::GetLightingKeys, _>(self, msg).await,
             #[cfg(feature = "lighting")]
-            Cmd::GetLightingPhysicalKeys => Serve::<command::GetLightingPhysicalKeys, _>::serve(self, msg).await,
+            Cmd::GetLightingPhysicalKeys => serve::<command::GetLightingPhysicalKeys, _>(self, msg).await,
             #[cfg(feature = "lighting")]
-            Cmd::GetLightingLeds => Serve::<command::GetLightingLeds, _>::serve(self, msg).await,
+            Cmd::GetLightingLeds => serve::<command::GetLightingLeds, _>(self, msg).await,
             #[cfg(feature = "lighting")]
-            Cmd::GetLightingZones => Serve::<command::GetLightingZones, _>::serve(self, msg).await,
+            Cmd::GetLightingZones => serve::<command::GetLightingZones, _>(self, msg).await,
             #[cfg(feature = "lighting")]
-            Cmd::GetLightingZoneMemberships => Serve::<command::GetLightingZoneMemberships, _>::serve(self, msg).await,
+            Cmd::GetLightingZoneMemberships => serve::<command::GetLightingZoneMemberships, _>(self, msg).await,
             #[cfg(feature = "lighting")]
-            Cmd::GetLightingOutputs => Serve::<command::GetLightingOutputs, _>::serve(self, msg).await,
+            Cmd::GetLightingOutputs => serve::<command::GetLightingOutputs, _>(self, msg).await,
             #[cfg(feature = "lighting")]
-            Cmd::GetLightingRoutes => Serve::<command::GetLightingRoutes, _>::serve(self, msg).await,
+            Cmd::GetLightingRoutes => serve::<command::GetLightingRoutes, _>(self, msg).await,
             #[cfg(feature = "lighting")]
-            Cmd::SetLightingOverlay => Serve::<command::SetLightingOverlay, _>::serve(self, msg).await,
+            Cmd::SetLightingOverlay => serve::<command::SetLightingOverlay, _>(self, msg).await,
             #[cfg(feature = "lighting")]
-            Cmd::UnsetLightingOverlay => Serve::<command::UnsetLightingOverlay, _>::serve(self, msg).await,
+            Cmd::UnsetLightingOverlay => serve::<command::UnsetLightingOverlay, _>(self, msg).await,
             #[cfg(feature = "lighting")]
-            Cmd::ClearLightingOverlay => Serve::<command::ClearLightingOverlay, _>::serve(self, msg).await,
+            Cmd::ClearLightingOverlay => serve::<command::ClearLightingOverlay, _>(self, msg).await,
             #[cfg(feature = "lighting")]
             Cmd::BeginLightingOverlayReplace => handlers::lighting::serve_begin(self, session, msg).await,
             #[cfg(feature = "lighting")]

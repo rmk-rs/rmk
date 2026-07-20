@@ -11,6 +11,9 @@ use crate::morse::MorseProfile;
 /// Maximum byte length of each `DeviceInfo` string field.
 pub const DEVICE_INFO_STRING_SIZE: usize = 32;
 
+/// Maximum byte length of the application-defined build label.
+pub const BUILD_INFO_STRING_SIZE: usize = 128;
+
 /// Protocol version advertised during the connection handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
@@ -22,8 +25,27 @@ pub struct ProtocolVersion {
 
 impl ProtocolVersion {
     /// Current protocol version for this firmware release.
-    /// The protocol is still under development; lighting endpoints were added in v0.2.
+    /// The protocol is still under development; lighting endpoints and
+    /// build-info discovery were added in v0.2.
     pub const CURRENT: Self = Self { major: 0, minor: 2 };
+}
+
+/// Human-readable identity of the firmware build.
+///
+/// Unlike [`ProtocolVersion`], this label is deliberately application-defined:
+/// it is for diagnostics and display, never compatibility decisions. RMK
+/// supplies an RMK-only default and downstream firmware may replace it with a
+/// label containing its own package, source revision, or configuration name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct BuildInfo {
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
+    pub label: String<BUILD_INFO_STRING_SIZE>,
+}
+
+impl MaxSize for BuildInfo {
+    const POSTCARD_MAX_SIZE: usize = crate::heapless_vec_max_size::<u8, BUILD_INFO_STRING_SIZE>();
 }
 
 /// Device capabilities discovered during the connection handshake.
@@ -245,6 +267,15 @@ mod tests {
             product_name: full.clone(),
             serial_number: full,
         };
+        round_trip(&info);
+        assert_max_size_bound(&info);
+    }
+
+    #[test]
+    fn round_trip_build_info() {
+        let full: String<BUILD_INFO_STRING_SIZE> =
+            String::try_from("x".repeat(BUILD_INFO_STRING_SIZE).as_str()).unwrap();
+        let info = BuildInfo { label: full };
         round_trip(&info);
         assert_max_size_bound(&info);
     }
