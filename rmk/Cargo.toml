@@ -197,7 +197,11 @@ std = [
 ]
 
 ## Enable display support (traits + processor)
-display = ["dep:embedded-graphics", "rmk-types/display"]
+display = ["dep:embedded-graphics", "rmk-types/display", "_render_state"]
+## Enable topology-aware composable lighting support.
+lighting = ["rmk-types/lighting", "_render_state"]
+## Shared authoritative state needed by display and lighting renderers.
+_render_state = []
 ## Enable SSD1306 OLED driver
 ssd1306 = ["display", "dep:ssd1306", "dep:display-interface", "dep:display-interface-i2c"]
 ## Enable OLED drivers via oled_async (SH1106, SH1107, SH1108, SSD1309)

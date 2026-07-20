@@ -9,6 +9,31 @@ use rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
 use crate::RawMutex;
 use crate::event::{ConnectionStatusChangeEvent, publish_event};
 
+/// Authoritative device sleep state shared by display, lighting, host
+/// readback, battery management, and split forwarding. Events invalidate this
+/// value; they are not a second owner of it.
+static SLEEPING: Mutex<RawMutex, Cell<bool>> = Mutex::new(Cell::new(false));
+
+pub(crate) fn current_sleeping() -> bool {
+    SLEEPING.lock(Cell::get)
+}
+
+/// Compatibility spelling used by the existing Rynk status handler.
+pub(crate) fn current_sleep_state() -> bool {
+    current_sleeping()
+}
+
+pub(crate) fn set_sleeping(sleeping: bool) {
+    let changed = SLEEPING.lock(|state| {
+        let changed = state.get() != sleeping;
+        state.set(sleeping);
+        changed
+    });
+    if changed {
+        publish_event(crate::event::SleepStateEvent::new(sleeping));
+    }
+}
+
 /// Single source of truth for transport state and routing. All writes go
 /// through the mutator helpers below so the active-output cascade runs and
 /// change events fire on every transition.
@@ -25,19 +50,6 @@ pub(crate) fn current_connection_status() -> ConnectionStatus {
 
 pub(crate) fn current_usb_state() -> UsbState {
     CONNECTION_STATUS.lock(|c| c.get().usb)
-}
-
-/// Current central sleep state for host polling. Sourced from the BLE sleep
-/// manager's `SLEEPING_STATE`; always `false` in builds without BLE.
-pub(crate) fn current_sleep_state() -> bool {
-    #[cfg(feature = "_ble")]
-    {
-        crate::ble::sleep::SLEEPING_STATE.load(core::sync::atomic::Ordering::Acquire)
-    }
-    #[cfg(not(feature = "_ble"))]
-    {
-        false
-    }
 }
 
 #[cfg(feature = "_ble")]

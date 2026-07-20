@@ -61,7 +61,7 @@ pub(crate) enum SplitMessage {
     #[cfg(feature = "display")]
     Modifier(u8),
     /// Sleep state from central to peripheral
-    #[cfg(feature = "display")]
+    #[cfg(feature = "_render_state")]
     SleepState(bool),
     /// Battery status, from peripheral to central
     #[cfg(feature = "_ble")]

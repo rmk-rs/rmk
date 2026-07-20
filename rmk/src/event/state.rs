@@ -58,3 +58,18 @@ impl SleepStateEvent {
 }
 
 impl_payload_wrapper!(SleepStateEvent, bool);
+
+/// Authoritative lighting state changed.
+///
+/// This is deliberately a unit invalidation: consumers read a fresh state
+/// snapshot from the lighting controller instead of trusting an event mirror.
+#[event(channel_size = crate::LIGHTING_CHANGED_EVENT_CHANNEL_SIZE, pubs = crate::LIGHTING_CHANGED_EVENT_PUB_SIZE, subs = crate::LIGHTING_CHANGED_EVENT_SUB_SIZE)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct LightingChangedEvent;
+
+impl LightingChangedEvent {
+    pub const fn new() -> Self {
+        Self
+    }
+}

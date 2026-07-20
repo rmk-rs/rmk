@@ -1,6 +1,5 @@
 /// Traits and types for HID message reporting and listening.
 use core::future::Future;
-use core::sync::atomic::Ordering;
 
 use embassy_usb::class::hid::ReadError;
 use embassy_usb::driver::EndpointError;
@@ -13,7 +12,6 @@ use usbd_hid::descriptor::generator_prelude::*;
 use usbd_hid::descriptor::{AsInputReport, MediaKeyboardReport, MouseReport, SystemControlReport};
 
 use crate::event::{LedIndicatorEvent, publish_event};
-use crate::keyboard::LOCK_LED_STATES;
 
 /// KeyboardReport describes a report and its companion descriptor that can be
 /// used to send keyboard button presses to a host and receive the status of the
@@ -403,7 +401,7 @@ pub(crate) async fn run_led_reader<R: HidReaderTrait<ReportType = LedIndicator>>
             Ok(led_indicator) => {
                 info!("Got led indicator");
                 if crate::state::active_transport() == Some(kind) {
-                    LOCK_LED_STATES.store(led_indicator.into_bits(), Ordering::Relaxed);
+                    crate::keyboard::set_current_led_indicator(led_indicator);
                     publish_event(LedIndicatorEvent::new(led_indicator));
                 }
             }

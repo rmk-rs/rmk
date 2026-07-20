@@ -22,6 +22,7 @@ use super::keyboard_config::{
     expand_keyboard_info, expand_lock_config, expand_vial_config, read_keyboard_toml_config,
 };
 use super::keymap::expand_default_keymap;
+use super::lighting::{expand_lighting_topology, expand_physical_layout};
 use super::matrix::{expand_bootmagic_check, expand_matrix_config};
 use super::registered_processor::expand_registered_processor_init;
 use super::split::central::expand_split_central_config;
@@ -56,18 +57,29 @@ pub(crate) fn parse_keyboard_mod(item_mod: syn::ItemMod) -> TokenStream2 {
     let layout = keyboard_config
         .layout()
         .expect("failed to resolve layout config");
+    let lighting = keyboard_config
+        .lighting(&layout, &keymap)
+        .expect("failed to resolve lighting config");
 
     validate_feature_config_parity(
         &rmk_features,
         hardware.storage.is_some(),
         host.vial_enabled,
         host.rynk_enabled,
+        lighting.is_some(),
     )
     .unwrap_or_else(|err| panic!("{err}"));
 
     // Generate imports and statics
-    let imports_and_statics =
-        expand_imports_and_constants(&identity, &host, &hardware, &behavior, &keymap);
+    let imports_and_statics = expand_imports_and_constants(
+        &identity,
+        &host,
+        &hardware,
+        &behavior,
+        &keymap,
+        &layout,
+        lighting.as_ref(),
+    );
 
     // Generate main function body
     let main_function = expand_main(
@@ -92,6 +104,7 @@ fn validate_feature_config_parity(
     storage_in_config: bool,
     vial_in_config: bool,
     rynk_in_config: bool,
+    lighting_in_config: bool,
 ) -> Result<(), String> {
     // A feature enabled in keyboard.toml must have its rmk Cargo feature enabled, and vice versa.
     // (Cargo feature, keyboard.toml field, enabled in keyboard.toml?)
@@ -120,6 +133,17 @@ fn validate_feature_config_parity(
         );
     }
 
+    // Unlike the host/storage integrations, lighting also has a public Rust
+    // construction path, so enabling the feature without TOML is valid. A
+    // TOML section does require the feature because codegen emits lighting
+    // runtime types.
+    if lighting_in_config && !is_feature_enabled(rmk_features, "lighting") {
+        return Err(
+            "A `[lighting]` section in keyboard.toml requires enabling the \"lighting\" Cargo feature for rmk."
+                .to_string(),
+        );
+    }
+
     Ok(())
 }
 
@@ -129,6 +153,8 @@ pub(crate) fn expand_imports_and_constants(
     hardware: &Hardware,
     behavior: &Behavior,
     keymap: &Keymap,
+    layout: &Layout,
+    lighting: Option<&rmk_config::resolved::Lighting>,
 ) -> TokenStream2 {
     // Generate keyboard info and number of rows/cols/layers
     let keyboard_info_static_var = expand_keyboard_info(identity, keymap);
@@ -138,6 +164,8 @@ pub(crate) fn expand_imports_and_constants(
     let vial_static_var = expand_vial_config(host);
     // Generate rynk lock-gate config
     let lock_static_var = expand_lock_config(host);
+    let physical_layout = expand_physical_layout(&layout.physical);
+    let lighting_topology = expand_lighting_topology(lighting);
 
     // Generate extra imports, panic handler and logger
     let imports = match hardware.chip.series {
@@ -178,6 +206,8 @@ pub(crate) fn expand_imports_and_constants(
         #vial_static_var
         #lock_static_var
         #default_keymap
+        #physical_layout
+        #lighting_topology
     }
 }
 
@@ -193,22 +223,45 @@ mod tests {
     #[test]
     fn accepts_matching_storage_vial_rynk_feature_states() {
         assert!(
-            validate_feature_config_parity(&features(&["storage", "vial"]), true, true, false)
+            validate_feature_config_parity(
+                &features(&["storage", "vial"]),
+                true,
+                true,
+                false,
+                false
+            )
+            .is_ok()
+        );
+        assert!(validate_feature_config_parity(&features(&[]), false, false, false, false).is_ok());
+        assert!(
+            validate_feature_config_parity(&features(&["storage"]), true, false, false, false)
                 .is_ok()
         );
-        assert!(validate_feature_config_parity(&features(&[]), false, false, false).is_ok());
         assert!(
-            validate_feature_config_parity(&features(&["storage"]), true, false, false).is_ok()
+            validate_feature_config_parity(
+                &features(&["storage", "rynk"]),
+                true,
+                false,
+                true,
+                false
+            )
+            .is_ok()
         );
         assert!(
-            validate_feature_config_parity(&features(&["storage", "rynk"]), true, false, true)
+            validate_feature_config_parity(&features(&["lighting"]), false, false, false, false)
+                .is_ok(),
+            "the lighting feature supports public Rust construction without TOML"
+        );
+        assert!(
+            validate_feature_config_parity(&features(&["lighting"]), false, false, false, true)
                 .is_ok()
         );
     }
 
     #[test]
     fn rejects_storage_enabled_in_config_without_feature() {
-        let err = validate_feature_config_parity(&features(&[]), true, false, false).unwrap_err();
+        let err =
+            validate_feature_config_parity(&features(&[]), true, false, false, false).unwrap_err();
         assert_eq!(
             err,
             "If the \"storage\" Cargo feature is disabled, `storage.enabled` must be set to false in keyboard.toml."
@@ -217,8 +270,9 @@ mod tests {
 
     #[test]
     fn rejects_storage_feature_without_config() {
-        let err = validate_feature_config_parity(&features(&["storage"]), false, false, false)
-            .unwrap_err();
+        let err =
+            validate_feature_config_parity(&features(&["storage"]), false, false, false, false)
+                .unwrap_err();
         assert_eq!(
             err,
             "`storage.enabled = false` in keyboard.toml requires disabling the \"storage\" Cargo feature for rmk in Cargo.toml (for example with `default-features = false` and explicitly re-enabling the features you need)."
@@ -227,7 +281,8 @@ mod tests {
 
     #[test]
     fn rejects_vial_enabled_in_config_without_feature() {
-        let err = validate_feature_config_parity(&features(&[]), false, true, false).unwrap_err();
+        let err =
+            validate_feature_config_parity(&features(&[]), false, true, false, false).unwrap_err();
         assert_eq!(
             err,
             "If the \"vial\" Cargo feature is disabled, `host.vial_enabled` must be set to false in keyboard.toml."
@@ -236,8 +291,8 @@ mod tests {
 
     #[test]
     fn rejects_vial_feature_without_config() {
-        let err =
-            validate_feature_config_parity(&features(&["vial"]), false, false, false).unwrap_err();
+        let err = validate_feature_config_parity(&features(&["vial"]), false, false, false, false)
+            .unwrap_err();
         assert_eq!(
             err,
             "`host.vial_enabled = false` in keyboard.toml requires disabling the \"vial\" Cargo feature for rmk in Cargo.toml (for example with `default-features = false` and explicitly re-enabling the features you need)."
@@ -246,7 +301,8 @@ mod tests {
 
     #[test]
     fn rejects_rynk_enabled_in_config_without_feature() {
-        let err = validate_feature_config_parity(&features(&[]), false, false, true).unwrap_err();
+        let err =
+            validate_feature_config_parity(&features(&[]), false, false, true, false).unwrap_err();
         assert_eq!(
             err,
             "If the \"rynk\" Cargo feature is disabled, `host.rynk_enabled` must be set to false in keyboard.toml."
@@ -255,8 +311,8 @@ mod tests {
 
     #[test]
     fn rejects_rynk_feature_without_config() {
-        let err =
-            validate_feature_config_parity(&features(&["rynk"]), false, false, false).unwrap_err();
+        let err = validate_feature_config_parity(&features(&["rynk"]), false, false, false, false)
+            .unwrap_err();
         assert_eq!(
             err,
             "`host.rynk_enabled = false` in keyboard.toml requires disabling the \"rynk\" Cargo feature for rmk in Cargo.toml (for example with `default-features = false` and explicitly re-enabling the features you need)."
@@ -265,11 +321,22 @@ mod tests {
 
     #[test]
     fn rejects_vial_and_rynk_both_enabled() {
-        let err = validate_feature_config_parity(&features(&["vial", "rynk"]), false, true, true)
-            .unwrap_err();
+        let err =
+            validate_feature_config_parity(&features(&["vial", "rynk"]), false, true, true, false)
+                .unwrap_err();
         assert_eq!(
             err,
             "`host.vial_enabled` and `host.rynk_enabled` are mutually exclusive — set exactly one to true (the underlying Cargo features for rmk also conflict)."
+        );
+    }
+
+    #[test]
+    fn rejects_lighting_config_without_feature() {
+        let err =
+            validate_feature_config_parity(&features(&[]), false, false, false, true).unwrap_err();
+        assert_eq!(
+            err,
+            "A `[lighting]` section in keyboard.toml requires enabling the \"lighting\" Cargo feature for rmk."
         );
     }
 }

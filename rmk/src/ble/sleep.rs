@@ -1,26 +1,19 @@
 //! Keyboard-wide sleep management.
 //!
-//! One manager owns the keyboard's sleep state: it watches [`SLEEP_INPUT`],
-//! latches each decision in [`SLEEPING_STATE`] for pollers like the battery
-//! service, and publishes it as [`SleepStateEvent`] for everything else — the
-//! display, and on split centrals the per-link connection-parameter followers
-//! in `split::ble::central`.
-
-use core::sync::atomic::{AtomicBool, Ordering};
+//! One manager owns the keyboard's sleep state: it watches [`SLEEP_INPUT`] and
+//! latches each decision through [`crate::state::set_sleeping`], which both
+//! stores the value for pollers like the battery service and publishes it as
+//! [`crate::event::SleepStateEvent`] for everything else — the display, the
+//! lighting engine, host readback, and on split centrals the per-link
+//! connection-parameter followers in `split::ble::central`.
 
 use embassy_futures::select::{Either, select};
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 
 use crate::SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS;
-use crate::event::{SleepStateEvent, publish_event};
 
-/// The latched sleep state.
-/// - `true`: the keyboard is idle and sleeping
-/// - `false`: the keyboard is awake
-pub(crate) static SLEEPING_STATE: AtomicBool = AtomicBool::new(false);
-
-/// Input to [`run_sleep_manager`], same encoding as [`SLEEPING_STATE`]:
+/// Input to [`run_sleep_manager`], same encoding as the latched sleep state:
 /// - `true`: sleep now, without waiting out the idle timeout
 /// - `false`: activity — wake up, or restart the idle timeout
 static SLEEP_INPUT: Signal<crate::RawMutex, bool> = Signal::new();
@@ -71,15 +64,13 @@ async fn manage_sleep_state(idle_timeout: Duration) -> ! {
             }
         }
         info!("Entering sleep mode");
-        SLEEPING_STATE.store(true, Ordering::Release);
-        publish_event(SleepStateEvent::new(true));
+        crate::state::set_sleeping(true);
 
         // Asleep: only activity wakes us; further sleep requests change nothing.
         while SLEEP_INPUT.wait().await {}
 
         info!("Waking up from sleep mode due to activity");
-        SLEEPING_STATE.store(false, Ordering::Release);
-        publish_event(SleepStateEvent::new(false));
+        crate::state::set_sleeping(false);
     }
 }
 
@@ -96,7 +87,7 @@ mod tests {
     }
 
     fn sleeping() -> bool {
-        SLEEPING_STATE.load(Ordering::Acquire)
+        crate::state::current_sleeping()
     }
 
     #[test]

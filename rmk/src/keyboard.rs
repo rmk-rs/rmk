@@ -64,6 +64,13 @@ pub(crate) fn current_led_indicator() -> LedIndicator {
     LedIndicator::from_bits(LOCK_LED_STATES.load(core::sync::atomic::Ordering::Relaxed))
 }
 
+/// Update the authoritative host-driven lock LED state before publishing its
+/// invalidation event. This also covers split peripherals, which do not have a
+/// local HID reader.
+pub(crate) fn set_current_led_indicator(indicator: LedIndicator) {
+    LOCK_LED_STATES.store(indicator.into_bits(), core::sync::atomic::Ordering::Relaxed);
+}
+
 /// State machine for Caps Word
 #[derive(Debug, Default)]
 enum CapsWordState {
@@ -1221,6 +1228,12 @@ impl<'a> Keyboard<'a> {
     }
 
     async fn process_key_action_normal(&mut self, action: Action, event: KeyboardEvent) {
+        #[cfg(feature = "lighting")]
+        if event.pressed
+            && let Action::Light(light_action) = action
+        {
+            crate::lighting::send_light_action(light_action).await;
+        }
         publish_event_async(ActionEvent {
             action,
             keyboard_event: event,

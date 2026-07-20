@@ -19,7 +19,7 @@ use crate::event::{
     KeyboardEvent, LayerChangeEvent, LedIndicatorEvent, PointingEvent, SubscribableEvent, publish_event,
 };
 #[cfg(feature = "display")]
-use crate::event::{ModifierEvent, SleepStateEvent, WpmUpdateEvent};
+use crate::event::{ModifierEvent, WpmUpdateEvent};
 #[cfg(not(feature = "_ble"))]
 use crate::split::serial::SerialSplitDriver;
 use crate::state::update_status;
@@ -189,9 +189,9 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                             }
                             SplitMessage::KeyboardIndicator(indicator) => {
                                 // Publish KeyboardIndicator event
-                                publish_event(LedIndicatorEvent::new(
-                                    rmk_types::led_indicator::LedIndicator::from_bits(indicator),
-                                ));
+                                let indicator = rmk_types::led_indicator::LedIndicator::from_bits(indicator);
+                                crate::keyboard::set_current_led_indicator(indicator);
+                                publish_event(LedIndicatorEvent::new(indicator));
                             }
                             SplitMessage::Layer(layer) => {
                                 // Publish Layer event
@@ -205,9 +205,9 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                                     modifier: rmk_types::modifier::ModifierCombination::from_bits(bits),
                                 });
                             }
-                            #[cfg(feature = "display")]
+                            #[cfg(feature = "_render_state")]
                             SplitMessage::SleepState(sleeping) => {
-                                publish_event(SleepStateEvent::new(sleeping));
+                                crate::state::set_sleeping(sleeping);
                             }
                             // --- dfu_split: firmware update handlers ---
                             #[cfg(feature = "dfu_split")]

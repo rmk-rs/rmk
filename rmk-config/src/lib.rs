@@ -89,6 +89,9 @@ pub struct KeyboardTomlConfig {
     /// Layout config: the physical key arrangement (`map`) plus the rendered layout.
     /// For split keyboards, the total row/col is defined in this section.
     layout: Option<LayoutTomlConfig>,
+    /// Topology-aware lighting. Key geometry is always derived from
+    /// `[layout].map`; emitters add semantic identity and electrical routing.
+    lighting: Option<LightingTomlConfig>,
     /// Behavior config
     behavior: Option<BehaviorConfig>,
     /// Light config
@@ -504,6 +507,7 @@ define_event_config!(
     wpm_update,
     led_indicator,
     sleep_state,
+    lighting_changed,
     // Power events
     battery_status,
     battery_adc,
@@ -562,6 +566,141 @@ pub(crate) struct VariantToml {
     pub name: String,
     pub shapes: Option<HashMap<String, String>>,
     pub hidden: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingTomlConfig {
+    #[serde(default = "default_topology_revision")]
+    pub topology_revision: u32,
+    #[serde(default, rename = "zone")]
+    pub zones: Vec<LightingZoneTomlConfig>,
+    #[serde(default, rename = "output")]
+    pub outputs: Vec<LightingOutputTomlConfig>,
+    #[serde(default, rename = "emitter")]
+    pub emitters: Vec<LightingEmitterTomlConfig>,
+    #[serde(default, rename = "layer_scene")]
+    pub layer_scenes: Vec<LightingLayerSceneTomlConfig>,
+    pub background: Option<LightingBackgroundTomlConfig>,
+}
+
+fn default_topology_revision() -> u32 {
+    1
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingZoneTomlConfig {
+    pub id: u8,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingOutputTomlConfig {
+    pub node: u8,
+    pub id: u8,
+    pub pixel_count: u16,
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub sparse: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingEmitterTomlConfig {
+    pub id: u16,
+    pub key: Option<[u8; 2]>,
+    pub position: Option<[f32; 3]>,
+    #[serde(default)]
+    pub zones: Vec<u8>,
+    pub node: u8,
+    pub output: u8,
+    pub physical_index: u16,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingLayerSceneTomlConfig {
+    pub layer: u8,
+    #[serde(default, rename = "cell")]
+    pub cells: Vec<LightingSceneCellTomlConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingSceneCellTomlConfig {
+    pub target: LightingTargetTomlConfig,
+    pub effect: LightingEffectTomlConfig,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum LightingTargetTomlConfig {
+    Led { led: u16 },
+    Key { key: [u8; 2] },
+    Zone { zone: u8 },
+    All { all: bool },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LightingEffectTomlConfig {
+    Solid {
+        color: [u8; 3],
+    },
+    Blink {
+        color: [u8; 3],
+        period_ms: u32,
+        #[serde(default)]
+        phase_ms: u32,
+        duty_percent: u8,
+    },
+    Breathe {
+        color: [u8; 3],
+        period_ms: u32,
+        #[serde(default)]
+        phase_ms: u32,
+        #[serde(default = "default_breathe_step_ms")]
+        step_ms: u16,
+    },
+}
+
+fn default_breathe_step_ms() -> u16 {
+    16
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingBackgroundTomlConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub hue: u8,
+    #[serde(default)]
+    pub saturation: u8,
+    #[serde(default = "default_background_value")]
+    pub value: u8,
+    #[serde(default = "default_background_speed")]
+    pub speed: u8,
+    #[serde(default)]
+    pub mode: LightingBackgroundModeToml,
+}
+
+fn default_background_value() -> u8 {
+    32
+}
+
+fn default_background_speed() -> u8 {
+    128
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LightingBackgroundModeToml {
+    #[default]
+    Solid,
+    Breathe,
 }
 
 /// The `[keymap]` section: layer count plus the per-layer key actions.
@@ -1470,6 +1609,10 @@ mod tests {
         assert_eq!(config.led_indicator.channel_size, 2);
         assert_eq!(config.led_indicator.pubs, 2);
         assert_eq!(config.led_indicator.subs, 3);
+
+        assert_eq!(config.lighting_changed.channel_size, 1);
+        assert_eq!(config.lighting_changed.pubs, 1);
+        assert_eq!(config.lighting_changed.subs, 1);
 
         assert_eq!(config.pointing.channel_size, 8);
         assert_eq!(config.pointing.subs, 2);
