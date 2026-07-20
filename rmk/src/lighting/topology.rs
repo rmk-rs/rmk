@@ -14,7 +14,7 @@ pub struct LedSlot(pub u16);
 
 impl LedSlot {
     pub const fn from_index(index: usize) -> Self {
-        assert!(index <= u16::MAX as usize, "LED slot exceeds u16 capacity");
+        core::assert!(index <= u16::MAX as usize, "LED slot exceeds u16 capacity");
         Self(index as u16)
     }
 
