@@ -1,9 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{LightingBackgroundModeToml, LightingEffectTomlConfig, LightingTargetTomlConfig};
-
 use super::Keymap;
 use super::layout::{FixedPoint3, Layout};
+use crate::{LightingBackgroundModeToml, LightingEffectTomlConfig, LightingTargetTomlConfig};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LightingKey {
