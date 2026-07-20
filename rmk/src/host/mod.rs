@@ -7,11 +7,12 @@ pub(crate) mod lock;
 pub(crate) mod rynk;
 #[cfg(feature = "storage")]
 pub(crate) mod storage;
-// Shared transport-adapter error, used by the USB/BLE Vial and BLE Rynk
+// Shared transport-adapter error, used by the USB/BLE Vial and USB/BLE Rynk
 // adapters. Gated to exactly the feature combos that compile an adapter.
 #[cfg(any(
     all(feature = "vial", not(feature = "_no_usb")),
     all(feature = "vial", feature = "_ble"),
+    all(feature = "rynk", not(feature = "_no_usb")),
     all(feature = "rynk", feature = "_ble"),
 ))]
 pub(crate) mod transport;
