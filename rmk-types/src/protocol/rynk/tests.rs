@@ -374,6 +374,10 @@ fn wire_values_locked() {
         remaining_keys: 2,
         key_positions: unlock_keys,
     };
+    let layer_state = LayerState {
+        default_layer: 2,
+        active_bitmap: [0x05, 0, 0, 0, 0, 0, 0, 0x80],
+    };
     let profile = MorseProfile::new(None, Some(MorseMode::Normal), Some(200), Some(150));
 
     let entries: alloc::vec::Vec<(&str, alloc::vec::Vec<u8>)> = alloc::vec![
@@ -491,6 +495,7 @@ fn wire_values_locked() {
         ("MacroData{[0x01,0x02,0x03]}", encode(&ex.macro_data)),
         // --- Status / system responses ---
         ("MatrixState{[0x05,0x00,0x20]}", encode(&ex.matrix)),
+        ("LayerState{default:2,active:[0x05,..,0x80]}", encode(&layer_state)),
         ("DeviceCapabilities{1..16}", encode(&ex.capabilities)),
         ("DeviceInfo{1.2.3,4,5,RMK,..}", encode(&ex.device_info)),
         ("BuildInfo{my-firmware..}", encode(&ex.build_info)),
@@ -633,6 +638,10 @@ fn wire_frames_locked() {
         unlocking: false,
         remaining_keys: 2,
         key_positions: unlock_keys,
+    };
+    let layer_state = LayerState {
+        default_layer: 2,
+        active_bitmap: [0x05, 0, 0, 0, 0, 0, 0, 0x80],
     };
 
     let entries: alloc::vec::Vec<(&str, alloc::vec::Vec<u8>)> = alloc::vec![
@@ -963,6 +972,11 @@ fn wire_frames_locked() {
             "GetLedIndicator reply Ok(LedIndicator(Num|Scroll))",
             encode_frame(Cmd::GetLedIndicator, SEQ, &Ok::<LedIndicator, RynkError>(led)),
         ),
+        ("GetLayerState request ()", encode_frame(Cmd::GetLayerState, SEQ, &())),
+        (
+            "GetLayerState reply Ok(LayerState{default:2,active:[0x05,..,0x80]})",
+            encode_frame(Cmd::GetLayerState, SEQ, &Ok::<LayerState, RynkError>(layer_state)),
+        ),
         // Connection / status rows behind `_ble` and `split`.
         ("GetBleStatus request ()", encode_frame(Cmd::GetBleStatus, SEQ, &())),
         (
@@ -1108,7 +1122,9 @@ fn lighting_wire_frames_locked() {
                 | LightingFeatureFlags::ROUTING
                 | LightingFeatureFlags::OVERLAY_TTL
                 | LightingFeatureFlags::ATOMIC_OVERLAY_REPLACE
-                | LightingFeatureFlags::LAYER_AWARE,
+                | LightingFeatureFlags::LAYER_AWARE
+                | LightingFeatureFlags::OVERLAY_READBACK
+                | LightingFeatureFlags::COMPILED_LAYER_SCENES,
         ),
         effects: LightingEffectFlags(
             LightingEffectFlags::SOLID | LightingEffectFlags::BLINK | LightingEffectFlags::BREATHE,
@@ -1183,6 +1199,15 @@ fn lighting_wire_frames_locked() {
         },
         ttl_ms: Some(5000),
     };
+    let overlay_page_request = LightingOverlayPageRequest {
+        revision: state.revision,
+        offset: 0,
+    };
+    let overlay_page = LightingOverlayPage {
+        revision: state.revision,
+        total_count: 1,
+        items: one(overlay_cell),
+    };
     let set_state = SetLightingStateRequest {
         expected_revision: 8,
         state: mutable_state,
@@ -1232,6 +1257,17 @@ fn lighting_wire_frames_locked() {
     };
     let scenes_page = LightingScenesPage {
         revision: state.revision,
+        total_count: 1,
+        items: one(scene_cell),
+    };
+    let compiled_scene_status = LightingCompiledSceneStatus {
+        topology_revision: capabilities.topology_revision,
+        scene_len: 1,
+        policy: LightingLayerPolicy::EffectiveOnly,
+        chunk_capacity: LIGHTING_SCENE_CHUNK_SIZE as u8,
+    };
+    let compiled_scenes_page = LightingCompiledScenesPage {
+        topology_revision: capabilities.topology_revision,
         total_count: 1,
         items: one(scene_cell),
     };
@@ -1387,6 +1423,18 @@ fn lighting_wire_frames_locked() {
             )
         ),
         (
+            "GetLightingOverlay request",
+            encode_frame(Cmd::GetLightingOverlay, SEQ, &overlay_page_request)
+        ),
+        (
+            "GetLightingOverlay reply",
+            encode_frame(
+                Cmd::GetLightingOverlay,
+                SEQ,
+                &Ok::<LightingOverlayPageResult, RynkError>(Ok(overlay_page))
+            )
+        ),
+        (
             "SetLightingOverlay request",
             encode_frame(Cmd::SetLightingOverlay, SEQ, &set_overlay)
         ),
@@ -1518,6 +1566,30 @@ fn lighting_wire_frames_locked() {
                 Cmd::GetLightingScenes,
                 SEQ,
                 &Ok::<LightingScenesPageResult, RynkError>(Ok(scenes_page))
+            )
+        ),
+        (
+            "GetLightingCompiledSceneStatus request",
+            encode_frame(Cmd::GetLightingCompiledSceneStatus, SEQ, &())
+        ),
+        (
+            "GetLightingCompiledSceneStatus reply",
+            encode_frame(
+                Cmd::GetLightingCompiledSceneStatus,
+                SEQ,
+                &Ok::<LightingCompiledSceneStatusResult, RynkError>(Ok(compiled_scene_status))
+            )
+        ),
+        (
+            "GetLightingCompiledScenes request",
+            encode_frame(Cmd::GetLightingCompiledScenes, SEQ, &page_request)
+        ),
+        (
+            "GetLightingCompiledScenes reply",
+            encode_frame(
+                Cmd::GetLightingCompiledScenes,
+                SEQ,
+                &Ok::<LightingCompiledScenesPageResult, RynkError>(Ok(compiled_scenes_page))
             )
         ),
         (

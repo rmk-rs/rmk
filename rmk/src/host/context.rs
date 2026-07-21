@@ -11,6 +11,7 @@ use rmk_types::led_indicator::LedIndicator;
 use rmk_types::morse::{Morse, MorseProfile};
 #[cfg(feature = "rynk")]
 use rmk_types::protocol::rynk::BehaviorConfig;
+use rmk_types::protocol::rynk::{LAYER_STATE_BITMAP_SIZE, LAYER_STATE_CAPACITY, LayerState};
 
 use crate::event::KeyboardEventPos;
 use crate::keyboard::combo::Combo;
@@ -339,6 +340,29 @@ impl<'a> KeyboardContext<'a> {
         self.keymap.active_layer()
     }
 
+    /// Snapshot the complete active-layer set for host consumers.
+    ///
+    /// The mutable keymap mask does not contain the default layer, so its bit
+    /// is added explicitly to make this snapshot authoritative.
+    pub fn layer_state(&self) -> LayerState {
+        let default_layer = self.keymap.get_default_layer();
+        let mut active_bitmap = [0; LAYER_STATE_BITMAP_SIZE];
+
+        if (default_layer as usize) < LAYER_STATE_CAPACITY {
+            active_bitmap[default_layer as usize / 8] |= 1_u8 << (default_layer as usize % 8);
+        }
+        for layer in 0..self.keymap.num_layer().min(LAYER_STATE_CAPACITY) {
+            if self.keymap.is_layer_active(layer as u8) {
+                active_bitmap[layer / 8] |= 1_u8 << (layer % 8);
+            }
+        }
+
+        LayerState {
+            default_layer,
+            active_bitmap,
+        }
+    }
+
     pub fn default_layer(&self) -> u8 {
         self.keymap.get_default_layer()
     }
@@ -380,5 +404,46 @@ impl<'a> KeyboardContext<'a> {
     #[cfg(feature = "host_lock")]
     pub fn read_matrix_state(&self, target: &mut [u8]) {
         self.keymap.read_matrix_state(target);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rmk_types::action::KeyAction;
+
+    use super::KeyboardContext;
+    use crate::config::{BehaviorConfig, PositionalConfig};
+    use crate::keymap::{KeyMap, KeymapData};
+    use crate::test_support::test_block_on as block_on;
+
+    #[test]
+    fn layer_state_includes_default_explicit_and_tri_layers() {
+        let mut data: KeymapData<1, 1, 64> = KeymapData::new([[[KeyAction::No]]; 64]);
+        let mut behavior = BehaviorConfig {
+            default_layer: 5,
+            tri_layer: Some([1, 2, 3]),
+            ..Default::default()
+        };
+        let positional = PositionalConfig::<1, 1>::default();
+        let keymap = block_on(KeyMap::new(&mut data, &mut behavior, &positional));
+        let context = KeyboardContext::new(&keymap);
+
+        let default_only = context.layer_state();
+        assert_eq!(default_only.default_layer, 5);
+        assert!(default_only.is_active(5));
+        assert!((0..64).all(|layer| layer == 5 || !default_only.is_active(layer)));
+
+        keymap.activate_layer(1);
+        keymap.activate_layer(2);
+        keymap.activate_layer(63);
+
+        let state = context.layer_state();
+        assert_eq!(state.default_layer, 5);
+        assert!(!state.is_active(0));
+        assert!(state.is_active(1));
+        assert!(state.is_active(2));
+        assert!(state.is_active(3));
+        assert!(state.is_active(5));
+        assert!(state.is_active(63));
     }
 }

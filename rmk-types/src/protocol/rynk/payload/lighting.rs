@@ -182,6 +182,10 @@ impl LightingFeatureFlags {
     pub const LAYER_AWARE: u16 = 1 << 5;
     /// Runtime-configurable per-layer scenes stored on the device.
     pub const LAYER_SCENES: u16 = 1 << 6;
+    /// Revision-pinned readback of the transient overlay.
+    pub const OVERLAY_READBACK: u16 = 1 << 7;
+    /// Read-only board-compiled layer scenes, separate from runtime scenes.
+    pub const COMPILED_LAYER_SCENES: u16 = 1 << 8;
 
     pub const fn contains(self, bits: u16) -> bool {
         self.0 & bits == bits
@@ -356,13 +360,41 @@ wire_type! {
 
 wire_type! {
     /// One transient overlay cell addressed by stable LED identity.
-    pub struct LightingOverlayCell {
+pub struct LightingOverlayCell {
         pub led_id: LightingLedId,
         pub effect: LightingEffect,
         /// Relative lifetime. `None` lasts until unset, clear, or reboot;
         /// `Some(0)` is invalid.
         pub ttl_ms: Option<u32>,
     }
+}
+
+wire_type! {
+    /// Revision-pinned request for one transient overlay page.
+    pub struct LightingOverlayPageRequest {
+        /// Expected [`LightingState::revision`].
+        pub revision: u32,
+        pub offset: u16,
+    }
+}
+
+/// One atomically sampled page of transient overlay cells. Cell TTLs are
+/// remaining relative lifetimes at the sample time, never firmware deadlines.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingOverlayPage {
+    pub revision: u32,
+    pub total_count: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingOverlayCell[]"))]
+    pub items: Vec<LightingOverlayCell, LIGHTING_OVERLAY_CHUNK_SIZE>,
+}
+
+impl MaxSize for LightingOverlayPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingOverlayCell, LIGHTING_OVERLAY_CHUNK_SIZE>();
 }
 
 impl LightingOverlayCell {
@@ -475,7 +507,7 @@ wire_type! {
     /// [`LightingCapabilities`]/[`LightingState`] so their postcard layout is
     /// unchanged for existing hosts; discovery uses
     /// [`LightingFeatureFlags::LAYER_SCENES`] plus this endpoint.
-    pub struct LightingSceneStatus {
+pub struct LightingSceneStatus {
         /// Current [`LightingState::revision`]; scene mutations advance it.
         pub revision: u32,
         /// Maximum stored scene cells. `0` means scenes are absent.
@@ -483,6 +515,21 @@ wire_type! {
         pub scene_len: u16,
         pub policy: LightingLayerPolicy,
         /// Cells per `GetLightingScenes` page and per replacement chunk.
+        pub chunk_capacity: u8,
+    }
+}
+
+wire_type! {
+    /// Occupancy of the immutable board-compiled layer-scene source.
+    ///
+    /// This source is distinct from [`LightingSceneStatus`]'s mutable table
+    /// and is pinned to the topology revision for the firmware build.
+    pub struct LightingCompiledSceneStatus {
+        pub topology_revision: u32,
+        pub scene_len: u16,
+        /// Composition policy of the immutable compiled source. This is
+        /// independent from the mutable runtime scene table's policy.
+        pub policy: LightingLayerPolicy,
         pub chunk_capacity: u8,
     }
 }
@@ -507,6 +554,24 @@ pub struct LightingScenesPage {
     pub total_count: u16,
     #[cfg_attr(feature = "wasm", tsify(type = "LightingSceneCell[]"))]
     pub items: Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+}
+
+/// One page of immutable board-compiled layer scenes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingCompiledScenesPage {
+    pub topology_revision: u32,
+    pub total_count: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingSceneCell[]"))]
+    pub items: Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for LightingCompiledScenesPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>();
 }
 
 impl MaxSize for LightingScenesPage {
@@ -616,9 +681,12 @@ pub type LightingZonesPageResult = LightingResult<LightingZonesPage>;
 pub type LightingZoneMembershipsPageResult = LightingResult<LightingZoneMembershipsPage>;
 pub type LightingOutputsPageResult = LightingResult<LightingOutputsPage>;
 pub type LightingRoutesPageResult = LightingResult<LightingRoutesPage>;
+pub type LightingOverlayPageResult = LightingResult<LightingOverlayPage>;
 pub type LightingOverlayTransactionResult = LightingResult<LightingOverlayTransaction>;
 pub type LightingSceneStatusResult = LightingResult<LightingSceneStatus>;
 pub type LightingScenesPageResult = LightingResult<LightingScenesPage>;
+pub type LightingCompiledSceneStatusResult = LightingResult<LightingCompiledSceneStatus>;
+pub type LightingCompiledScenesPageResult = LightingResult<LightingCompiledScenesPage>;
 pub type LightingSceneTransactionResult = LightingResult<LightingSceneTransaction>;
 pub type LightingUnitResult = LightingResult<()>;
 
@@ -648,6 +716,7 @@ const _: () = {
     assert_endpoint_fits!(LightingPageRequest, LightingZoneMembershipsPageResult);
     assert_endpoint_fits!(LightingPageRequest, LightingOutputsPageResult);
     assert_endpoint_fits!(LightingPageRequest, LightingRoutesPageResult);
+    assert_endpoint_fits!(LightingOverlayPageRequest, LightingOverlayPageResult);
     assert_endpoint_fits!(SetLightingOverlayRequest, LightingStateResult);
     assert_endpoint_fits!(UnsetLightingOverlayRequest, LightingStateResult);
     assert_endpoint_fits!(ClearLightingOverlayRequest, LightingStateResult);
@@ -657,6 +726,8 @@ const _: () = {
     assert_endpoint_fits!(AbortLightingOverlayReplaceRequest, LightingUnitResult);
     assert_endpoint_fits!((), LightingSceneStatusResult);
     assert_endpoint_fits!(LightingScenePageRequest, LightingScenesPageResult);
+    assert_endpoint_fits!((), LightingCompiledSceneStatusResult);
+    assert_endpoint_fits!(LightingPageRequest, LightingCompiledScenesPageResult);
     assert_endpoint_fits!(SetLightingSceneCellRequest, LightingStateResult);
     assert_endpoint_fits!(UnsetLightingSceneCellRequest, LightingStateResult);
     assert_endpoint_fits!(SetLightingLayerPolicyRequest, LightingStateResult);
@@ -704,7 +775,7 @@ mod tests {
     }
 
     #[test]
-    fn maximum_overlay_chunk_respects_bound() {
+    fn maximum_overlay_chunk_and_page_respect_bound() {
         let mut cells = Vec::new();
         for id in 0..LIGHTING_OVERLAY_CHUNK_SIZE as u16 {
             cells.push(cell(id)).unwrap();
@@ -712,11 +783,20 @@ mod tests {
         let request = PutLightingOverlayChunkRequest {
             transaction_id: u32::MAX,
             offset: u16::MAX,
-            cells,
+            cells: cells.clone(),
         };
         round_trip(&request);
         assert_max_size_bound(&request);
         assert!(PutLightingOverlayChunkRequest::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+
+        let page = LightingOverlayPage {
+            revision: u32::MAX,
+            total_count: u16::MAX,
+            items: cells,
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingOverlayPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
     }
 
     #[test]
@@ -768,6 +848,12 @@ mod tests {
             policy: LightingLayerPolicy::ActiveStack,
             chunk_capacity: LIGHTING_SCENE_CHUNK_SIZE as u8,
         });
+        round_trip(&LightingCompiledSceneStatus {
+            topology_revision: u32::MAX,
+            scene_len: 12,
+            policy: LightingLayerPolicy::EffectiveOnly,
+            chunk_capacity: LIGHTING_SCENE_CHUNK_SIZE as u8,
+        });
         round_trip(&LightingSceneTransaction {
             id: u32::MAX,
             cell_count: u16::MAX,
@@ -794,11 +880,20 @@ mod tests {
         let page = LightingScenesPage {
             revision: u32::MAX,
             total_count: u16::MAX,
-            items: cells,
+            items: cells.clone(),
         };
         round_trip(&page);
         assert_max_size_bound(&page);
         assert!(LightingScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+
+        let compiled_page = LightingCompiledScenesPage {
+            topology_revision: u32::MAX,
+            total_count: u16::MAX,
+            items: cells,
+        };
+        round_trip(&compiled_page);
+        assert_max_size_bound(&compiled_page);
+        assert!(LightingCompiledScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
     }
 
     #[test]

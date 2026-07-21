@@ -24,6 +24,10 @@ use super::source::{LayerPolicy, LayerScenes, OverlayError, OverlayUpdate, TtlOv
 use super::topology::LedSlot;
 use crate::RawMutex;
 
+/// Cells per overlay readback page. Kept equal to the wire chunk size so
+/// protocol adapters can forward pages without re-batching.
+pub const OVERLAY_CHUNK_SIZE: usize = 8;
+
 /// Cells per scene page/replacement chunk. Kept equal to the wire chunk size
 /// so protocol adapters can forward chunks without re-batching.
 pub const SCENE_CHUNK_SIZE: usize = 8;
@@ -511,6 +515,10 @@ pub enum StandardCommand<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
     /// slot. Intended for a renderer replica, not a second authority.
     ApplyReplica(&'static StandardReplicaSlot<OVERLAY_CAP, SCENE_CAP>),
     ReadState,
+    /// One atomically sampled page of the transient overlay.
+    ReadOverlay {
+        offset: u16,
+    },
     SetSceneCellIfRevision {
         expected_revision: u32,
         cell: SceneTableCell,
@@ -545,6 +553,10 @@ pub enum StandardCommand<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
     ReadScenes {
         offset: u16,
     },
+    /// One page of the immutable board-compiled layer scenes.
+    ReadCompiledScenes {
+        offset: u16,
+    },
 }
 
 /// Mutable standard state excluding the transient overlay contents and the
@@ -567,11 +579,27 @@ pub struct StandardState {
     pub scene_policy: LayerPolicy,
 }
 
+/// One page of transient overlay cells with remaining TTLs.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct OverlayPage {
+    pub revision: u32,
+    pub total: u16,
+    pub cells: OverlayBatch<OVERLAY_CHUNK_SIZE>,
+}
+
 /// One page of stored scene cells with the revision it was read under.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ScenePage {
     pub revision: u32,
     pub total: u16,
+    pub cells: SceneChunk,
+}
+
+/// One page of immutable board-compiled layer scenes.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct CompiledScenePage {
+    pub total: u16,
+    pub policy: LayerPolicy,
     pub cells: SceneChunk,
 }
 
@@ -581,7 +609,9 @@ pub struct ScenePage {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum StandardReply {
     State(StandardState),
+    OverlayPage(OverlayPage),
     ScenesPage(ScenePage),
+    CompiledScenesPage(CompiledScenePage),
     SceneTransaction { id: u32, cell_count: u16 },
 }
 
@@ -1180,12 +1210,66 @@ where
         // bespoke revision behavior; everything else falls through to the
         // uniform state-readback path below.
         match command {
+            StandardCommand::ReadOverlay { offset } => {
+                let old_len = self.overlay.active_len();
+                self.overlay.prune_expired(effect_now_ms);
+                let expired = self.overlay.active_len() != old_len;
+                if expired {
+                    self.advance_revision();
+                }
+                let start = (offset as usize).min(self.overlay.active_len());
+                let mut cells = OverlayBatch::new();
+                for update in self.overlay.active_updates().skip(start).take(OVERLAY_CHUNK_SIZE) {
+                    let ttl_ms = update.expires_ms.map(|expires_ms| {
+                        let remaining = expires_ms.saturating_sub(effect_now_ms).min(u32::MAX as u64) as u32;
+                        NonZeroU32::new(remaining).expect("expired overlays were pruned")
+                    });
+                    cells
+                        .push(OverlayCell {
+                            slot: update.slot,
+                            effect: update.effect,
+                            ttl_ms,
+                        })
+                        .expect("overlay page is chunk-bounded");
+                }
+                return Ok(CommandResult::new(
+                    StandardReply::OverlayPage(OverlayPage {
+                        revision: self.revision,
+                        total: self.overlay.active_len().min(u16::MAX as usize) as u16,
+                        cells,
+                    }),
+                    if expired {
+                        Invalidation::Render
+                    } else {
+                        Invalidation::None
+                    },
+                ));
+            }
             StandardCommand::ReadScenes { offset } => {
                 return Ok(CommandResult::unchanged(StandardReply::ScenesPage(ScenePage {
                     revision: self.revision,
                     total: self.scenes.len().min(u16::MAX as usize) as u16,
                     cells: self.scenes.page(offset),
                 })));
+            }
+            StandardCommand::ReadCompiledScenes { offset } => {
+                let mut cells = SceneChunk::new();
+                for (layer, cell) in self.layers.cells().skip(offset as usize).take(SCENE_CHUNK_SIZE) {
+                    cells
+                        .push(SceneTableCell {
+                            layer,
+                            slot: cell.slot,
+                            effect: cell.effect,
+                        })
+                        .expect("compiled scene page is chunk-bounded");
+                }
+                return Ok(CommandResult::unchanged(StandardReply::CompiledScenesPage(
+                    CompiledScenePage {
+                        total: self.layers.cell_count().min(u16::MAX as usize) as u16,
+                        policy: self.layers.policy,
+                        cells,
+                    },
+                )));
             }
             StandardCommand::BeginSceneReplace {
                 expected_revision,
@@ -1394,7 +1478,9 @@ where
                 )
             }
             StandardCommand::ReadState => (Invalidation::None, false),
-            StandardCommand::ReadScenes { .. }
+            StandardCommand::ReadOverlay { .. }
+            | StandardCommand::ReadScenes { .. }
+            | StandardCommand::ReadCompiledScenes { .. }
             | StandardCommand::BeginSceneReplace { .. }
             | StandardCommand::PutSceneChunk { .. }
             | StandardCommand::CommitSceneReplace { .. }
@@ -1787,6 +1873,98 @@ mod tests {
             .unwrap();
         assert!(!second_expiry.state_changed);
         assert_eq!(engine.state().revision, 5, "expiry advances exactly once");
+    }
+
+    #[test]
+    fn overlay_pages_sample_remaining_ttl_and_prune_with_revision_advance() {
+        let mut engine = engine();
+        let snapshot = context(0);
+        engine
+            .handle_command(
+                100,
+                StandardCommand::SetOverlay(OverlayCell {
+                    slot: LedSlot(0),
+                    effect: BuiltinEffect::Solid { color: RED },
+                    ttl_ms: None,
+                }),
+                &snapshot,
+            )
+            .unwrap();
+        engine
+            .handle_command(
+                100,
+                StandardCommand::SetOverlay(OverlayCell {
+                    slot: LedSlot(1),
+                    effect: BuiltinEffect::Solid { color: GREEN },
+                    ttl_ms: NonZeroU32::new(50),
+                }),
+                &snapshot,
+            )
+            .unwrap();
+
+        let sampled = engine
+            .handle_command(120, StandardCommand::ReadOverlay { offset: 0 }, &snapshot)
+            .unwrap();
+        assert_eq!(sampled.invalidation, Invalidation::None);
+        let StandardReply::OverlayPage(page) = sampled.reply else {
+            panic!("expected overlay page")
+        };
+        assert_eq!(page.revision, 2);
+        assert_eq!(page.total, 2);
+        assert_eq!(page.cells.as_slice()[0].ttl_ms, None);
+        assert_eq!(page.cells.as_slice()[1].ttl_ms, NonZeroU32::new(30));
+
+        let pruned = engine
+            .handle_command(150, StandardCommand::ReadOverlay { offset: 0 }, &snapshot)
+            .unwrap();
+        assert_eq!(pruned.invalidation, Invalidation::Render);
+        let StandardReply::OverlayPage(page) = pruned.reply else {
+            panic!("expected overlay page")
+        };
+        assert_eq!(page.revision, 3);
+        assert_eq!(page.total, 1);
+        assert_eq!(page.cells.as_slice()[0].slot, LedSlot(0));
+    }
+
+    #[test]
+    fn compiled_scene_pages_preserve_layer_and_are_separate_from_runtime_scenes() {
+        let mut engine = scene_engine();
+        set_cell(&mut engine, 0, scene_cell(7, 1, GREEN));
+
+        let reply = engine
+            .handle_command(0, StandardCommand::ReadCompiledScenes { offset: 0 }, &context(0))
+            .unwrap()
+            .reply;
+        let StandardReply::CompiledScenesPage(page) = reply else {
+            panic!("expected compiled scene page")
+        };
+        assert_eq!(page.total, 1);
+        assert_eq!(page.policy, LayerPolicy::ActiveStack);
+        assert_eq!(page.cells.as_slice(), &[scene_cell(1, 0, RED)]);
+
+        let runtime = scenes_page(&mut engine, 0);
+        assert_eq!(runtime.total, 1);
+        assert_eq!(runtime.cells.as_slice(), &[scene_cell(7, 1, GREEN)]);
+
+        let mut empty: Engine = StandardLightingEngine::new(
+            BackgroundState::default(),
+            LayerScenes {
+                scenes: &[],
+                policy: LayerPolicy::ActiveStack,
+            },
+            EmptySource,
+            EmptySource,
+        );
+        let StandardReply::CompiledScenesPage(empty_page) = empty
+            .handle_command(0, StandardCommand::ReadCompiledScenes { offset: 0 }, &context(0))
+            .unwrap()
+            .reply
+        else {
+            panic!("expected compiled scene page")
+        };
+        assert_eq!(empty_page.total, 0);
+        assert_eq!(empty_page.policy, LayerPolicy::ActiveStack);
+        assert!(empty_page.cells.as_slice().is_empty());
     }
 
     #[test]

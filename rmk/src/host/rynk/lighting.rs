@@ -15,22 +15,27 @@ use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use heapless::Vec;
 use rmk_types::protocol::rynk::{
-    LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode, LightingBackgroundState, LightingError, LightingLayerPolicy,
-    LightingMutableState, LightingOverlayCell, LightingResult, LightingRgb8, LightingSceneCell,
-    LightingSceneTransaction, LightingScenesPage, LightingState,
+    LIGHTING_OVERLAY_CHUNK_SIZE, LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode, LightingBackgroundState,
+    LightingCompiledScenesPage, LightingError, LightingLayerPolicy, LightingMutableState, LightingOverlayCell,
+    LightingOverlayPage, LightingResult, LightingRgb8, LightingSceneCell, LightingSceneTransaction, LightingScenesPage,
+    LightingState,
 };
 
 use crate::RawMutex;
 use crate::core_traits::Runnable;
 use crate::lighting::{
     BackgroundMode, BackgroundState, BuiltinEffect, LayerPolicy, LedId, LightingMailbox, LightingRouting,
-    LightingTopology, OverlayBatch, OverlayCell, OverlayError, Rgb8, SceneChunk, SceneTableCell, StandardCommand,
-    StandardError, StandardLightingEngine, StandardMutableState, StandardReply, StandardState,
+    LightingTopology, OVERLAY_CHUNK_SIZE, OverlayBatch, OverlayCell, OverlayError, Rgb8, SceneChunk, SceneTableCell,
+    StandardCommand, StandardError, StandardLightingEngine, StandardMutableState, StandardReply, StandardState,
 };
 
 const _: () = core::assert!(
     crate::lighting::SCENE_CHUNK_SIZE == LIGHTING_SCENE_CHUNK_SIZE,
     "engine scene chunk must match the wire chunk so adapters forward chunks unmodified"
+);
+const _: () = core::assert!(
+    OVERLAY_CHUNK_SIZE == LIGHTING_OVERLAY_CHUNK_SIZE,
+    "engine overlay page must match the wire chunk so adapters forward pages unmodified"
 );
 
 /// Maximum number of cells staged by one Rynk overlay replacement.
@@ -124,12 +129,18 @@ impl<'a> RynkLightingController<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RynkLightingReadback {
     State(LightingState),
+    OverlayPage(LightingOverlayPage),
     SceneStatus {
         revision: u32,
         scene_len: u16,
         policy: LightingLayerPolicy,
     },
     ScenesPage(LightingScenesPage),
+    CompiledSceneStatus {
+        scene_len: u16,
+        policy: LightingLayerPolicy,
+    },
+    CompiledScenesPage(LightingCompiledScenesPage),
     SceneTransaction(LightingSceneTransaction),
     Unit,
 }
@@ -281,9 +292,17 @@ impl Default for RynkLightingMailbox {
 
 pub(super) enum RynkLightingCommand {
     ReadState,
+    ReadOverlay {
+        expected_revision: u32,
+        offset: u16,
+    },
     ReadSceneStatus,
     ReadScenes {
         expected_revision: u32,
+        offset: u16,
+    },
+    ReadCompiledSceneStatus,
+    ReadCompiledScenes {
         offset: u16,
     },
     SetSceneCell {
@@ -460,6 +479,32 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
     async fn dispatch(&self, request_id: u32, command: RynkLightingCommand) -> LightingResult<RynkLightingReadback> {
         let core_command = match command {
             RynkLightingCommand::ReadState => StandardCommand::ReadState,
+            RynkLightingCommand::ReadOverlay {
+                expected_revision,
+                offset,
+            } => {
+                let page = match self.request_core(StandardCommand::ReadOverlay { offset }).await? {
+                    StandardReply::OverlayPage(page) => page,
+                    _ => return Err(LightingError::InvalidRequest),
+                };
+                if page.revision != expected_revision {
+                    return Err(LightingError::StateRevisionConflict {
+                        expected: expected_revision,
+                        current: page.revision,
+                    });
+                }
+                let mut items: Vec<LightingOverlayCell, LIGHTING_OVERLAY_CHUNK_SIZE> = Vec::new();
+                for cell in page.cells.as_slice() {
+                    items
+                        .push(self.overlay_cell_to_wire(*cell).ok_or(LightingError::InvalidRequest)?)
+                        .map_err(|_| LightingError::InvalidRequest)?;
+                }
+                return Ok(RynkLightingReadback::OverlayPage(LightingOverlayPage {
+                    revision: page.revision,
+                    total_count: page.total,
+                    items,
+                }));
+            }
             RynkLightingCommand::ReadSceneStatus => {
                 let state = self.request_core_state(StandardCommand::ReadState).await?;
                 return Ok(RynkLightingReadback::SceneStatus {
@@ -491,6 +536,39 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                 }
                 return Ok(RynkLightingReadback::ScenesPage(LightingScenesPage {
                     revision: page.revision,
+                    total_count: page.total,
+                    items,
+                }));
+            }
+            RynkLightingCommand::ReadCompiledSceneStatus => {
+                let page = match self
+                    .request_core(StandardCommand::ReadCompiledScenes { offset: 0 })
+                    .await?
+                {
+                    StandardReply::CompiledScenesPage(page) => page,
+                    _ => return Err(LightingError::InvalidRequest),
+                };
+                return Ok(RynkLightingReadback::CompiledSceneStatus {
+                    scene_len: page.total,
+                    policy: policy_to_wire(page.policy),
+                });
+            }
+            RynkLightingCommand::ReadCompiledScenes { offset } => {
+                let page = match self
+                    .request_core(StandardCommand::ReadCompiledScenes { offset })
+                    .await?
+                {
+                    StandardReply::CompiledScenesPage(page) => page,
+                    _ => return Err(LightingError::InvalidRequest),
+                };
+                let mut items: Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE> = Vec::new();
+                for cell in page.cells.as_slice() {
+                    items
+                        .push(self.scene_cell_to_wire(*cell).ok_or(LightingError::InvalidRequest)?)
+                        .map_err(|_| LightingError::InvalidRequest)?;
+                }
+                return Ok(RynkLightingReadback::CompiledScenesPage(LightingCompiledScenesPage {
+                    topology_revision: 0,
                     total_count: page.total,
                     items,
                 }));
@@ -650,6 +728,15 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
             slot,
             effect: effect_from_wire(cell.effect),
             ttl_ms: cell.ttl_ms.and_then(NonZeroU32::new),
+        })
+    }
+
+    fn overlay_cell_to_wire(&self, cell: OverlayCell) -> Option<LightingOverlayCell> {
+        let led = self.topology.led(cell.slot)?;
+        Some(LightingOverlayCell {
+            led_id: rmk_types::protocol::rynk::LightingLedId(led.id.0),
+            effect: effect_to_wire(cell.effect),
+            ttl_ms: cell.ttl_ms.map(NonZeroU32::get),
         })
     }
 

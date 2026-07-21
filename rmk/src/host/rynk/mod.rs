@@ -249,6 +249,7 @@ impl<'a> RynkService<'a> {
             Cmd::GetWpm => serve::<command::GetWpm, _>(self, msg).await,
             Cmd::GetSleepState => serve::<command::GetSleepState, _>(self, msg).await,
             Cmd::GetLedIndicator => serve::<command::GetLedIndicator, _>(self, msg).await,
+            Cmd::GetLayerState => serve::<command::GetLayerState, _>(self, msg).await,
 
             Cmd::GetLayout => serve::<command::GetLayout, _>(self, msg).await,
 
@@ -258,6 +259,8 @@ impl<'a> RynkService<'a> {
             Cmd::GetLightingState => serve::<command::GetLightingState, _>(self, msg).await,
             #[cfg(feature = "lighting")]
             Cmd::SetLightingState => serve::<command::SetLightingState, _>(self, msg).await,
+            Cmd::GetLightingOverlay => serve::<command::GetLightingOverlay, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
             #[cfg(feature = "lighting")]
             Cmd::GetLightingKeys => serve::<command::GetLightingKeys, _>(self, msg).await,
             #[cfg(feature = "lighting")]
@@ -290,6 +293,12 @@ impl<'a> RynkService<'a> {
             Cmd::GetLightingSceneStatus => Serve::<command::GetLightingSceneStatus, _>::serve(self, msg).await,
             #[cfg(feature = "lighting")]
             Cmd::GetLightingScenes => Serve::<command::GetLightingScenes, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingCompiledSceneStatus => {
+                Serve::<command::GetLightingCompiledSceneStatus, _>::serve(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingCompiledScenes => Serve::<command::GetLightingCompiledScenes, _>::serve(self, msg).await,
             #[cfg(feature = "lighting")]
             Cmd::SetLightingSceneCell => Serve::<command::SetLightingSceneCell, _>::serve(self, msg).await,
             #[cfg(feature = "lighting")]

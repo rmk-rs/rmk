@@ -32,7 +32,8 @@ use rynk::rmk_types::protocol::rynk::{
     UnsetLightingOverlayRequest, BuildInfo, AbortLightingSceneReplaceRequest, BeginLightingSceneReplaceRequest,
     CommitLightingSceneReplaceRequest, LightingScenePageRequest, LightingSceneStatus, LightingSceneTransaction,
     LightingScenesPage, PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest, SetLightingSceneCellRequest,
-    UnsetLightingSceneCellRequest,
+    UnsetLightingSceneCellRequest, LayerState, LightingCompiledSceneStatus, LightingCompiledScenesPage,
+    LightingOverlayPage, LightingOverlayPageRequest,
 };
 use rynk::{Client, Driver, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
 use wasm_bindgen::prelude::*;
@@ -161,6 +162,7 @@ endpoints! {
     set_behavior(config: BehaviorConfig) -> (),
     // status
     get_current_layer() -> u8,
+    get_layer_state() -> LayerState,
     get_matrix_state() -> MatrixState,
     get_battery_status() -> BatteryStatus,
     get_led_indicator() -> LedIndicator,
@@ -185,8 +187,11 @@ endpoints! {
     put_lighting_overlay_chunk(request: PutLightingOverlayChunkRequest) -> (),
     commit_lighting_overlay_replace(request: CommitLightingOverlayReplaceRequest) -> LightingState,
     abort_lighting_overlay_replace(request: AbortLightingOverlayReplaceRequest) -> (),
+    get_lighting_overlay(request: LightingOverlayPageRequest) -> LightingOverlayPage,
     get_lighting_scene_status() -> LightingSceneStatus,
     get_lighting_scenes(request: LightingScenePageRequest) -> LightingScenesPage,
+    get_lighting_compiled_scene_status() -> LightingCompiledSceneStatus,
+    get_lighting_compiled_scenes(request: LightingPageRequest) -> LightingCompiledScenesPage,
     set_lighting_scene_cell(request: SetLightingSceneCellRequest) -> LightingState,
     unset_lighting_scene_cell(request: UnsetLightingSceneCellRequest) -> LightingState,
     set_lighting_layer_policy(request: SetLightingLayerPolicyRequest) -> LightingState,

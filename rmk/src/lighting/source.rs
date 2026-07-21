@@ -57,6 +57,19 @@ pub struct LayerScenes<'a, E> {
 }
 
 impl<'a, E> LayerScenes<'a, E> {
+    /// Number of board-compiled cells across every configured layer.
+    pub fn cell_count(&self) -> usize {
+        self.scenes.iter().map(|scene| scene.cells.len()).sum()
+    }
+
+    /// Iterate every board-compiled cell in declaration order while retaining
+    /// the layer carried by its enclosing scene.
+    pub fn cells(&self) -> impl Iterator<Item = (u8, &'a SceneCell<E>)> + '_ {
+        self.scenes
+            .iter()
+            .flat_map(|scene| scene.cells.iter().map(move |cell| (scene.layer, cell)))
+    }
+
     fn cell_for_layer(&self, layer: u8, wanted: &mut usize) -> Option<&SceneCell<E>> {
         for scene in self.scenes.iter().filter(|scene| scene.layer == layer) {
             if *wanted < scene.cells.len() {

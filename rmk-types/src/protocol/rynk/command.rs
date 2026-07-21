@@ -16,9 +16,9 @@ use super::message::{RynkHeader, encode_frame};
 use super::{
     BehaviorConfig, BuildInfo, DeviceCapabilities, DeviceInfo, GetComboBulkRequest, GetComboBulkResponse,
     GetEncoderRequest, GetKeymapBulkRequest, GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest,
-    GetMorseBulkResponse, KeyPosition, LayoutChunk, LockStatus, MacroData, MatrixState, ProtocolVersion, RynkError,
-    SetComboBulkRequest, SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest,
-    SetMacroRequest, SetMorseBulkRequest, SetMorseRequest, StorageResetMode,
+    GetMorseBulkResponse, KeyPosition, LayerState, LayoutChunk, LockStatus, MacroData, MatrixState, ProtocolVersion,
+    RynkError, SetComboBulkRequest, SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest,
+    SetKeymapBulkRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest, StorageResetMode,
 };
 use crate::action::{EncoderAction, KeyAction};
 #[cfg(feature = "_ble")]
@@ -36,8 +36,9 @@ use crate::protocol::rynk::PeripheralStatus;
 use crate::protocol::rynk::{
     AbortLightingOverlayReplaceRequest, AbortLightingSceneReplaceRequest, BeginLightingOverlayReplaceRequest,
     BeginLightingSceneReplaceRequest, ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest,
-    CommitLightingSceneReplaceRequest, LightingCapabilitiesResult, LightingChanged, LightingKeysPageResult,
-    LightingLedsPageResult, LightingOutputsPageResult, LightingOverlayTransactionResult, LightingPageRequest,
+    CommitLightingSceneReplaceRequest, LightingCapabilitiesResult, LightingChanged, LightingCompiledSceneStatusResult,
+    LightingCompiledScenesPageResult, LightingKeysPageResult, LightingLedsPageResult, LightingOutputsPageResult,
+    LightingOverlayPageRequest, LightingOverlayPageResult, LightingOverlayTransactionResult, LightingPageRequest,
     LightingPhysicalKeysPageResult, LightingRoutesPageResult, LightingScenePageRequest, LightingSceneStatusResult,
     LightingSceneTransactionResult, LightingScenesPageResult, LightingStateResult, LightingUnitResult,
     LightingZoneMembershipsPageResult, LightingZonesPageResult, PutLightingOverlayChunkRequest,
@@ -353,6 +354,9 @@ endpoints! {
     GetSleepState = 0x0806: () => bool;
     /// Latest HID LED bitmap, sourced from the `LedIndicatorChange` topic snapshot.
     GetLedIndicator = 0x0807: () => LedIndicator;
+    /// Default layer and complete active-layer bitmap.
+    GetLayerState = 0x0808: () => LayerState;
+
     // Lighting (0x09xx). Lighting-domain errors are nested inside Rynk's
     // outer protocol result so hosts retain precise rejection reasons.
     #[cfg(feature = "lighting")]
@@ -411,6 +415,15 @@ endpoints! {
     AbortLightingSceneReplace = 0x0919: AbortLightingSceneReplaceRequest => LightingUnitResult;
     #[cfg(feature = "lighting")]
     SetLightingLayerPolicy = 0x091A: SetLightingLayerPolicyRequest => LightingStateResult;
+    /// Overlay pages are pinned to `LightingState.revision` for consistency.
+    #[cfg(feature = "lighting")]
+    GetLightingOverlay = 0x091B: LightingOverlayPageRequest => LightingOverlayPageResult;
+    /// Discover the immutable board-compiled layer-scene source.
+    #[cfg(feature = "lighting")]
+    GetLightingCompiledSceneStatus = 0x091C: () => LightingCompiledSceneStatusResult;
+    /// Compiled-scene pages are pinned to the firmware topology revision.
+    #[cfg(feature = "lighting")]
+    GetLightingCompiledScenes = 0x091D: LightingPageRequest => LightingCompiledScenesPageResult;
 }
 
 // Define topics: `Name = value: Payload;`

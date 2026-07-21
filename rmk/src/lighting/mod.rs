@@ -41,10 +41,10 @@ pub use source::{
     OverlayUpdate, SceneCell, SparseScene, TtlOverlay,
 };
 pub use standard::{
-    BackgroundMode, BackgroundPatch, BackgroundState, EmptySource, OverlayBatch, OverlayCell, ReplicaSlotError,
-    SCENE_CHUNK_SIZE, SCENE_TRANSACTION_TIMEOUT_MS, SceneChunk, ScenePage, SceneTable, SceneTableCell, StandardCommand,
-    StandardError, StandardInput, StandardLightingEngine, StandardMutableState, StandardReplicaSlot,
-    StandardReplicaState, StandardReply, StandardState, UniformBackground,
+    BackgroundMode, BackgroundPatch, BackgroundState, CompiledScenePage, EmptySource, OVERLAY_CHUNK_SIZE, OverlayBatch,
+    OverlayCell, OverlayPage, ReplicaSlotError, SCENE_CHUNK_SIZE, SCENE_TRANSACTION_TIMEOUT_MS, SceneChunk, ScenePage,
+    SceneTable, SceneTableCell, StandardCommand, StandardError, StandardInput, StandardLightingEngine,
+    StandardMutableState, StandardReplicaSlot, StandardReplicaState, StandardReply, StandardState, UniformBackground,
 };
 pub use topology::*;
 

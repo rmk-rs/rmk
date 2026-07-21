@@ -19,14 +19,20 @@ CommitLightingOverlayReplace reply                     0f 09 01 0c 00 00 00 09 0
 CommitLightingOverlayReplace request                   0f 09 01 01 00 0d
 CommitLightingSceneReplace reply                       18 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
 CommitLightingSceneReplace request                     18 09 01 01 00 15
-GetLightingCapabilities reply                          01 09 01 0f 00 00 00 01 02 03 04 05 06 07 08 09 08 08 3f 07
+GetLightingCapabilities reply                          01 09 01 10 00 00 00 01 02 03 04 05 06 07 08 09 08 08 bf 03 07
 GetLightingCapabilities request                        01 09 01 00 00
+GetLightingCompiledSceneStatus reply                   1c 09 01 06 00 00 00 01 01 00 08
+GetLightingCompiledSceneStatus request                 1c 09 01 00 00
+GetLightingCompiledScenes reply                        1d 09 01 0b 00 00 00 01 01 01 02 2a 00 07 08 09
+GetLightingCompiledScenes request                      1d 09 01 02 00 01 00
 GetLightingKeys reply                                  11 09 01 07 00 00 00 01 01 01 01 02
 GetLightingKeys request                                11 09 01 02 00 01 00
 GetLightingLeds reply                                  05 09 01 12 00 00 00 01 01 01 2a 01 01 02 01 ff 01 80 04 80 01 03 01
 GetLightingLeds request                                05 09 01 02 00 01 00
 GetLightingOutputs reply                               08 09 01 0a 00 00 00 01 01 01 01 02 28 14 00
 GetLightingOutputs request                             08 09 01 02 00 01 00
+GetLightingOverlay reply                               1b 09 01 12 00 00 00 09 01 01 2a 01 01 02 03 e8 07 fa 01 32 01 88 27
+GetLightingOverlay request                             1b 09 01 02 00 09 00
 GetLightingPhysicalKeys reply                          04 09 01 13 00 00 00 01 01 01 01 02 ff 01 80 04 80 01 80 02 80 03 db 0b
 GetLightingPhysicalKeys request                        04 09 01 02 00 01 00
 GetLightingRoutes reply                                09 09 01 09 00 00 00 01 01 01 2a 01 02 07
