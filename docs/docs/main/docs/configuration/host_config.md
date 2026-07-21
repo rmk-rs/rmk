@@ -34,6 +34,11 @@ insecure = false
 # Rynk only: move config writes (SetKeyAction, SetMacro, …) into the locked
 # tier so they also require unlock (default: false).
 write_requires_unlock = false
+
+# Rynk only: require physical unlock before central or split-peripheral
+# bootloader entry (default: true). Set false for host-managed deployment;
+# other dangerous operations remain gated.
+bootloader_requires_unlock = true
 ```
 
 ## Common Setups

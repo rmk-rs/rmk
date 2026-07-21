@@ -586,6 +586,8 @@ unlock_keys = [[0, 0], [0, 1]]
 insecure = false
 # Rynk only: move config writes into the locked tier (default: false).
 write_requires_unlock = false
+# Require physical unlock before central or split-peripheral bootloader entry.
+bootloader_requires_unlock = true
 
 # Chip-specific configuration
 # To use the default configuration, ignore this section completely

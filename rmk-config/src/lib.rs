@@ -1264,6 +1264,10 @@ pub(crate) struct HostConfig {
     /// locked set, so writes also require unlock (default: false).
     #[serde_inline_default(false)]
     pub write_requires_unlock: bool,
+    /// Require the Rynk physical-presence unlock before entering either the
+    /// central or a split peripheral bootloader (default: true).
+    #[serde_inline_default(true)]
+    pub bootloader_requires_unlock: bool,
 }
 
 impl Default for HostConfig {
@@ -1274,6 +1278,7 @@ impl Default for HostConfig {
             unlock_keys: None,
             insecure: false,
             write_requires_unlock: false,
+            bootloader_requires_unlock: true,
         }
     }
 }
