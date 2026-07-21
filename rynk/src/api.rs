@@ -116,6 +116,19 @@ impl Client {
         self.send_no_reply::<command::BootloaderJump>(&()).await
     }
 
+    /// Ask the application to route a bootloader jump to one split peripheral.
+    /// Unlike the local jump, the central remains online and acknowledges
+    /// whether the board-specific route accepted the request.
+    pub async fn peripheral_bootloader_jump(&self, slot: u8) -> Result<(), RynkHostError> {
+        if !self.capabilities.is_split {
+            return Err(RynkHostError::Unsupported(
+                Cmd::PeripheralBootloaderJump,
+                "not a split keyboard",
+            ));
+        }
+        self.request::<command::PeripheralBootloaderJump>(&slot).await
+    }
+
     /// Reset persistent storage. Requires [`DeviceCapabilities::storage_enabled`]:
     /// without storage the wipe would silently do nothing, so nothing is sent.
     pub async fn storage_reset(&self, mode: StorageResetMode) -> Result<(), RynkHostError> {

@@ -289,6 +289,8 @@ endpoints! {
     GetDeviceInfo = 0x000A: () => DeviceInfo;
     /// Application-defined diagnostic build label; never used for compatibility.
     GetBuildInfo = 0x000B: () => BuildInfo;
+    /// Ask the application to route a bootloader jump to one split peripheral.
+    PeripheralBootloaderJump = 0x000C: u8 => ();
 
     // Keymap (0x01xx) — includes encoder.
     GetKeyAction = 0x0101: KeyPosition => KeyAction;

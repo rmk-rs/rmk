@@ -117,6 +117,7 @@ endpoints! {
     get_build_info() -> BuildInfo,
     reboot() -> (),
     bootloader_jump() -> (),
+    peripheral_bootloader_jump(slot: u8) -> (),
     storage_reset(mode: StorageResetMode) -> (),
     // lock gate
     get_lock_status() -> LockStatus,

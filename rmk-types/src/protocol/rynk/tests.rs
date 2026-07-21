@@ -669,6 +669,14 @@ fn wire_frames_locked() {
             encode_frame(Cmd::BootloaderJump, SEQ, &Ok::<(), RynkError>(())),
         ),
         (
+            "PeripheralBootloaderJump request slot 1",
+            encode_frame(Cmd::PeripheralBootloaderJump, SEQ, &1_u8),
+        ),
+        (
+            "PeripheralBootloaderJump reply Ok(())",
+            encode_frame(Cmd::PeripheralBootloaderJump, SEQ, &Ok::<(), RynkError>(()),),
+        ),
+        (
             "StorageReset request StorageResetMode::Full",
             encode_frame(Cmd::StorageReset, SEQ, &StorageResetMode::Full)
         ),

@@ -81,6 +81,8 @@ pub struct RynkService<'a> {
     lighting: Option<RynkLightingController<'a>>,
     /// Human-readable firmware identity served by `GetBuildInfo`.
     build_info: BuildInfo,
+    /// Optional board-specific route to a split peripheral's bootloader.
+    peripheral_bootloader: Option<fn(u8) -> Result<(), RynkError>>,
 }
 
 /// Per-session state that has to outlive a single dispatch. The authorization
@@ -108,6 +110,7 @@ impl<'a> RynkService<'a> {
             build_info: BuildInfo {
                 label: truncated(DEFAULT_BUILD_LABEL),
             },
+            peripheral_bootloader: None,
         }
     }
 
@@ -129,10 +132,16 @@ impl<'a> RynkService<'a> {
         self
     }
 
+    /// Attach a board-specific split-peripheral bootloader route.
+    pub fn with_peripheral_bootloader(mut self, route: fn(u8) -> Result<(), RynkError>) -> Self {
+        self.peripheral_bootloader = Some(route);
+        self
+    }
+
     /// Whether `cmd` needs an unlocked device.
     fn requires_unlock(&self, cmd: Cmd) -> bool {
         match cmd {
-            Cmd::BootloaderJump | Cmd::StorageReset | Cmd::GetMatrixState => true,
+            Cmd::BootloaderJump | Cmd::PeripheralBootloaderJump | Cmd::StorageReset | Cmd::GetMatrixState => true,
             // Deleting a bond opens a re-pair hijack window; BLE-only command.
             #[cfg(feature = "_ble")]
             Cmd::ClearBleProfile => true,
@@ -185,6 +194,7 @@ impl<'a> RynkService<'a> {
             Cmd::Lock => serve::<command::Lock, _>(locker, msg).await,
             Cmd::GetDeviceInfo => serve::<command::GetDeviceInfo, _>(self, msg).await,
             Cmd::GetBuildInfo => serve::<command::GetBuildInfo, _>(self, msg).await,
+            Cmd::PeripheralBootloaderJump => serve::<command::PeripheralBootloaderJump, _>(self, msg).await,
 
             Cmd::GetKeyAction => serve::<command::GetKeyAction, _>(self, msg).await,
             Cmd::SetKeyAction => serve::<command::SetKeyAction, _>(self, msg).await,

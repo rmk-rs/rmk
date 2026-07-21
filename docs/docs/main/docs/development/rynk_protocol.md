@@ -6,6 +6,7 @@
 # Rynk Protocol Reference
 
 Current protocol version: **0.2**.
+Current protocol version: **0.4**.
 
 Every transport (USB vendor bulk, BLE GATT, BLE HID) carries the same frame — a 3-byte header plus a [postcard](https://docs.rs/postcard)-encoded payload:
 
@@ -81,6 +82,8 @@ The lock is per session and starts locked; `Lock` or the end of the session (unp
 | `0x0008` | `Lock`                         | `()`                                  | `()`                                |            | Relock immediately.                                                          |
 | `0x0009` | `GetLayout`                    | `u32`                                 | `LayoutChunk`                       |            | Get layout blob chunk. `u32` is the byte offset.                             |
 | `0x000A` | `GetDeviceInfo`                | `()`                                  | `DeviceInfo`                        |            | Identity strings and USB ids; feature gating stays in `GetCapabilities`.     |
+| `0x000B` | `GetBuildInfo`                 | `()`                                  | `BuildInfo`                         |            | Application-defined diagnostic build label; never used for compatibility.    |
+| `0x000C` | `PeripheralBootloaderJump`     | `u8`                                  | `()`                                |            | Ask the application to route a bootloader jump to one split peripheral.      |
 | `0x0101` | `GetKeyAction`                 | `KeyPosition`                         | `KeyAction`                         |            |                                                                              |
 | `0x0102` | `SetKeyAction`                 | `SetKeyRequest`                       | `()`                                |            |                                                                              |
 | `0x0103` | `GetDefaultLayer`              | `()`                                  | `u8`                                |            |                                                                              |

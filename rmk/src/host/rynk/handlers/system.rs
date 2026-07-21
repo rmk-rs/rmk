@@ -2,8 +2,8 @@
 
 use rmk_types::constants;
 use rmk_types::protocol::rynk::command::{
-    BootloaderJump, GetBuildInfo, GetCapabilities, GetDeviceInfo, GetLockStatus, GetVersion, Lock, Reboot,
-    StorageReset, UnlockPoll,
+    BootloaderJump, GetBuildInfo, GetCapabilities, GetDeviceInfo, GetLockStatus, GetVersion, Lock,
+    PeripheralBootloaderJump, Reboot, StorageReset, UnlockPoll,
 };
 use rmk_types::protocol::rynk::{
     BuildInfo, DEVICE_INFO_STRING_SIZE, DeviceCapabilities, DeviceInfo, LockStatus, MAX_BULK_ITEMS, MAX_BULK_KEYS,
@@ -74,6 +74,12 @@ impl Handle<BootloaderJump> for RynkService<'_> {
         // Fire-and-forget, same reasoning as `Reboot`.
         crate::boot::jump_to_bootloader();
         Ok(())
+    }
+}
+
+impl Handle<PeripheralBootloaderJump> for RynkService<'_> {
+    async fn handle(&self, slot: u8) -> Result<(), RynkError> {
+        self.peripheral_bootloader.ok_or(RynkError::Unimplemented)?(slot)
     }
 }
 
