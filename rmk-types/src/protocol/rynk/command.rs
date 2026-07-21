@@ -34,12 +34,15 @@ use crate::morse::Morse;
 use crate::protocol::rynk::PeripheralStatus;
 #[cfg(feature = "lighting")]
 use crate::protocol::rynk::{
-    AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest, ClearLightingOverlayRequest,
-    CommitLightingOverlayReplaceRequest, LightingCapabilitiesResult, LightingChanged, LightingKeysPageResult,
+    AbortLightingOverlayReplaceRequest, AbortLightingSceneReplaceRequest, BeginLightingOverlayReplaceRequest,
+    BeginLightingSceneReplaceRequest, ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest,
+    CommitLightingSceneReplaceRequest, LightingCapabilitiesResult, LightingChanged, LightingKeysPageResult,
     LightingLedsPageResult, LightingOutputsPageResult, LightingOverlayTransactionResult, LightingPageRequest,
-    LightingPhysicalKeysPageResult, LightingRoutesPageResult, LightingStateResult, LightingUnitResult,
+    LightingPhysicalKeysPageResult, LightingRoutesPageResult, LightingScenePageRequest, LightingSceneStatusResult,
+    LightingSceneTransactionResult, LightingScenesPageResult, LightingStateResult, LightingUnitResult,
     LightingZoneMembershipsPageResult, LightingZonesPageResult, PutLightingOverlayChunkRequest,
-    SetLightingOverlayRequest, SetLightingStateRequest, UnsetLightingOverlayRequest,
+    PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest, SetLightingOverlayRequest,
+    SetLightingSceneCellRequest, SetLightingStateRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
 
 /// CMD high bit marking a topic (server → host push).
@@ -387,6 +390,27 @@ endpoints! {
     /// Logical matrix keys are distinct from optional physical geometry.
     #[cfg(feature = "lighting")]
     GetLightingKeys = 0x0911: LightingPageRequest => LightingKeysPageResult;
+    /// Scene discovery lives outside `LightingCapabilities`/`LightingState`
+    /// so their postcard layout stays stable for existing hosts.
+    #[cfg(feature = "lighting")]
+    GetLightingSceneStatus = 0x0912: () => LightingSceneStatusResult;
+    /// Scene pages are pinned to `LightingState.revision` for consistency.
+    #[cfg(feature = "lighting")]
+    GetLightingScenes = 0x0913: LightingScenePageRequest => LightingScenesPageResult;
+    #[cfg(feature = "lighting")]
+    SetLightingSceneCell = 0x0914: SetLightingSceneCellRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    UnsetLightingSceneCell = 0x0915: UnsetLightingSceneCellRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    BeginLightingSceneReplace = 0x0916: BeginLightingSceneReplaceRequest => LightingSceneTransactionResult;
+    #[cfg(feature = "lighting")]
+    PutLightingSceneChunk = 0x0917: PutLightingSceneChunkRequest => LightingUnitResult;
+    #[cfg(feature = "lighting")]
+    CommitLightingSceneReplace = 0x0918: CommitLightingSceneReplaceRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    AbortLightingSceneReplace = 0x0919: AbortLightingSceneReplaceRequest => LightingUnitResult;
+    #[cfg(feature = "lighting")]
+    SetLightingLayerPolicy = 0x091A: SetLightingLayerPolicyRequest => LightingStateResult;
 }
 
 // Define topics: `Name = value: Payload;`

@@ -1212,6 +1212,58 @@ fn lighting_wire_frames_locked() {
     let abort = AbortLightingOverlayReplaceRequest {
         transaction_id: transaction.id,
     };
+    let scene_cell = LightingSceneCell {
+        layer: 2,
+        led_id: led.id,
+        effect: LightingEffect::Solid {
+            color: LightingRgb8 { r: 7, g: 8, b: 9 },
+        },
+    };
+    let scene_status = LightingSceneStatus {
+        revision: state.revision,
+        capacity: 256,
+        scene_len: 1,
+        policy: LightingLayerPolicy::ActiveStack,
+        chunk_capacity: LIGHTING_SCENE_CHUNK_SIZE as u8,
+    };
+    let scene_page_request = LightingScenePageRequest {
+        revision: state.revision,
+        offset: 0,
+    };
+    let scenes_page = LightingScenesPage {
+        revision: state.revision,
+        total_count: 1,
+        items: one(scene_cell),
+    };
+    let set_scene_cell = SetLightingSceneCellRequest {
+        expected_revision: 9,
+        cell: scene_cell,
+    };
+    let unset_scene_cell = UnsetLightingSceneCellRequest {
+        expected_revision: 10,
+        layer: scene_cell.layer,
+        led_id: led.id,
+    };
+    let set_layer_policy = SetLightingLayerPolicyRequest {
+        expected_revision: 11,
+        policy: LightingLayerPolicy::EffectiveOnly,
+    };
+    let scene_begin = BeginLightingSceneReplaceRequest {
+        expected_revision: 12,
+        cell_count: 1,
+    };
+    let scene_transaction = LightingSceneTransaction { id: 21, cell_count: 1 };
+    let scene_put = PutLightingSceneChunkRequest {
+        transaction_id: scene_transaction.id,
+        offset: 0,
+        cells: one(scene_cell),
+    };
+    let scene_commit = CommitLightingSceneReplaceRequest {
+        transaction_id: scene_transaction.id,
+    };
+    let scene_abort = AbortLightingSceneReplaceRequest {
+        transaction_id: scene_transaction.id,
+    };
 
     let entries: alloc::vec::Vec<(&str, alloc::vec::Vec<u8>)> = alloc::vec![
         (
@@ -1442,6 +1494,130 @@ fn lighting_wire_frames_locked() {
                 Cmd::PutLightingOverlayChunk,
                 SEQ,
                 &Ok::<LightingUnitResult, RynkError>(Err(LightingError::TransactionExpired))
+            )
+        ),
+        (
+            "GetLightingSceneStatus request",
+            encode_frame(Cmd::GetLightingSceneStatus, SEQ, &())
+        ),
+        (
+            "GetLightingSceneStatus reply",
+            encode_frame(
+                Cmd::GetLightingSceneStatus,
+                SEQ,
+                &Ok::<LightingSceneStatusResult, RynkError>(Ok(scene_status))
+            )
+        ),
+        (
+            "GetLightingScenes request",
+            encode_frame(Cmd::GetLightingScenes, SEQ, &scene_page_request)
+        ),
+        (
+            "GetLightingScenes reply",
+            encode_frame(
+                Cmd::GetLightingScenes,
+                SEQ,
+                &Ok::<LightingScenesPageResult, RynkError>(Ok(scenes_page))
+            )
+        ),
+        (
+            "SetLightingSceneCell request",
+            encode_frame(Cmd::SetLightingSceneCell, SEQ, &set_scene_cell)
+        ),
+        (
+            "SetLightingSceneCell reply",
+            encode_frame(
+                Cmd::SetLightingSceneCell,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "UnsetLightingSceneCell request",
+            encode_frame(Cmd::UnsetLightingSceneCell, SEQ, &unset_scene_cell)
+        ),
+        (
+            "UnsetLightingSceneCell reply",
+            encode_frame(
+                Cmd::UnsetLightingSceneCell,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "SetLightingLayerPolicy request",
+            encode_frame(Cmd::SetLightingLayerPolicy, SEQ, &set_layer_policy)
+        ),
+        (
+            "SetLightingLayerPolicy reply",
+            encode_frame(
+                Cmd::SetLightingLayerPolicy,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "BeginLightingSceneReplace request",
+            encode_frame(Cmd::BeginLightingSceneReplace, SEQ, &scene_begin)
+        ),
+        (
+            "BeginLightingSceneReplace reply",
+            encode_frame(
+                Cmd::BeginLightingSceneReplace,
+                SEQ,
+                &Ok::<LightingSceneTransactionResult, RynkError>(Ok(scene_transaction))
+            )
+        ),
+        (
+            "PutLightingSceneChunk request",
+            encode_frame(Cmd::PutLightingSceneChunk, SEQ, &scene_put)
+        ),
+        (
+            "PutLightingSceneChunk reply",
+            encode_frame(
+                Cmd::PutLightingSceneChunk,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Ok(()))
+            )
+        ),
+        (
+            "CommitLightingSceneReplace request",
+            encode_frame(Cmd::CommitLightingSceneReplace, SEQ, &scene_commit)
+        ),
+        (
+            "CommitLightingSceneReplace reply",
+            encode_frame(
+                Cmd::CommitLightingSceneReplace,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "AbortLightingSceneReplace request",
+            encode_frame(Cmd::AbortLightingSceneReplace, SEQ, &scene_abort)
+        ),
+        (
+            "AbortLightingSceneReplace reply",
+            encode_frame(
+                Cmd::AbortLightingSceneReplace,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Ok(()))
+            )
+        ),
+        (
+            "SetLightingSceneCell inner Err(UnknownLayer)",
+            encode_frame(
+                Cmd::SetLightingSceneCell,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Err(LightingError::UnknownLayer { layer: 200 }))
+            )
+        ),
+        (
+            "SetLightingSceneCell inner Err(SceneFull)",
+            encode_frame(
+                Cmd::SetLightingSceneCell,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Err(LightingError::SceneFull { capacity: 256 }))
             )
         ),
         (

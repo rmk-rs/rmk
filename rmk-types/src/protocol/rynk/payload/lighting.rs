@@ -15,6 +15,8 @@ pub const LIGHTING_PAYLOAD_SIZE: usize = 256;
 pub const LIGHTING_PAGE_SIZE: usize = 8;
 /// Number of overlay cells in one replacement chunk.
 pub const LIGHTING_OVERLAY_CHUNK_SIZE: usize = 8;
+/// Number of scene cells in one scene page or replacement chunk.
+pub const LIGHTING_SCENE_CHUNK_SIZE: usize = 8;
 /// Maximum UTF-8 byte length of a zone name.
 pub const LIGHTING_ZONE_NAME_SIZE: usize = 24;
 
@@ -178,6 +180,8 @@ impl LightingFeatureFlags {
     pub const OVERLAY_TTL: u16 = 1 << 3;
     pub const ATOMIC_OVERLAY_REPLACE: u16 = 1 << 4;
     pub const LAYER_AWARE: u16 = 1 << 5;
+    /// Runtime-configurable per-layer scenes stored on the device.
+    pub const LAYER_SCENES: u16 = 1 << 6;
 
     pub const fn contains(self, bits: u16) -> bool {
         self.0 & bits == bits
@@ -439,6 +443,147 @@ wire_type! {
 }
 
 wire_type! {
+    /// Wire mirror of the engine's layer composition policy.
+    pub enum LightingLayerPolicy {
+        /// Only the effective layer contributes scene cells.
+        EffectiveOnly,
+        /// Default first, then the active set in ascending precedence, with
+        /// the effective layer last. Sparse cells fall through.
+        ActiveStack,
+    }
+}
+
+wire_type! {
+    /// One durable scene cell: an effect bound to a stable LED on one layer.
+    pub struct LightingSceneCell {
+        pub layer: u8,
+        pub led_id: LightingLedId,
+        pub effect: LightingEffect,
+    }
+}
+
+impl LightingSceneCell {
+    /// Validate the effect. Layer and LED bounds are checked against the
+    /// live keymap and topology by the firmware service.
+    pub const fn validate(&self) -> LightingResult<()> {
+        self.effect.validate()
+    }
+}
+
+wire_type! {
+    /// Scene limits and current occupancy. Kept out of
+    /// [`LightingCapabilities`]/[`LightingState`] so their postcard layout is
+    /// unchanged for existing hosts; discovery uses
+    /// [`LightingFeatureFlags::LAYER_SCENES`] plus this endpoint.
+    pub struct LightingSceneStatus {
+        /// Current [`LightingState::revision`]; scene mutations advance it.
+        pub revision: u32,
+        /// Maximum stored scene cells. `0` means scenes are absent.
+        pub capacity: u16,
+        pub scene_len: u16,
+        pub policy: LightingLayerPolicy,
+        /// Cells per `GetLightingScenes` page and per replacement chunk.
+        pub chunk_capacity: u8,
+    }
+}
+
+wire_type! {
+    /// Revision-pinned request for one scene page. `revision` is the expected
+    /// [`LightingState::revision`]; a stale read is rejected so multi-page
+    /// reads stay self-consistent.
+    pub struct LightingScenePageRequest {
+        pub revision: u32,
+        pub offset: u16,
+    }
+}
+
+/// One page of stored scene cells, echoing the pinned state revision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingScenesPage {
+    pub revision: u32,
+    pub total_count: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingSceneCell[]"))]
+    pub items: Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for LightingScenesPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>();
+}
+
+wire_type! {
+    pub struct SetLightingSceneCellRequest {
+        pub expected_revision: u32,
+        pub cell: LightingSceneCell,
+    }
+}
+
+wire_type! {
+    pub struct UnsetLightingSceneCellRequest {
+        pub expected_revision: u32,
+        pub layer: u8,
+        pub led_id: LightingLedId,
+    }
+}
+
+wire_type! {
+    pub struct SetLightingLayerPolicyRequest {
+        pub expected_revision: u32,
+        pub policy: LightingLayerPolicy,
+    }
+}
+
+wire_type! {
+    /// Begin an atomic, multi-packet scene-table replacement.
+    pub struct BeginLightingSceneReplaceRequest {
+        pub expected_revision: u32,
+        pub cell_count: u16,
+    }
+}
+
+wire_type! {
+    /// Opaque scene transaction token allocated by the firmware.
+    pub struct LightingSceneTransaction {
+        pub id: u32,
+        pub cell_count: u16,
+    }
+}
+
+/// One ordered scene transaction chunk. Chunks are applied only by commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct PutLightingSceneChunkRequest {
+    pub transaction_id: u32,
+    pub offset: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingSceneCell[]"))]
+    pub cells: Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for PutLightingSceneChunkRequest {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>();
+}
+
+wire_type! {
+    pub struct CommitLightingSceneReplaceRequest {
+        pub transaction_id: u32,
+    }
+}
+
+wire_type! {
+    pub struct AbortLightingSceneReplaceRequest {
+        pub transaction_id: u32,
+    }
+}
+
+wire_type! {
     /// Lighting-domain rejection carried inside Rynk's outer protocol result.
     pub enum LightingError {
         Unsupported,
@@ -453,6 +598,10 @@ wire_type! {
         InvalidTransaction,
         TransactionExpired,
         TransactionIncomplete { expected: u16, received: u16 },
+        // Appended after the first lighting ICD; new variants only surface
+        // from the new scene endpoints, so older hosts never decode them.
+        UnknownLayer { layer: u8 },
+        SceneFull { capacity: u16 },
     }
 }
 
@@ -468,6 +617,9 @@ pub type LightingZoneMembershipsPageResult = LightingResult<LightingZoneMembersh
 pub type LightingOutputsPageResult = LightingResult<LightingOutputsPage>;
 pub type LightingRoutesPageResult = LightingResult<LightingRoutesPage>;
 pub type LightingOverlayTransactionResult = LightingResult<LightingOverlayTransaction>;
+pub type LightingSceneStatusResult = LightingResult<LightingSceneStatus>;
+pub type LightingScenesPageResult = LightingResult<LightingScenesPage>;
+pub type LightingSceneTransactionResult = LightingResult<LightingSceneTransaction>;
 pub type LightingUnitResult = LightingResult<()>;
 
 wire_type! {
@@ -503,6 +655,15 @@ const _: () = {
     assert_endpoint_fits!(PutLightingOverlayChunkRequest, LightingUnitResult);
     assert_endpoint_fits!(CommitLightingOverlayReplaceRequest, LightingStateResult);
     assert_endpoint_fits!(AbortLightingOverlayReplaceRequest, LightingUnitResult);
+    assert_endpoint_fits!((), LightingSceneStatusResult);
+    assert_endpoint_fits!(LightingScenePageRequest, LightingScenesPageResult);
+    assert_endpoint_fits!(SetLightingSceneCellRequest, LightingStateResult);
+    assert_endpoint_fits!(UnsetLightingSceneCellRequest, LightingStateResult);
+    assert_endpoint_fits!(SetLightingLayerPolicyRequest, LightingStateResult);
+    assert_endpoint_fits!(BeginLightingSceneReplaceRequest, LightingSceneTransactionResult);
+    assert_endpoint_fits!(PutLightingSceneChunkRequest, LightingUnitResult);
+    assert_endpoint_fits!(CommitLightingSceneReplaceRequest, LightingStateResult);
+    assert_endpoint_fits!(AbortLightingSceneReplaceRequest, LightingUnitResult);
     core::assert!(LightingChanged::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
 };
 
@@ -580,6 +741,80 @@ mod tests {
         };
         round_trip(&page);
         assert_max_size_bound(&page);
+    }
+
+    fn scene_cell(layer: u8, id: u16) -> LightingSceneCell {
+        LightingSceneCell {
+            layer,
+            led_id: LightingLedId(id),
+            effect: LightingEffect::Breathe {
+                color: LightingRgb8 { r: 4, g: 5, b: 6 },
+                period_ms: u32::MAX,
+                phase_ms: u32::MAX,
+                step_ms: u16::MAX - 1,
+            },
+        }
+    }
+
+    #[test]
+    fn scene_types_round_trip() {
+        round_trip(&LightingLayerPolicy::EffectiveOnly);
+        round_trip(&LightingLayerPolicy::ActiveStack);
+        round_trip(&scene_cell(3, 42));
+        round_trip(&LightingSceneStatus {
+            revision: u32::MAX,
+            capacity: 256,
+            scene_len: 12,
+            policy: LightingLayerPolicy::ActiveStack,
+            chunk_capacity: LIGHTING_SCENE_CHUNK_SIZE as u8,
+        });
+        round_trip(&LightingSceneTransaction {
+            id: u32::MAX,
+            cell_count: u16::MAX,
+        });
+        round_trip(&LightingError::UnknownLayer { layer: 9 });
+        round_trip(&LightingError::SceneFull { capacity: 256 });
+    }
+
+    #[test]
+    fn maximum_scene_chunk_and_page_respect_bounds() {
+        let mut cells = Vec::new();
+        for id in 0..LIGHTING_SCENE_CHUNK_SIZE as u16 {
+            cells.push(scene_cell(u8::MAX, id)).unwrap();
+        }
+        let request = PutLightingSceneChunkRequest {
+            transaction_id: u32::MAX,
+            offset: u16::MAX,
+            cells: cells.clone(),
+        };
+        round_trip(&request);
+        assert_max_size_bound(&request);
+        assert!(PutLightingSceneChunkRequest::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+
+        let page = LightingScenesPage {
+            revision: u32::MAX,
+            total_count: u16::MAX,
+            items: cells,
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+    }
+
+    #[test]
+    fn scene_cell_validation_is_effect_validation() {
+        assert_eq!(scene_cell(0, 1).validate(), Ok(()));
+        let invalid = LightingSceneCell {
+            layer: 0,
+            led_id: LightingLedId(1),
+            effect: LightingEffect::Blink {
+                color: LightingRgb8 { r: 1, g: 2, b: 3 },
+                period_ms: 0,
+                phase_ms: 0,
+                duty: 50,
+            },
+        };
+        assert_eq!(invalid.validate(), Err(LightingError::InvalidEffect));
     }
 
     #[test]
