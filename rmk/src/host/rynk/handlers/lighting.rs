@@ -4,24 +4,30 @@ use embassy_time::Instant;
 use heapless::{String, Vec};
 use rmk_types::protocol::rynk::command::{
     ClearLightingOverlay, GetLightingCapabilities, GetLightingKeys, GetLightingLeds, GetLightingOutputs,
-    GetLightingPhysicalKeys, GetLightingRoutes, GetLightingState, GetLightingZoneMemberships, GetLightingZones,
-    SetLightingOverlay, SetLightingState, UnsetLightingOverlay,
+    GetLightingPhysicalKeys, GetLightingRoutes, GetLightingSceneStatus, GetLightingScenes, GetLightingState,
+    GetLightingZoneMemberships, GetLightingZones, SetLightingLayerPolicy, SetLightingOverlay, SetLightingSceneCell,
+    SetLightingState, UnsetLightingOverlay, UnsetLightingSceneCell,
 };
 use rmk_types::protocol::rynk::{
-    AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest, ClearLightingOverlayRequest,
-    CommitLightingOverlayReplaceRequest, LIGHTING_PAGE_SIZE, LIGHTING_ZONE_NAME_SIZE, LightingCapabilities,
-    LightingCapabilitiesResult, LightingEffectFlags, LightingError, LightingFeatureFlags, LightingKeysPage,
-    LightingKeysPageResult, LightingLed, LightingLedId, LightingLedsPage, LightingLedsPageResult,
+    AbortLightingOverlayReplaceRequest, AbortLightingSceneReplaceRequest, BeginLightingOverlayReplaceRequest,
+    BeginLightingSceneReplaceRequest, ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest,
+    CommitLightingSceneReplaceRequest, LIGHTING_PAGE_SIZE, LIGHTING_SCENE_CHUNK_SIZE, LIGHTING_ZONE_NAME_SIZE,
+    LightingCapabilities, LightingCapabilitiesResult, LightingEffectFlags, LightingError, LightingFeatureFlags,
+    LightingKeysPage, LightingKeysPageResult, LightingLed, LightingLedId, LightingLedsPage, LightingLedsPageResult,
     LightingMatrixPosition, LightingOutput, LightingOutputCapabilities, LightingOutputCoverage, LightingOutputsPage,
     LightingOutputsPageResult, LightingOverlayCell, LightingOverlayTransaction, LightingOverlayTransactionResult,
     LightingPageRequest, LightingPhysicalKey, LightingPhysicalKeysPage, LightingPhysicalKeysPageResult, LightingPoint3,
-    LightingResult, LightingRoute, LightingRoutesPage, LightingRoutesPageResult, LightingState, LightingStateResult,
-    LightingUnitResult, LightingZone, LightingZoneId, LightingZoneMembershipsPage, LightingZoneMembershipsPageResult,
-    LightingZonesPage, LightingZonesPageResult, PutLightingOverlayChunkRequest, RynkError, RynkMessage,
-    SetLightingOverlayRequest, SetLightingStateRequest, UnsetLightingOverlayRequest,
+    LightingResult, LightingRoute, LightingRoutesPage, LightingRoutesPageResult, LightingScenePageRequest,
+    LightingSceneStatus, LightingSceneStatusResult, LightingSceneTransactionResult, LightingScenesPageResult,
+    LightingState, LightingStateResult, LightingUnitResult, LightingZone, LightingZoneId, LightingZoneMembershipsPage,
+    LightingZoneMembershipsPageResult, LightingZonesPage, LightingZonesPageResult, PutLightingOverlayChunkRequest,
+    PutLightingSceneChunkRequest, RynkError, RynkMessage, SetLightingLayerPolicyRequest, SetLightingOverlayRequest,
+    SetLightingSceneCellRequest, SetLightingStateRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
 
-use super::super::lighting::{RYNK_LIGHTING_TRANSACTION_CAPACITY, RynkLightingCommand, RynkLightingController};
+use super::super::lighting::{
+    RYNK_LIGHTING_TRANSACTION_CAPACITY, RynkLightingCommand, RynkLightingController, RynkLightingReadback,
+};
 use super::super::{RynkService, RynkSession};
 use super::Handle;
 use crate::lighting::OutputCoverage;
@@ -30,6 +36,16 @@ const TRANSACTION_TIMEOUT_MS: u64 = 5_000;
 
 fn controller<'a>(service: &RynkService<'a>) -> LightingResult<RynkLightingController<'a>> {
     service.lighting.ok_or(LightingError::Unsupported)
+}
+
+/// Scene endpoints require a board that wired a runtime scene table; a
+/// controller advertising `scene_capacity == 0` has none.
+fn scene_controller<'a>(service: &RynkService<'a>) -> LightingResult<RynkLightingController<'a>> {
+    let controller = controller(service)?;
+    if controller.scene_capacity == 0 {
+        return Err(LightingError::Unsupported);
+    }
+    Ok(controller)
 }
 
 impl Handle<GetLightingCapabilities> for RynkService<'_> {
@@ -41,7 +57,7 @@ impl Handle<GetLightingCapabilities> for RynkService<'_> {
 impl Handle<GetLightingState> for RynkService<'_> {
     async fn handle(&self, _: ()) -> Result<LightingStateResult, RynkError> {
         Ok(match controller(self) {
-            Ok(controller) => controller.request(RynkLightingCommand::ReadState).await,
+            Ok(controller) => controller.request_state(RynkLightingCommand::ReadState).await,
             Err(error) => Err(error),
         })
     }
@@ -52,7 +68,7 @@ impl Handle<SetLightingState> for RynkService<'_> {
         let result = match controller(self) {
             Ok(controller) => {
                 controller
-                    .request(RynkLightingCommand::SetState {
+                    .request_state(RynkLightingCommand::SetState {
                         expected_revision: req.expected_revision,
                         state: req.state,
                     })
@@ -72,7 +88,7 @@ impl Handle<SetLightingOverlay> for RynkService<'_> {
         let result = match controller(self) {
             Ok(controller) => {
                 controller
-                    .request(RynkLightingCommand::SetOverlay {
+                    .request_state(RynkLightingCommand::SetOverlay {
                         expected_revision: req.expected_revision,
                         cell: req.cell,
                     })
@@ -89,7 +105,7 @@ impl Handle<UnsetLightingOverlay> for RynkService<'_> {
         let result = match controller(self) {
             Ok(controller) => {
                 controller
-                    .request(RynkLightingCommand::UnsetOverlay {
+                    .request_state(RynkLightingCommand::UnsetOverlay {
                         expected_revision: req.expected_revision,
                         led_id: req.led_id,
                     })
@@ -106,11 +122,218 @@ impl Handle<ClearLightingOverlay> for RynkService<'_> {
         let result = match controller(self) {
             Ok(controller) => {
                 controller
-                    .request(RynkLightingCommand::ClearOverlay {
+                    .request_state(RynkLightingCommand::ClearOverlay {
                         expected_revision: req.expected_revision,
                     })
                     .await
             }
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl RynkService<'_> {
+    /// `UnknownLayer` for a scene layer outside the live keymap.
+    fn check_scene_layer(&self, layer: u8) -> LightingResult<()> {
+        let (_, _, num_layers) = self.ctx.keymap_dimensions();
+        if (layer as usize) < num_layers {
+            Ok(())
+        } else {
+            Err(LightingError::UnknownLayer { layer })
+        }
+    }
+}
+
+impl Handle<GetLightingSceneStatus> for RynkService<'_> {
+    async fn handle(&self, _: ()) -> Result<LightingSceneStatusResult, RynkError> {
+        let result = match scene_controller(self) {
+            Ok(controller) => match controller.request(RynkLightingCommand::ReadSceneStatus).await {
+                Ok(RynkLightingReadback::SceneStatus {
+                    revision,
+                    scene_len,
+                    policy,
+                }) => Ok(LightingSceneStatus {
+                    revision,
+                    capacity: controller.scene_capacity,
+                    scene_len,
+                    policy,
+                    chunk_capacity: LIGHTING_SCENE_CHUNK_SIZE as u8,
+                }),
+                Ok(_) => Err(LightingError::InvalidRequest),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<GetLightingScenes> for RynkService<'_> {
+    async fn handle(&self, req: LightingScenePageRequest) -> Result<LightingScenesPageResult, RynkError> {
+        let result = match scene_controller(self) {
+            Ok(controller) => match controller
+                .request(RynkLightingCommand::ReadScenes {
+                    expected_revision: req.revision,
+                    offset: req.offset,
+                })
+                .await
+            {
+                Ok(RynkLightingReadback::ScenesPage(page)) => Ok(page),
+                Ok(_) => Err(LightingError::InvalidRequest),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<SetLightingSceneCell> for RynkService<'_> {
+    async fn handle(&self, req: SetLightingSceneCellRequest) -> Result<LightingStateResult, RynkError> {
+        if let Err(error) = req
+            .cell
+            .validate()
+            .and_then(|()| self.check_scene_layer(req.cell.layer))
+        {
+            return Ok(Err(error));
+        }
+        let result = match scene_controller(self) {
+            Ok(controller) => {
+                controller
+                    .request_state(RynkLightingCommand::SetSceneCell {
+                        expected_revision: req.expected_revision,
+                        cell: req.cell,
+                    })
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<UnsetLightingSceneCell> for RynkService<'_> {
+    async fn handle(&self, req: UnsetLightingSceneCellRequest) -> Result<LightingStateResult, RynkError> {
+        if let Err(error) = self.check_scene_layer(req.layer) {
+            return Ok(Err(error));
+        }
+        let result = match scene_controller(self) {
+            Ok(controller) => {
+                controller
+                    .request_state(RynkLightingCommand::UnsetSceneCell {
+                        expected_revision: req.expected_revision,
+                        layer: req.layer,
+                        led_id: req.led_id,
+                    })
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<SetLightingLayerPolicy> for RynkService<'_> {
+    async fn handle(&self, req: SetLightingLayerPolicyRequest) -> Result<LightingStateResult, RynkError> {
+        let result = match scene_controller(self) {
+            Ok(controller) => {
+                controller
+                    .request_state(RynkLightingCommand::SetLayerPolicy {
+                        expected_revision: req.expected_revision,
+                        policy: req.policy,
+                    })
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<rmk_types::protocol::rynk::command::BeginLightingSceneReplace> for RynkService<'_> {
+    async fn handle(&self, req: BeginLightingSceneReplaceRequest) -> Result<LightingSceneTransactionResult, RynkError> {
+        let result = match scene_controller(self) {
+            Ok(controller) => {
+                if req.cell_count > controller.scene_capacity {
+                    Err(LightingError::SceneFull {
+                        capacity: controller.scene_capacity,
+                    })
+                } else {
+                    match controller
+                        .request(RynkLightingCommand::BeginSceneReplace {
+                            expected_revision: req.expected_revision,
+                            cell_count: req.cell_count,
+                        })
+                        .await
+                    {
+                        Ok(RynkLightingReadback::SceneTransaction(transaction)) => Ok(transaction),
+                        Ok(_) => Err(LightingError::InvalidRequest),
+                        Err(error) => Err(error),
+                    }
+                }
+            }
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<rmk_types::protocol::rynk::command::PutLightingSceneChunk> for RynkService<'_> {
+    async fn handle(&self, req: PutLightingSceneChunkRequest) -> Result<LightingUnitResult, RynkError> {
+        for cell in &req.cells {
+            if let Err(error) = cell.validate().and_then(|()| self.check_scene_layer(cell.layer)) {
+                return Ok(Err(error));
+            }
+        }
+        let result = match scene_controller(self) {
+            Ok(controller) => match controller
+                .request(RynkLightingCommand::PutSceneChunk {
+                    transaction_id: req.transaction_id,
+                    offset: req.offset,
+                    cells: req.cells,
+                })
+                .await
+            {
+                Ok(RynkLightingReadback::Unit) => Ok(()),
+                Ok(_) => Err(LightingError::InvalidRequest),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<rmk_types::protocol::rynk::command::CommitLightingSceneReplace> for RynkService<'_> {
+    async fn handle(&self, req: CommitLightingSceneReplaceRequest) -> Result<LightingStateResult, RynkError> {
+        let result = match scene_controller(self) {
+            Ok(controller) => {
+                controller
+                    .request_state(RynkLightingCommand::CommitSceneReplace {
+                        transaction_id: req.transaction_id,
+                    })
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<rmk_types::protocol::rynk::command::AbortLightingSceneReplace> for RynkService<'_> {
+    async fn handle(&self, req: AbortLightingSceneReplaceRequest) -> Result<LightingUnitResult, RynkError> {
+        let result = match scene_controller(self) {
+            Ok(controller) => match controller
+                .request(RynkLightingCommand::AbortSceneReplace {
+                    transaction_id: req.transaction_id,
+                })
+                .await
+            {
+                Ok(RynkLightingReadback::Unit) => Ok(()),
+                Ok(_) => Err(LightingError::InvalidRequest),
+                Err(error) => Err(error),
+            },
             Err(error) => Err(error),
         };
         Ok(result)
@@ -176,6 +399,9 @@ fn capabilities(binding: RynkLightingController<'_>) -> LightingCapabilities {
     }
     if !routing.routes.is_empty() || !routing.outputs.is_empty() {
         features.0 |= LightingFeatureFlags::ROUTING;
+    }
+    if binding.scene_capacity > 0 {
+        features.0 |= LightingFeatureFlags::LAYER_SCENES;
     }
     LightingCapabilities {
         topology_revision: descriptor.topology_revision,
@@ -1000,7 +1226,7 @@ mod tests {
                         }
                         _ => panic!("expected replacement"),
                     }
-                    mailbox.reply(pending.id, Ok(committed));
+                    mailbox.reply(pending.id, Ok(RynkLightingReadback::State(committed)));
                 },
             )
             .await;
@@ -1090,11 +1316,353 @@ mod tests {
                             expected_revision: 9,
                         } if staged.is_empty()
                     ));
-                    mailbox.reply(pending.id, Ok(cleared));
+                    mailbox.reply(pending.id, Ok(RynkLightingReadback::State(cleared)));
                 },
             )
             .await;
             assert_eq!(response.unwrap(), Ok(cleared));
+        });
+    }
+
+    fn wire_scene_cell(layer: u8, led: u16) -> rmk_types::protocol::rynk::LightingSceneCell {
+        rmk_types::protocol::rynk::LightingSceneCell {
+            layer,
+            led_id: LightingLedId(led),
+            effect: rmk_types::protocol::rynk::LightingEffect::Solid {
+                color: rmk_types::protocol::rynk::LightingRgb8 { r: 5, g: 6, b: 7 },
+            },
+        }
+    }
+
+    #[test]
+    fn scene_endpoints_reject_unsupported_without_a_scene_capacity() {
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 3> = PositionalConfig::default();
+            let mut data: KeymapData<1, 3, 1, 0> = KeymapData::new([[[KeyAction::No; 3]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut config = RmkConfig::default();
+            config.lock_config.insecure = true;
+            let mailbox = RynkLightingMailbox::new();
+            // Lighting is bound, but the board wired no runtime scene table.
+            let service = RynkService::new(&keymap, &config).with_lighting(RynkLightingController::new(
+                &mailbox,
+                descriptor(),
+                8,
+            ));
+            let session = session(&keymap, &config);
+
+            let lighting = capabilities(service.lighting.unwrap());
+            assert!(!lighting.features.contains(LightingFeatureFlags::LAYER_SCENES));
+
+            let status = call::<rmk_types::protocol::rynk::command::GetLightingSceneStatus>(&service, &session, &())
+                .await
+                .unwrap();
+            assert_eq!(status, Err(LightingError::Unsupported));
+            let set = call::<rmk_types::protocol::rynk::command::SetLightingSceneCell>(
+                &service,
+                &session,
+                &rmk_types::protocol::rynk::SetLightingSceneCellRequest {
+                    expected_revision: 0,
+                    cell: wire_scene_cell(0, 10),
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(set, Err(LightingError::Unsupported));
+        });
+    }
+
+    /// Full stack: handler validation → protocol mailbox → adapter → engine,
+    /// with scene persistence observed on the flash channel.
+    #[test]
+    fn scene_endpoints_flow_through_adapter_and_engine() {
+        use embassy_futures::select::{Either3, select3};
+        use rmk_types::protocol::rynk::command::{
+            AbortLightingSceneReplace, BeginLightingSceneReplace, CommitLightingSceneReplace, GetLightingSceneStatus,
+            GetLightingScenes, PutLightingSceneChunk, SetLightingLayerPolicy, SetLightingSceneCell,
+            UnsetLightingSceneCell,
+        };
+        use rmk_types::protocol::rynk::{
+            BeginLightingSceneReplaceRequest, CommitLightingSceneReplaceRequest, LightingLayerPolicy,
+            LightingScenePageRequest, PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest,
+            SetLightingSceneCellRequest, UnsetLightingSceneCellRequest,
+        };
+
+        use crate::lighting::{
+            BackgroundState, EmptySource, LayerPolicy, LayerScenes, LightingContext, LightingEngine, LightingMailbox,
+            StandardCommand, StandardError, StandardLightingEngine, StandardReply,
+        };
+
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 3> = PositionalConfig::default();
+            let mut data: KeymapData<1, 3, 2, 0> = KeymapData::new([[[KeyAction::No; 3]]; 2]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut config = RmkConfig::default();
+            config.lock_config.insecure = true;
+            let mailbox = RynkLightingMailbox::new();
+            let service = RynkService::new(&keymap, &config)
+                .with_lighting(RynkLightingController::new(&mailbox, descriptor(), 8).with_scene_capacity(4));
+            let session = session(&keymap, &config);
+
+            let core = LightingMailbox::<StandardCommand<2, 4>, StandardReply, StandardError, 1>::new();
+            let mut adapter = super::super::super::lighting::StandardRynkLightingAdapter::<2, 1, 4>::new(
+                &mailbox,
+                &core,
+                descriptor().topology,
+            );
+            let mut engine: StandardLightingEngine<'static, EmptySource, EmptySource, 2, 2, 4> =
+                StandardLightingEngine::new(
+                    BackgroundState::default(),
+                    LayerScenes {
+                        scenes: &[],
+                        policy: LayerPolicy::ActiveStack,
+                    },
+                    EmptySource,
+                    EmptySource,
+                );
+
+            let lighting = capabilities(service.lighting.unwrap());
+            assert!(lighting.features.contains(LightingFeatureFlags::LAYER_SCENES));
+
+            let client = async {
+                let status = call::<GetLightingSceneStatus>(&service, &session, &())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(status.capacity, 4);
+                assert_eq!(status.scene_len, 0);
+                assert_eq!(status.policy, LightingLayerPolicy::ActiveStack);
+                assert_eq!(
+                    status.chunk_capacity as usize,
+                    rmk_types::protocol::rynk::LIGHTING_SCENE_CHUNK_SIZE
+                );
+
+                // Handler-side bounds: an out-of-keymap layer and an unknown
+                // stable LED never reach the engine.
+                let bad_layer = call::<SetLightingSceneCell>(
+                    &service,
+                    &session,
+                    &SetLightingSceneCellRequest {
+                        expected_revision: 0,
+                        cell: wire_scene_cell(9, 10),
+                    },
+                )
+                .await
+                .unwrap();
+                assert_eq!(bad_layer, Err(LightingError::UnknownLayer { layer: 9 }));
+                let bad_led = call::<SetLightingSceneCell>(
+                    &service,
+                    &session,
+                    &SetLightingSceneCellRequest {
+                        expected_revision: 0,
+                        cell: wire_scene_cell(1, 7),
+                    },
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    bad_led,
+                    Err(LightingError::UnknownLed {
+                        led_id: LightingLedId(7)
+                    })
+                );
+
+                let state = call::<SetLightingSceneCell>(
+                    &service,
+                    &session,
+                    &SetLightingSceneCellRequest {
+                        expected_revision: 0,
+                        cell: wire_scene_cell(1, 42),
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(state.revision, 1);
+
+                // Pinned page reads round-trip stable LED identity.
+                let page =
+                    call::<GetLightingScenes>(&service, &session, &LightingScenePageRequest { revision: 1, offset: 0 })
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert_eq!(page.total_count, 1);
+                assert_eq!(page.items[0], wire_scene_cell(1, 42));
+                let stale =
+                    call::<GetLightingScenes>(&service, &session, &LightingScenePageRequest { revision: 0, offset: 0 })
+                        .await
+                        .unwrap();
+                assert_eq!(
+                    stale,
+                    Err(LightingError::StateRevisionConflict {
+                        expected: 0,
+                        current: 1
+                    })
+                );
+
+                // A whole-table replacement above capacity fails locally.
+                let over = call::<BeginLightingSceneReplace>(
+                    &service,
+                    &session,
+                    &BeginLightingSceneReplaceRequest {
+                        expected_revision: 1,
+                        cell_count: 9,
+                    },
+                )
+                .await
+                .unwrap();
+                assert_eq!(over, Err(LightingError::SceneFull { capacity: 4 }));
+
+                let transaction = call::<BeginLightingSceneReplace>(
+                    &service,
+                    &session,
+                    &BeginLightingSceneReplaceRequest {
+                        expected_revision: 1,
+                        cell_count: 1,
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                let mut cells = Vec::new();
+                cells.push(wire_scene_cell(0, 10)).unwrap();
+                call::<PutLightingSceneChunk>(
+                    &service,
+                    &session,
+                    &PutLightingSceneChunkRequest {
+                        transaction_id: transaction.id,
+                        offset: 0,
+                        cells,
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                let committed = call::<CommitLightingSceneReplace>(
+                    &service,
+                    &session,
+                    &CommitLightingSceneReplaceRequest {
+                        transaction_id: transaction.id,
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(committed.revision, 2);
+
+                // The pre-replace cell is gone; the replacement is visible.
+                let page =
+                    call::<GetLightingScenes>(&service, &session, &LightingScenePageRequest { revision: 2, offset: 0 })
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert_eq!(page.total_count, 1);
+                assert_eq!(page.items[0], wire_scene_cell(0, 10));
+
+                let state = call::<SetLightingLayerPolicy>(
+                    &service,
+                    &session,
+                    &SetLightingLayerPolicyRequest {
+                        expected_revision: 2,
+                        policy: LightingLayerPolicy::EffectiveOnly,
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(state.revision, 3);
+                let status = call::<GetLightingSceneStatus>(&service, &session, &())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(status.policy, LightingLayerPolicy::EffectiveOnly);
+                assert_eq!(status.scene_len, 1);
+
+                // Unset through stable identity, then abort of a dead
+                // transaction reports it as unknown.
+                let state = call::<UnsetLightingSceneCell>(
+                    &service,
+                    &session,
+                    &UnsetLightingSceneCellRequest {
+                        expected_revision: 3,
+                        layer: 0,
+                        led_id: LightingLedId(10),
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(state.revision, 4);
+                let aborted = call::<AbortLightingSceneReplace>(
+                    &service,
+                    &session,
+                    &rmk_types::protocol::rynk::AbortLightingSceneReplaceRequest { transaction_id: 999 },
+                )
+                .await
+                .unwrap();
+                assert_eq!(aborted, Err(LightingError::InvalidTransaction));
+            };
+
+            let adapter_loop = async {
+                loop {
+                    adapter.process_next().await;
+                }
+            };
+            let context = LightingContext::default();
+            let engine_loop = async {
+                loop {
+                    let (id, command) = core.receive_request().await;
+                    let result = engine.handle_command(0, command, &context).map(|outcome| outcome.reply);
+                    core.publish_reply(id, result);
+                }
+            };
+            #[cfg(feature = "storage")]
+            let persisted = core::cell::RefCell::new(alloc::vec::Vec::new());
+            let flash_drain = async {
+                #[cfg(feature = "storage")]
+                loop {
+                    persisted
+                        .borrow_mut()
+                        .push(crate::channel::FLASH_CHANNEL.receive().await);
+                }
+                #[cfg(not(feature = "storage"))]
+                core::future::pending::<()>().await
+            };
+
+            match select3(
+                client,
+                adapter_loop,
+                embassy_futures::join::join(engine_loop, flash_drain),
+            )
+            .await
+            {
+                Either3::First(()) => {}
+                _ => panic!("service loops must not finish"),
+            }
+
+            // Every scene mutation rewrote the durable table: the last
+            // header reflects the final one-cell removal and policy change.
+            #[cfg(feature = "storage")]
+            {
+                use crate::storage::FlashOperationMessage;
+                let persisted = persisted.into_inner();
+                assert!(!persisted.is_empty());
+                let last_table = persisted
+                    .iter()
+                    .rev()
+                    .find_map(|message| match message {
+                        FlashOperationMessage::LightingSceneTable { len, policy } => Some((*len, *policy)),
+                        _ => None,
+                    })
+                    .expect("scene mutations persist a table header");
+                assert_eq!(last_table, (0, LightingLayerPolicy::EffectiveOnly));
+                assert!(persisted.iter().any(|message| matches!(
+                    message,
+                    FlashOperationMessage::LightingSceneShard { index: 0, cells } if cells.len() == 1
+                )));
+            }
         });
     }
 }

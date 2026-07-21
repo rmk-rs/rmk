@@ -12,17 +12,24 @@ use core::num::NonZeroU32;
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use rmk_types::action::LightAction;
 
+use super::Rgb8;
 use super::compositor::{
     Compositor, Contribution, LightingSource, LogicalFrame, RenderError, RenderInput as SourceRenderInput,
 };
-use super::context::LightingContextProvider;
+use super::context::{LightingContext, LightingContextProvider};
 use super::effect::{BuiltinEffect, LightingEffect};
 use super::output::BrightnessTransform;
 use super::service::{CommandResult, Invalidation, LightingEngine, RenderInput, RenderOutcome};
-use super::source::{LayerScenes, OverlayError, OverlayUpdate, TtlOverlay};
+use super::source::{LayerPolicy, LayerScenes, OverlayError, OverlayUpdate, TtlOverlay};
 use super::topology::LedSlot;
-use super::{LightingContext, Rgb8};
 use crate::RawMutex;
+
+/// Cells per scene page/replacement chunk. Kept equal to the wire chunk size
+/// so protocol adapters can forward chunks without re-batching.
+pub const SCENE_CHUNK_SIZE: usize = 8;
+
+/// A staged scene replacement expires after this much command inactivity.
+pub const SCENE_TRANSACTION_TIMEOUT_MS: u64 = 5_000;
 
 /// Stable default priority bands. Equal-priority call order remains stable.
 pub mod priority {
@@ -223,8 +230,252 @@ impl<const CAP: usize> Default for OverlayBatch<CAP> {
     }
 }
 
+/// One durable scene cell: an effect bound to a local slot on one layer.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum StandardCommand<const OVERLAY_CAP: usize> {
+pub struct SceneTableCell {
+    pub layer: u8,
+    pub slot: LedSlot,
+    pub effect: BuiltinEffect,
+}
+
+const EMPTY_SCENE_CELL: SceneTableCell = SceneTableCell {
+    layer: 0,
+    slot: LedSlot(0),
+    effect: BuiltinEffect::Solid { color: Rgb8::BLACK },
+};
+
+/// Fixed-capacity, owned scene chunk suitable for a bounded async mailbox.
+/// One chunk is both a page of readback and a replacement-staging step.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct SceneChunk {
+    cells: [SceneTableCell; SCENE_CHUNK_SIZE],
+    len: usize,
+}
+
+impl Default for SceneChunk {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SceneChunk {
+    pub const fn new() -> Self {
+        Self {
+            cells: [EMPTY_SCENE_CELL; SCENE_CHUNK_SIZE],
+            len: 0,
+        }
+    }
+
+    pub fn push(&mut self, cell: SceneTableCell) -> Result<(), StandardError> {
+        if self.len == SCENE_CHUNK_SIZE {
+            return Err(StandardError::InvalidSceneRequest);
+        }
+        self.cells[self.len] = cell;
+        self.len += 1;
+        Ok(())
+    }
+
+    pub fn as_slice(&self) -> &[SceneTableCell] {
+        &self.cells[..self.len]
+    }
+}
+
+/// Fixed-capacity runtime scene table with layer-aware composition.
+///
+/// Cells are unique per `(layer, slot)` and stored in insertion order; order
+/// is irrelevant to rendering because layer precedence comes from the policy
+/// and same-layer cells can never target the same slot.
+#[derive(Copy, Clone, Debug)]
+pub struct SceneTable<const CAP: usize> {
+    cells: [SceneTableCell; CAP],
+    len: usize,
+    policy: LayerPolicy,
+}
+
+impl<const CAP: usize> SceneTable<CAP> {
+    pub const fn new() -> Self {
+        Self {
+            cells: [EMPTY_SCENE_CELL; CAP],
+            len: 0,
+            policy: LayerPolicy::ActiveStack,
+        }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub const fn policy(&self) -> LayerPolicy {
+        self.policy
+    }
+
+    pub fn set_policy(&mut self, policy: LayerPolicy) -> bool {
+        let changed = self.policy != policy;
+        self.policy = policy;
+        changed
+    }
+
+    pub fn as_slice(&self) -> &[SceneTableCell] {
+        &self.cells[..self.len]
+    }
+
+    /// Insert or update the cell addressed by `(layer, slot)`.
+    pub fn set(&mut self, cell: SceneTableCell) -> Result<(), StandardError> {
+        if let Some(existing) = self.cells[..self.len]
+            .iter_mut()
+            .find(|existing| existing.layer == cell.layer && existing.slot == cell.slot)
+        {
+            *existing = cell;
+            return Ok(());
+        }
+        if self.len == CAP {
+            return Err(StandardError::SceneFull { capacity: CAP });
+        }
+        self.cells[self.len] = cell;
+        self.len += 1;
+        Ok(())
+    }
+
+    /// Remove the cell addressed by `(layer, slot)`.
+    pub fn unset(&mut self, layer: u8, slot: LedSlot) -> bool {
+        if let Some(index) = self.cells[..self.len]
+            .iter()
+            .position(|cell| cell.layer == layer && cell.slot == slot)
+        {
+            self.len -= 1;
+            self.cells[index] = self.cells[self.len];
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    /// One readback page starting at `offset`, clamped at the table's end.
+    pub fn page(&self, offset: u16) -> SceneChunk {
+        let start = (offset as usize).min(self.len);
+        let end = (start + SCENE_CHUNK_SIZE).min(self.len);
+        let mut chunk = SceneChunk::new();
+        for cell in &self.cells[start..end] {
+            chunk.push(*cell).expect("page is chunk-bounded");
+        }
+        chunk
+    }
+
+    fn cell_for_layer(&self, layer: u8, wanted: &mut usize) -> Option<&SceneTableCell> {
+        for cell in self.cells[..self.len].iter().filter(|cell| cell.layer == layer) {
+            if *wanted == 0 {
+                return Some(cell);
+            }
+            *wanted -= 1;
+        }
+        None
+    }
+
+    fn cell_at(&self, context: &LightingContext, mut wanted: usize) -> &SceneTableCell {
+        let effective = context.layers.effective;
+        match self.policy {
+            LayerPolicy::EffectiveOnly => self.cell_for_layer(effective, &mut wanted),
+            LayerPolicy::ActiveStack => {
+                let default = context.layers.default;
+                if let Some(cell) = self.cell_for_layer(default, &mut wanted) {
+                    return cell;
+                }
+                for layer in 0..super::context::LayerState::CAPACITY {
+                    if layer != default
+                        && layer != effective
+                        && context.layers.is_active(layer)
+                        && let Some(cell) = self.cell_for_layer(layer, &mut wanted)
+                    {
+                        return cell;
+                    }
+                }
+                if effective != default {
+                    self.cell_for_layer(effective, &mut wanted)
+                } else {
+                    None
+                }
+            }
+        }
+        .expect("LightingSource index must be below len")
+    }
+
+    fn included_len(&self, context: &LightingContext) -> usize {
+        let effective = context.layers.effective;
+        self.cells[..self.len]
+            .iter()
+            .filter(|cell| match self.policy {
+                LayerPolicy::EffectiveOnly => cell.layer == effective,
+                LayerPolicy::ActiveStack => {
+                    cell.layer == context.layers.default
+                        || cell.layer == effective
+                        || context.layers.is_active(cell.layer)
+                }
+            })
+            .count()
+    }
+}
+
+impl<const CAP: usize> Default for SceneTable<CAP> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const CAP: usize> PartialEq for SceneTable<CAP> {
+    fn eq(&self, other: &Self) -> bool {
+        // Cells past `len` are stale storage, not state.
+        self.policy == other.policy && self.as_slice() == other.as_slice()
+    }
+}
+
+impl<const CAP: usize> Eq for SceneTable<CAP> {}
+
+impl<Context, const CAP: usize> LightingSource<Rgb8, Context> for SceneTable<CAP>
+where
+    Context: LightingContextProvider,
+{
+    fn len(&self, input: &SourceRenderInput<'_, Context>) -> usize {
+        self.included_len(input.context.lighting_context())
+    }
+
+    fn slot(&self, index: usize, input: &SourceRenderInput<'_, Context>) -> LedSlot {
+        self.cell_at(input.context.lighting_context(), index).slot
+    }
+
+    fn contribution(&mut self, index: usize, input: &SourceRenderInput<'_, Context>) -> Contribution<Rgb8> {
+        Contribution::Opaque(
+            self.cell_at(input.context.lighting_context(), index)
+                .effect
+                .sample(input.now_ms),
+        )
+    }
+}
+
+/// One in-progress, chunk-staged atomic scene replacement.
+///
+/// The overlay replacement stages host-side because a whole overlay batch
+/// fits one mailbox command. A scene table is an order of magnitude larger,
+/// so its transaction stages inside the engine via bounded chunks instead of
+/// forcing kilobyte-sized command payloads through every mailbox.
+struct SceneReplace<const CAP: usize> {
+    id: u32,
+    expected_revision: u32,
+    expected_count: u16,
+    cells: [SceneTableCell; CAP],
+    len: usize,
+    last_activity_ms: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum StandardCommand<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
     SetOutputEnabled(bool),
     SetOutputBrightness(u8),
     SetBackground(BackgroundState),
@@ -255,11 +506,45 @@ pub enum StandardCommand<const OVERLAY_CAP: usize> {
     /// Atomically export all state needed by a renderer replica. The larger
     /// snapshot moves through the referenced slot so it does not inflate
     /// every element of the bounded command queue.
-    ExportReplica(&'static StandardReplicaSlot<OVERLAY_CAP>),
+    ExportReplica(&'static StandardReplicaSlot<OVERLAY_CAP, SCENE_CAP>),
     /// Atomically install a snapshot previously placed in the referenced
     /// slot. Intended for a renderer replica, not a second authority.
-    ApplyReplica(&'static StandardReplicaSlot<OVERLAY_CAP>),
+    ApplyReplica(&'static StandardReplicaSlot<OVERLAY_CAP, SCENE_CAP>),
     ReadState,
+    SetSceneCellIfRevision {
+        expected_revision: u32,
+        cell: SceneTableCell,
+    },
+    UnsetSceneCellIfRevision {
+        expected_revision: u32,
+        layer: u8,
+        slot: LedSlot,
+    },
+    SetLayerPolicyIfRevision {
+        expected_revision: u32,
+        policy: LayerPolicy,
+    },
+    /// Reserve the engine's single scene-staging transaction. The expected
+    /// revision is recorded here and enforced atomically at commit.
+    BeginSceneReplace {
+        expected_revision: u32,
+        cell_count: u16,
+    },
+    PutSceneChunk {
+        transaction_id: u32,
+        offset: u16,
+        cells: SceneChunk,
+    },
+    CommitSceneReplace {
+        transaction_id: u32,
+    },
+    AbortSceneReplace {
+        transaction_id: u32,
+    },
+    /// One page of the stored scene table starting at `offset`.
+    ReadScenes {
+        offset: u16,
+    },
 }
 
 /// Mutable standard state excluding the transient overlay contents and the
@@ -278,6 +563,36 @@ pub struct StandardState {
     pub output_brightness: u8,
     pub background: BackgroundState,
     pub overlay_len: usize,
+    pub scene_len: usize,
+    pub scene_policy: LayerPolicy,
+}
+
+/// One page of stored scene cells with the revision it was read under.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ScenePage {
+    pub revision: u32,
+    pub total: u16,
+    pub cells: SceneChunk,
+}
+
+/// Protocol-independent readback for [`StandardCommand`]s. Most commands
+/// answer with authoritative [`StandardState`]; scene reads and transaction
+/// reservation carry their own shapes.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum StandardReply {
+    State(StandardState),
+    ScenesPage(ScenePage),
+    SceneTransaction { id: u32, cell_count: u16 },
+}
+
+impl StandardReply {
+    /// The state readback carried by state-shaped replies.
+    pub const fn state(self) -> Option<StandardState> {
+        match self {
+            Self::State(state) => Some(state),
+            _ => None,
+        }
+    }
 }
 
 /// Complete declarative state needed by a standard-engine renderer replica.
@@ -286,11 +601,16 @@ pub struct StandardState {
 /// Applying the snapshot anchors the replica's local monotonic clock to that
 /// value; subsequent animation frames are sampled locally without link
 /// traffic. Overlay TTLs are remaining lifetimes at the same instant.
+///
+/// The runtime scene table travels with the snapshot: replicas must render
+/// host-configured per-layer scenes exactly like the authority, and they
+/// never receive the incremental scene mutation commands themselves.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct StandardReplicaState<const OVERLAY_CAP: usize> {
+pub struct StandardReplicaState<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
     pub revision: u32,
     pub mutable: StandardMutableState,
     pub overlay: OverlayBatch<OVERLAY_CAP>,
+    pub scenes: SceneTable<SCENE_CAP>,
     pub context: LightingContext,
     pub sample_time_ms: u64,
 }
@@ -306,18 +626,18 @@ pub enum ReplicaSlotError {
 /// The lighting mailbox serializes access. Keeping the large snapshot out of
 /// [`StandardCommand`] prevents command-channel capacity from multiplying its
 /// RAM cost on small MCUs.
-pub struct StandardReplicaSlot<const OVERLAY_CAP: usize> {
-    value: BlockingMutex<RawMutex, RefCell<Option<StandardReplicaState<OVERLAY_CAP>>>>,
+pub struct StandardReplicaSlot<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
+    value: BlockingMutex<RawMutex, RefCell<Option<StandardReplicaState<OVERLAY_CAP, SCENE_CAP>>>>,
 }
 
-impl<const OVERLAY_CAP: usize> StandardReplicaSlot<OVERLAY_CAP> {
+impl<const OVERLAY_CAP: usize, const SCENE_CAP: usize> StandardReplicaSlot<OVERLAY_CAP, SCENE_CAP> {
     pub const fn new() -> Self {
         Self {
             value: BlockingMutex::new(RefCell::new(None)),
         }
     }
 
-    pub fn put(&self, state: StandardReplicaState<OVERLAY_CAP>) -> Result<(), ReplicaSlotError> {
+    pub fn put(&self, state: StandardReplicaState<OVERLAY_CAP, SCENE_CAP>) -> Result<(), ReplicaSlotError> {
         self.value.lock(|value| {
             let mut value = value.borrow_mut();
             if value.is_some() {
@@ -329,31 +649,31 @@ impl<const OVERLAY_CAP: usize> StandardReplicaSlot<OVERLAY_CAP> {
         })
     }
 
-    pub fn take(&self) -> Result<StandardReplicaState<OVERLAY_CAP>, ReplicaSlotError> {
+    pub fn take(&self) -> Result<StandardReplicaState<OVERLAY_CAP, SCENE_CAP>, ReplicaSlotError> {
         self.value
             .lock(|value| value.borrow_mut().take().ok_or(ReplicaSlotError::Empty))
     }
 }
 
-impl<const OVERLAY_CAP: usize> Default for StandardReplicaSlot<OVERLAY_CAP> {
+impl<const OVERLAY_CAP: usize, const SCENE_CAP: usize> Default for StandardReplicaSlot<OVERLAY_CAP, SCENE_CAP> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const OVERLAY_CAP: usize> fmt::Debug for StandardReplicaSlot<OVERLAY_CAP> {
+impl<const OVERLAY_CAP: usize, const SCENE_CAP: usize> fmt::Debug for StandardReplicaSlot<OVERLAY_CAP, SCENE_CAP> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StandardReplicaSlot").finish_non_exhaustive()
     }
 }
 
-impl<const OVERLAY_CAP: usize> PartialEq for StandardReplicaSlot<OVERLAY_CAP> {
+impl<const OVERLAY_CAP: usize, const SCENE_CAP: usize> PartialEq for StandardReplicaSlot<OVERLAY_CAP, SCENE_CAP> {
     fn eq(&self, other: &Self) -> bool {
         core::ptr::eq(self, other)
     }
 }
 
-impl<const OVERLAY_CAP: usize> Eq for StandardReplicaSlot<OVERLAY_CAP> {}
+impl<const OVERLAY_CAP: usize, const SCENE_CAP: usize> Eq for StandardReplicaSlot<OVERLAY_CAP, SCENE_CAP> {}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum StandardError {
@@ -361,7 +681,26 @@ pub enum StandardError {
     Overlay(OverlayError),
     DeadlineOverflow,
     ReplicaSlot(ReplicaSlotError),
-    RevisionConflict { expected: u32, current: u32 },
+    RevisionConflict {
+        expected: u32,
+        current: u32,
+    },
+    SceneFull {
+        capacity: usize,
+    },
+    SceneSlotOutOfRange {
+        slot: LedSlot,
+    },
+    /// Malformed scene request: bad chunk order, count overflow, or a
+    /// duplicate `(layer, slot)` within one staged replacement.
+    InvalidSceneRequest,
+    SceneTransactionBusy,
+    InvalidSceneTransaction,
+    SceneTransactionExpired,
+    SceneTransactionIncomplete {
+        expected: u16,
+        received: u16,
+    },
 }
 
 impl From<RenderError> for StandardError {
@@ -419,21 +758,38 @@ impl From<LightAction> for StandardInput {
 /// End-to-end standard engine. `Extension` composes above the designated
 /// background and below layers; `Status` composes last. Either can be an
 /// external stateful source, or [`EmptySource`].
-pub struct StandardLightingEngine<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize> {
+///
+/// Static board layer scenes and the runtime [`SceneTable`] share the layer
+/// band: runtime cells apply after the static defaults, so a host-configured
+/// cell overrides a board default for the same slot while the TTL overlay
+/// still wins above both.
+pub struct StandardLightingEngine<
+    'scenes,
+    Extension,
+    Status,
+    const N: usize,
+    const OVERLAY_CAP: usize,
+    const SCENE_CAP: usize = 0,
+> {
     compositor: Compositor<Rgb8, N>,
     background: UniformBackground<N>,
     extension: Extension,
     layers: LayerScenes<'scenes, BuiltinEffect>,
+    scenes: SceneTable<SCENE_CAP>,
     overlay: TtlOverlay<BuiltinEffect, OVERLAY_CAP>,
     status: Status,
     animation_clock: AnimationClock,
+    scene_replace: Option<SceneReplace<SCENE_CAP>>,
+    scene_next_transaction: u32,
+    scene_expired_transaction: Option<u32>,
+    scene_committed_transaction: Option<u32>,
     revision: u32,
     output_enabled: bool,
     output_brightness: u8,
 }
 
-impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize>
-    StandardLightingEngine<'scenes, Extension, Status, N, OVERLAY_CAP>
+impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const SCENE_CAP: usize>
+    StandardLightingEngine<'scenes, Extension, Status, N, OVERLAY_CAP, SCENE_CAP>
 {
     pub fn new(
         background: BackgroundState,
@@ -446,9 +802,14 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize>
             background: UniformBackground::new(background),
             extension,
             layers,
+            scenes: SceneTable::new(),
             overlay: TtlOverlay::new(),
             status,
             animation_clock: AnimationClock::local(),
+            scene_replace: None,
+            scene_next_transaction: 1,
+            scene_expired_transaction: None,
+            scene_committed_transaction: None,
             revision: 0,
             output_enabled: true,
             output_brightness: u8::MAX,
@@ -462,7 +823,29 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize>
             output_brightness: self.output_brightness,
             background: self.background.state(),
             overlay_len: self.overlay.active_len(),
+            scene_len: self.scenes.len(),
+            scene_policy: self.scenes.policy(),
         }
+    }
+
+    pub const fn scene_capacity() -> usize {
+        SCENE_CAP
+    }
+
+    pub const fn scenes(&self) -> &SceneTable<SCENE_CAP> {
+        &self.scenes
+    }
+
+    /// Install one persisted scene cell during startup, before the engine is
+    /// serving commands. Does not advance the concurrency revision.
+    pub fn install_scene_cell(&mut self, cell: SceneTableCell) -> Result<(), StandardError> {
+        Self::check_scene_slot(cell.slot)?;
+        self.scenes.set(cell)
+    }
+
+    /// Install the persisted layer policy during startup.
+    pub fn install_scene_policy(&mut self, policy: LayerPolicy) {
+        self.scenes.set_policy(policy);
     }
 
     pub const fn extension(&self) -> &Extension {
@@ -554,7 +937,7 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize>
         &self,
         local_now_ms: u64,
         context: &Context,
-    ) -> Result<StandardReplicaState<OVERLAY_CAP>, StandardError> {
+    ) -> Result<StandardReplicaState<OVERLAY_CAP, SCENE_CAP>, StandardError> {
         let sample_time_ms = self.animation_clock.sample_time(local_now_ms);
         let mut overlay = OverlayBatch::new();
         for update in self.overlay.active_updates() {
@@ -576,6 +959,7 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize>
             revision: self.revision,
             mutable: self.mutable_state(),
             overlay,
+            scenes: self.scenes,
             context: *context.lighting_context(),
             sample_time_ms,
         })
@@ -584,7 +968,7 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize>
     fn apply_replica(
         &mut self,
         local_now_ms: u64,
-        replica: StandardReplicaState<OVERLAY_CAP>,
+        replica: StandardReplicaState<OVERLAY_CAP, SCENE_CAP>,
     ) -> Result<(), StandardError> {
         let mut updates = [OverlayUpdate {
             slot: LedSlot(0),
@@ -606,6 +990,7 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize>
         self.overlay
             .replace(replica.sample_time_ms, &updates[..replica.overlay.as_slice().len()])?;
         self.set_mutable_state(replica.mutable);
+        self.scenes = replica.scenes;
         self.revision = replica.revision;
         self.animation_clock.anchor(local_now_ms, replica.sample_time_ms);
         Ok(())
@@ -628,10 +1013,142 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize>
             expires_ms: Self::expires_at(now_ms, cell.ttl_ms)?,
         })
     }
+
+    fn check_scene_slot(slot: LedSlot) -> Result<(), StandardError> {
+        if slot.index() < N {
+            Ok(())
+        } else {
+            Err(StandardError::SceneSlotOutOfRange { slot })
+        }
+    }
+
+    fn expire_scene_replace(&mut self, now_ms: u64) {
+        if self
+            .scene_replace
+            .as_ref()
+            .is_some_and(|replace| now_ms.saturating_sub(replace.last_activity_ms) >= SCENE_TRANSACTION_TIMEOUT_MS)
+        {
+            self.scene_expired_transaction = self.scene_replace.as_ref().map(|replace| replace.id);
+            self.scene_replace = None;
+        }
+    }
+
+    fn scene_transaction_error(&self, id: u32) -> StandardError {
+        if self.scene_expired_transaction == Some(id) {
+            StandardError::SceneTransactionExpired
+        } else {
+            StandardError::InvalidSceneTransaction
+        }
+    }
+
+    fn begin_scene_replace(
+        &mut self,
+        now_ms: u64,
+        expected_revision: u32,
+        cell_count: u16,
+    ) -> Result<u32, StandardError> {
+        self.expire_scene_replace(now_ms);
+        if self.scene_replace.is_some() {
+            return Err(StandardError::SceneTransactionBusy);
+        }
+        if cell_count as usize > SCENE_CAP {
+            return Err(StandardError::SceneFull { capacity: SCENE_CAP });
+        }
+        let id = self.scene_next_transaction;
+        self.scene_next_transaction = self.scene_next_transaction.wrapping_add(1).max(1);
+        self.scene_expired_transaction = None;
+        self.scene_replace = Some(SceneReplace {
+            id,
+            expected_revision,
+            expected_count: cell_count,
+            cells: [EMPTY_SCENE_CELL; SCENE_CAP],
+            len: 0,
+            last_activity_ms: now_ms,
+        });
+        Ok(id)
+    }
+
+    fn put_scene_chunk(
+        &mut self,
+        now_ms: u64,
+        transaction_id: u32,
+        offset: u16,
+        cells: &SceneChunk,
+    ) -> Result<(), StandardError> {
+        self.expire_scene_replace(now_ms);
+        for cell in cells.as_slice() {
+            Self::check_scene_slot(cell.slot)?;
+        }
+        let error = self.scene_transaction_error(transaction_id);
+        let replace = self
+            .scene_replace
+            .as_mut()
+            .filter(|replace| replace.id == transaction_id)
+            .ok_or(error)?;
+        if offset as usize != replace.len || replace.len + cells.as_slice().len() > replace.expected_count as usize {
+            return Err(StandardError::InvalidSceneRequest);
+        }
+        for cell in cells.as_slice() {
+            if replace.cells[..replace.len]
+                .iter()
+                .any(|staged| staged.layer == cell.layer && staged.slot == cell.slot)
+            {
+                return Err(StandardError::InvalidSceneRequest);
+            }
+            replace.cells[replace.len] = *cell;
+            replace.len += 1;
+        }
+        replace.last_activity_ms = now_ms;
+        Ok(())
+    }
+
+    /// Atomically publish a complete staged replacement. A repeated commit of
+    /// the transaction most recently committed answers idempotently with
+    /// `changed == false` so a retried commit over a lossy link converges.
+    fn commit_scene_replace(&mut self, now_ms: u64, transaction_id: u32) -> Result<bool, StandardError> {
+        self.expire_scene_replace(now_ms);
+        if self.scene_committed_transaction == Some(transaction_id) && self.scene_replace.is_none() {
+            return Ok(false);
+        }
+        let error = self.scene_transaction_error(transaction_id);
+        let replace = self
+            .scene_replace
+            .as_ref()
+            .filter(|replace| replace.id == transaction_id)
+            .ok_or(error)?;
+        if replace.len != replace.expected_count as usize {
+            return Err(StandardError::SceneTransactionIncomplete {
+                expected: replace.expected_count,
+                received: replace.len as u16,
+            });
+        }
+        self.check_revision(replace.expected_revision)?;
+        let replace = self.scene_replace.take().expect("checked above");
+        self.scenes.clear();
+        for cell in &replace.cells[..replace.len] {
+            self.scenes.set(*cell).expect("staged length is table-bounded");
+        }
+        self.scene_committed_transaction = Some(transaction_id);
+        self.scene_expired_transaction = None;
+        Ok(true)
+    }
+
+    fn abort_scene_replace(&mut self, now_ms: u64, transaction_id: u32) -> Result<(), StandardError> {
+        self.expire_scene_replace(now_ms);
+        if self
+            .scene_replace
+            .as_ref()
+            .is_some_and(|replace| replace.id == transaction_id)
+        {
+            self.scene_replace = None;
+            return Ok(());
+        }
+        Err(self.scene_transaction_error(transaction_id))
+    }
 }
 
-impl<'scenes, Context, Extension, Status, const N: usize, const OVERLAY_CAP: usize> LightingEngine<Context>
-    for StandardLightingEngine<'scenes, Extension, Status, N, OVERLAY_CAP>
+impl<'scenes, Context, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const SCENE_CAP: usize>
+    LightingEngine<Context> for StandardLightingEngine<'scenes, Extension, Status, N, OVERLAY_CAP, SCENE_CAP>
 where
     Context: LightingContextProvider,
     Extension: LightingSource<Rgb8, Context>,
@@ -639,8 +1156,8 @@ where
 {
     type Frame = LogicalFrame<Rgb8, N>;
     type Input = StandardInput;
-    type Command = StandardCommand<OVERLAY_CAP>;
-    type Reply = StandardState;
+    type Command = StandardCommand<OVERLAY_CAP, SCENE_CAP>;
+    type Reply = StandardReply;
     type Error = StandardError;
 
     fn on_input(&mut self, input: Self::Input, _snapshot: &Context) -> Result<Invalidation, Self::Error> {
@@ -659,6 +1176,55 @@ where
         snapshot: &Context,
     ) -> Result<CommandResult<Self::Reply>, Self::Error> {
         let effect_now_ms = self.animation_clock.sample_time(now_ms);
+        // Scene reads and transaction bookkeeping have non-state replies or
+        // bespoke revision behavior; everything else falls through to the
+        // uniform state-readback path below.
+        match command {
+            StandardCommand::ReadScenes { offset } => {
+                return Ok(CommandResult::unchanged(StandardReply::ScenesPage(ScenePage {
+                    revision: self.revision,
+                    total: self.scenes.len().min(u16::MAX as usize) as u16,
+                    cells: self.scenes.page(offset),
+                })));
+            }
+            StandardCommand::BeginSceneReplace {
+                expected_revision,
+                cell_count,
+            } => {
+                let id = self.begin_scene_replace(now_ms, expected_revision, cell_count)?;
+                return Ok(CommandResult::unchanged(StandardReply::SceneTransaction {
+                    id,
+                    cell_count,
+                }));
+            }
+            StandardCommand::PutSceneChunk {
+                transaction_id,
+                offset,
+                cells,
+            } => {
+                self.put_scene_chunk(now_ms, transaction_id, offset, &cells)?;
+                return Ok(CommandResult::unchanged(StandardReply::State(self.state())));
+            }
+            StandardCommand::CommitSceneReplace { transaction_id } => {
+                // A repeated commit of the last committed transaction is
+                // answered idempotently without advancing the revision.
+                let committed = self.commit_scene_replace(now_ms, transaction_id)?;
+                if committed {
+                    self.advance_revision();
+                    return Ok(CommandResult::new(
+                        StandardReply::State(self.state()),
+                        Invalidation::Render,
+                    ));
+                }
+                return Ok(CommandResult::unchanged(StandardReply::State(self.state())));
+            }
+            StandardCommand::AbortSceneReplace { transaction_id } => {
+                self.abort_scene_replace(now_ms, transaction_id)?;
+                return Ok(CommandResult::unchanged(StandardReply::State(self.state())));
+            }
+            _ => {}
+        }
+
         let (mut invalidation, advances_revision) = match command {
             StandardCommand::SetOutputEnabled(enabled) => {
                 self.output_enabled = enabled;
@@ -787,7 +1353,52 @@ where
                 self.apply_replica(now_ms, slot.take()?)?;
                 (Invalidation::Render, false)
             }
+            StandardCommand::SetSceneCellIfRevision {
+                expected_revision,
+                cell,
+            } => {
+                self.check_revision(expected_revision)?;
+                Self::check_scene_slot(cell.slot)?;
+                self.scenes.set(cell)?;
+                (Invalidation::Render, true)
+            }
+            StandardCommand::UnsetSceneCellIfRevision {
+                expected_revision,
+                layer,
+                slot,
+            } => {
+                self.check_revision(expected_revision)?;
+                let changed = self.scenes.unset(layer, slot);
+                (
+                    if changed {
+                        Invalidation::Render
+                    } else {
+                        Invalidation::None
+                    },
+                    true,
+                )
+            }
+            StandardCommand::SetLayerPolicyIfRevision {
+                expected_revision,
+                policy,
+            } => {
+                self.check_revision(expected_revision)?;
+                let changed = self.scenes.set_policy(policy);
+                (
+                    if changed {
+                        Invalidation::Render
+                    } else {
+                        Invalidation::None
+                    },
+                    true,
+                )
+            }
             StandardCommand::ReadState => (Invalidation::None, false),
+            StandardCommand::ReadScenes { .. }
+            | StandardCommand::BeginSceneReplace { .. }
+            | StandardCommand::PutSceneChunk { .. }
+            | StandardCommand::CommitSceneReplace { .. }
+            | StandardCommand::AbortSceneReplace { .. } => unreachable!("handled above"),
         };
         if advances_revision {
             self.advance_revision();
@@ -795,7 +1406,7 @@ where
                 invalidation = Invalidation::StateChanged;
             }
         }
-        Ok(CommandResult::new(self.state(), invalidation))
+        Ok(CommandResult::new(StandardReply::State(self.state()), invalidation))
     }
 
     fn render(
@@ -815,17 +1426,24 @@ where
             background,
             extension,
             layers,
+            scenes,
             overlay,
             status,
             animation_clock: _,
             output_enabled,
             output_brightness,
+            scene_replace: _,
+            scene_next_transaction: _,
+            scene_expired_transaction: _,
+            scene_committed_transaction: _,
             revision: _,
         } = self;
         let mut transaction = compositor.begin(effect_now_ms, input.snapshot, Rgb8::BLACK, frame);
         transaction.apply(priority::BACKGROUND, background)?;
         transaction.apply(priority::EXTENSION, extension)?;
         transaction.apply(priority::LAYER, layers)?;
+        // Same band, later call: runtime cells override static defaults.
+        transaction.apply(priority::LAYER, scenes)?;
         transaction.apply(priority::HOST_OVERLAY, overlay)?;
         transaction.apply(priority::STATUS, status)?;
         let mut transform = BrightnessTransform::new(if *output_enabled { *output_brightness } else { 0 });
@@ -912,8 +1530,23 @@ mod tests {
     }
 
     #[test]
-    fn replica_snapshot_preserves_state_context_ttl_and_animation_phase() {
-        let mut authority = engine();
+    fn replica_snapshot_preserves_state_scenes_context_ttl_and_animation_phase() {
+        type SceneEngine = StandardLightingEngine<'static, EmptySource, EmptySource, 2, 2, 4>;
+        fn scene_engine() -> SceneEngine {
+            SceneEngine::new(
+                BackgroundState {
+                    value: 10,
+                    ..BackgroundState::default()
+                },
+                LayerScenes {
+                    scenes: &LAYERS,
+                    policy: LayerPolicy::ActiveStack,
+                },
+                EmptySource,
+                EmptySource,
+            )
+        }
+        let mut authority = scene_engine();
         let authority_context = context(3);
         authority
             .handle_command(
@@ -937,8 +1570,23 @@ mod tests {
                 &authority_context,
             )
             .unwrap();
+        let scene_cell = SceneTableCell {
+            layer: 3,
+            slot: LedSlot(0),
+            effect: BuiltinEffect::Solid { color: RED },
+        };
+        authority
+            .handle_command(
+                100,
+                StandardCommand::SetSceneCellIfRevision {
+                    expected_revision: 2,
+                    cell: scene_cell,
+                },
+                &authority_context,
+            )
+            .unwrap();
 
-        static EXPORT: StandardReplicaSlot<2> = StandardReplicaSlot::new();
+        static EXPORT: StandardReplicaSlot<2, 4> = StandardReplicaSlot::new();
         authority
             .handle_command(120, StandardCommand::ExportReplica(&EXPORT), &authority_context)
             .unwrap();
@@ -946,6 +1594,7 @@ mod tests {
         assert_eq!(snapshot.context, authority_context);
         assert_eq!(snapshot.sample_time_ms, 120);
         assert_eq!(snapshot.overlay.as_slice()[0].ttl_ms, NonZeroU32::new(80));
+        assert_eq!(snapshot.scenes.as_slice(), &[scene_cell]);
 
         let mut authority_frame = LogicalFrame::new(Rgb8::BLACK);
         authority
@@ -958,9 +1607,9 @@ mod tests {
             )
             .unwrap();
 
-        static APPLY: StandardReplicaSlot<2> = StandardReplicaSlot::new();
+        static APPLY: StandardReplicaSlot<2, 4> = StandardReplicaSlot::new();
         APPLY.put(snapshot).unwrap();
-        let mut replica = engine();
+        let mut replica = scene_engine();
         replica
             .handle_command(1_000, StandardCommand::ApplyReplica(&APPLY), &authority_context)
             .unwrap();
@@ -976,6 +1625,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(replica.state().revision, snapshot.revision);
+        assert_eq!(replica.scenes().as_slice(), &[scene_cell]);
         assert_eq!(replica_frame, authority_frame);
     }
 
@@ -990,6 +1640,7 @@ mod tests {
                 background: BackgroundState::default(),
             },
             overlay: OverlayBatch::new(),
+            scenes: SceneTable::new(),
             context: context(0),
             sample_time_ms: 9,
         };
@@ -1014,7 +1665,9 @@ mod tests {
                 &snapshot,
             )
             .unwrap()
-            .reply;
+            .reply
+            .state()
+            .unwrap();
 
         assert_eq!(reply.background.value, 77);
         assert_eq!(reply.background.enabled, before.background.enabled);
@@ -1079,7 +1732,9 @@ mod tests {
                 &snapshot,
             )
             .unwrap()
-            .reply;
+            .reply
+            .state()
+            .unwrap();
         assert_eq!(reply.revision, 2);
         assert!(!reply.output_enabled);
 
@@ -1261,5 +1916,435 @@ mod tests {
             Ok(Invalidation::Render)
         );
         assert!(!engine.state().output_enabled);
+    }
+
+    const BLUE: Rgb8 = Rgb8::new(0, 0, 200);
+
+    type SceneEngine = StandardLightingEngine<'static, EmptySource, EmptySource, 2, 2, 4>;
+
+    fn scene_engine() -> SceneEngine {
+        StandardLightingEngine::new(
+            BackgroundState {
+                value: 10,
+                ..BackgroundState::default()
+            },
+            LayerScenes {
+                scenes: &LAYERS,
+                policy: LayerPolicy::ActiveStack,
+            },
+            EmptySource,
+            EmptySource,
+        )
+    }
+
+    fn scene_cell(layer: u8, slot: u16, color: Rgb8) -> SceneTableCell {
+        SceneTableCell {
+            layer,
+            slot: LedSlot(slot),
+            effect: BuiltinEffect::Solid { color },
+        }
+    }
+
+    fn set_cell(engine: &mut SceneEngine, revision: u32, cell: SceneTableCell) -> StandardState {
+        engine
+            .handle_command(
+                0,
+                StandardCommand::SetSceneCellIfRevision {
+                    expected_revision: revision,
+                    cell,
+                },
+                &context(0),
+            )
+            .unwrap()
+            .reply
+            .state()
+            .unwrap()
+    }
+
+    fn scenes_page(engine: &mut SceneEngine, offset: u16) -> ScenePage {
+        match engine
+            .handle_command(0, StandardCommand::ReadScenes { offset }, &context(0))
+            .unwrap()
+            .reply
+        {
+            StandardReply::ScenesPage(page) => page,
+            other => panic!("expected page, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scene_crud_is_revision_checked_and_keyed_by_layer_and_slot() {
+        let mut engine = scene_engine();
+        let snapshot = context(0);
+
+        let state = set_cell(&mut engine, 0, scene_cell(1, 0, GREEN));
+        assert_eq!(state.revision, 1);
+        assert_eq!(state.scene_len, 1);
+
+        // Same (layer, slot) updates in place; a new pair appends.
+        let state = set_cell(&mut engine, 1, scene_cell(1, 0, BLUE));
+        assert_eq!(state.scene_len, 1);
+        let state = set_cell(&mut engine, 2, scene_cell(2, 0, RED));
+        assert_eq!(state.scene_len, 2);
+
+        assert_eq!(
+            engine.handle_command(
+                0,
+                StandardCommand::SetSceneCellIfRevision {
+                    expected_revision: 0,
+                    cell: scene_cell(0, 1, RED),
+                },
+                &snapshot,
+            ),
+            Err(StandardError::RevisionConflict {
+                expected: 0,
+                current: 3
+            })
+        );
+        assert_eq!(engine.state().scene_len, 2, "a stale write is all-or-nothing");
+
+        // Out-of-range slots never reach the table.
+        assert_eq!(
+            engine.handle_command(
+                0,
+                StandardCommand::SetSceneCellIfRevision {
+                    expected_revision: 3,
+                    cell: scene_cell(0, 9, RED),
+                },
+                &snapshot,
+            ),
+            Err(StandardError::SceneSlotOutOfRange { slot: LedSlot(9) })
+        );
+
+        // Unset of a missing cell keeps the revision moving but not the frame.
+        let result = engine
+            .handle_command(
+                0,
+                StandardCommand::UnsetSceneCellIfRevision {
+                    expected_revision: 3,
+                    layer: 7,
+                    slot: LedSlot(0),
+                },
+                &snapshot,
+            )
+            .unwrap();
+        assert_eq!(result.invalidation, Invalidation::StateChanged);
+        let state = result.reply.state().unwrap();
+        assert_eq!(state.scene_len, 2);
+        assert_eq!(state.revision, 4);
+
+        let state = engine
+            .handle_command(
+                0,
+                StandardCommand::UnsetSceneCellIfRevision {
+                    expected_revision: 4,
+                    layer: 1,
+                    slot: LedSlot(0),
+                },
+                &snapshot,
+            )
+            .unwrap()
+            .reply
+            .state()
+            .unwrap();
+        assert_eq!(state.scene_len, 1);
+
+        // Capacity is enforced with the table's own limit.
+        for (revision, (layer, slot)) in [(5u32, (5u8, 0u16)), (6, (5, 1)), (7, (6, 0))] {
+            set_cell(&mut engine, revision, scene_cell(layer, slot, RED));
+        }
+        assert_eq!(
+            engine.handle_command(
+                0,
+                StandardCommand::SetSceneCellIfRevision {
+                    expected_revision: 8,
+                    cell: scene_cell(9, 1, RED),
+                },
+                &snapshot,
+            ),
+            Err(StandardError::SceneFull { capacity: 4 })
+        );
+    }
+
+    #[test]
+    fn scene_pages_echo_revision_and_clamp() {
+        let mut engine = scene_engine();
+        set_cell(&mut engine, 0, scene_cell(0, 0, RED));
+        set_cell(&mut engine, 1, scene_cell(0, 1, GREEN));
+
+        let page = scenes_page(&mut engine, 0);
+        assert_eq!(page.revision, 2);
+        assert_eq!(page.total, 2);
+        assert_eq!(page.cells.as_slice().len(), 2);
+        let tail = scenes_page(&mut engine, 99);
+        assert_eq!(tail.total, 2);
+        assert!(tail.cells.as_slice().is_empty());
+    }
+
+    #[test]
+    fn runtime_scene_overrides_static_layer_and_yields_to_overlay() {
+        let mut engine = scene_engine();
+        let snapshot = context(1);
+
+        // Static layer 1 paints slot 0 RED; runtime cell overrides to BLUE.
+        set_cell(&mut engine, 0, scene_cell(1, 0, BLUE));
+        let mut frame = LogicalFrame::new(Rgb8::BLACK);
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 0,
+                    snapshot: &snapshot,
+                },
+                &mut frame,
+            )
+            .unwrap();
+        assert_eq!(frame.as_slice()[0], BLUE);
+
+        // The TTL overlay still wins above runtime scenes.
+        engine
+            .handle_command(
+                0,
+                StandardCommand::SetOverlay(OverlayCell {
+                    slot: LedSlot(0),
+                    effect: BuiltinEffect::Solid { color: GREEN },
+                    ttl_ms: None,
+                }),
+                &snapshot,
+            )
+            .unwrap();
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 1,
+                    snapshot: &snapshot,
+                },
+                &mut frame,
+            )
+            .unwrap();
+        assert_eq!(frame.as_slice()[0], GREEN);
+    }
+
+    #[test]
+    fn layer_policy_switches_between_effective_only_and_active_stack() {
+        let mut engine = scene_engine();
+        // Base layer paints slot 1; effective layer paints slot 0.
+        set_cell(&mut engine, 0, scene_cell(0, 1, GREEN));
+        set_cell(&mut engine, 1, scene_cell(1, 0, BLUE));
+        let snapshot = context(1);
+
+        let mut frame = LogicalFrame::new(Rgb8::BLACK);
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 0,
+                    snapshot: &snapshot,
+                },
+                &mut frame,
+            )
+            .unwrap();
+        assert_eq!(frame.as_slice(), &[BLUE, GREEN], "ActiveStack falls through sparsely");
+
+        let state = engine
+            .handle_command(
+                0,
+                StandardCommand::SetLayerPolicyIfRevision {
+                    expected_revision: 2,
+                    policy: LayerPolicy::EffectiveOnly,
+                },
+                &snapshot,
+            )
+            .unwrap()
+            .reply
+            .state()
+            .unwrap();
+        assert_eq!(state.scene_policy, LayerPolicy::EffectiveOnly);
+
+        let background = Rgb8::new(10, 10, 10);
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 1,
+                    snapshot: &snapshot,
+                },
+                &mut frame,
+            )
+            .unwrap();
+        assert_eq!(
+            frame.as_slice(),
+            &[BLUE, background],
+            "EffectiveOnly hides base-layer cells"
+        );
+    }
+
+    #[test]
+    fn scene_replace_is_chunked_ordered_atomic_and_idempotent() {
+        let mut engine = scene_engine();
+        let snapshot = context(0);
+        set_cell(&mut engine, 0, scene_cell(3, 0, RED));
+
+        let (id, _) = match engine
+            .handle_command(
+                10,
+                StandardCommand::BeginSceneReplace {
+                    expected_revision: 1,
+                    cell_count: 2,
+                },
+                &snapshot,
+            )
+            .unwrap()
+            .reply
+        {
+            StandardReply::SceneTransaction { id, cell_count } => (id, cell_count),
+            other => panic!("expected transaction, got {other:?}"),
+        };
+
+        // A second begin while staged is busy; out-of-order chunks rejected.
+        assert_eq!(
+            engine.handle_command(
+                11,
+                StandardCommand::BeginSceneReplace {
+                    expected_revision: 1,
+                    cell_count: 0,
+                },
+                &snapshot,
+            ),
+            Err(StandardError::SceneTransactionBusy)
+        );
+        let mut chunk = SceneChunk::new();
+        chunk.push(scene_cell(0, 0, GREEN)).unwrap();
+        assert_eq!(
+            engine.handle_command(
+                12,
+                StandardCommand::PutSceneChunk {
+                    transaction_id: id,
+                    offset: 1,
+                    cells: chunk,
+                },
+                &snapshot,
+            ),
+            Err(StandardError::InvalidSceneRequest)
+        );
+        assert_eq!(
+            engine.handle_command(
+                13,
+                StandardCommand::CommitSceneReplace { transaction_id: id },
+                &snapshot,
+            ),
+            Err(StandardError::SceneTransactionIncomplete {
+                expected: 2,
+                received: 0
+            })
+        );
+
+        let mut chunk = SceneChunk::new();
+        chunk.push(scene_cell(0, 0, GREEN)).unwrap();
+        chunk.push(scene_cell(0, 1, BLUE)).unwrap();
+        engine
+            .handle_command(
+                14,
+                StandardCommand::PutSceneChunk {
+                    transaction_id: id,
+                    offset: 0,
+                    cells: chunk,
+                },
+                &snapshot,
+            )
+            .unwrap();
+
+        let committed = engine
+            .handle_command(
+                15,
+                StandardCommand::CommitSceneReplace { transaction_id: id },
+                &snapshot,
+            )
+            .unwrap();
+        assert_eq!(committed.invalidation, Invalidation::Render);
+        let state = committed.reply.state().unwrap();
+        assert_eq!(state.scene_len, 2, "replacement drops the previous table");
+        assert_eq!(state.revision, 2);
+
+        // Retried commit answers idempotently without another revision bump.
+        let retried = engine
+            .handle_command(
+                16,
+                StandardCommand::CommitSceneReplace { transaction_id: id },
+                &snapshot,
+            )
+            .unwrap();
+        assert_eq!(retried.invalidation, Invalidation::None);
+        assert_eq!(retried.reply.state().unwrap().revision, 2);
+
+        // A conflicting revision at commit leaves the table untouched.
+        let stale = match engine
+            .handle_command(
+                20,
+                StandardCommand::BeginSceneReplace {
+                    expected_revision: 0,
+                    cell_count: 0,
+                },
+                &snapshot,
+            )
+            .unwrap()
+            .reply
+        {
+            StandardReply::SceneTransaction { id, .. } => id,
+            other => panic!("expected transaction, got {other:?}"),
+        };
+        assert_eq!(
+            engine.handle_command(
+                21,
+                StandardCommand::CommitSceneReplace { transaction_id: stale },
+                &snapshot,
+            ),
+            Err(StandardError::RevisionConflict {
+                expected: 0,
+                current: 2
+            })
+        );
+        assert_eq!(engine.state().scene_len, 2);
+        engine
+            .handle_command(
+                22,
+                StandardCommand::AbortSceneReplace { transaction_id: stale },
+                &snapshot,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn scene_transaction_expires_after_inactivity() {
+        let mut engine = scene_engine();
+        let snapshot = context(0);
+        let id = match engine
+            .handle_command(
+                0,
+                StandardCommand::BeginSceneReplace {
+                    expected_revision: 0,
+                    cell_count: 0,
+                },
+                &snapshot,
+            )
+            .unwrap()
+            .reply
+        {
+            StandardReply::SceneTransaction { id, .. } => id,
+            other => panic!("expected transaction, got {other:?}"),
+        };
+        assert_eq!(
+            engine.handle_command(
+                SCENE_TRANSACTION_TIMEOUT_MS,
+                StandardCommand::CommitSceneReplace { transaction_id: id },
+                &snapshot,
+            ),
+            Err(StandardError::SceneTransactionExpired)
+        );
+        assert_eq!(
+            engine.handle_command(
+                SCENE_TRANSACTION_TIMEOUT_MS,
+                StandardCommand::AbortSceneReplace { transaction_id: 999 },
+                &snapshot,
+            ),
+            Err(StandardError::InvalidSceneTransaction)
+        );
     }
 }

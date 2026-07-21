@@ -15,7 +15,7 @@ use postcard::experimental::max_size::MaxSize;
 #[cfg(feature = "lighting")]
 pub use lighting::{
     RYNK_LIGHTING_TRANSACTION_CAPACITY, RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox,
-    StandardRynkLightingAdapter,
+    RynkLightingReadback, StandardRynkLightingAdapter, install_lighting_scenes,
 };
 use rmk_types::constants::RYNK_BUFFER_SIZE;
 use rmk_types::protocol::rynk::{
@@ -165,7 +165,14 @@ impl<'a> RynkService<'a> {
             | Cmd::BeginLightingOverlayReplace
             | Cmd::PutLightingOverlayChunk
             | Cmd::CommitLightingOverlayReplace
-            | Cmd::AbortLightingOverlayReplace => self.lock_config.write_requires_unlock,
+            | Cmd::AbortLightingOverlayReplace
+            | Cmd::SetLightingSceneCell
+            | Cmd::UnsetLightingSceneCell
+            | Cmd::SetLightingLayerPolicy
+            | Cmd::BeginLightingSceneReplace
+            | Cmd::PutLightingSceneChunk
+            | Cmd::CommitLightingSceneReplace
+            | Cmd::AbortLightingSceneReplace => self.lock_config.write_requires_unlock,
             _ => false,
         }
     }
@@ -279,6 +286,24 @@ impl<'a> RynkService<'a> {
             Cmd::CommitLightingOverlayReplace => handlers::lighting::serve_commit(self, session, msg).await,
             #[cfg(feature = "lighting")]
             Cmd::AbortLightingOverlayReplace => handlers::lighting::serve_abort(self, session, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingSceneStatus => Serve::<command::GetLightingSceneStatus, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingScenes => Serve::<command::GetLightingScenes, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingSceneCell => Serve::<command::SetLightingSceneCell, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::UnsetLightingSceneCell => Serve::<command::UnsetLightingSceneCell, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingLayerPolicy => Serve::<command::SetLightingLayerPolicy, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::BeginLightingSceneReplace => Serve::<command::BeginLightingSceneReplace, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::PutLightingSceneChunk => Serve::<command::PutLightingSceneChunk, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::CommitLightingSceneReplace => Serve::<command::CommitLightingSceneReplace, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::AbortLightingSceneReplace => Serve::<command::AbortLightingSceneReplace, _>::serve(self, msg).await,
 
             _ => Err(RynkError::UnknownCmd),
         }

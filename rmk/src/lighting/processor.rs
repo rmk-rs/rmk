@@ -75,6 +75,19 @@ impl<Command, Reply, Error, const CAPACITY: usize> LightingMailbox<Command, Repl
         self.retry_output.signal(());
     }
 
+    /// Service side: receive the next command. Normally only
+    /// [`LightingProcessor`] drives this; it is public for board-specific
+    /// executors and deterministic tests.
+    pub async fn receive_request(&self) -> (u32, Command) {
+        let request = self.requests.receive().await;
+        (request.id, request.command)
+    }
+
+    /// Service side: publish the reply for a previously received command.
+    pub fn publish_reply(&self, id: u32, result: Result<Reply, Error>) {
+        self.response.signal(MailboxResponse { id, result });
+    }
+
     async fn receive(&self) -> MailboxRequest<Command> {
         self.requests.receive().await
     }

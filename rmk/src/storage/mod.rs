@@ -8,6 +8,8 @@ use embedded_storage_async::nor_flash::NorFlash as AsyncNorFlash;
 use postcard::experimental::max_size::MaxSize;
 use rmk_types::connection::ConnectionType;
 use rmk_types::morse::MorseProfile;
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+use rmk_types::protocol::rynk::{LIGHTING_SCENE_CHUNK_SIZE, LightingLayerPolicy, LightingSceneCell};
 use sequential_storage::Error as SSError;
 use sequential_storage::cache::{Cache, Uncached};
 use sequential_storage::map::{Key, MapConfig, MapStorage, PostcardValue, SerializationError};
@@ -156,6 +158,18 @@ pub(crate) enum FlashOperationMessage {
     // The whole behavior config in one message (Rynk's SetBehaviorConfig carries
     // every field, so one store beats six read-modify-write cycles)
     BehaviorConfig(BehaviorConfig),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    // Lighting scene-table header: authoritative cell count and layer policy
+    LightingSceneTable {
+        len: u16,
+        policy: LightingLayerPolicy,
+    },
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    // One shard of the lighting scene table, in wire (stable LED id) form
+    LightingSceneShard {
+        index: u8,
+        cells: heapless::Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+    },
     #[cfg(feature = "_ble")]
     // Read bond info for the given slot; storage task replies via `BOND_INFO_RESPONSE`.
     ReadBleBondInfo(u8),
@@ -202,6 +216,10 @@ pub(crate) enum StorageKey {
     ActiveBleProfile,
     #[cfg(feature = "_ble")]
     BondInfo(u8),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneTable,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneShard(u8),
 }
 
 impl StorageKey {
@@ -283,9 +301,23 @@ pub(crate) enum StorageData {
     BondInfo(ProfileInfo),
     #[cfg(feature = "_ble")]
     ActiveBleProfile(u8),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneTable(LightingSceneTableRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneShard(heapless::Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>),
 }
 
 impl<'a> PostcardValue<'a> for StorageData {}
+
+/// Persisted lighting scene-table header. Shards beyond `len` are stale
+/// leftovers from a larger previous table and are ignored at load.
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub(crate) struct LightingSceneTableRecord {
+    pub(crate) len: u16,
+    pub(crate) policy: LightingLayerPolicy,
+}
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -529,6 +561,42 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
         }
 
         Ok(())
+    }
+
+    /// Read the persisted lighting scene configuration at startup, before the
+    /// storage task takes ownership. Returns the persisted layer policy, if
+    /// any, and appends up to `CAP` stored cells to `cells`.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub async fn read_lighting_scenes<const CAP: usize>(
+        &mut self,
+        cells: &mut heapless::Vec<LightingSceneCell, CAP>,
+    ) -> Option<LightingLayerPolicy> {
+        let Some(StorageData::LightingSceneTable(record)) = self.fetch_data(StorageKey::LightingSceneTable).await
+        else {
+            return None;
+        };
+        let len = (record.len as usize).min(CAP);
+        let mut index: u8 = 0;
+        'shards: while cells.len() < len {
+            let Some(StorageData::LightingSceneShard(shard)) =
+                self.fetch_data(StorageKey::LightingSceneShard(index)).await
+            else {
+                break;
+            };
+            if shard.is_empty() {
+                break;
+            }
+            for cell in shard {
+                if cells.len() == len || cells.push(cell).is_err() {
+                    break 'shards;
+                }
+            }
+            let Some(next) = index.checked_add(1) else {
+                break;
+            };
+            index = next;
+        }
+        Some(record.policy)
     }
 
     async fn initialize_storage_with_config(
@@ -818,6 +886,33 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                         &StorageData::BehaviorConfig(behavior_config),
                     )
                     .await
+                }
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingSceneTable { len, policy } => {
+                    // Scene persistence rewrites the whole table on every
+                    // mutation; comparing before writing keeps unchanged
+                    // records from consuming flash on single-cell edits.
+                    let record = LightingSceneTableRecord { len, policy };
+                    match self.fetch_data(StorageKey::LightingSceneTable).await {
+                        Some(StorageData::LightingSceneTable(saved)) if saved == record => Ok(()),
+                        _ => {
+                            self.store_data(StorageKey::LightingSceneTable, &StorageData::LightingSceneTable(record))
+                                .await
+                        }
+                    }
+                }
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingSceneShard { index, cells } => {
+                    match self.fetch_data(StorageKey::LightingSceneShard(index)).await {
+                        Some(StorageData::LightingSceneShard(saved)) if saved == cells => Ok(()),
+                        _ => {
+                            self.store_data(
+                                StorageKey::LightingSceneShard(index),
+                                &StorageData::LightingSceneShard(cells),
+                            )
+                            .await
+                        }
+                    }
                 }
             };
 

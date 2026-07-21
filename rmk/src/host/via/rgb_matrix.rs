@@ -210,17 +210,19 @@ mod standard_control {
         BackgroundMode as ViaMode, BackgroundPatch as ViaPatch, BackgroundState as ViaState, ViaRgbMatrixControl,
     };
     use crate::lighting::processor::LightingMailbox;
-    use crate::lighting::standard::{BackgroundMode, BackgroundPatch, StandardCommand, StandardError, StandardState};
+    use crate::lighting::standard::{
+        BackgroundMode, BackgroundPatch, StandardCommand, StandardError, StandardReply, StandardState,
+    };
 
     /// Mailbox-backed live control. Persistence remains unavailable until RMK
     /// has a correlated durable completion path.
     pub struct StandardControl<'a, const OVERLAY_CAP: usize, const MAILBOX_CAP: usize> {
-        mailbox: &'a LightingMailbox<StandardCommand<OVERLAY_CAP>, StandardState, StandardError, MAILBOX_CAP>,
+        mailbox: &'a LightingMailbox<StandardCommand<OVERLAY_CAP>, StandardReply, StandardError, MAILBOX_CAP>,
     }
 
     impl<'a, const OVERLAY_CAP: usize, const MAILBOX_CAP: usize> StandardControl<'a, OVERLAY_CAP, MAILBOX_CAP> {
         pub const fn new(
-            mailbox: &'a LightingMailbox<StandardCommand<OVERLAY_CAP>, StandardState, StandardError, MAILBOX_CAP>,
+            mailbox: &'a LightingMailbox<StandardCommand<OVERLAY_CAP>, StandardReply, StandardError, MAILBOX_CAP>,
         ) -> Self {
             Self { mailbox }
         }
@@ -246,6 +248,10 @@ mod standard_control {
         }
     }
 
+    fn reply_state(reply: StandardReply) -> Result<StandardState, Error> {
+        reply.state().ok_or(Error::PersistenceUnavailable)
+    }
+
     fn patch(patch: ViaPatch) -> BackgroundPatch {
         BackgroundPatch {
             enabled: patch.enabled,
@@ -269,16 +275,18 @@ mod standard_control {
             self.mailbox
                 .request(StandardCommand::ReadState)
                 .await
-                .map(state)
                 .map_err(Error::Lighting)
+                .and_then(reply_state)
+                .map(state)
         }
 
         async fn patch_background(&self, update: ViaPatch) -> Result<ViaState, Self::Error> {
             self.mailbox
                 .request(StandardCommand::PatchBackground(patch(update)))
                 .await
-                .map(state)
                 .map_err(Error::Lighting)
+                .and_then(reply_state)
+                .map(state)
         }
 
         async fn save_background(&self) -> Result<(), Self::Error> {
@@ -474,9 +482,9 @@ mod tests {
     #[test]
     fn standard_mailbox_control_does_not_claim_persistence() {
         use crate::lighting::processor::LightingMailbox;
-        use crate::lighting::standard::{StandardCommand, StandardError, StandardState};
+        use crate::lighting::standard::{StandardCommand, StandardError, StandardReply};
 
-        let mailbox = LightingMailbox::<StandardCommand<1>, StandardState, StandardError, 1>::new();
+        let mailbox = LightingMailbox::<StandardCommand<1>, StandardReply, StandardError, 1>::new();
         let control = StandardControl::new(&mailbox);
         assert_eq!(
             block_on(control.save_background()),

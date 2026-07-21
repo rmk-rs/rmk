@@ -15,16 +15,23 @@ use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use heapless::Vec;
 use rmk_types::protocol::rynk::{
-    LightingBackgroundMode, LightingBackgroundState, LightingError, LightingMutableState, LightingOverlayCell,
-    LightingResult, LightingRgb8, LightingState,
+    LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode, LightingBackgroundState, LightingError, LightingLayerPolicy,
+    LightingMutableState, LightingOverlayCell, LightingResult, LightingRgb8, LightingSceneCell,
+    LightingSceneTransaction, LightingScenesPage, LightingState,
 };
 
 use crate::RawMutex;
 use crate::core_traits::Runnable;
 use crate::lighting::{
-    BackgroundMode, BackgroundState, BuiltinEffect, LedId, LightingMailbox, LightingRouting, LightingTopology,
-    OverlayBatch, OverlayCell, OverlayError, Rgb8, StandardCommand, StandardError, StandardMutableState, StandardState,
+    BackgroundMode, BackgroundState, BuiltinEffect, LayerPolicy, LedId, LightingMailbox, LightingRouting,
+    LightingTopology, OverlayBatch, OverlayCell, OverlayError, Rgb8, SceneChunk, SceneTableCell, StandardCommand,
+    StandardError, StandardLightingEngine, StandardMutableState, StandardReply, StandardState,
 };
+
+const _: () = core::assert!(
+    crate::lighting::SCENE_CHUNK_SIZE == LIGHTING_SCENE_CHUNK_SIZE,
+    "engine scene chunk must match the wire chunk so adapters forward chunks unmodified"
+);
 
 /// Maximum number of cells staged by one Rynk overlay replacement.
 ///
@@ -47,6 +54,10 @@ pub struct RynkLightingDescriptor<'a> {
 pub struct RynkLightingController<'a> {
     pub(super) descriptor: RynkLightingDescriptor<'a>,
     pub(super) overlay_capacity: u16,
+    /// Advertised runtime scene-cell capacity. `0` means the board did not
+    /// wire a scene table; hosts gate on it and every scene endpoint rejects
+    /// with `Unsupported`.
+    pub(super) scene_capacity: u16,
     mailbox: &'a RynkLightingMailbox,
 }
 
@@ -66,8 +77,16 @@ impl<'a> RynkLightingController<'a> {
             } else {
                 staged_capacity
             },
+            scene_capacity: 0,
             mailbox,
         }
+    }
+
+    /// Advertise runtime scene support. Pass the engine's scene capacity;
+    /// boards without a scene table simply skip this call.
+    pub const fn with_scene_capacity(mut self, scene_capacity: u16) -> Self {
+        self.scene_capacity = scene_capacity;
+        self
     }
 
     pub const fn descriptor(&self) -> RynkLightingDescriptor<'a> {
@@ -78,8 +97,17 @@ impl<'a> RynkLightingController<'a> {
         self.overlay_capacity
     }
 
-    pub(super) async fn request(&self, command: RynkLightingCommand) -> LightingResult<LightingState> {
+    pub const fn scene_capacity(&self) -> u16 {
+        self.scene_capacity
+    }
+
+    pub(super) async fn request(&self, command: RynkLightingCommand) -> LightingResult<RynkLightingReadback> {
         self.mailbox.request(command).await
+    }
+
+    /// Request expecting authoritative state readback.
+    pub(super) async fn request_state(&self, command: RynkLightingCommand) -> LightingResult<LightingState> {
+        expect_state(self.mailbox.request(command).await)
     }
 
     pub(super) async fn replace_overlay(
@@ -87,7 +115,32 @@ impl<'a> RynkLightingController<'a> {
         expected_revision: u32,
         cells: &Vec<LightingOverlayCell, RYNK_LIGHTING_TRANSACTION_CAPACITY>,
     ) -> LightingResult<LightingState> {
-        self.mailbox.request_replace(expected_revision, cells).await
+        expect_state(self.mailbox.request_replace(expected_revision, cells).await)
+    }
+}
+
+/// Typed readback carried by the protocol mailbox. Most commands answer with
+/// wire state; scene reads and transaction reservation have their own shapes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RynkLightingReadback {
+    State(LightingState),
+    SceneStatus {
+        revision: u32,
+        scene_len: u16,
+        policy: LightingLayerPolicy,
+    },
+    ScenesPage(LightingScenesPage),
+    SceneTransaction(LightingSceneTransaction),
+    Unit,
+}
+
+fn expect_state(result: LightingResult<RynkLightingReadback>) -> LightingResult<LightingState> {
+    match result? {
+        RynkLightingReadback::State(state) => Ok(state),
+        _ => {
+            debug_assert!(false, "adapter answered a state command with a non-state readback");
+            Err(LightingError::InvalidRequest)
+        }
     }
 }
 
@@ -115,7 +168,7 @@ pub(in crate::host::rynk) struct MailboxRequest {
 
 struct MailboxResponse {
     id: u32,
-    result: LightingResult<LightingState>,
+    result: LightingResult<RynkLightingReadback>,
 }
 
 impl RynkLightingMailbox {
@@ -131,7 +184,7 @@ impl RynkLightingMailbox {
         }
     }
 
-    async fn request(&self, command: RynkLightingCommand) -> LightingResult<LightingState> {
+    async fn request(&self, command: RynkLightingCommand) -> LightingResult<RynkLightingReadback> {
         let _caller = self.caller.lock().await;
         let id = self.allocate_id();
         self.send_and_wait(id, command).await
@@ -141,7 +194,7 @@ impl RynkLightingMailbox {
         &self,
         expected_revision: u32,
         cells: &Vec<LightingOverlayCell, RYNK_LIGHTING_TRANSACTION_CAPACITY>,
-    ) -> LightingResult<LightingState> {
+    ) -> LightingResult<RynkLightingReadback> {
         let _caller = self.caller.lock().await;
         while self.replacement.lock(|replacement| replacement.borrow().is_some()) {
             self.replacement_available.wait().await;
@@ -176,12 +229,12 @@ impl RynkLightingMailbox {
         })
     }
 
-    async fn send_and_wait(&self, id: u32, command: RynkLightingCommand) -> LightingResult<LightingState> {
+    async fn send_and_wait(&self, id: u32, command: RynkLightingCommand) -> LightingResult<RynkLightingReadback> {
         self.requests.send(MailboxRequest { id, command }).await;
         self.wait_for_reply(id).await
     }
 
-    async fn wait_for_reply(&self, id: u32) -> LightingResult<LightingState> {
+    async fn wait_for_reply(&self, id: u32) -> LightingResult<RynkLightingReadback> {
         loop {
             let response = self.response.wait().await;
             if response.id == id {
@@ -194,7 +247,7 @@ impl RynkLightingMailbox {
         self.requests.receive().await
     }
 
-    pub(in crate::host::rynk) fn reply(&self, id: u32, result: LightingResult<LightingState>) {
+    pub(in crate::host::rynk) fn reply(&self, id: u32, result: LightingResult<RynkLightingReadback>) {
         self.response.signal(MailboxResponse { id, result });
     }
 
@@ -228,6 +281,39 @@ impl Default for RynkLightingMailbox {
 
 pub(super) enum RynkLightingCommand {
     ReadState,
+    ReadSceneStatus,
+    ReadScenes {
+        expected_revision: u32,
+        offset: u16,
+    },
+    SetSceneCell {
+        expected_revision: u32,
+        cell: LightingSceneCell,
+    },
+    UnsetSceneCell {
+        expected_revision: u32,
+        layer: u8,
+        led_id: rmk_types::protocol::rynk::LightingLedId,
+    },
+    SetLayerPolicy {
+        expected_revision: u32,
+        policy: LightingLayerPolicy,
+    },
+    BeginSceneReplace {
+        expected_revision: u32,
+        cell_count: u16,
+    },
+    PutSceneChunk {
+        transaction_id: u32,
+        offset: u16,
+        cells: Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+    },
+    CommitSceneReplace {
+        transaction_id: u32,
+    },
+    AbortSceneReplace {
+        transaction_id: u32,
+    },
     SetState {
         expected_revision: u32,
         state: LightingMutableState,
@@ -250,20 +336,30 @@ pub(super) enum RynkLightingCommand {
 
 /// Bridges type-erased Rynk commands into one concrete standard lighting
 /// mailbox. Boards spawn this alongside `LightingProcessor`.
-pub struct StandardRynkLightingAdapter<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize> {
+pub struct StandardRynkLightingAdapter<
+    'a,
+    const OVERLAY_CAPACITY: usize,
+    const CORE_COMMAND_CAPACITY: usize,
+    const SCENE_CAP: usize = 0,
+> {
     protocol: &'a RynkLightingMailbox,
-    core: &'a LightingMailbox<StandardCommand<OVERLAY_CAPACITY>, StandardState, StandardError, CORE_COMMAND_CAPACITY>,
+    core: &'a LightingMailbox<
+        StandardCommand<OVERLAY_CAPACITY, SCENE_CAP>,
+        StandardReply,
+        StandardError,
+        CORE_COMMAND_CAPACITY,
+    >,
     topology: LightingTopology<'a>,
 }
 
-impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize>
-    StandardRynkLightingAdapter<'a, OVERLAY_CAPACITY, CORE_COMMAND_CAPACITY>
+impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, const SCENE_CAP: usize>
+    StandardRynkLightingAdapter<'a, OVERLAY_CAPACITY, CORE_COMMAND_CAPACITY, SCENE_CAP>
 {
     pub const fn new(
         protocol: &'a RynkLightingMailbox,
         core: &'a LightingMailbox<
-            StandardCommand<OVERLAY_CAPACITY>,
-            StandardState,
+            StandardCommand<OVERLAY_CAPACITY, SCENE_CAP>,
+            StandardReply,
             StandardError,
             CORE_COMMAND_CAPACITY,
         >,
@@ -284,9 +380,214 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize>
         self.protocol.reply(request.id, result);
     }
 
-    async fn dispatch(&self, request_id: u32, command: RynkLightingCommand) -> LightingResult<LightingState> {
+    async fn request_core(
+        &self,
+        command: StandardCommand<OVERLAY_CAPACITY, SCENE_CAP>,
+    ) -> LightingResult<StandardReply> {
+        self.core
+            .request(command)
+            .await
+            .map_err(|error| map_standard_error(error, OVERLAY_CAPACITY))
+    }
+
+    async fn request_core_state(
+        &self,
+        command: StandardCommand<OVERLAY_CAPACITY, SCENE_CAP>,
+    ) -> LightingResult<StandardState> {
+        match self.request_core(command).await? {
+            StandardReply::State(state) => Ok(state),
+            _ => Err(LightingError::InvalidRequest),
+        }
+    }
+
+    /// Run a scene mutation, then persist the whole authoritative scene
+    /// configuration. Persisting by readback keeps the engine the single
+    /// source of truth instead of mirroring its insertion algorithm here.
+    async fn scene_mutation(
+        &self,
+        command: StandardCommand<OVERLAY_CAPACITY, SCENE_CAP>,
+    ) -> LightingResult<StandardState> {
+        let state = self.request_core_state(command).await?;
+        self.persist_scenes(&state).await;
+        Ok(state)
+    }
+
+    #[cfg(feature = "storage")]
+    async fn persist_scenes(&self, state: &StandardState) {
+        use crate::channel::FLASH_CHANNEL;
+        use crate::storage::FlashOperationMessage;
+
+        let mut total = state.scene_len.min(u16::MAX as usize) as u16;
+        let mut offset: u16 = 0;
+        let mut shard: u8 = 0;
+        while offset < total {
+            let Ok(StandardReply::ScenesPage(page)) = self.request_core(StandardCommand::ReadScenes { offset }).await
+            else {
+                return;
+            };
+            let cells = page.cells.as_slice();
+            if cells.is_empty() {
+                break;
+            }
+            let mut wire_cells: Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE> = Vec::new();
+            for cell in cells {
+                let Some(wire) = self.scene_cell_to_wire(*cell) else {
+                    return;
+                };
+                let _ = wire_cells.push(wire);
+            }
+            FLASH_CHANNEL
+                .send(FlashOperationMessage::LightingSceneShard {
+                    index: shard,
+                    cells: wire_cells,
+                })
+                .await;
+            offset += cells.len() as u16;
+            shard = shard.saturating_add(1);
+            total = page.total;
+        }
+        FLASH_CHANNEL
+            .send(FlashOperationMessage::LightingSceneTable {
+                len: offset,
+                policy: policy_to_wire(state.scene_policy),
+            })
+            .await;
+    }
+
+    #[cfg(not(feature = "storage"))]
+    async fn persist_scenes(&self, _state: &StandardState) {}
+
+    async fn dispatch(&self, request_id: u32, command: RynkLightingCommand) -> LightingResult<RynkLightingReadback> {
         let core_command = match command {
             RynkLightingCommand::ReadState => StandardCommand::ReadState,
+            RynkLightingCommand::ReadSceneStatus => {
+                let state = self.request_core_state(StandardCommand::ReadState).await?;
+                return Ok(RynkLightingReadback::SceneStatus {
+                    revision: state.revision,
+                    scene_len: state.scene_len.min(u16::MAX as usize) as u16,
+                    policy: policy_to_wire(state.scene_policy),
+                });
+            }
+            RynkLightingCommand::ReadScenes {
+                expected_revision,
+                offset,
+            } => {
+                let page = match self.request_core(StandardCommand::ReadScenes { offset }).await? {
+                    StandardReply::ScenesPage(page) => page,
+                    _ => return Err(LightingError::InvalidRequest),
+                };
+                // The page is read atomically by the engine; pinning only has
+                // to compare the revision it was served under.
+                if page.revision != expected_revision {
+                    return Err(LightingError::StateRevisionConflict {
+                        expected: expected_revision,
+                        current: page.revision,
+                    });
+                }
+                let mut items: Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE> = Vec::new();
+                for cell in page.cells.as_slice() {
+                    let wire = self.scene_cell_to_wire(*cell).ok_or(LightingError::InvalidRequest)?;
+                    items.push(wire).map_err(|_| LightingError::InvalidRequest)?;
+                }
+                return Ok(RynkLightingReadback::ScenesPage(LightingScenesPage {
+                    revision: page.revision,
+                    total_count: page.total,
+                    items,
+                }));
+            }
+            RynkLightingCommand::SetSceneCell {
+                expected_revision,
+                cell,
+            } => {
+                let cell = self.scene_cell_from_wire(cell)?;
+                let state = self
+                    .scene_mutation(StandardCommand::SetSceneCellIfRevision {
+                        expected_revision,
+                        cell,
+                    })
+                    .await?;
+                return Ok(RynkLightingReadback::State(state_to_wire(state)));
+            }
+            RynkLightingCommand::UnsetSceneCell {
+                expected_revision,
+                layer,
+                led_id,
+            } => {
+                let slot = self
+                    .topology
+                    .slot(LedId(led_id.0))
+                    .ok_or(LightingError::UnknownLed { led_id })?;
+                let state = self
+                    .scene_mutation(StandardCommand::UnsetSceneCellIfRevision {
+                        expected_revision,
+                        layer,
+                        slot,
+                    })
+                    .await?;
+                return Ok(RynkLightingReadback::State(state_to_wire(state)));
+            }
+            RynkLightingCommand::SetLayerPolicy {
+                expected_revision,
+                policy,
+            } => {
+                let state = self
+                    .scene_mutation(StandardCommand::SetLayerPolicyIfRevision {
+                        expected_revision,
+                        policy: policy_from_wire(policy),
+                    })
+                    .await?;
+                return Ok(RynkLightingReadback::State(state_to_wire(state)));
+            }
+            RynkLightingCommand::BeginSceneReplace {
+                expected_revision,
+                cell_count,
+            } => {
+                let reply = self
+                    .request_core(StandardCommand::BeginSceneReplace {
+                        expected_revision,
+                        cell_count,
+                    })
+                    .await?;
+                return match reply {
+                    StandardReply::SceneTransaction { id, cell_count } => {
+                        Ok(RynkLightingReadback::SceneTransaction(LightingSceneTransaction {
+                            id,
+                            cell_count,
+                        }))
+                    }
+                    _ => Err(LightingError::InvalidRequest),
+                };
+            }
+            RynkLightingCommand::PutSceneChunk {
+                transaction_id,
+                offset,
+                cells,
+            } => {
+                let mut chunk = SceneChunk::new();
+                for cell in &cells {
+                    chunk
+                        .push(self.scene_cell_from_wire(*cell)?)
+                        .map_err(|error| map_standard_error(error, OVERLAY_CAPACITY))?;
+                }
+                self.request_core_state(StandardCommand::PutSceneChunk {
+                    transaction_id,
+                    offset,
+                    cells: chunk,
+                })
+                .await?;
+                return Ok(RynkLightingReadback::Unit);
+            }
+            RynkLightingCommand::CommitSceneReplace { transaction_id } => {
+                let state = self
+                    .scene_mutation(StandardCommand::CommitSceneReplace { transaction_id })
+                    .await?;
+                return Ok(RynkLightingReadback::State(state_to_wire(state)));
+            }
+            RynkLightingCommand::AbortSceneReplace { transaction_id } => {
+                self.request_core_state(StandardCommand::AbortSceneReplace { transaction_id })
+                    .await?;
+                return Ok(RynkLightingReadback::Unit);
+            }
             RynkLightingCommand::SetState {
                 expected_revision,
                 state,
@@ -333,11 +634,10 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize>
             }
         };
 
-        self.core
-            .request(core_command)
+        self.request_core_state(core_command)
             .await
             .map(state_to_wire)
-            .map_err(|error| map_standard_error(error, OVERLAY_CAPACITY))
+            .map(RynkLightingReadback::State)
     }
 
     fn overlay_cell(&self, cell: LightingOverlayCell) -> LightingResult<OverlayCell> {
@@ -352,10 +652,60 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize>
             ttl_ms: cell.ttl_ms.and_then(NonZeroU32::new),
         })
     }
+
+    fn scene_cell_from_wire(&self, cell: LightingSceneCell) -> LightingResult<SceneTableCell> {
+        cell.validate()?;
+        let slot = self
+            .topology
+            .slot(LedId(cell.led_id.0))
+            .ok_or(LightingError::UnknownLed { led_id: cell.led_id })?;
+        Ok(SceneTableCell {
+            layer: cell.layer,
+            slot,
+            effect: effect_from_wire(cell.effect),
+        })
+    }
+
+    fn scene_cell_to_wire(&self, cell: SceneTableCell) -> Option<LightingSceneCell> {
+        let led = self.topology.led(cell.slot)?;
+        Some(LightingSceneCell {
+            layer: cell.layer,
+            led_id: rmk_types::protocol::rynk::LightingLedId(led.id.0),
+            effect: effect_to_wire(cell.effect),
+        })
+    }
 }
 
-impl<const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize> Runnable
-    for StandardRynkLightingAdapter<'_, OVERLAY_CAPACITY, CORE_COMMAND_CAPACITY>
+/// Install persisted scene configuration into a standard engine at startup,
+/// before the engine begins serving commands. Cells whose stable LED id no
+/// longer resolves against the current topology are skipped rather than
+/// failing the boot.
+pub fn install_lighting_scenes<Extension, Status, const N: usize, const OVERLAY_CAP: usize, const SCENE_CAP: usize>(
+    engine: &mut StandardLightingEngine<'_, Extension, Status, N, OVERLAY_CAP, SCENE_CAP>,
+    topology: &LightingTopology<'_>,
+    cells: &[LightingSceneCell],
+    policy: Option<LightingLayerPolicy>,
+) {
+    if let Some(policy) = policy {
+        engine.install_scene_policy(policy_from_wire(policy));
+    }
+    for cell in cells {
+        if cell.validate().is_err() {
+            continue;
+        }
+        let Some(slot) = topology.slot(LedId(cell.led_id.0)) else {
+            continue;
+        };
+        let _ = engine.install_scene_cell(SceneTableCell {
+            layer: cell.layer,
+            slot,
+            effect: effect_from_wire(cell.effect),
+        });
+    }
+}
+
+impl<const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, const SCENE_CAP: usize> Runnable
+    for StandardRynkLightingAdapter<'_, OVERLAY_CAPACITY, CORE_COMMAND_CAPACITY, SCENE_CAP>
 {
     async fn run(&mut self) -> ! {
         loop {
@@ -438,6 +788,60 @@ const fn rgb_from_wire(color: LightingRgb8) -> Rgb8 {
     Rgb8::new(color.r, color.g, color.b)
 }
 
+const fn rgb_to_wire(color: Rgb8) -> LightingRgb8 {
+    LightingRgb8 {
+        r: color.r,
+        g: color.g,
+        b: color.b,
+    }
+}
+
+fn effect_to_wire(effect: BuiltinEffect) -> rmk_types::protocol::rynk::LightingEffect {
+    use rmk_types::protocol::rynk::LightingEffect;
+
+    match effect {
+        BuiltinEffect::Solid { color } => LightingEffect::Solid {
+            color: rgb_to_wire(color),
+        },
+        BuiltinEffect::Blink {
+            color,
+            period_ms,
+            phase_ms,
+            duty,
+        } => LightingEffect::Blink {
+            color: rgb_to_wire(color),
+            period_ms,
+            phase_ms,
+            duty,
+        },
+        BuiltinEffect::Breathe {
+            color,
+            period_ms,
+            phase_ms,
+            step_ms,
+        } => LightingEffect::Breathe {
+            color: rgb_to_wire(color),
+            period_ms,
+            phase_ms,
+            step_ms,
+        },
+    }
+}
+
+pub(super) const fn policy_from_wire(policy: LightingLayerPolicy) -> LayerPolicy {
+    match policy {
+        LightingLayerPolicy::EffectiveOnly => LayerPolicy::EffectiveOnly,
+        LightingLayerPolicy::ActiveStack => LayerPolicy::ActiveStack,
+    }
+}
+
+pub(super) const fn policy_to_wire(policy: LayerPolicy) -> LightingLayerPolicy {
+    match policy {
+        LayerPolicy::EffectiveOnly => LightingLayerPolicy::EffectiveOnly,
+        LayerPolicy::ActiveStack => LightingLayerPolicy::ActiveStack,
+    }
+}
+
 fn map_standard_error(error: StandardError, capacity: usize) -> LightingError {
     match error {
         StandardError::RevisionConflict { expected, current } => {
@@ -447,6 +851,16 @@ fn map_standard_error(error: StandardError, capacity: usize) -> LightingError {
         StandardError::DeadlineOverflow => LightingError::InvalidTtl,
         StandardError::ReplicaSlot(_) => LightingError::Unsupported,
         StandardError::Render(_) => LightingError::Unsupported,
+        StandardError::SceneFull { capacity } => LightingError::SceneFull {
+            capacity: capacity.min(u16::MAX as usize) as u16,
+        },
+        StandardError::SceneSlotOutOfRange { .. } | StandardError::InvalidSceneRequest => LightingError::InvalidRequest,
+        StandardError::SceneTransactionBusy => LightingError::TransactionBusy,
+        StandardError::InvalidSceneTransaction => LightingError::InvalidTransaction,
+        StandardError::SceneTransactionExpired => LightingError::TransactionExpired,
+        StandardError::SceneTransactionIncomplete { expected, received } => {
+            LightingError::TransactionIncomplete { expected, received }
+        }
     }
 }
 
@@ -540,7 +954,7 @@ mod tests {
             ));
             let abandoned_cells = mailbox.take_replacement(abandoned.id).await;
             assert_eq!(abandoned_cells.as_slice(), &[cell(10)]);
-            mailbox.reply(abandoned.id, Ok(state(1)));
+            mailbox.reply(abandoned.id, Ok(RynkLightingReadback::State(state(1))));
 
             let current = mailbox.receive().await;
             assert!(matches!(
@@ -549,15 +963,15 @@ mod tests {
             ));
             let current_cells = mailbox.take_replacement(current.id).await;
             assert_eq!(current_cells.as_slice(), &[cell(20)]);
-            mailbox.reply(current.id, Ok(state(2)));
+            mailbox.reply(current.id, Ok(RynkLightingReadback::State(state(2))));
         }));
-        assert_eq!(reply, Ok(state(2)));
+        assert_eq!(reply, Ok(RynkLightingReadback::State(state(2))));
     }
 
     #[test]
     fn replacement_rejects_duplicate_stable_ids_before_reaching_the_core() {
         let protocol = RynkLightingMailbox::new();
-        let core = LightingMailbox::<StandardCommand<2>, StandardState, StandardError, 1>::new();
+        let core = LightingMailbox::<StandardCommand<2>, StandardReply, StandardError, 1>::new();
         let mut adapter = StandardRynkLightingAdapter::new(&protocol, &core, topology());
         let mut cells = Vec::new();
         cells.push(cell(10)).unwrap();

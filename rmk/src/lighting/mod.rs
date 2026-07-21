@@ -42,8 +42,9 @@ pub use source::{
 };
 pub use standard::{
     BackgroundMode, BackgroundPatch, BackgroundState, EmptySource, OverlayBatch, OverlayCell, ReplicaSlotError,
-    StandardCommand, StandardError, StandardInput, StandardLightingEngine, StandardMutableState, StandardReplicaSlot,
-    StandardReplicaState, StandardState, UniformBackground,
+    SCENE_CHUNK_SIZE, SCENE_TRANSACTION_TIMEOUT_MS, SceneChunk, ScenePage, SceneTable, SceneTableCell, StandardCommand,
+    StandardError, StandardInput, StandardLightingEngine, StandardMutableState, StandardReplicaSlot,
+    StandardReplicaState, StandardReply, StandardState, UniformBackground,
 };
 pub use topology::*;
 
