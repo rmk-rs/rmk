@@ -103,11 +103,11 @@ impl MaxSize for SplitAppData {
 
 /// Central → peripheral queue, drained by `PeripheralManager` while the link
 /// is up. Producers MUST use `try_send` (bounded, never block); capacity is
-/// sized so one full application resync burst fits with headroom. Forty-eight
-/// entries admit a complete 40-cell semantic lighting snapshot (begin,
-/// context, one worst-case animated cell per packet, and commit). This is
+/// sized so one full application resync burst fits with headroom. One hundred
+/// and twelve entries admit a complete 40-cell overlay plus a 64-cell runtime
+/// scene table (begin, context, one cell per packet, and commit). This is
 /// mutation/reconnect traffic, not rendered-frame streaming.
-pub static SPLIT_APP_TX: Channel<RawMutex, SplitAppData, 48> = Channel::new();
+pub static SPLIT_APP_TX: Channel<RawMutex, SplitAppData, 112> = Channel::new();
 
 /// This side's inbox of received application messages (peripheral: from the
 /// central's `SPLIT_APP_TX`; central: from the peripheral's
