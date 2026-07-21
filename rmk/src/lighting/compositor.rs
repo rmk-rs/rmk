@@ -1,3 +1,5 @@
+use rmk_types::action::LightAction;
+
 use super::effect::EffectSample;
 use super::topology::LedSlot;
 
@@ -32,6 +34,16 @@ pub trait LightingSource<C, Context> {
 
     fn is_empty(&self, input: &RenderInput<'_, Context>) -> bool {
         self.len(input) == 0
+    }
+
+    /// Claim a `LightAction` ahead of the engine's built-in handling.
+    ///
+    /// The standard engine offers each incoming action to its extension
+    /// source first, so animated sources can own the RGB mode/value/speed
+    /// keys instead of the uniform background. Return `true` to consume the
+    /// action; the engine then re-renders. The default declines everything.
+    fn handle_light_action(&mut self, _action: LightAction) -> bool {
+        false
     }
 }
 

@@ -1249,7 +1249,7 @@ where
     type Error = StandardError;
 
     fn on_input(&mut self, input: Self::Input, _snapshot: &Context) -> Result<Invalidation, Self::Error> {
-        if self.apply_light_action(input.0) {
+        if self.extension.handle_light_action(input.0) || self.apply_light_action(input.0) {
             self.advance_revision();
             Ok(Invalidation::Render)
         } else {
@@ -2703,6 +2703,64 @@ mod tests {
                 &snapshot,
             ),
             Err(StandardError::InvalidSceneTransaction)
+        );
+    }
+
+    #[test]
+    fn extension_source_claims_light_actions_before_background() {
+        #[derive(Default)]
+        struct ClaimingSource;
+
+        impl<C, Context> LightingSource<C, Context> for ClaimingSource {
+            fn len(&self, _: &SourceRenderInput<'_, Context>) -> usize {
+                0
+            }
+
+            fn slot(&self, _: usize, _: &SourceRenderInput<'_, Context>) -> LedSlot {
+                unreachable!("ClaimingSource has no targets")
+            }
+
+            fn contribution(&mut self, _: usize, _: &SourceRenderInput<'_, Context>) -> Contribution<C> {
+                unreachable!("ClaimingSource has no samples")
+            }
+
+            fn handle_light_action(&mut self, action: LightAction) -> bool {
+                matches!(action, LightAction::RgbHui)
+            }
+        }
+
+        let mut engine: StandardLightingEngine<'static, ClaimingSource, EmptySource, 2, 2> =
+            StandardLightingEngine::new(
+                BackgroundState {
+                    value: 10,
+                    ..BackgroundState::default()
+                },
+                LayerScenes {
+                    scenes: &LAYERS,
+                    policy: LayerPolicy::ActiveStack,
+                },
+                ClaimingSource,
+                EmptySource,
+            );
+        let snapshot = context(0);
+        let hue_before = engine.state().background.hue;
+
+        assert_eq!(
+            engine.on_input(StandardInput(LightAction::RgbHui), &snapshot),
+            Ok(Invalidation::Render)
+        );
+        assert_eq!(engine.state().revision, 1);
+        assert_eq!(
+            engine.state().background.hue,
+            hue_before,
+            "a claimed action must bypass the built-in background handling"
+        );
+
+        engine.on_input(StandardInput(LightAction::RgbHud), &snapshot).unwrap();
+        assert_ne!(
+            engine.state().background.hue,
+            hue_before,
+            "unclaimed actions still fall through to the background"
         );
     }
 }

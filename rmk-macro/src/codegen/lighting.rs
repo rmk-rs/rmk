@@ -8,6 +8,27 @@ use rmk_config::resolved::lighting::{
 };
 use rmk_config::resolved::{FixedPoint3, PhysicalLayout};
 
+/// Statics for a hand-written main: resolve `[layout]` and `[lighting]`
+/// directly from `KEYBOARD_TOML_PATH` without the full `#[rmk_keyboard]`
+/// pipeline (which would require a `[matrix]` or `[split]` section).
+pub(crate) fn expand_standalone_lighting_config() -> TokenStream2 {
+    let config = crate::codegen::keyboard_config::read_keyboard_toml_config();
+    let layout = config
+        .layout_standalone()
+        .expect("failed to resolve layout config");
+    let lighting = config
+        .lighting_standalone(&layout)
+        .expect("failed to resolve lighting config");
+    let physical_layout = expand_physical_layout(&layout.physical);
+    let topology = expand_lighting_topology(lighting.as_ref());
+    let blob_lit = proc_macro2::Literal::byte_string(&layout.blob);
+    quote! {
+        #physical_layout
+        #topology
+        pub static LAYOUT_BLOB: &[u8] = #blob_lit;
+    }
+}
+
 pub(crate) fn expand_physical_layout(layout: &PhysicalLayout) -> TokenStream2 {
     let keys = layout.keys.iter().map(|key| {
         let [row, col] = key.matrix;

@@ -58,4 +58,26 @@ impl crate::KeyboardTomlConfig {
             physical,
         })
     }
+
+    /// Resolve the `[layout]` section without consulting the board config.
+    ///
+    /// Firmware that wires its scan hardware by hand has no `[matrix]` or
+    /// `[split]` section, so encoder counts cannot be validated against the
+    /// layout map; everything else resolves as in [`Self::layout`].
+    pub fn layout_standalone(&self) -> Result<Layout, String> {
+        let (blob, keys, physical, rows, cols) = match &self.layout {
+            Some(l) => {
+                let resolved = crate::layout::build_resolved_layout(l, None)?;
+                (resolved.blob, resolved.keys, resolved.physical, l.rows, l.cols)
+            }
+            None => (Vec::new(), Vec::new(), PhysicalLayout::default(), 0, 0),
+        };
+        Ok(Layout {
+            blob,
+            rows,
+            cols,
+            keys,
+            physical,
+        })
+    }
 }

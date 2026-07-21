@@ -197,6 +197,28 @@ pub struct Lighting {
 }
 
 impl crate::KeyboardTomlConfig {
+    /// Resolve `[lighting]` without a resolved board keymap, for firmware
+    /// that defines its keymap in Rust instead of `[[keymap.layer]]`.
+    ///
+    /// The layer count for scene validation comes from `[keymap].layers`,
+    /// falling back to the number of `[[keymap.layer]]` blocks.
+    pub fn lighting_standalone(&self, layout: &Layout) -> Result<Option<Lighting>, String> {
+        let layers = match &self.keymap {
+            Some(k) => k.layers.unwrap_or(k.layer.len() as u8),
+            None => 0,
+        };
+        let keymap = Keymap {
+            rows: layout.rows,
+            cols: layout.cols,
+            layers,
+            keymap: Vec::new(),
+            encoder_map: Vec::new(),
+            key_info: Vec::new(),
+            num_encoder: 0,
+        };
+        self.lighting(layout, &keymap)
+    }
+
     pub fn lighting(&self, layout: &Layout, keymap: &Keymap) -> Result<Option<Lighting>, String> {
         let Some(config) = &self.lighting else {
             return Ok(None);
