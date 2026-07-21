@@ -2,6 +2,7 @@ use super::compositor::{Contribution, LightingSource, RenderInput};
 use super::context::{LightingContext, LightingContextProvider};
 use super::effect::{EffectSample, LightingEffect};
 use super::topology::LedSlot;
+use crate::types::battery::{BatteryStatus, ChargeState};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct SceneCell<E> {
@@ -144,6 +145,144 @@ where
                 .effect
                 .sample(input.now_ms),
         )
+    }
+}
+
+/// Board-owned lookup used by declarative battery conditions. Node IDs match
+/// lighting topology node IDs, so a split board can expose each half without
+/// embedding board-specific left/right semantics in the renderer.
+pub trait BatteryStatusProvider {
+    fn battery_status(&self, node: u8) -> BatteryStatus;
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct LayerCondition {
+    pub layer: u8,
+    pub active: bool,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ChargeCondition {
+    Any,
+    Charging,
+    Discharging,
+    Unknown,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct BatteryCondition {
+    pub node: u8,
+    pub min_level: Option<u8>,
+    pub max_level: Option<u8>,
+    pub charge: ChargeCondition,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct ConditionSet {
+    pub layer: Option<LayerCondition>,
+    pub battery: Option<BatteryCondition>,
+}
+
+impl ConditionSet {
+    fn matches<Context, Batteries>(&self, context: &Context, batteries: &Batteries) -> bool
+    where
+        Context: LightingContextProvider,
+        Batteries: BatteryStatusProvider + ?Sized,
+    {
+        if let Some(condition) = self.layer
+            && context.lighting_context().layers.is_active(condition.layer) != condition.active
+        {
+            return false;
+        }
+        let Some(condition) = self.battery else {
+            return true;
+        };
+        let BatteryStatus::Available { charge_state, level } = batteries.battery_status(condition.node) else {
+            return false;
+        };
+        if !matches!(
+            (condition.charge, charge_state),
+            (ChargeCondition::Any, _)
+                | (ChargeCondition::Charging, ChargeState::Charging)
+                | (ChargeCondition::Discharging, ChargeState::Discharging)
+                | (ChargeCondition::Unknown, ChargeState::Unknown)
+        ) {
+            return false;
+        }
+        if condition.min_level.is_none() && condition.max_level.is_none() {
+            return true;
+        }
+        let Some(level) = level else {
+            return false;
+        };
+        condition.min_level.is_none_or(|min| level >= min) && condition.max_level.is_none_or(|max| level <= max)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ConditionalSceneCell<E> {
+    pub conditions: ConditionSet,
+    pub slot: LedSlot,
+    pub effect: E,
+}
+
+/// Immutable conditional cells compiled from `keyboard.toml`.
+///
+/// Matching cells compose in declaration order. This permits a broad rule to
+/// establish a default and a later, narrower rule to override the same LED.
+#[derive(Copy, Clone, Debug)]
+pub struct ConditionalScenes<'a, E, Batteries: ?Sized> {
+    pub cells: &'a [ConditionalSceneCell<E>],
+    pub batteries: &'a Batteries,
+}
+
+impl<'a, E, Batteries: ?Sized> ConditionalScenes<'a, E, Batteries> {
+    pub const fn new(cells: &'a [ConditionalSceneCell<E>], batteries: &'a Batteries) -> Self {
+        Self { cells, batteries }
+    }
+
+    pub const fn cell_count(&self) -> usize {
+        self.cells.len()
+    }
+
+    fn cell_at<Context>(&self, context: &Context, mut wanted: usize) -> &ConditionalSceneCell<E>
+    where
+        Context: LightingContextProvider,
+        Batteries: BatteryStatusProvider,
+    {
+        for cell in self
+            .cells
+            .iter()
+            .filter(|cell| cell.conditions.matches(context, self.batteries))
+        {
+            if wanted == 0 {
+                return cell;
+            }
+            wanted -= 1;
+        }
+        panic!("LightingSource index must be below len")
+    }
+}
+
+impl<C, Context, E, Batteries> LightingSource<C, Context> for ConditionalScenes<'_, E, Batteries>
+where
+    Context: LightingContextProvider,
+    E: LightingEffect<C>,
+    Batteries: BatteryStatusProvider + ?Sized,
+{
+    fn len(&self, input: &RenderInput<'_, Context>) -> usize {
+        self.cells
+            .iter()
+            .filter(|cell| cell.conditions.matches(input.context, self.batteries))
+            .count()
+    }
+
+    fn slot(&self, index: usize, input: &RenderInput<'_, Context>) -> LedSlot {
+        self.cell_at(input.context, index).slot
+    }
+
+    fn contribution(&mut self, index: usize, input: &RenderInput<'_, Context>) -> Contribution<C> {
+        Contribution::Opaque(self.cell_at(input.context, index).effect.sample(input.now_ms))
     }
 }
 
@@ -421,6 +560,7 @@ fn earliest(left: Option<u64>, right: Option<u64>) -> Option<u64> {
 mod tests {
     use super::super::{BuiltinEffect, Compositor, LayerState, LogicalFrame, Rgb8};
     use super::*;
+    use crate::types::battery::{BatteryStatus, ChargeState};
 
     const RED: Rgb8 = Rgb8::new(10, 0, 0);
     const GREEN: Rgb8 = Rgb8::new(0, 10, 0);
@@ -517,6 +657,78 @@ mod tests {
         tx.apply(0, &mut overlay).unwrap();
         tx.finish();
         assert_eq!(frame.as_slice(), &[Rgb8::BLACK, GREEN]);
+    }
+
+    #[test]
+    fn conditional_scenes_conjoin_live_layer_and_battery_state() {
+        struct Batteries;
+        impl BatteryStatusProvider for Batteries {
+            fn battery_status(&self, node: u8) -> BatteryStatus {
+                if node == 0 {
+                    BatteryStatus::Available {
+                        charge_state: ChargeState::Discharging,
+                        level: Some(35),
+                    }
+                } else {
+                    BatteryStatus::Unavailable
+                }
+            }
+        }
+        let layer = Some(LayerCondition { layer: 2, active: true });
+        let cells = [
+            ConditionalSceneCell {
+                conditions: ConditionSet {
+                    layer,
+                    battery: Some(BatteryCondition {
+                        node: 0,
+                        min_level: Some(1),
+                        max_level: None,
+                        charge: ChargeCondition::Any,
+                    }),
+                },
+                slot: LedSlot(0),
+                effect: BuiltinEffect::solid(GREEN),
+            },
+            ConditionalSceneCell {
+                conditions: ConditionSet {
+                    layer,
+                    battery: Some(BatteryCondition {
+                        node: 0,
+                        min_level: Some(41),
+                        max_level: None,
+                        charge: ChargeCondition::Any,
+                    }),
+                },
+                slot: LedSlot(1),
+                effect: BuiltinEffect::solid(BLUE),
+            },
+            // A later, narrower match overrides the broad green contribution.
+            ConditionalSceneCell {
+                conditions: ConditionSet {
+                    layer,
+                    battery: Some(BatteryCondition {
+                        node: 0,
+                        min_level: Some(1),
+                        max_level: Some(40),
+                        charge: ChargeCondition::Discharging,
+                    }),
+                },
+                slot: LedSlot(0),
+                effect: BuiltinEffect::solid(RED),
+            },
+        ];
+        let batteries = Batteries;
+        let mut source = ConditionalScenes::new(&cells, &batteries);
+        let context = LightingContext {
+            layers: LayerState::new(2, 0, 0b101),
+            indicators: Default::default(),
+        };
+        let compositor = Compositor::<Rgb8, 2>::new(Rgb8::BLACK);
+        let mut frame = LogicalFrame::new(Rgb8::BLACK);
+        let mut tx = compositor.begin(0, &context, Rgb8::BLACK, &mut frame);
+        tx.apply(0, &mut source).unwrap();
+        tx.finish();
+        assert_eq!(frame.as_slice(), &[RED, Rgb8::BLACK]);
     }
 
     #[test]

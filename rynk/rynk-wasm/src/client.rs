@@ -20,8 +20,8 @@ use rynk::rmk_types::combo::Combo;
 use rynk::rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rynk::rmk_types::fork::Fork;
 use rynk::rmk_types::led_indicator::LedIndicator;
-use rynk::rmk_types::morse::Morse;
 use rynk::rmk_types::modifier::ModifierCombination;
+use rynk::rmk_types::morse::Morse;
 use rynk::rmk_types::protocol::rynk::{
     AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest, BehaviorConfig,
     ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest, DeviceCapabilities, DeviceInfo,
@@ -35,6 +35,7 @@ use rynk::rmk_types::protocol::rynk::{
     LightingScenesPage, PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest, SetLightingSceneCellRequest,
     UnsetLightingSceneCellRequest, LayerState, LightingCompiledSceneStatus, LightingCompiledScenesPage,
     LightingOverlayPage, LightingOverlayPageRequest, SplitCentralLatencyPolicy, SplitCentralLatencyState,
+    LightingConditionalSceneStatus, LightingConditionalScenesPage,
 };
 use rynk::{Client, Driver, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
 use wasm_bindgen::prelude::*;
@@ -196,6 +197,8 @@ endpoints! {
     get_lighting_scenes(request: LightingScenePageRequest) -> LightingScenesPage,
     get_lighting_compiled_scene_status() -> LightingCompiledSceneStatus,
     get_lighting_compiled_scenes(request: LightingPageRequest) -> LightingCompiledScenesPage,
+    get_lighting_conditional_scene_status() -> LightingConditionalSceneStatus,
+    get_lighting_conditional_scenes(request: LightingPageRequest) -> LightingConditionalScenesPage,
     set_lighting_scene_cell(request: SetLightingSceneCellRequest) -> LightingState,
     unset_lighting_scene_cell(request: UnsetLightingSceneCellRequest) -> LightingState,
     set_lighting_layer_policy(request: SetLightingLayerPolicyRequest) -> LightingState,

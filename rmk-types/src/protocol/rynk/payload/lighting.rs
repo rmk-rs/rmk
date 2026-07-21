@@ -17,6 +17,8 @@ pub const LIGHTING_PAGE_SIZE: usize = 8;
 pub const LIGHTING_OVERLAY_CHUNK_SIZE: usize = 8;
 /// Number of scene cells in one scene page or replacement chunk.
 pub const LIGHTING_SCENE_CHUNK_SIZE: usize = 8;
+/// Number of immutable conditional cells in one readback page.
+pub const LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 8;
 /// Maximum UTF-8 byte length of a zone name.
 pub const LIGHTING_ZONE_NAME_SIZE: usize = 24;
 
@@ -186,6 +188,8 @@ impl LightingFeatureFlags {
     pub const OVERLAY_READBACK: u16 = 1 << 7;
     /// Read-only board-compiled layer scenes, separate from runtime scenes.
     pub const COMPILED_LAYER_SCENES: u16 = 1 << 8;
+    /// Read-only board-compiled rules driven by layer and battery state.
+    pub const COMPILED_CONDITIONAL_SCENES: u16 = 1 << 9;
 
     pub const fn contains(self, bits: u16) -> bool {
         self.0 & bits == bits
@@ -574,6 +578,73 @@ impl MaxSize for LightingCompiledScenesPage {
         + crate::heapless_vec_max_size::<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>();
 }
 
+wire_type! {
+    pub struct LightingLayerCondition {
+        pub layer: u8,
+        pub active: bool,
+    }
+}
+
+wire_type! {
+    pub enum LightingChargeCondition {
+        Any,
+        Charging,
+        Discharging,
+        Unknown,
+    }
+}
+
+wire_type! {
+    pub struct LightingBatteryCondition {
+        pub node: LightingNodeId,
+        pub min_level: Option<u8>,
+        pub max_level: Option<u8>,
+        pub charge: LightingChargeCondition,
+    }
+}
+
+wire_type! {
+    /// A conjunction of optional layer and battery predicates.
+    pub struct LightingConditionSet {
+        pub layer: Option<LightingLayerCondition>,
+        pub battery: Option<LightingBatteryCondition>,
+    }
+}
+
+wire_type! {
+    /// One immutable conditional effect compiled from keyboard configuration.
+    pub struct LightingConditionalSceneCell {
+        pub conditions: LightingConditionSet,
+        pub led_id: LightingLedId,
+        pub effect: LightingEffect,
+    }
+}
+
+wire_type! {
+    pub struct LightingConditionalSceneStatus {
+        pub topology_revision: u32,
+        pub cell_len: u16,
+        pub chunk_capacity: u8,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingConditionalScenesPage {
+    pub topology_revision: u32,
+    pub total_count: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingConditionalSceneCell[]"))]
+    pub items: Vec<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for LightingConditionalScenesPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>();
+}
+
 impl MaxSize for LightingScenesPage {
     const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
         + u16::POSTCARD_MAX_SIZE
@@ -687,6 +758,8 @@ pub type LightingSceneStatusResult = LightingResult<LightingSceneStatus>;
 pub type LightingScenesPageResult = LightingResult<LightingScenesPage>;
 pub type LightingCompiledSceneStatusResult = LightingResult<LightingCompiledSceneStatus>;
 pub type LightingCompiledScenesPageResult = LightingResult<LightingCompiledScenesPage>;
+pub type LightingConditionalSceneStatusResult = LightingResult<LightingConditionalSceneStatus>;
+pub type LightingConditionalScenesPageResult = LightingResult<LightingConditionalScenesPage>;
 pub type LightingSceneTransactionResult = LightingResult<LightingSceneTransaction>;
 pub type LightingUnitResult = LightingResult<()>;
 
@@ -728,6 +801,8 @@ const _: () = {
     assert_endpoint_fits!(LightingScenePageRequest, LightingScenesPageResult);
     assert_endpoint_fits!((), LightingCompiledSceneStatusResult);
     assert_endpoint_fits!(LightingPageRequest, LightingCompiledScenesPageResult);
+    assert_endpoint_fits!((), LightingConditionalSceneStatusResult);
+    assert_endpoint_fits!(LightingPageRequest, LightingConditionalScenesPageResult);
     assert_endpoint_fits!(SetLightingSceneCellRequest, LightingStateResult);
     assert_endpoint_fits!(UnsetLightingSceneCellRequest, LightingStateResult);
     assert_endpoint_fits!(SetLightingLayerPolicyRequest, LightingStateResult);
@@ -894,6 +969,45 @@ mod tests {
         round_trip(&compiled_page);
         assert_max_size_bound(&compiled_page);
         assert!(LightingCompiledScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+    }
+
+    #[test]
+    fn conditional_scene_page_round_trips_at_capacity() {
+        let mut items = Vec::new();
+        for id in 0..LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE as u16 {
+            items
+                .push(LightingConditionalSceneCell {
+                    conditions: LightingConditionSet {
+                        layer: Some(LightingLayerCondition {
+                            layer: u8::MAX,
+                            active: true,
+                        }),
+                        battery: Some(LightingBatteryCondition {
+                            node: LightingNodeId(u8::MAX),
+                            min_level: Some(1),
+                            max_level: Some(100),
+                            charge: LightingChargeCondition::Charging,
+                        }),
+                    },
+                    led_id: LightingLedId(id),
+                    effect: LightingEffect::Solid {
+                        color: LightingRgb8 {
+                            r: u8::MAX,
+                            g: u8::MAX,
+                            b: u8::MAX,
+                        },
+                    },
+                })
+                .unwrap();
+        }
+        let page = LightingConditionalScenesPage {
+            topology_revision: u32::MAX,
+            total_count: u16::MAX,
+            items,
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingConditionalScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
     }
 
     #[test]

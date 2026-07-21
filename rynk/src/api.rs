@@ -36,7 +36,7 @@ use rmk_types::protocol::rynk::{
     LightingSceneTransaction, LightingScenesPage, PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest,
     SetLightingSceneCellRequest, UnsetLightingSceneCellRequest, LayerState, LightingCompiledSceneStatus,
     LightingCompiledScenesPage, LightingOverlayPage, LightingOverlayPageRequest, SplitCentralLatencyPolicy,
-    SplitCentralLatencyState,
+    SplitCentralLatencyState, LightingConditionalSceneStatus, LightingConditionalScenesPage,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -580,6 +580,21 @@ impl Client {
         Self::flatten_lighting(self.request::<command::GetLightingCompiledScenes>(&request).await?)
     }
 
+    /// Discover immutable conditional lighting compiled from board config.
+    pub async fn get_lighting_conditional_scene_status(&self) -> Result<LightingConditionalSceneStatus, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingConditionalSceneStatus)?;
+        Self::flatten_lighting(self.request::<command::GetLightingConditionalSceneStatus>(&()).await?)
+    }
+
+    /// Read one topology-revision-pinned conditional-scene page.
+    pub async fn get_lighting_conditional_scenes(
+        &self,
+        request: LightingPageRequest,
+    ) -> Result<LightingConditionalScenesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingConditionalScenes)?;
+        Self::flatten_lighting(self.request::<command::GetLightingConditionalScenes>(&request).await?)
+    }
+
     /// Insert or update one durable scene cell when the revision matches.
     pub async fn set_lighting_scene_cell(
         &self,
@@ -879,6 +894,64 @@ impl Client {
             return Err(RynkHostError::InconsistentResponse {
                 cmd: Cmd::GetLightingCompiledScenes,
                 reason: "pagination ended before the advertised count",
+            });
+        }
+        Ok((status, cells))
+    }
+
+    /// Read every immutable conditional cell under one topology revision.
+    pub async fn read_all_lighting_conditional_scenes(
+        &self,
+    ) -> Result<
+        (
+            LightingConditionalSceneStatus,
+            Vec<rmk_types::protocol::rynk::LightingConditionalSceneCell>,
+        ),
+        RynkHostError,
+    > {
+        let status = self.get_lighting_conditional_scene_status().await?;
+        let mut cells = Vec::new();
+        let mut offset: u16 = 0;
+        let mut first_page = true;
+        while first_page || offset < status.cell_len {
+            first_page = false;
+            let page = self
+                .get_lighting_conditional_scenes(LightingPageRequest {
+                    topology_revision: status.topology_revision,
+                    offset,
+                })
+                .await?;
+            if page.topology_revision != status.topology_revision || page.total_count != status.cell_len {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingConditionalScenes,
+                    reason: "conditional page topology revision/count disagrees with status",
+                });
+            }
+            if offset >= status.cell_len {
+                if !page.items.is_empty() {
+                    return Err(RynkHostError::InconsistentResponse {
+                        cmd: Cmd::GetLightingConditionalScenes,
+                        reason: "empty conditional source returned unexpected cells",
+                    });
+                }
+                break;
+            }
+            if page.items.is_empty()
+                || page.items.len() > status.chunk_capacity as usize
+                || offset as usize + page.items.len() > status.cell_len as usize
+            {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingConditionalScenes,
+                    reason: "conditional page is empty, oversized, or exceeds advertised count",
+                });
+            }
+            offset += page.items.len() as u16;
+            cells.extend(page.items.iter().copied());
+        }
+        if cells.len() != status.cell_len as usize {
+            return Err(RynkHostError::InconsistentResponse {
+                cmd: Cmd::GetLightingConditionalScenes,
+                reason: "conditional pagination ended before advertised count",
             });
         }
         Ok((status, cells))

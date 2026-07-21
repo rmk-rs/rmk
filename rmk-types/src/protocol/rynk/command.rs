@@ -38,13 +38,14 @@ use crate::protocol::rynk::{
     AbortLightingOverlayReplaceRequest, AbortLightingSceneReplaceRequest, BeginLightingOverlayReplaceRequest,
     BeginLightingSceneReplaceRequest, ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest,
     CommitLightingSceneReplaceRequest, LightingCapabilitiesResult, LightingChanged, LightingCompiledSceneStatusResult,
-    LightingCompiledScenesPageResult, LightingKeysPageResult, LightingLedsPageResult, LightingOutputsPageResult,
-    LightingOverlayPageRequest, LightingOverlayPageResult, LightingOverlayTransactionResult, LightingPageRequest,
-    LightingPhysicalKeysPageResult, LightingRoutesPageResult, LightingScenePageRequest, LightingSceneStatusResult,
-    LightingSceneTransactionResult, LightingScenesPageResult, LightingStateResult, LightingUnitResult,
-    LightingZoneMembershipsPageResult, LightingZonesPageResult, PutLightingOverlayChunkRequest,
-    PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest, SetLightingOverlayRequest,
-    SetLightingSceneCellRequest, SetLightingStateRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
+    LightingCompiledScenesPageResult, LightingConditionalSceneStatusResult, LightingConditionalScenesPageResult,
+    LightingKeysPageResult, LightingLedsPageResult, LightingOutputsPageResult, LightingOverlayPageRequest,
+    LightingOverlayPageResult, LightingOverlayTransactionResult, LightingPageRequest, LightingPhysicalKeysPageResult,
+    LightingRoutesPageResult, LightingScenePageRequest, LightingSceneStatusResult, LightingSceneTransactionResult,
+    LightingScenesPageResult, LightingStateResult, LightingUnitResult, LightingZoneMembershipsPageResult,
+    LightingZonesPageResult, PutLightingOverlayChunkRequest, PutLightingSceneChunkRequest,
+    SetLightingLayerPolicyRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
+    UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
 #[cfg(all(feature = "_ble", feature = "split"))]
 use crate::protocol::rynk::{SplitCentralLatencyPolicy, SplitCentralLatencyState};
@@ -435,6 +436,12 @@ endpoints! {
     /// Compiled-scene pages are pinned to the firmware topology revision.
     #[cfg(feature = "lighting")]
     GetLightingCompiledScenes = 0x091D: LightingPageRequest => LightingCompiledScenesPageResult;
+    /// Discover immutable conditional lighting compiled from board config.
+    #[cfg(feature = "lighting")]
+    GetLightingConditionalSceneStatus = 0x091E: () => LightingConditionalSceneStatusResult;
+    /// Conditional-scene pages are pinned to the firmware topology revision.
+    #[cfg(feature = "lighting")]
+    GetLightingConditionalScenes = 0x091F: LightingPageRequest => LightingConditionalScenesPageResult;
 }
 
 // Define topics: `Name = value: Payload;`

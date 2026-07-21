@@ -3,7 +3,8 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use rmk_config::resolved::lighting::{
-    Lighting, LightingBackgroundMode, LightingEffect, LightingSceneCell,
+    Lighting, LightingBackgroundMode, LightingChargeCondition, LightingConditionalSceneCell,
+    LightingEffect, LightingSceneCell,
 };
 use rmk_config::resolved::{FixedPoint3, PhysicalLayout};
 
@@ -189,6 +190,11 @@ pub(crate) fn expand_lighting_renderer_config(lighting: Option<&Lighting>) -> To
             }
         });
     let layer_scene_count = lighting.layer_scenes.len();
+    let conditional_cells = lighting
+        .conditional_scene_cells
+        .iter()
+        .map(expand_conditional_scene_cell);
+    let conditional_cell_count = lighting.conditional_scene_cells.len();
     let background = &lighting.background;
     let background_enabled = background.enabled;
     let background_hue = background.hue;
@@ -211,6 +217,9 @@ pub(crate) fn expand_lighting_renderer_config(lighting: Option<&Lighting>) -> To
                 scenes: &LIGHTING_LAYER_SCENE_TABLE,
                 policy: ::rmk::lighting::LayerPolicy::ActiveStack,
             };
+        pub static LIGHTING_CONDITIONAL_SCENE_CELLS:
+            [::rmk::lighting::ConditionalSceneCell<::rmk::lighting::BuiltinEffect>; #conditional_cell_count] =
+            [#(#conditional_cells),*];
         pub const LIGHTING_BACKGROUND: ::rmk::lighting::BackgroundState =
             ::rmk::lighting::BackgroundState {
                 enabled: #background_enabled,
@@ -220,6 +229,69 @@ pub(crate) fn expand_lighting_renderer_config(lighting: Option<&Lighting>) -> To
                 speed: #background_speed,
                 mode: #background_mode,
             };
+    }
+}
+
+fn expand_conditional_scene_cell(cell: &LightingConditionalSceneCell) -> TokenStream2 {
+    let slot = cell.slot;
+    let effect = expand_effect(cell.effect);
+    let layer = match cell.conditions.layer {
+        Some(condition) => {
+            let layer = condition.layer;
+            let active = condition.active;
+            quote! {
+                ::core::option::Option::Some(::rmk::lighting::LayerCondition {
+                    layer: #layer,
+                    active: #active,
+                })
+            }
+        }
+        None => quote! { ::core::option::Option::None },
+    };
+    let battery = match cell.conditions.battery {
+        Some(condition) => {
+            let node = condition.node;
+            let min_level = expand_option_u8(condition.min_level);
+            let max_level = expand_option_u8(condition.max_level);
+            let charge = match condition.charge {
+                LightingChargeCondition::Any => quote! { ::rmk::lighting::ChargeCondition::Any },
+                LightingChargeCondition::Charging => {
+                    quote! { ::rmk::lighting::ChargeCondition::Charging }
+                }
+                LightingChargeCondition::Discharging => {
+                    quote! { ::rmk::lighting::ChargeCondition::Discharging }
+                }
+                LightingChargeCondition::Unknown => {
+                    quote! { ::rmk::lighting::ChargeCondition::Unknown }
+                }
+            };
+            quote! {
+                ::core::option::Option::Some(::rmk::lighting::BatteryCondition {
+                    node: #node,
+                    min_level: #min_level,
+                    max_level: #max_level,
+                    charge: #charge,
+                })
+            }
+        }
+        None => quote! { ::core::option::Option::None },
+    };
+    quote! {
+        ::rmk::lighting::ConditionalSceneCell {
+            conditions: ::rmk::lighting::ConditionSet {
+                layer: #layer,
+                battery: #battery,
+            },
+            slot: ::rmk::lighting::LedSlot(#slot),
+            effect: #effect,
+        }
+    }
+}
+
+fn expand_option_u8(value: Option<u8>) -> TokenStream2 {
+    match value {
+        Some(value) => quote! { ::core::option::Option::Some(#value) },
+        None => quote! { ::core::option::Option::None },
     }
 }
 

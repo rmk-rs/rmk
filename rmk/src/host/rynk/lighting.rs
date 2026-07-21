@@ -16,17 +16,18 @@ use embassy_sync::signal::Signal;
 use heapless::Vec;
 use rmk_types::protocol::rynk::{
     LIGHTING_OVERLAY_CHUNK_SIZE, LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode, LightingBackgroundState,
-    LightingCompiledScenesPage, LightingError, LightingLayerPolicy, LightingMutableState, LightingOverlayCell,
-    LightingOverlayPage, LightingResult, LightingRgb8, LightingSceneCell, LightingSceneTransaction, LightingScenesPage,
-    LightingState,
+    LightingCompiledScenesPage, LightingConditionalSceneCell as WireConditionalSceneCell, LightingError,
+    LightingLayerPolicy, LightingMutableState, LightingOverlayCell, LightingOverlayPage, LightingResult, LightingRgb8,
+    LightingSceneCell, LightingSceneTransaction, LightingScenesPage, LightingState,
 };
 
 use crate::RawMutex;
 use crate::core_traits::Runnable;
 use crate::lighting::{
-    BackgroundMode, BackgroundState, BuiltinEffect, LayerPolicy, LedId, LightingMailbox, LightingRouting,
-    LightingTopology, OVERLAY_CHUNK_SIZE, OverlayBatch, OverlayCell, OverlayError, Rgb8, SceneChunk, SceneTableCell,
-    StandardCommand, StandardError, StandardLightingEngine, StandardMutableState, StandardReply, StandardState,
+    BackgroundMode, BackgroundState, BuiltinEffect, ConditionalSceneCell, LayerPolicy, LedId, LightingMailbox,
+    LightingRouting, LightingTopology, OVERLAY_CHUNK_SIZE, OverlayBatch, OverlayCell, OverlayError, Rgb8, SceneChunk,
+    SceneTableCell, StandardCommand, StandardError, StandardLightingEngine, StandardMutableState, StandardReply,
+    StandardState,
 };
 
 const _: () = core::assert!(
@@ -63,6 +64,7 @@ pub struct RynkLightingController<'a> {
     /// wire a scene table; hosts gate on it and every scene endpoint rejects
     /// with `Unsupported`.
     pub(super) scene_capacity: u16,
+    pub(super) conditional_scenes: &'a [ConditionalSceneCell<BuiltinEffect>],
     mailbox: &'a RynkLightingMailbox,
 }
 
@@ -83,6 +85,7 @@ impl<'a> RynkLightingController<'a> {
                 staged_capacity
             },
             scene_capacity: 0,
+            conditional_scenes: &[],
             mailbox,
         }
     }
@@ -91,6 +94,12 @@ impl<'a> RynkLightingController<'a> {
     /// boards without a scene table simply skip this call.
     pub const fn with_scene_capacity(mut self, scene_capacity: u16) -> Self {
         self.scene_capacity = scene_capacity;
+        self
+    }
+
+    /// Advertise immutable conditional scenes compiled from board config.
+    pub const fn with_conditional_scenes(mut self, scenes: &'a [ConditionalSceneCell<BuiltinEffect>]) -> Self {
+        self.conditional_scenes = scenes;
         self
     }
 
@@ -104,6 +113,18 @@ impl<'a> RynkLightingController<'a> {
 
     pub const fn scene_capacity(&self) -> u16 {
         self.scene_capacity
+    }
+
+    pub(super) fn conditional_scene_cell_to_wire(
+        &self,
+        cell: ConditionalSceneCell<BuiltinEffect>,
+    ) -> Option<WireConditionalSceneCell> {
+        let led = self.descriptor.topology.led(cell.slot)?;
+        Some(WireConditionalSceneCell {
+            conditions: condition_set_to_wire(cell.conditions),
+            led_id: rmk_types::protocol::rynk::LightingLedId(led.id.0),
+            effect: effect_to_wire(cell.effect),
+        })
     }
 
     pub(super) async fn request(&self, command: RynkLightingCommand) -> LightingResult<RynkLightingReadback> {
@@ -912,6 +933,31 @@ fn effect_to_wire(effect: BuiltinEffect) -> rmk_types::protocol::rynk::LightingE
             phase_ms,
             step_ms,
         },
+    }
+}
+
+fn condition_set_to_wire(conditions: crate::lighting::ConditionSet) -> rmk_types::protocol::rynk::LightingConditionSet {
+    use crate::lighting::ChargeCondition;
+    use rmk_types::protocol::rynk::{
+        LightingBatteryCondition, LightingChargeCondition, LightingConditionSet, LightingLayerCondition, LightingNodeId,
+    };
+
+    LightingConditionSet {
+        layer: conditions.layer.map(|condition| LightingLayerCondition {
+            layer: condition.layer,
+            active: condition.active,
+        }),
+        battery: conditions.battery.map(|condition| LightingBatteryCondition {
+            node: LightingNodeId(condition.node),
+            min_level: condition.min_level,
+            max_level: condition.max_level,
+            charge: match condition.charge {
+                ChargeCondition::Any => LightingChargeCondition::Any,
+                ChargeCondition::Charging => LightingChargeCondition::Charging,
+                ChargeCondition::Discharging => LightingChargeCondition::Discharging,
+                ChargeCondition::Unknown => LightingChargeCondition::Unknown,
+            },
+        }),
     }
 }
 

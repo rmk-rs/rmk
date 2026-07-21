@@ -37,8 +37,9 @@ pub use service::{
     OutputState, PowerState, RenderOutcome, ServiceAction, SnapshotProvider,
 };
 pub use source::{
-    DenseSource, Indicator, IndicatorScene, IndicatorScenes, LayerPolicy, LayerScene, LayerScenes, OverlayError,
-    OverlayUpdate, SceneCell, SparseScene, TtlOverlay,
+    BatteryCondition, BatteryStatusProvider, ChargeCondition, ConditionSet, ConditionalSceneCell, ConditionalScenes,
+    DenseSource, Indicator, IndicatorScene, IndicatorScenes, LayerCondition, LayerPolicy, LayerScene, LayerScenes,
+    OverlayError, OverlayUpdate, SceneCell, SparseScene, TtlOverlay,
 };
 pub use standard::{
     BackgroundMode, BackgroundPatch, BackgroundState, CompiledScenePage, EmptySource, OVERLAY_CHUNK_SIZE, OverlayBatch,

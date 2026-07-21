@@ -604,6 +604,8 @@ pub(crate) struct LightingTomlConfig {
     pub emitters: Vec<LightingEmitterTomlConfig>,
     #[serde(default, rename = "layer_scene")]
     pub layer_scenes: Vec<LightingLayerSceneTomlConfig>,
+    #[serde(default, rename = "conditional_scene")]
+    pub conditional_scenes: Vec<LightingConditionalSceneTomlConfig>,
     pub background: Option<LightingBackgroundTomlConfig>,
 }
 
@@ -648,6 +650,43 @@ pub(crate) struct LightingLayerSceneTomlConfig {
     pub layer: u8,
     #[serde(default, rename = "cell")]
     pub cells: Vec<LightingSceneCellTomlConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingConditionalSceneTomlConfig {
+    pub layer: Option<LightingLayerConditionTomlConfig>,
+    pub battery: Option<LightingBatteryConditionTomlConfig>,
+    #[serde(default, rename = "cell")]
+    pub cells: Vec<LightingSceneCellTomlConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingLayerConditionTomlConfig {
+    pub layer: u8,
+    #[serde(default = "default_true")]
+    pub active: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingBatteryConditionTomlConfig {
+    pub node: u8,
+    pub min_level: Option<u8>,
+    pub max_level: Option<u8>,
+    #[serde(default)]
+    pub charge: LightingChargeConditionToml,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LightingChargeConditionToml {
+    #[default]
+    Any,
+    Charging,
+    Discharging,
+    Unknown,
 }
 
 #[derive(Clone, Debug, Deserialize)]

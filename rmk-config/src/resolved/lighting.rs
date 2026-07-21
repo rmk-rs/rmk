@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use super::Keymap;
 use super::layout::{FixedPoint3, Layout};
-use crate::{LightingBackgroundModeToml, LightingEffectTomlConfig, LightingTargetTomlConfig};
+use crate::{
+    LightingBackgroundModeToml, LightingChargeConditionToml, LightingEffectTomlConfig, LightingTargetTomlConfig,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LightingKey {
@@ -73,6 +75,41 @@ pub struct LightingLayerScene {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LightingLayerCondition {
+    pub layer: u8,
+    pub active: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LightingChargeCondition {
+    Any,
+    Charging,
+    Discharging,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LightingBatteryCondition {
+    pub node: u8,
+    pub min_level: Option<u8>,
+    pub max_level: Option<u8>,
+    pub charge: LightingChargeCondition,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LightingConditionSet {
+    pub layer: Option<LightingLayerCondition>,
+    pub battery: Option<LightingBatteryCondition>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LightingConditionalSceneCell {
+    pub conditions: LightingConditionSet,
+    pub slot: u16,
+    pub effect: LightingEffect,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LightingBackgroundMode {
     Solid,
     Breathe,
@@ -115,6 +152,7 @@ pub struct Lighting {
     pub outputs: Vec<LightingOutput>,
     pub routes: Vec<LightingRoute>,
     pub layer_scenes: Vec<LightingLayerScene>,
+    pub conditional_scene_cells: Vec<LightingConditionalSceneCell>,
     pub background: LightingBackground,
 }
 
@@ -198,6 +236,13 @@ impl crate::KeyboardTomlConfig {
             &zone_memberships,
             &zone_ids,
         )?;
+        let conditional_scene_cells = resolve_conditional_scenes(
+            keymap.layers,
+            &config.conditional_scenes,
+            &emitters,
+            &zone_memberships,
+            &zone_ids,
+        )?;
         let background = config
             .background
             .as_ref()
@@ -229,6 +274,7 @@ impl crate::KeyboardTomlConfig {
             outputs,
             routes,
             layer_scenes,
+            conditional_scene_cells,
             background,
         }))
     }
@@ -389,38 +435,7 @@ fn resolve_layer_scenes(
         }
         let mut cells = Vec::new();
         for cell in &scene.cells {
-            let slots: Vec<u16> = match cell.target {
-                LightingTargetTomlConfig::Led { led } => vec![
-                    *id_to_slot
-                        .get(&led)
-                        .ok_or_else(|| format!("lighting scene references unknown emitter id {led}"))?,
-                ],
-                LightingTargetTomlConfig::Key { key } => emitters
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, emitter)| emitter.key == Some(key))
-                    .map(|(slot, _)| slot as u16)
-                    .collect(),
-                LightingTargetTomlConfig::Zone { zone } => {
-                    if !zone_ids.contains(&zone) {
-                        return Err(format!("lighting scene references unknown zone {zone}"));
-                    }
-                    emitters
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, emitter)| {
-                            let start = emitter.zone_start as usize;
-                            let end = start + emitter.zone_len as usize;
-                            zone_memberships[start..end].contains(&zone)
-                        })
-                        .map(|(slot, _)| slot as u16)
-                        .collect()
-                }
-                LightingTargetTomlConfig::All { all: true } => (0..emitters.len() as u16).collect(),
-                LightingTargetTomlConfig::All { all: false } => {
-                    return Err("lighting target `{ all = false }` is invalid".into());
-                }
-            };
+            let slots = resolve_target_slots(&cell.target, &id_to_slot, emitters, zone_memberships, zone_ids)?;
             if slots.is_empty() {
                 return Err(format!(
                     "lighting layer scene {} target resolves to no emitters",
@@ -436,6 +451,122 @@ fn resolve_layer_scenes(
         });
     }
     Ok(scenes)
+}
+
+fn resolve_conditional_scenes(
+    layer_count: u8,
+    config: &[crate::LightingConditionalSceneTomlConfig],
+    emitters: &[LightingEmitter],
+    zone_memberships: &[u8],
+    zone_ids: &HashSet<u8>,
+) -> Result<Vec<LightingConditionalSceneCell>, String> {
+    let id_to_slot: HashMap<u16, u16> = emitters
+        .iter()
+        .enumerate()
+        .map(|(slot, emitter)| (emitter.id, slot as u16))
+        .collect();
+    let mut resolved = Vec::new();
+    for (index, scene) in config.iter().enumerate() {
+        if scene.cells.is_empty() {
+            return Err(format!("lighting conditional scene {index} has no cells"));
+        }
+        let layer = scene
+            .layer
+            .map(|condition| {
+                if condition.layer >= layer_count {
+                    return Err(format!(
+                        "lighting conditional scene {index} layer {} is outside configured layer count {layer_count}",
+                        condition.layer
+                    ));
+                }
+                Ok(LightingLayerCondition {
+                    layer: condition.layer,
+                    active: condition.active,
+                })
+            })
+            .transpose()?;
+        let battery = scene
+            .battery
+            .map(|condition| {
+                if condition.min_level.is_some_and(|level| level > 100)
+                    || condition.max_level.is_some_and(|level| level > 100)
+                    || matches!((condition.min_level, condition.max_level), (Some(min), Some(max)) if min > max)
+                {
+                    return Err(format!(
+                        "lighting conditional scene {index} has invalid battery level range"
+                    ));
+                }
+                Ok(LightingBatteryCondition {
+                    node: condition.node,
+                    min_level: condition.min_level,
+                    max_level: condition.max_level,
+                    charge: match condition.charge {
+                        LightingChargeConditionToml::Any => LightingChargeCondition::Any,
+                        LightingChargeConditionToml::Charging => LightingChargeCondition::Charging,
+                        LightingChargeConditionToml::Discharging => LightingChargeCondition::Discharging,
+                        LightingChargeConditionToml::Unknown => LightingChargeCondition::Unknown,
+                    },
+                })
+            })
+            .transpose()?;
+        let conditions = LightingConditionSet { layer, battery };
+        for cell in &scene.cells {
+            let slots = resolve_target_slots(&cell.target, &id_to_slot, emitters, zone_memberships, zone_ids)?;
+            if slots.is_empty() {
+                return Err(format!(
+                    "lighting conditional scene {index} target resolves to no emitters"
+                ));
+            }
+            let effect = resolve_effect(&cell.effect)?;
+            resolved.extend(slots.into_iter().map(|slot| LightingConditionalSceneCell {
+                conditions,
+                slot,
+                effect,
+            }));
+        }
+    }
+    Ok(resolved)
+}
+
+fn resolve_target_slots(
+    target: &LightingTargetTomlConfig,
+    id_to_slot: &HashMap<u16, u16>,
+    emitters: &[LightingEmitter],
+    zone_memberships: &[u8],
+    zone_ids: &HashSet<u8>,
+) -> Result<Vec<u16>, String> {
+    Ok(match *target {
+        LightingTargetTomlConfig::Led { led } => vec![
+            *id_to_slot
+                .get(&led)
+                .ok_or_else(|| format!("lighting scene references unknown emitter id {led}"))?,
+        ],
+        LightingTargetTomlConfig::Key { key } => emitters
+            .iter()
+            .enumerate()
+            .filter(|(_, emitter)| emitter.key == Some(key))
+            .map(|(slot, _)| slot as u16)
+            .collect(),
+        LightingTargetTomlConfig::Zone { zone } => {
+            if !zone_ids.contains(&zone) {
+                return Err(format!("lighting scene references unknown zone {zone}"));
+            }
+            emitters
+                .iter()
+                .enumerate()
+                .filter(|(_, emitter)| {
+                    let start = emitter.zone_start as usize;
+                    let end = start + emitter.zone_len as usize;
+                    zone_memberships[start..end].contains(&zone)
+                })
+                .map(|(slot, _)| slot as u16)
+                .collect()
+        }
+        LightingTargetTomlConfig::All { all: true } => (0..emitters.len() as u16).collect(),
+        LightingTargetTomlConfig::All { all: false } => {
+            return Err("lighting target `{ all = false }` is invalid".into());
+        }
+    })
 }
 
 fn resolve_effect(config: &LightingEffectTomlConfig) -> Result<LightingEffect, String> {
@@ -594,6 +725,51 @@ hidden = ["(0,1)"]"#,
         let lighting = config.lighting(&layout, &keymap).unwrap().unwrap();
         assert_eq!(lighting.emitters[1].key, Some([0, 1]));
         assert_eq!(lighting.emitters[1].position.unwrap().z, 64);
+    }
+
+    #[test]
+    fn resolves_conditional_layer_and_battery_scenes() {
+        let source = format!(
+            r#"{BASE}
+[[lighting.conditional_scene]]
+layer = {{ layer = 1, active = true }}
+battery = {{ node = 0, min_level = 21, max_level = 40, charge = "discharging" }}
+[[lighting.conditional_scene.cell]]
+target = {{ zone = 1 }}
+effect = {{ kind = "solid", color = [9, 8, 7] }}
+"#
+        );
+        let config = parse(&source);
+        let layout = config.layout().unwrap();
+        let keymap = config.keymap().unwrap();
+        let lighting = config.lighting(&layout, &keymap).unwrap().unwrap();
+        assert_eq!(lighting.conditional_scene_cells.len(), 2);
+        let conditions = lighting.conditional_scene_cells[0].conditions;
+        assert_eq!(conditions.layer.unwrap().layer, 1);
+        assert!(conditions.layer.unwrap().active);
+        let battery = conditions.battery.unwrap();
+        assert_eq!(battery.node, 0);
+        assert_eq!(battery.min_level, Some(21));
+        assert_eq!(battery.max_level, Some(40));
+        assert_eq!(battery.charge, super::LightingChargeCondition::Discharging);
+    }
+
+    #[test]
+    fn rejects_invalid_conditional_battery_range() {
+        let source = format!(
+            r#"{BASE}
+[[lighting.conditional_scene]]
+battery = {{ node = 0, min_level = 80, max_level = 20 }}
+[[lighting.conditional_scene.cell]]
+target = {{ led = 10 }}
+effect = {{ kind = "solid", color = [9, 8, 7] }}
+"#
+        );
+        let config = parse(&source);
+        let layout = config.layout().unwrap();
+        let keymap = config.keymap().unwrap();
+        let error = config.lighting(&layout, &keymap).unwrap_err();
+        assert!(error.contains("invalid battery level range"), "{error}");
     }
 
     #[test]
