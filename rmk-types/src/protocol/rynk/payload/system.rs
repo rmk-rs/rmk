@@ -25,9 +25,34 @@ pub struct ProtocolVersion {
 
 impl ProtocolVersion {
     /// Current protocol version for this firmware release.
-    /// The protocol is still under development; lighting endpoints were added
-    /// in v0.2 and lighting scene endpoints in v0.3.
-    pub const CURRENT: Self = Self { major: 0, minor: 3 };
+    /// Now the protocol is still being developed, so the version is v0.1
+    ///
+    /// Version numbers are minted upstream (HaoboGu/rmk) only — downstream
+    /// extensions must never bump this constant, or the same number would
+    /// eventually name two different protocols. Extensions are discovered
+    /// through capability surfaces instead: [`DeviceCapabilities`] flags,
+    /// domain capability endpoints (e.g. `GetLightingCapabilities` /
+    /// `GetLightingSceneStatus`), and per-command probing — firmware answers
+    /// `UnknownCmd` for any command it does not implement.
+    pub const CURRENT: Self = Self { major: 0, minor: 1 };
+}
+
+/// Human-readable identity of the firmware build.
+///
+/// Unlike [`ProtocolVersion`], this label is deliberately application-defined:
+/// it is for diagnostics and display, never compatibility decisions. RMK
+/// supplies an RMK-only default and downstream firmware may replace it with a
+/// label containing its own package, source revision, or configuration name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct BuildInfo {
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
+    pub label: String<BUILD_INFO_STRING_SIZE>,
+}
+
+impl MaxSize for BuildInfo {
+    const POSTCARD_MAX_SIZE: usize = crate::heapless_vec_max_size::<u8, BUILD_INFO_STRING_SIZE>();
 }
 
 /// Device capabilities discovered during the connection handshake.

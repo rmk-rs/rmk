@@ -8,6 +8,7 @@
 Current protocol version: **0.2**.
 Current protocol version: **0.4**.
 Current protocol version: **0.3**.
+Current protocol version: **0.1**.
 
 Every transport (USB vendor bulk, BLE GATT, BLE HID) carries the same frame — a 3-byte header plus a [postcard](https://docs.rs/postcard)-encoded payload:
 
@@ -275,3 +276,4 @@ Topics are best-effort pushes; the `Get*` endpoints above mirror their payloads 
 - `GetVersion` (`0x0001`) and its `Result<ProtocolVersion, RynkError>` reply are frozen across all versions.
 - Within a major version, adding a CMD or topic is a `minor` bump: old firmware answers `UnknownCmd`, old hosts ignore unknown topics.
 - Reshaping an existing request/response — including appending a field — is a `major` bump.
+- Version numbers are minted upstream only. Downstream extensions never bump `ProtocolVersion`; hosts discover them through capability surfaces (`DeviceCapabilities`, `LightingCapabilities.features`, `GetLightingSceneStatus`) and per-command probing (an unsupported command answers `UnknownCmd`), never by comparing `minor`.
