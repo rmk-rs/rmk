@@ -29,7 +29,10 @@ use rynk::rmk_types::protocol::rynk::{
     LightingRoutesPage, LightingState, LightingZoneMembershipsPage, LightingZonesPage, LockStatus, MacroData,
     MatrixState, PeripheralStatus, ProtocolVersion, PutLightingOverlayChunkRequest, SetComboBulkRequest,
     SetKeymapBulkRequest, SetLightingOverlayRequest, SetLightingStateRequest, SetMorseBulkRequest, StorageResetMode,
-    UnsetLightingOverlayRequest, BuildInfo,
+    UnsetLightingOverlayRequest, BuildInfo, AbortLightingSceneReplaceRequest, BeginLightingSceneReplaceRequest,
+    CommitLightingSceneReplaceRequest, LightingScenePageRequest, LightingSceneStatus, LightingSceneTransaction,
+    LightingScenesPage, PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest, SetLightingSceneCellRequest,
+    UnsetLightingSceneCellRequest,
 };
 use rynk::{Client, Driver, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
 use wasm_bindgen::prelude::*;
@@ -182,6 +185,15 @@ endpoints! {
     put_lighting_overlay_chunk(request: PutLightingOverlayChunkRequest) -> (),
     commit_lighting_overlay_replace(request: CommitLightingOverlayReplaceRequest) -> LightingState,
     abort_lighting_overlay_replace(request: AbortLightingOverlayReplaceRequest) -> (),
+    get_lighting_scene_status() -> LightingSceneStatus,
+    get_lighting_scenes(request: LightingScenePageRequest) -> LightingScenesPage,
+    set_lighting_scene_cell(request: SetLightingSceneCellRequest) -> LightingState,
+    unset_lighting_scene_cell(request: UnsetLightingSceneCellRequest) -> LightingState,
+    set_lighting_layer_policy(request: SetLightingLayerPolicyRequest) -> LightingState,
+    begin_lighting_scene_replace(request: BeginLightingSceneReplaceRequest) -> LightingSceneTransaction,
+    put_lighting_scene_chunk(request: PutLightingSceneChunkRequest) -> (),
+    commit_lighting_scene_replace(request: CommitLightingSceneReplaceRequest) -> LightingState,
+    abort_lighting_scene_replace(request: AbortLightingSceneReplaceRequest) -> (),
     // connection
     get_connection_type() -> ConnectionType,
     get_connection_status() -> ConnectionStatus,

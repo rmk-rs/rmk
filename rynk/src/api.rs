@@ -21,8 +21,9 @@ use rmk_types::fork::Fork;
 use rmk_types::led_indicator::LedIndicator;
 use rmk_types::morse::Morse;
 use rmk_types::protocol::rynk::{
-    AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest, BehaviorConfig,
-    ClearLightingOverlayRequest, Cmd, CommitLightingOverlayReplaceRequest, DeviceCapabilities, DeviceInfo,
+    AbortLightingOverlayReplaceRequest, AbortLightingSceneReplaceRequest, BeginLightingOverlayReplaceRequest,
+    BeginLightingSceneReplaceRequest, BehaviorConfig, ClearLightingOverlayRequest, Cmd,
+    CommitLightingOverlayReplaceRequest, CommitLightingSceneReplaceRequest, DeviceCapabilities, DeviceInfo,
     GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest, GetKeymapBulkRequest, GetKeymapBulkResponse,
     GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse, KeyPosition, LightingCapabilities, LightingKeysPage,
     LightingLedsPage, LightingOutputsPage, LightingOverlayTransaction, LightingPageRequest, LightingPhysicalKeysPage,
@@ -30,7 +31,9 @@ use rmk_types::protocol::rynk::{
     MacroData, MatrixState, PeripheralStatus, ProtocolVersion, PutLightingOverlayChunkRequest, SetComboBulkRequest,
     SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest,
     SetLightingOverlayRequest, SetLightingStateRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest,
-    StorageResetMode, UnsetLightingOverlayRequest, command, BuildInfo,
+    StorageResetMode, UnsetLightingOverlayRequest, command, BuildInfo, LightingScenePageRequest, LightingSceneStatus,
+    LightingSceneTransaction, LightingScenesPage, PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest,
+    SetLightingSceneCellRequest, UnsetLightingSceneCellRequest,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -523,6 +526,83 @@ impl Client {
         Self::flatten_lighting(self.request::<command::AbortLightingOverlayReplace>(&request).await?)
     }
 
+    /// Read scene limits and occupancy. Scene support is discovered through
+    /// [`LightingCapabilities::features`] (`LAYER_SCENES`) plus this endpoint;
+    /// firmware without a scene table rejects it with `Unsupported`.
+    pub async fn get_lighting_scene_status(&self) -> Result<LightingSceneStatus, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingSceneStatus)?;
+        Self::flatten_lighting(self.request::<command::GetLightingSceneStatus>(&()).await?)
+    }
+
+    /// Read one page of stored scene cells, pinned to a state revision.
+    pub async fn get_lighting_scenes(
+        &self,
+        request: LightingScenePageRequest,
+    ) -> Result<LightingScenesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingScenes)?;
+        Self::flatten_lighting(self.request::<command::GetLightingScenes>(&request).await?)
+    }
+
+    /// Insert or update one durable scene cell when the revision matches.
+    pub async fn set_lighting_scene_cell(
+        &self,
+        request: SetLightingSceneCellRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingSceneCell)?;
+        Self::flatten_lighting(self.request::<command::SetLightingSceneCell>(&request).await?)
+    }
+
+    /// Remove one durable scene cell when the revision matches.
+    pub async fn unset_lighting_scene_cell(
+        &self,
+        request: UnsetLightingSceneCellRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::UnsetLightingSceneCell)?;
+        Self::flatten_lighting(self.request::<command::UnsetLightingSceneCell>(&request).await?)
+    }
+
+    /// Set the scene layer-composition policy when the revision matches.
+    pub async fn set_lighting_layer_policy(
+        &self,
+        request: SetLightingLayerPolicyRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingLayerPolicy)?;
+        Self::flatten_lighting(self.request::<command::SetLightingLayerPolicy>(&request).await?)
+    }
+
+    /// Reserve the bounded staging transaction for atomic scene replacement.
+    pub async fn begin_lighting_scene_replace(
+        &self,
+        request: BeginLightingSceneReplaceRequest,
+    ) -> Result<LightingSceneTransaction, RynkHostError> {
+        self.require_lighting(Cmd::BeginLightingSceneReplace)?;
+        Self::flatten_lighting(self.request::<command::BeginLightingSceneReplace>(&request).await?)
+    }
+
+    /// Stage one ordered scene chunk. It does not mutate the live table.
+    pub async fn put_lighting_scene_chunk(&self, request: PutLightingSceneChunkRequest) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::PutLightingSceneChunk)?;
+        Self::flatten_lighting(self.request::<command::PutLightingSceneChunk>(&request).await?)
+    }
+
+    /// Atomically publish a complete staged scene replacement.
+    pub async fn commit_lighting_scene_replace(
+        &self,
+        request: CommitLightingSceneReplaceRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::CommitLightingSceneReplace)?;
+        Self::flatten_lighting(self.request::<command::CommitLightingSceneReplace>(&request).await?)
+    }
+
+    /// Discard a staged scene replacement without changing live state.
+    pub async fn abort_lighting_scene_replace(
+        &self,
+        request: AbortLightingSceneReplaceRequest,
+    ) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::AbortLightingSceneReplace)?;
+        Self::flatten_lighting(self.request::<command::AbortLightingSceneReplace>(&request).await?)
+    }
+
     /// Read the active connection type (USB / BLE).
     pub async fn get_connection_type(&self) -> Result<ConnectionType, RynkHostError> {
         self.request::<command::GetConnectionType>(&()).await
@@ -620,6 +700,93 @@ impl Client {
                 configs,
             })
             .await
+        })
+        .await
+    }
+
+    /// Read the whole stored scene table by paging `GetLightingScenes` under
+    /// one pinned revision. A concurrent lighting mutation invalidates the
+    /// pin; the read restarts from a fresh status, bounded by a few attempts.
+    pub async fn read_all_lighting_scenes(
+        &self,
+    ) -> Result<(u32, Vec<rmk_types::protocol::rynk::LightingSceneCell>), RynkHostError> {
+        const ATTEMPTS: usize = 4;
+        let mut last_error = None;
+        for _ in 0..ATTEMPTS {
+            let status = self.get_lighting_scene_status().await?;
+            let mut cells = Vec::new();
+            let mut offset: u16 = 0;
+            let mut conflicted = false;
+            while offset < status.scene_len {
+                match self
+                    .get_lighting_scenes(LightingScenePageRequest {
+                        revision: status.revision,
+                        offset,
+                    })
+                    .await
+                {
+                    Ok(page) => {
+                        if page.items.is_empty() {
+                            break;
+                        }
+                        offset += page.items.len() as u16;
+                        cells.extend(page.items.iter().copied());
+                    }
+                    Err(
+                        error @ RynkHostError::LightingRejected(
+                            rmk_types::protocol::rynk::LightingError::StateRevisionConflict { .. },
+                        ),
+                    ) => {
+                        last_error = Some(error);
+                        conflicted = true;
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if !conflicted {
+                return Ok((status.revision, cells));
+            }
+        }
+        Err(last_error.expect("a retried read only exits with a recorded conflict"))
+    }
+
+    /// Atomically replace the whole stored scene table: begin, stage in
+    /// chunk-sized pages, and commit. A staging failure is followed by a
+    /// best-effort abort so the firmware transaction is not left dangling.
+    pub async fn replace_all_lighting_scenes(
+        &self,
+        expected_revision: u32,
+        cells: &[rmk_types::protocol::rynk::LightingSceneCell],
+    ) -> Result<LightingState, RynkHostError> {
+        let transaction = self
+            .begin_lighting_scene_replace(BeginLightingSceneReplaceRequest {
+                expected_revision,
+                cell_count: cells.len() as u16,
+            })
+            .await?;
+        let mut offset: u16 = 0;
+        for chunk in cells.chunks(rmk_types::protocol::rynk::LIGHTING_SCENE_CHUNK_SIZE) {
+            let mut request = PutLightingSceneChunkRequest {
+                transaction_id: transaction.id,
+                offset,
+                cells: Default::default(),
+            };
+            for cell in chunk {
+                request.cells.push(*cell).expect("chunks are chunk-size bounded");
+            }
+            if let Err(error) = self.put_lighting_scene_chunk(request).await {
+                let _ = self
+                    .abort_lighting_scene_replace(AbortLightingSceneReplaceRequest {
+                        transaction_id: transaction.id,
+                    })
+                    .await;
+                return Err(error);
+            }
+            offset += chunk.len() as u16;
+        }
+        self.commit_lighting_scene_replace(CommitLightingSceneReplaceRequest {
+            transaction_id: transaction.id,
         })
         .await
     }
