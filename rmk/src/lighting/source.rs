@@ -191,6 +191,16 @@ pub enum OutputMode {
     PoweredOnly,
 }
 
+/// Which power source a split renderer uses for `PoweredOnly`.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum PoweredOnlyScope {
+    /// Follow the authoritative renderer's power state on every node.
+    #[default]
+    Authority,
+    /// Let each renderer use its own node's local VBUS state.
+    Local,
+}
+
 impl OutputMode {
     pub const fn next(self) -> Self {
         match self {
@@ -227,6 +237,7 @@ pub struct LightingControls {
     pub output_mode_cycle_user_action: Option<u8>,
     pub wake_layer: Option<u8>,
     pub initial_output_mode: OutputMode,
+    pub powered_only_scope: PoweredOnlyScope,
     pub output_mode_indicator: Option<OutputModeIndicator>,
 }
 

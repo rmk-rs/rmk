@@ -1843,6 +1843,7 @@ mod tests {
             output_mode_cycle_user_action: Some(13),
             wake_layer: Some(2),
             initial_output_mode: OutputMode::PoweredOnly,
+            powered_only_scope: super::super::source::PoweredOnlyScope::Local,
             output_mode_indicator: Some(super::super::source::OutputModeIndicator {
                 slot: LedSlot(1),
                 always_on: BuiltinEffect::Solid { color: GREEN },

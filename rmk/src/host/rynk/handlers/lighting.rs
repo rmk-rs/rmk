@@ -1583,6 +1583,7 @@ mod tests {
                 output_mode_cycle_user_action: Some(14),
                 wake_layer: Some(1),
                 initial_output_mode: OutputMode::PoweredOnly,
+                powered_only_scope: crate::lighting::PoweredOnlyScope::Local,
                 output_mode_indicator: Some(OutputModeIndicator {
                     slot: LedSlot(0),
                     always_on: BuiltinEffect::solid(Rgb8::new(0, 9, 0)),

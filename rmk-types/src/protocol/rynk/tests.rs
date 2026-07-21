@@ -1399,6 +1399,7 @@ fn lighting_wire_frames_locked() {
         powered: true,
         wake_active: false,
         effective_enabled: true,
+        powered_only_scope: LightingPoweredOnlyScope::Local,
         cycle_user_action: Some(13),
         wake_layer: Some(2),
         indicator: Some(LightingOutputModeIndicator {

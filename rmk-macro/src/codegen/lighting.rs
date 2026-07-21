@@ -4,7 +4,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use rmk_config::resolved::lighting::{
     Lighting, LightingBackgroundMode, LightingChargeCondition, LightingConditionalSceneCell,
-    LightingEffect, LightingOutputMode, LightingSceneCell,
+    LightingEffect, LightingOutputMode, LightingPoweredOnlyScope, LightingSceneCell,
 };
 use rmk_config::resolved::{FixedPoint3, PhysicalLayout};
 
@@ -212,6 +212,12 @@ pub(crate) fn expand_lighting_renderer_config(lighting: Option<&Lighting>) -> To
         LightingOutputMode::AlwaysOff => quote! { ::rmk::lighting::OutputMode::AlwaysOff },
         LightingOutputMode::PoweredOnly => quote! { ::rmk::lighting::OutputMode::PoweredOnly },
     };
+    let powered_only_scope = match lighting.controls.powered_only_scope {
+        LightingPoweredOnlyScope::Authority => {
+            quote! { ::rmk::lighting::PoweredOnlyScope::Authority }
+        }
+        LightingPoweredOnlyScope::Local => quote! { ::rmk::lighting::PoweredOnlyScope::Local },
+    };
     let output_mode_indicator = match lighting.controls.output_mode_indicator {
         Some(indicator) => {
             let slot = indicator.slot;
@@ -260,6 +266,7 @@ pub(crate) fn expand_lighting_renderer_config(lighting: Option<&Lighting>) -> To
                 output_mode_cycle_user_action: #output_mode_cycle_user_action,
                 wake_layer: #wake_layer,
                 initial_output_mode: #initial_output_mode,
+                powered_only_scope: #powered_only_scope,
                 output_mode_indicator: #output_mode_indicator,
             };
         pub const LIGHTING_BACKGROUND: ::rmk::lighting::BackgroundState =

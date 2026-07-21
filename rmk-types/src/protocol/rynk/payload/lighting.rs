@@ -640,6 +640,14 @@ wire_type! {
 }
 
 wire_type! {
+    /// Power source used by split renderers in `PoweredOnly` mode.
+    pub enum LightingPoweredOnlyScope {
+        Authority,
+        Local,
+    }
+}
+
+wire_type! {
     /// Configured status LED and its mode-specific effects.
     pub struct LightingOutputModeIndicator {
         pub led_id: LightingLedId,
@@ -657,6 +665,7 @@ wire_type! {
         pub powered: bool,
         pub wake_active: bool,
         pub effective_enabled: bool,
+        pub powered_only_scope: LightingPoweredOnlyScope,
         pub cycle_user_action: Option<u8>,
         pub wake_layer: Option<u8>,
         pub indicator: Option<LightingOutputModeIndicator>,

@@ -94,6 +94,7 @@ impl<'a> RynkLightingController<'a> {
                 output_mode_cycle_user_action: None,
                 wake_layer: None,
                 initial_output_mode: crate::lighting::OutputMode::AlwaysOn,
+                powered_only_scope: crate::lighting::PoweredOnlyScope::Authority,
                 output_mode_indicator: None,
             },
             mailbox,
@@ -135,6 +136,12 @@ impl<'a> RynkLightingController<'a> {
             powered: state.powered,
             wake_active: state.wake_active,
             effective_enabled: state.output_enabled,
+            powered_only_scope: match self.controls.powered_only_scope {
+                crate::lighting::PoweredOnlyScope::Authority => {
+                    rmk_types::protocol::rynk::LightingPoweredOnlyScope::Authority
+                }
+                crate::lighting::PoweredOnlyScope::Local => rmk_types::protocol::rynk::LightingPoweredOnlyScope::Local,
+            },
             cycle_user_action: self.controls.output_mode_cycle_user_action,
             wake_layer: self.controls.wake_layer,
             indicator: self.controls.output_mode_indicator.and_then(|indicator| {

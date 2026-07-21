@@ -618,7 +618,17 @@ pub(crate) struct LightingControlsTomlConfig {
     pub wake_layer: Option<u8>,
     #[serde(default)]
     pub initial_output_mode: LightingOutputModeToml,
+    #[serde(default)]
+    pub powered_only_scope: LightingPoweredOnlyScopeToml,
     pub output_mode_indicator: Option<LightingOutputModeIndicatorTomlConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LightingPoweredOnlyScopeToml {
+    #[default]
+    Authority,
+    Local,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]

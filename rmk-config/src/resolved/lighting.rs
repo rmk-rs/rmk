@@ -4,7 +4,7 @@ use super::Keymap;
 use super::layout::{FixedPoint3, Layout};
 use crate::{
     LightingBackgroundModeToml, LightingChargeConditionToml, LightingEffectTomlConfig, LightingOutputModeToml,
-    LightingTargetTomlConfig,
+    LightingPoweredOnlyScopeToml, LightingTargetTomlConfig,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -117,6 +117,13 @@ pub enum LightingOutputMode {
     PoweredOnly,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LightingPoweredOnlyScope {
+    #[default]
+    Authority,
+    Local,
+}
+
 impl Default for LightingOutputMode {
     fn default() -> Self {
         Self::AlwaysOn
@@ -137,6 +144,7 @@ pub struct LightingControls {
     pub output_mode_cycle_user_action: Option<u8>,
     pub wake_layer: Option<u8>,
     pub initial_output_mode: LightingOutputMode,
+    pub powered_only_scope: LightingPoweredOnlyScope,
     pub output_mode_indicator: Option<LightingOutputModeIndicator>,
 }
 
@@ -295,6 +303,10 @@ impl crate::KeyboardTomlConfig {
                         LightingOutputModeToml::AlwaysOn => LightingOutputMode::AlwaysOn,
                         LightingOutputModeToml::AlwaysOff => LightingOutputMode::AlwaysOff,
                         LightingOutputModeToml::PoweredOnly => LightingOutputMode::PoweredOnly,
+                    },
+                    powered_only_scope: match controls.powered_only_scope {
+                        LightingPoweredOnlyScopeToml::Authority => LightingPoweredOnlyScope::Authority,
+                        LightingPoweredOnlyScopeToml::Local => LightingPoweredOnlyScope::Local,
                     },
                     output_mode_indicator: controls
                         .output_mode_indicator
@@ -703,6 +715,8 @@ fn resolve_effect(config: &LightingEffectTomlConfig) -> Result<LightingEffect, S
 
 #[cfg(test)]
 mod tests {
+    use super::{LightingOutputMode, LightingPoweredOnlyScope};
+
     fn parse(config: &str) -> crate::KeyboardTomlConfig {
         toml::from_str(config).unwrap()
     }
@@ -849,6 +863,7 @@ output_toggle_user_action = 13
 output_mode_cycle_user_action = 14
 wake_layer = 1
 initial_output_mode = "powered_only"
+powered_only_scope = "local"
 
 [lighting.controls.output_mode_indicator]
 target = {{ led = 10 }}
@@ -865,6 +880,7 @@ powered_only = {{ kind = "solid", color = [0, 0, 9] }}
         assert_eq!(lighting.controls.output_mode_cycle_user_action, Some(14));
         assert_eq!(lighting.controls.wake_layer, Some(1));
         assert_eq!(lighting.controls.initial_output_mode, LightingOutputMode::PoweredOnly);
+        assert_eq!(lighting.controls.powered_only_scope, LightingPoweredOnlyScope::Local);
         assert_eq!(lighting.controls.output_mode_indicator.unwrap().slot, 0);
 
         let invalid = parse(&source.replace("wake_layer = 1", "wake_layer = 2"));
