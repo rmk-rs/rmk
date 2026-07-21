@@ -39,7 +39,7 @@ pub use service::{
 pub use source::{
     BatteryCondition, BatteryStatusProvider, ChargeCondition, ConditionSet, ConditionalSceneCell, ConditionalScenes,
     DenseSource, Indicator, IndicatorScene, IndicatorScenes, LayerCondition, LayerPolicy, LayerScene, LayerScenes,
-    OverlayError, OverlayUpdate, SceneCell, SparseScene, TtlOverlay,
+    LightingControls, OverlayError, OverlayUpdate, SceneCell, SparseScene, TtlOverlay,
 };
 pub use standard::{
     BackgroundMode, BackgroundPatch, BackgroundState, CompiledScenePage, EmptySource, OVERLAY_CHUNK_SIZE, OverlayBatch,

@@ -264,6 +264,7 @@ impl Handle<GetLightingConditionalSceneStatus> for RynkService<'_> {
             topology_revision: controller.descriptor.topology_revision,
             cell_len: count(controller.conditional_scenes.len()),
             chunk_capacity: LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE as u8,
+            controls: controller.controls_to_wire(),
         }))
     }
 }
@@ -1542,8 +1543,8 @@ mod tests {
         };
 
         use crate::lighting::{
-            BackgroundState, EmptySource, LayerPolicy, LayerScenes, LightingContext, LightingEngine, LightingMailbox,
-            StandardCommand, StandardError, StandardLightingEngine, StandardReply,
+            BackgroundState, EmptySource, LayerPolicy, LayerScenes, LightingContext, LightingControls, LightingEngine,
+            LightingMailbox, StandardCommand, StandardError, StandardLightingEngine, StandardReply,
         };
 
         block_on(async {
@@ -1557,7 +1558,11 @@ mod tests {
             let service = RynkService::new(&keymap, &config).with_lighting(
                 RynkLightingController::new(&mailbox, descriptor(), 8)
                     .with_scene_capacity(4)
-                    .with_conditional_scenes(&CONDITIONAL_CELLS),
+                    .with_conditional_scenes(&CONDITIONAL_CELLS)
+                    .with_controls(LightingControls {
+                        output_toggle_user_action: Some(13),
+                        wake_layer: Some(2),
+                    }),
             );
             let session = session(&keymap, &config);
 
@@ -1617,6 +1622,8 @@ mod tests {
                     .unwrap();
                 assert_eq!(conditional_status.topology_revision, 7);
                 assert_eq!(conditional_status.cell_len, 1);
+                assert_eq!(conditional_status.controls.output_toggle_user_action, Some(13));
+                assert_eq!(conditional_status.controls.wake_layer, Some(2));
                 let conditional = call::<GetLightingConditionalScenes>(
                     &service,
                     &session,

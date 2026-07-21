@@ -109,6 +109,12 @@ pub struct LightingConditionalSceneCell {
     pub effect: LightingEffect,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LightingControls {
+    pub output_toggle_user_action: Option<u8>,
+    pub wake_layer: Option<u8>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LightingBackgroundMode {
     Solid,
@@ -153,6 +159,7 @@ pub struct Lighting {
     pub routes: Vec<LightingRoute>,
     pub layer_scenes: Vec<LightingLayerScene>,
     pub conditional_scene_cells: Vec<LightingConditionalSceneCell>,
+    pub controls: LightingControls,
     pub background: LightingBackground,
 }
 
@@ -243,6 +250,20 @@ impl crate::KeyboardTomlConfig {
             &zone_memberships,
             &zone_ids,
         )?;
+        let controls = config.controls.map_or(Ok(LightingControls::default()), |controls| {
+            if let Some(layer) = controls.wake_layer
+                && layer >= keymap.layers
+            {
+                return Err(format!(
+                    "lighting.controls wake_layer {} is outside keymap layer count {}",
+                    layer, keymap.layers
+                ));
+            }
+            Ok(LightingControls {
+                output_toggle_user_action: controls.output_toggle_user_action,
+                wake_layer: controls.wake_layer,
+            })
+        })?;
         let background = config
             .background
             .as_ref()
@@ -275,6 +296,7 @@ impl crate::KeyboardTomlConfig {
             routes,
             layer_scenes,
             conditional_scene_cells,
+            controls,
             background,
         }))
     }
@@ -752,6 +774,27 @@ effect = {{ kind = "solid", color = [9, 8, 7] }}
         assert_eq!(battery.min_level, Some(21));
         assert_eq!(battery.max_level, Some(40));
         assert_eq!(battery.charge, super::LightingChargeCondition::Discharging);
+    }
+
+    #[test]
+    fn resolves_and_validates_lighting_controls() {
+        let source = format!(
+            r#"{BASE}
+[lighting.controls]
+output_toggle_user_action = 13
+wake_layer = 1
+"#
+        );
+        let config = parse(&source);
+        let layout = config.layout().unwrap();
+        let keymap = config.keymap().unwrap();
+        let lighting = config.lighting(&layout, &keymap).unwrap().unwrap();
+        assert_eq!(lighting.controls.output_toggle_user_action, Some(13));
+        assert_eq!(lighting.controls.wake_layer, Some(1));
+
+        let invalid = parse(&source.replace("wake_layer = 1", "wake_layer = 2"));
+        let error = invalid.lighting(&layout, &keymap).unwrap_err();
+        assert!(error.contains("outside keymap layer count"), "{error}");
     }
 
     #[test]

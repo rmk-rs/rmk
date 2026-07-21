@@ -16,18 +16,19 @@ use embassy_sync::signal::Signal;
 use heapless::Vec;
 use rmk_types::protocol::rynk::{
     LIGHTING_OVERLAY_CHUNK_SIZE, LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode, LightingBackgroundState,
-    LightingCompiledScenesPage, LightingConditionalSceneCell as WireConditionalSceneCell, LightingError,
-    LightingLayerPolicy, LightingMutableState, LightingOverlayCell, LightingOverlayPage, LightingResult, LightingRgb8,
-    LightingSceneCell, LightingSceneTransaction, LightingScenesPage, LightingState,
+    LightingCompiledScenesPage, LightingConditionalSceneCell as WireConditionalSceneCell,
+    LightingControls as WireLightingControls, LightingError, LightingLayerPolicy, LightingMutableState,
+    LightingOverlayCell, LightingOverlayPage, LightingResult, LightingRgb8, LightingSceneCell,
+    LightingSceneTransaction, LightingScenesPage, LightingState,
 };
 
 use crate::RawMutex;
 use crate::core_traits::Runnable;
 use crate::lighting::{
-    BackgroundMode, BackgroundState, BuiltinEffect, ConditionalSceneCell, LayerPolicy, LedId, LightingMailbox,
-    LightingRouting, LightingTopology, OVERLAY_CHUNK_SIZE, OverlayBatch, OverlayCell, OverlayError, Rgb8, SceneChunk,
-    SceneTableCell, StandardCommand, StandardError, StandardLightingEngine, StandardMutableState, StandardReply,
-    StandardState,
+    BackgroundMode, BackgroundState, BuiltinEffect, ConditionalSceneCell, LayerPolicy, LedId, LightingControls,
+    LightingMailbox, LightingRouting, LightingTopology, OVERLAY_CHUNK_SIZE, OverlayBatch, OverlayCell, OverlayError,
+    Rgb8, SceneChunk, SceneTableCell, StandardCommand, StandardError, StandardLightingEngine, StandardMutableState,
+    StandardReply, StandardState,
 };
 
 const _: () = core::assert!(
@@ -65,6 +66,7 @@ pub struct RynkLightingController<'a> {
     /// with `Unsupported`.
     pub(super) scene_capacity: u16,
     pub(super) conditional_scenes: &'a [ConditionalSceneCell<BuiltinEffect>],
+    pub(super) controls: LightingControls,
     mailbox: &'a RynkLightingMailbox,
 }
 
@@ -86,6 +88,10 @@ impl<'a> RynkLightingController<'a> {
             },
             scene_capacity: 0,
             conditional_scenes: &[],
+            controls: LightingControls {
+                output_toggle_user_action: None,
+                wake_layer: None,
+            },
             mailbox,
         }
     }
@@ -101,6 +107,18 @@ impl<'a> RynkLightingController<'a> {
     pub const fn with_conditional_scenes(mut self, scenes: &'a [ConditionalSceneCell<BuiltinEffect>]) -> Self {
         self.conditional_scenes = scenes;
         self
+    }
+
+    pub const fn with_controls(mut self, controls: LightingControls) -> Self {
+        self.controls = controls;
+        self
+    }
+
+    pub(super) const fn controls_to_wire(&self) -> WireLightingControls {
+        WireLightingControls {
+            output_toggle_user_action: self.controls.output_toggle_user_action,
+            wake_layer: self.controls.wake_layer,
+        }
     }
 
     pub const fn descriptor(&self) -> RynkLightingDescriptor<'a> {

@@ -621,10 +621,19 @@ wire_type! {
 }
 
 wire_type! {
+    /// Key/layer controls that gate the configured lighting presentation.
+    pub struct LightingControls {
+        pub output_toggle_user_action: Option<u8>,
+        pub wake_layer: Option<u8>,
+    }
+}
+
+wire_type! {
     pub struct LightingConditionalSceneStatus {
         pub topology_revision: u32,
         pub cell_len: u16,
         pub chunk_capacity: u8,
+        pub controls: LightingControls,
     }
 }
 

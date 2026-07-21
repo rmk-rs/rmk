@@ -195,6 +195,14 @@ pub(crate) fn expand_lighting_renderer_config(lighting: Option<&Lighting>) -> To
         .iter()
         .map(expand_conditional_scene_cell);
     let conditional_cell_count = lighting.conditional_scene_cells.len();
+    let output_toggle_user_action = match lighting.controls.output_toggle_user_action {
+        Some(action) => quote! { Some(#action) },
+        None => quote! { None },
+    };
+    let wake_layer = match lighting.controls.wake_layer {
+        Some(layer) => quote! { Some(#layer) },
+        None => quote! { None },
+    };
     let background = &lighting.background;
     let background_enabled = background.enabled;
     let background_hue = background.hue;
@@ -220,6 +228,11 @@ pub(crate) fn expand_lighting_renderer_config(lighting: Option<&Lighting>) -> To
         pub static LIGHTING_CONDITIONAL_SCENE_CELLS:
             [::rmk::lighting::ConditionalSceneCell<::rmk::lighting::BuiltinEffect>; #conditional_cell_count] =
             [#(#conditional_cells),*];
+        pub const LIGHTING_CONTROLS: ::rmk::lighting::LightingControls =
+            ::rmk::lighting::LightingControls {
+                output_toggle_user_action: #output_toggle_user_action,
+                wake_layer: #wake_layer,
+            };
         pub const LIGHTING_BACKGROUND: ::rmk::lighting::BackgroundState =
             ::rmk::lighting::BackgroundState {
                 enabled: #background_enabled,

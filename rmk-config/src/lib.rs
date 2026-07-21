@@ -606,7 +606,15 @@ pub(crate) struct LightingTomlConfig {
     pub layer_scenes: Vec<LightingLayerSceneTomlConfig>,
     #[serde(default, rename = "conditional_scene")]
     pub conditional_scenes: Vec<LightingConditionalSceneTomlConfig>,
+    pub controls: Option<LightingControlsTomlConfig>,
     pub background: Option<LightingBackgroundTomlConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingControlsTomlConfig {
+    pub output_toggle_user_action: Option<u8>,
+    pub wake_layer: Option<u8>,
 }
 
 fn default_topology_revision() -> u32 {

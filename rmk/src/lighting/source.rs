@@ -183,6 +183,13 @@ pub struct ConditionSet {
     pub battery: Option<BatteryCondition>,
 }
 
+/// Optional board controls compiled from `[lighting.controls]`.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct LightingControls {
+    pub output_toggle_user_action: Option<u8>,
+    pub wake_layer: Option<u8>,
+}
+
 impl ConditionSet {
     fn matches<Context, Batteries>(&self, context: &Context, batteries: &Batteries) -> bool
     where
