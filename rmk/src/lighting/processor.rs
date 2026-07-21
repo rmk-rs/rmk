@@ -3,7 +3,7 @@
 use core::cell::Cell;
 use core::num::NonZeroU32;
 
-use embassy_futures::select::{Either, Either3, Either4, select, select3, select4};
+use embassy_futures::select::{Either3, Either4, select3, select4};
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
@@ -28,6 +28,7 @@ pub struct LightingMailbox<Command, Reply, Error, const CAPACITY: usize> {
     requests: Channel<RawMutex, MailboxRequest<Command>, CAPACITY>,
     response: Signal<RawMutex, MailboxResponse<Reply, Error>>,
     retry_output: Signal<RawMutex, ()>,
+    snapshot_changed: Signal<RawMutex, ()>,
     caller: Mutex<RawMutex, ()>,
     next_id: BlockingMutex<RawMutex, Cell<u32>>,
 }
@@ -48,6 +49,7 @@ impl<Command, Reply, Error, const CAPACITY: usize> LightingMailbox<Command, Repl
             requests: Channel::new(),
             response: Signal::new(),
             retry_output: Signal::new(),
+            snapshot_changed: Signal::new(),
             caller: Mutex::new(()),
             next_id: BlockingMutex::new(Cell::new(0)),
         }
@@ -73,6 +75,15 @@ impl<Command, Reply, Error, const CAPACITY: usize> LightingMailbox<Command, Repl
     /// Wake a processor whose output policy blocked automatic retries.
     pub fn retry_output(&self) {
         self.retry_output.signal(());
+    }
+
+    /// Coalescing invalidation for application-owned snapshot fields.
+    ///
+    /// Boards use this after changing context outside the standard RMK
+    /// layer/indicator snapshots (for example battery or sensor state). The
+    /// processor takes a fresh snapshot, rerenders, and notifies replicas.
+    pub fn snapshot_changed(&self) {
+        self.snapshot_changed.signal(());
     }
 
     /// Service side: receive the next command. Normally only
@@ -279,19 +290,27 @@ where
                         Timer::at(Instant::from_millis(deadline)),
                         subscriber.next_event(),
                         self.mailbox.receive(),
-                        select(self.mailbox.retry_output.wait(), super::next_light_action()),
+                        select3(
+                            self.mailbox.retry_output.wait(),
+                            super::next_light_action(),
+                            self.mailbox.snapshot_changed.wait(),
+                        ),
                     )
                     .await
                     {
                         Either4::First(_) => {}
                         Either4::Second(event) => self.process(event).await,
                         Either4::Third(request) => self.handle_mailbox_command(request).await,
-                        Either4::Fourth(Either::First(())) => {
+                        Either4::Fourth(Either3::First(())) => {
                             let _ = self.service.retry_output_now();
                         }
-                        Either4::Fourth(Either::Second(action)) => {
+                        Either4::Fourth(Either3::Second(action)) => {
                             let _ = self.service.on_input(E::Input::from(action));
                             self.publish_pending_lighting_change();
+                        }
+                        Either4::Fourth(Either3::Third(())) => {
+                            self.service.request_render();
+                            publish_event(LightingChangedEvent::new());
                         }
                     }
                 }
@@ -299,18 +318,26 @@ where
                     match select3(
                         subscriber.next_event(),
                         self.mailbox.receive(),
-                        select(self.mailbox.retry_output.wait(), super::next_light_action()),
+                        select3(
+                            self.mailbox.retry_output.wait(),
+                            super::next_light_action(),
+                            self.mailbox.snapshot_changed.wait(),
+                        ),
                     )
                     .await
                     {
                         Either3::First(event) => self.process(event).await,
                         Either3::Second(request) => self.handle_mailbox_command(request).await,
-                        Either3::Third(Either::First(())) => {
+                        Either3::Third(Either3::First(())) => {
                             let _ = self.service.retry_output_now();
                         }
-                        Either3::Third(Either::Second(action)) => {
+                        Either3::Third(Either3::Second(action)) => {
                             let _ = self.service.on_input(E::Input::from(action));
                             self.publish_pending_lighting_change();
+                        }
+                        Either3::Third(Either3::Third(())) => {
+                            self.service.request_render();
+                            publish_event(LightingChangedEvent::new());
                         }
                     }
                 }
@@ -345,6 +372,16 @@ mod tests {
             mailbox.reply(request.id, Err(9));
         }));
         assert_eq!(reply, Err(9));
+    }
+
+    #[test]
+    fn snapshot_change_notifications_coalesce() {
+        let mailbox = LightingMailbox::<(), (), (), 1>::new();
+        mailbox.snapshot_changed();
+        mailbox.snapshot_changed();
+
+        assert_eq!(mailbox.snapshot_changed.try_take(), Some(()));
+        assert_eq!(mailbox.snapshot_changed.try_take(), None);
     }
 
     #[test]

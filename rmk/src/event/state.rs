@@ -59,7 +59,7 @@ impl SleepStateEvent {
 
 impl_payload_wrapper!(SleepStateEvent, bool);
 
-/// Authoritative lighting state changed.
+/// Authoritative lighting state or application-owned render context changed.
 ///
 /// This is deliberately a unit invalidation: consumers read a fresh state
 /// snapshot from the lighting controller instead of trusting an event mirror.

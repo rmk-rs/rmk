@@ -52,7 +52,11 @@ pub use topology::*;
 /// notifications may be coalesced, but brightness/toggle/mode presses may not.
 static LIGHT_ACTIONS: Channel<RawMutex, LightAction, 4> = Channel::new();
 
-pub(crate) async fn send_light_action(action: LightAction) {
+/// Deliver a lighting action to the active lighting processor.
+///
+/// This is public so board-specific user actions can reuse the same ordered,
+/// lossless path as keymap-native lighting actions.
+pub async fn send_light_action(action: LightAction) {
     LIGHT_ACTIONS.send(action).await;
 }
 
