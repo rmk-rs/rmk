@@ -90,7 +90,11 @@ pub struct RotaryEncoderPos {
 // Modifier Events
 // ============================================================================
 
-/// Modifier keys combination changed event
+/// Final resolved HID modifier combination changed event.
+///
+/// This carries the modifier byte used by the keyboard report, including
+/// one-shot, macro, with-modifier, and fork effects. It is not merely the set
+/// of physically held modifier keys.
 #[event(channel_size = crate::MODIFIER_EVENT_CHANNEL_SIZE, pubs = crate::MODIFIER_EVENT_PUB_SIZE, subs = crate::MODIFIER_EVENT_SUB_SIZE)]
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]

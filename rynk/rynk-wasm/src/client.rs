@@ -21,6 +21,7 @@ use rynk::rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rynk::rmk_types::fork::Fork;
 use rynk::rmk_types::led_indicator::LedIndicator;
 use rynk::rmk_types::morse::Morse;
+use rynk::rmk_types::modifier::ModifierCombination;
 use rynk::rmk_types::protocol::rynk::{
     AbortLightingOverlayReplaceRequest, BeginLightingOverlayReplaceRequest, BehaviorConfig,
     ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest, DeviceCapabilities, DeviceInfo,
@@ -163,6 +164,7 @@ endpoints! {
     // status
     get_current_layer() -> u8,
     get_layer_state() -> LayerState,
+    get_modifier_state() -> ModifierCombination,
     get_matrix_state() -> MatrixState,
     get_battery_status() -> BatteryStatus,
     get_led_indicator() -> LedIndicator,

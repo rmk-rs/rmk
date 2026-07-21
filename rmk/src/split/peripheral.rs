@@ -17,11 +17,11 @@ use super::SplitMessage;
 use super::driver::{SplitReader, SplitWriter};
 #[cfg(feature = "_render_state")]
 use crate::event::SleepStateEvent;
+#[cfg(feature = "display")]
+use crate::event::WpmUpdateEvent;
 use crate::event::{
     KeyboardEvent, LayerChangeEvent, LedIndicatorEvent, PointingEvent, SubscribableEvent, publish_event,
 };
-#[cfg(feature = "display")]
-use crate::event::{ModifierEvent, WpmUpdateEvent};
 #[cfg(not(feature = "_ble"))]
 use crate::split::serial::SerialSplitDriver;
 use crate::state::update_status;
@@ -203,9 +203,9 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                             SplitMessage::Wpm(wpm) => publish_event(WpmUpdateEvent::new(wpm)),
                             #[cfg(feature = "display")]
                             SplitMessage::Modifier(bits) => {
-                                publish_event(ModifierEvent {
-                                    modifier: rmk_types::modifier::ModifierCombination::from_bits(bits),
-                                });
+                                crate::state::set_modifier_state(rmk_types::modifier::ModifierCombination::from_bits(
+                                    bits,
+                                ));
                             }
                             #[cfg(feature = "_render_state")]
                             SplitMessage::SleepState(sleeping) => {

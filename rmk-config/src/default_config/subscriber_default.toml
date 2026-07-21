@@ -66,6 +66,7 @@ events = [
     { name = "connection_status_change" },
     { name = "sleep_state" },
     { name = "led_indicator" },
+    { name = "modifier" },
 ]
 
 [[subscriber]]
@@ -86,6 +87,7 @@ events = [
     { name = "connection_status_change" },
     { name = "sleep_state" },
     { name = "led_indicator" },
+    { name = "modifier" },
 ]
 
 # --- Dongle firmware internal subscribers ---
