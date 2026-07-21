@@ -18,7 +18,8 @@ use super::service::{
 use crate::RawMutex;
 use crate::core_traits::Runnable;
 use crate::event::{
-    EventSubscriber, LayerChangeEvent, LedIndicatorEvent, LightingChangedEvent, SleepStateEvent, publish_event,
+    ConnectionStatusChangeEvent, EventSubscriber, LayerChangeEvent, LedIndicatorEvent, LightingChangedEvent,
+    SleepStateEvent, publish_event,
 };
 use crate::processor::Processor;
 
@@ -119,7 +120,7 @@ impl<Command, Reply, Error, const CAPACITY: usize> Default for LightingMailbox<C
 /// State notifications invalidate a fresh authoritative snapshot. LightAction
 /// edges and mailbox commands remain reliable and ordered. The loop arms only
 /// the deadline returned by the service; static output has no timer.
-#[::rmk::macros::processor(subscribe = [LayerChangeEvent, LedIndicatorEvent, SleepStateEvent])]
+#[::rmk::macros::processor(subscribe = [LayerChangeEvent, LedIndicatorEvent, SleepStateEvent, ConnectionStatusChangeEvent])]
 #[::rmk::macros::runnable_generated]
 pub struct LightingProcessor<'mailbox, P, E, O, const COMMAND_CAPACITY: usize>
 where
@@ -253,6 +254,10 @@ where
     }
 
     async fn on_led_indicator_event(&mut self, _event: LedIndicatorEvent) {
+        self.service.request_render();
+    }
+
+    async fn on_connection_status_change_event(&mut self, _event: ConnectionStatusChangeEvent) {
         self.service.request_render();
     }
 

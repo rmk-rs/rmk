@@ -36,7 +36,7 @@ use rmk_types::protocol::rynk::{
     LightingSceneTransaction, LightingScenesPage, PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest,
     SetLightingSceneCellRequest, UnsetLightingSceneCellRequest, LayerState, LightingCompiledSceneStatus,
     LightingCompiledScenesPage, LightingOverlayPage, LightingOverlayPageRequest, SplitCentralLatencyPolicy,
-    SplitCentralLatencyState, LightingConditionalSceneStatus, LightingConditionalScenesPage,
+    SplitCentralLatencyState, LightingConditionalSceneStatus, LightingConditionalScenesPage, LightingOutputModeState,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -423,6 +423,12 @@ impl Client {
     pub async fn get_lighting_state(&self) -> Result<LightingState, RynkHostError> {
         self.require_lighting(Cmd::GetLightingState)?;
         Self::flatten_lighting(self.request::<command::GetLightingState>(&()).await?)
+    }
+
+    /// Read the configured three-state lighting output policy and its live inputs.
+    pub async fn get_lighting_output_mode(&self) -> Result<LightingOutputModeState, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingOutputMode)?;
+        Self::flatten_lighting(self.request::<command::GetLightingOutputMode>(&()).await?)
     }
 
     /// Atomically replace standard mutable state when the revision still matches.

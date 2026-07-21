@@ -56,6 +56,8 @@ pub struct IndicatorState {
 pub struct LightingContext {
     pub layers: LayerState,
     pub indicators: IndicatorState,
+    /// USB/VBUS power is present. This remains true while USB is suspended.
+    pub powered: bool,
 }
 
 /// Access to RMK's standard lighting state from a board-extended snapshot.

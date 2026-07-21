@@ -339,6 +339,7 @@ The lock is per session and starts locked; `Lock` or the end of the session (unp
 | `0x091D` | `GetLightingCompiledScenes`         | `LightingPageRequest`                 | `LightingCompiledScenesPageResult`     | `lighting`       | Compiled-scene pages are pinned to the firmware topology revision.                                                             |
 | `0x091E` | `GetLightingConditionalSceneStatus` | `()`                                  | `LightingConditionalSceneStatusResult` | `lighting`       | Discover immutable conditional lighting compiled from board config.                                                            |
 | `0x091F` | `GetLightingConditionalScenes`      | `LightingPageRequest`                 | `LightingConditionalScenesPageResult`  | `lighting`       | Conditional-scene pages are pinned to the firmware topology revision.                                                          |
+| `0x0920` | `GetLightingOutputMode`             | `()`                                  | `LightingOutputModeStateResult`        | `lighting`       | Read the configured three-state output policy and its live state.                                                              |
 
 ## Topics
 

@@ -18,7 +18,8 @@ use rmk_types::protocol::rynk::{
     LIGHTING_OVERLAY_CHUNK_SIZE, LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode, LightingBackgroundState,
     LightingCompiledScenesPage, LightingConditionalSceneCell as WireConditionalSceneCell,
     LightingControls as WireLightingControls, LightingError, LightingLayerPolicy, LightingMutableState,
-    LightingOverlayCell, LightingOverlayPage, LightingResult, LightingRgb8, LightingSceneCell,
+    LightingOutputMode as WireLightingOutputMode, LightingOutputModeIndicator as WireLightingOutputModeIndicator,
+    LightingOutputModeState, LightingOverlayCell, LightingOverlayPage, LightingResult, LightingRgb8, LightingSceneCell,
     LightingSceneTransaction, LightingScenesPage, LightingState,
 };
 
@@ -90,7 +91,10 @@ impl<'a> RynkLightingController<'a> {
             conditional_scenes: &[],
             controls: LightingControls {
                 output_toggle_user_action: None,
+                output_mode_cycle_user_action: None,
                 wake_layer: None,
+                initial_output_mode: crate::lighting::OutputMode::AlwaysOn,
+                output_mode_indicator: None,
             },
             mailbox,
         }
@@ -118,6 +122,32 @@ impl<'a> RynkLightingController<'a> {
         WireLightingControls {
             output_toggle_user_action: self.controls.output_toggle_user_action,
             wake_layer: self.controls.wake_layer,
+        }
+    }
+
+    pub(super) fn output_mode_to_wire(&self, state: StandardState) -> LightingOutputModeState {
+        LightingOutputModeState {
+            mode: match state.output_mode {
+                crate::lighting::OutputMode::AlwaysOn => WireLightingOutputMode::AlwaysOn,
+                crate::lighting::OutputMode::AlwaysOff => WireLightingOutputMode::AlwaysOff,
+                crate::lighting::OutputMode::PoweredOnly => WireLightingOutputMode::PoweredOnly,
+            },
+            powered: state.powered,
+            wake_active: state.wake_active,
+            effective_enabled: state.output_enabled,
+            cycle_user_action: self.controls.output_mode_cycle_user_action,
+            wake_layer: self.controls.wake_layer,
+            indicator: self.controls.output_mode_indicator.and_then(|indicator| {
+                self.descriptor
+                    .topology
+                    .led(indicator.slot)
+                    .map(|led| WireLightingOutputModeIndicator {
+                        led_id: rmk_types::protocol::rynk::LightingLedId(led.id.0),
+                        always_on: effect_to_wire(indicator.always_on),
+                        always_off: effect_to_wire(indicator.always_off),
+                        powered_only: effect_to_wire(indicator.powered_only),
+                    })
+            }),
         }
     }
 
@@ -168,6 +198,7 @@ impl<'a> RynkLightingController<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RynkLightingReadback {
     State(LightingState),
+    OutputMode(StandardState),
     OverlayPage(LightingOverlayPage),
     SceneStatus {
         revision: u32,
@@ -331,6 +362,7 @@ impl Default for RynkLightingMailbox {
 
 pub(super) enum RynkLightingCommand {
     ReadState,
+    ReadOutputMode,
     ReadOverlay {
         expected_revision: u32,
         offset: u16,
@@ -518,6 +550,10 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
     async fn dispatch(&self, request_id: u32, command: RynkLightingCommand) -> LightingResult<RynkLightingReadback> {
         let core_command = match command {
             RynkLightingCommand::ReadState => StandardCommand::ReadState,
+            RynkLightingCommand::ReadOutputMode => {
+                let state = self.request_core_state(StandardCommand::ReadState).await?;
+                return Ok(RynkLightingReadback::OutputMode(state));
+            }
             RynkLightingCommand::ReadOverlay {
                 expected_revision,
                 offset,

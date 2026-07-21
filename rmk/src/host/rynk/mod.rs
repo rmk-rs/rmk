@@ -315,6 +315,8 @@ impl<'a> RynkService<'a> {
                 Serve::<command::GetLightingConditionalScenes, _>::serve(self, msg).await
             }
             #[cfg(feature = "lighting")]
+            Cmd::GetLightingOutputMode => Serve::<command::GetLightingOutputMode, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
             Cmd::SetLightingSceneCell => Serve::<command::SetLightingSceneCell, _>::serve(self, msg).await,
             #[cfg(feature = "lighting")]
             Cmd::UnsetLightingSceneCell => Serve::<command::UnsetLightingSceneCell, _>::serve(self, msg).await,

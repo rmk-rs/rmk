@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use super::Keymap;
 use super::layout::{FixedPoint3, Layout};
 use crate::{
-    LightingBackgroundModeToml, LightingChargeConditionToml, LightingEffectTomlConfig, LightingTargetTomlConfig,
+    LightingBackgroundModeToml, LightingChargeConditionToml, LightingEffectTomlConfig, LightingOutputModeToml,
+    LightingTargetTomlConfig,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -109,10 +110,34 @@ pub struct LightingConditionalSceneCell {
     pub effect: LightingEffect,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LightingOutputMode {
+    AlwaysOn,
+    AlwaysOff,
+    PoweredOnly,
+}
+
+impl Default for LightingOutputMode {
+    fn default() -> Self {
+        Self::AlwaysOn
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LightingOutputModeIndicator {
+    pub slot: u16,
+    pub always_on: LightingEffect,
+    pub always_off: LightingEffect,
+    pub powered_only: LightingEffect,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LightingControls {
     pub output_toggle_user_action: Option<u8>,
+    pub output_mode_cycle_user_action: Option<u8>,
     pub wake_layer: Option<u8>,
+    pub initial_output_mode: LightingOutputMode,
+    pub output_mode_indicator: Option<LightingOutputModeIndicator>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -250,20 +275,59 @@ impl crate::KeyboardTomlConfig {
             &zone_memberships,
             &zone_ids,
         )?;
-        let controls = config.controls.map_or(Ok(LightingControls::default()), |controls| {
-            if let Some(layer) = controls.wake_layer
-                && layer >= keymap.layers
-            {
-                return Err(format!(
-                    "lighting.controls wake_layer {} is outside keymap layer count {}",
-                    layer, keymap.layers
-                ));
-            }
-            Ok(LightingControls {
-                output_toggle_user_action: controls.output_toggle_user_action,
-                wake_layer: controls.wake_layer,
-            })
-        })?;
+        let controls = config
+            .controls
+            .clone()
+            .map_or(Ok(LightingControls::default()), |controls| {
+                if let Some(layer) = controls.wake_layer
+                    && layer >= keymap.layers
+                {
+                    return Err(format!(
+                        "lighting.controls wake_layer {} is outside keymap layer count {}",
+                        layer, keymap.layers
+                    ));
+                }
+                Ok(LightingControls {
+                    output_toggle_user_action: controls.output_toggle_user_action,
+                    output_mode_cycle_user_action: controls.output_mode_cycle_user_action,
+                    wake_layer: controls.wake_layer,
+                    initial_output_mode: match controls.initial_output_mode {
+                        LightingOutputModeToml::AlwaysOn => LightingOutputMode::AlwaysOn,
+                        LightingOutputModeToml::AlwaysOff => LightingOutputMode::AlwaysOff,
+                        LightingOutputModeToml::PoweredOnly => LightingOutputMode::PoweredOnly,
+                    },
+                    output_mode_indicator: controls
+                        .output_mode_indicator
+                        .as_ref()
+                        .map(|indicator| {
+                            let id_to_slot: HashMap<u16, u16> = emitters
+                                .iter()
+                                .enumerate()
+                                .map(|(slot, emitter)| (emitter.id, slot as u16))
+                                .collect();
+                            let slots = resolve_target_slots(
+                                &indicator.target,
+                                &id_to_slot,
+                                &emitters,
+                                &zone_memberships,
+                                &zone_ids,
+                            )?;
+                            if slots.len() != 1 {
+                                return Err(
+                                    "lighting.controls output_mode_indicator must resolve to exactly one LED"
+                                        .to_owned(),
+                                );
+                            }
+                            Ok(LightingOutputModeIndicator {
+                                slot: slots[0],
+                                always_on: resolve_effect(&indicator.always_on)?,
+                                always_off: resolve_effect(&indicator.always_off)?,
+                                powered_only: resolve_effect(&indicator.powered_only)?,
+                            })
+                        })
+                        .transpose()?,
+                })
+            })?;
         let background = config
             .background
             .as_ref()
@@ -782,7 +846,15 @@ effect = {{ kind = "solid", color = [9, 8, 7] }}
             r#"{BASE}
 [lighting.controls]
 output_toggle_user_action = 13
+output_mode_cycle_user_action = 14
 wake_layer = 1
+initial_output_mode = "powered_only"
+
+[lighting.controls.output_mode_indicator]
+target = {{ led = 10 }}
+always_on = {{ kind = "solid", color = [0, 9, 0] }}
+always_off = {{ kind = "solid", color = [9, 0, 0] }}
+powered_only = {{ kind = "solid", color = [0, 0, 9] }}
 "#
         );
         let config = parse(&source);
@@ -790,7 +862,10 @@ wake_layer = 1
         let keymap = config.keymap().unwrap();
         let lighting = config.lighting(&layout, &keymap).unwrap().unwrap();
         assert_eq!(lighting.controls.output_toggle_user_action, Some(13));
+        assert_eq!(lighting.controls.output_mode_cycle_user_action, Some(14));
         assert_eq!(lighting.controls.wake_layer, Some(1));
+        assert_eq!(lighting.controls.initial_output_mode, LightingOutputMode::PoweredOnly);
+        assert_eq!(lighting.controls.output_mode_indicator.unwrap().slot, 0);
 
         let invalid = parse(&source.replace("wake_layer = 1", "wake_layer = 2"));
         let error = invalid.lighting(&layout, &keymap).unwrap_err();

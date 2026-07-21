@@ -190,6 +190,8 @@ impl LightingFeatureFlags {
     pub const COMPILED_LAYER_SCENES: u16 = 1 << 8;
     /// Read-only board-compiled rules driven by layer and battery state.
     pub const COMPILED_CONDITIONAL_SCENES: u16 = 1 << 9;
+    /// Declarative three-state output policy and live readback.
+    pub const OUTPUT_MODE: u16 = 1 << 10;
 
     pub const fn contains(self, bits: u16) -> bool {
         self.0 & bits == bits
@@ -629,6 +631,39 @@ wire_type! {
 }
 
 wire_type! {
+    /// Persistent policy selected by the board's configured cycle action.
+    pub enum LightingOutputMode {
+        AlwaysOn,
+        AlwaysOff,
+        PoweredOnly,
+    }
+}
+
+wire_type! {
+    /// Configured status LED and its mode-specific effects.
+    pub struct LightingOutputModeIndicator {
+        pub led_id: LightingLedId,
+        pub always_on: LightingEffect,
+        pub always_off: LightingEffect,
+        pub powered_only: LightingEffect,
+    }
+}
+
+wire_type! {
+    /// Authoritative output policy plus the inputs that determine whether the
+    /// LEDs are physically enabled right now.
+    pub struct LightingOutputModeState {
+        pub mode: LightingOutputMode,
+        pub powered: bool,
+        pub wake_active: bool,
+        pub effective_enabled: bool,
+        pub cycle_user_action: Option<u8>,
+        pub wake_layer: Option<u8>,
+        pub indicator: Option<LightingOutputModeIndicator>,
+    }
+}
+
+wire_type! {
     pub struct LightingConditionalSceneStatus {
         pub topology_revision: u32,
         pub cell_len: u16,
@@ -769,6 +804,7 @@ pub type LightingCompiledSceneStatusResult = LightingResult<LightingCompiledScen
 pub type LightingCompiledScenesPageResult = LightingResult<LightingCompiledScenesPage>;
 pub type LightingConditionalSceneStatusResult = LightingResult<LightingConditionalSceneStatus>;
 pub type LightingConditionalScenesPageResult = LightingResult<LightingConditionalScenesPage>;
+pub type LightingOutputModeStateResult = LightingResult<LightingOutputModeState>;
 pub type LightingSceneTransactionResult = LightingResult<LightingSceneTransaction>;
 pub type LightingUnitResult = LightingResult<()>;
 
@@ -812,6 +848,7 @@ const _: () = {
     assert_endpoint_fits!(LightingPageRequest, LightingCompiledScenesPageResult);
     assert_endpoint_fits!((), LightingConditionalSceneStatusResult);
     assert_endpoint_fits!(LightingPageRequest, LightingConditionalScenesPageResult);
+    assert_endpoint_fits!((), LightingOutputModeStateResult);
     assert_endpoint_fits!(SetLightingSceneCellRequest, LightingStateResult);
     assert_endpoint_fits!(UnsetLightingSceneCellRequest, LightingStateResult);
     assert_endpoint_fits!(SetLightingLayerPolicyRequest, LightingStateResult);

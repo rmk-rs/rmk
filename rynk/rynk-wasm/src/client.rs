@@ -35,7 +35,7 @@ use rynk::rmk_types::protocol::rynk::{
     LightingScenesPage, PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest, SetLightingSceneCellRequest,
     UnsetLightingSceneCellRequest, LayerState, LightingCompiledSceneStatus, LightingCompiledScenesPage,
     LightingOverlayPage, LightingOverlayPageRequest, SplitCentralLatencyPolicy, SplitCentralLatencyState,
-    LightingConditionalSceneStatus, LightingConditionalScenesPage,
+    LightingConditionalSceneStatus, LightingConditionalScenesPage, LightingOutputModeState,
 };
 use rynk::{Client, Driver, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
 use wasm_bindgen::prelude::*;
@@ -177,6 +177,7 @@ endpoints! {
     // lighting
     get_lighting_capabilities() -> LightingCapabilities,
     get_lighting_state() -> LightingState,
+    get_lighting_output_mode() -> LightingOutputModeState,
     set_lighting_state(request: SetLightingStateRequest) -> LightingState,
     get_lighting_keys(request: LightingPageRequest) -> LightingKeysPage,
     get_lighting_physical_keys(request: LightingPageRequest) -> LightingPhysicalKeysPage,

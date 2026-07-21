@@ -1,6 +1,6 @@
 use super::compositor::{Contribution, LightingSource, RenderInput};
 use super::context::{LightingContext, LightingContextProvider};
-use super::effect::{EffectSample, LightingEffect};
+use super::effect::{BuiltinEffect, EffectSample, LightingEffect};
 use super::topology::LedSlot;
 use crate::types::battery::{BatteryStatus, ChargeState};
 
@@ -183,11 +183,51 @@ pub struct ConditionSet {
     pub battery: Option<BatteryCondition>,
 }
 
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum OutputMode {
+    #[default]
+    AlwaysOn,
+    AlwaysOff,
+    PoweredOnly,
+}
+
+impl OutputMode {
+    pub const fn next(self) -> Self {
+        match self {
+            Self::AlwaysOn => Self::AlwaysOff,
+            Self::AlwaysOff => Self::PoweredOnly,
+            Self::PoweredOnly => Self::AlwaysOn,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct OutputModeIndicator {
+    pub slot: LedSlot,
+    pub always_on: BuiltinEffect,
+    pub always_off: BuiltinEffect,
+    pub powered_only: BuiltinEffect,
+}
+
+impl OutputModeIndicator {
+    pub const fn effect(self, mode: OutputMode) -> BuiltinEffect {
+        match mode {
+            OutputMode::AlwaysOn => self.always_on,
+            OutputMode::AlwaysOff => self.always_off,
+            OutputMode::PoweredOnly => self.powered_only,
+        }
+    }
+}
+
 /// Optional board controls compiled from `[lighting.controls]`.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct LightingControls {
+    /// Legacy two-state action retained for existing boards.
     pub output_toggle_user_action: Option<u8>,
+    pub output_mode_cycle_user_action: Option<u8>,
     pub wake_layer: Option<u8>,
+    pub initial_output_mode: OutputMode,
+    pub output_mode_indicator: Option<OutputModeIndicator>,
 }
 
 impl ConditionSet {
@@ -602,6 +642,7 @@ mod tests {
         let context = LightingContext {
             layers: LayerState::new(3, 0, 0b1101),
             indicators: Default::default(),
+            powered: false,
         };
         let compositor = Compositor::<Rgb8, 2>::new(Rgb8::BLACK);
         let mut frame = LogicalFrame::new(Rgb8::BLACK);
@@ -729,6 +770,7 @@ mod tests {
         let context = LightingContext {
             layers: LayerState::new(2, 0, 0b101),
             indicators: Default::default(),
+            powered: false,
         };
         let compositor = Compositor::<Rgb8, 2>::new(Rgb8::BLACK);
         let mut frame = LogicalFrame::new(Rgb8::BLACK);

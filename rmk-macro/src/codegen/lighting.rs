@@ -4,7 +4,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use rmk_config::resolved::lighting::{
     Lighting, LightingBackgroundMode, LightingChargeCondition, LightingConditionalSceneCell,
-    LightingEffect, LightingSceneCell,
+    LightingEffect, LightingOutputMode, LightingSceneCell,
 };
 use rmk_config::resolved::{FixedPoint3, PhysicalLayout};
 
@@ -199,8 +199,34 @@ pub(crate) fn expand_lighting_renderer_config(lighting: Option<&Lighting>) -> To
         Some(action) => quote! { Some(#action) },
         None => quote! { None },
     };
+    let output_mode_cycle_user_action = match lighting.controls.output_mode_cycle_user_action {
+        Some(action) => quote! { Some(#action) },
+        None => quote! { None },
+    };
     let wake_layer = match lighting.controls.wake_layer {
         Some(layer) => quote! { Some(#layer) },
+        None => quote! { None },
+    };
+    let initial_output_mode = match lighting.controls.initial_output_mode {
+        LightingOutputMode::AlwaysOn => quote! { ::rmk::lighting::OutputMode::AlwaysOn },
+        LightingOutputMode::AlwaysOff => quote! { ::rmk::lighting::OutputMode::AlwaysOff },
+        LightingOutputMode::PoweredOnly => quote! { ::rmk::lighting::OutputMode::PoweredOnly },
+    };
+    let output_mode_indicator = match lighting.controls.output_mode_indicator {
+        Some(indicator) => {
+            let slot = indicator.slot;
+            let always_on = expand_effect(indicator.always_on);
+            let always_off = expand_effect(indicator.always_off);
+            let powered_only = expand_effect(indicator.powered_only);
+            quote! {
+                Some(::rmk::lighting::OutputModeIndicator {
+                    slot: ::rmk::lighting::LedSlot(#slot),
+                    always_on: #always_on,
+                    always_off: #always_off,
+                    powered_only: #powered_only,
+                })
+            }
+        }
         None => quote! { None },
     };
     let background = &lighting.background;
@@ -231,7 +257,10 @@ pub(crate) fn expand_lighting_renderer_config(lighting: Option<&Lighting>) -> To
         pub const LIGHTING_CONTROLS: ::rmk::lighting::LightingControls =
             ::rmk::lighting::LightingControls {
                 output_toggle_user_action: #output_toggle_user_action,
+                output_mode_cycle_user_action: #output_mode_cycle_user_action,
                 wake_layer: #wake_layer,
+                initial_output_mode: #initial_output_mode,
+                output_mode_indicator: #output_mode_indicator,
             };
         pub const LIGHTING_BACKGROUND: ::rmk::lighting::BackgroundState =
             ::rmk::lighting::BackgroundState {

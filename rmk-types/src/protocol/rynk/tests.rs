@@ -1217,7 +1217,8 @@ fn lighting_wire_frames_locked() {
                 | LightingFeatureFlags::ATOMIC_OVERLAY_REPLACE
                 | LightingFeatureFlags::LAYER_AWARE
                 | LightingFeatureFlags::OVERLAY_READBACK
-                | LightingFeatureFlags::COMPILED_LAYER_SCENES,
+                | LightingFeatureFlags::COMPILED_LAYER_SCENES
+                | LightingFeatureFlags::OUTPUT_MODE,
         ),
         effects: LightingEffectFlags(
             LightingEffectFlags::SOLID | LightingEffectFlags::BLINK | LightingEffectFlags::BREATHE,
@@ -1393,6 +1394,26 @@ fn lighting_wire_frames_locked() {
     let scene_abort = AbortLightingSceneReplaceRequest {
         transaction_id: scene_transaction.id,
     };
+    let output_mode = LightingOutputModeState {
+        mode: LightingOutputMode::PoweredOnly,
+        powered: true,
+        wake_active: false,
+        effective_enabled: true,
+        cycle_user_action: Some(13),
+        wake_layer: Some(2),
+        indicator: Some(LightingOutputModeIndicator {
+            led_id: led.id,
+            always_on: LightingEffect::Solid {
+                color: LightingRgb8 { r: 0, g: 9, b: 0 },
+            },
+            always_off: LightingEffect::Solid {
+                color: LightingRgb8 { r: 9, g: 0, b: 0 },
+            },
+            powered_only: LightingEffect::Solid {
+                color: LightingRgb8 { r: 0, g: 0, b: 9 },
+            },
+        }),
+    };
 
     let entries: alloc::vec::Vec<(&str, alloc::vec::Vec<u8>)> = alloc::vec![
         (
@@ -1429,6 +1450,18 @@ fn lighting_wire_frames_locked() {
                 Cmd::SetLightingState,
                 SEQ,
                 &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "GetLightingOutputMode request",
+            encode_frame(Cmd::GetLightingOutputMode, SEQ, &())
+        ),
+        (
+            "GetLightingOutputMode reply",
+            encode_frame(
+                Cmd::GetLightingOutputMode,
+                SEQ,
+                &Ok::<LightingOutputModeStateResult, RynkError>(Ok(output_mode))
             )
         ),
         (

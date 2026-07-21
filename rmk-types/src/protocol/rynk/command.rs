@@ -39,13 +39,13 @@ use crate::protocol::rynk::{
     BeginLightingSceneReplaceRequest, ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest,
     CommitLightingSceneReplaceRequest, LightingCapabilitiesResult, LightingChanged, LightingCompiledSceneStatusResult,
     LightingCompiledScenesPageResult, LightingConditionalSceneStatusResult, LightingConditionalScenesPageResult,
-    LightingKeysPageResult, LightingLedsPageResult, LightingOutputsPageResult, LightingOverlayPageRequest,
-    LightingOverlayPageResult, LightingOverlayTransactionResult, LightingPageRequest, LightingPhysicalKeysPageResult,
-    LightingRoutesPageResult, LightingScenePageRequest, LightingSceneStatusResult, LightingSceneTransactionResult,
-    LightingScenesPageResult, LightingStateResult, LightingUnitResult, LightingZoneMembershipsPageResult,
-    LightingZonesPageResult, PutLightingOverlayChunkRequest, PutLightingSceneChunkRequest,
-    SetLightingLayerPolicyRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
-    UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
+    LightingKeysPageResult, LightingLedsPageResult, LightingOutputModeStateResult, LightingOutputsPageResult,
+    LightingOverlayPageRequest, LightingOverlayPageResult, LightingOverlayTransactionResult, LightingPageRequest,
+    LightingPhysicalKeysPageResult, LightingRoutesPageResult, LightingScenePageRequest, LightingSceneStatusResult,
+    LightingSceneTransactionResult, LightingScenesPageResult, LightingStateResult, LightingUnitResult,
+    LightingZoneMembershipsPageResult, LightingZonesPageResult, PutLightingOverlayChunkRequest,
+    PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest, SetLightingOverlayRequest,
+    SetLightingSceneCellRequest, SetLightingStateRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
 #[cfg(all(feature = "_ble", feature = "split"))]
 use crate::protocol::rynk::{SplitCentralLatencyPolicy, SplitCentralLatencyState};
@@ -442,6 +442,9 @@ endpoints! {
     /// Conditional-scene pages are pinned to the firmware topology revision.
     #[cfg(feature = "lighting")]
     GetLightingConditionalScenes = 0x091F: LightingPageRequest => LightingConditionalScenesPageResult;
+    /// Read the configured three-state output policy and its live state.
+    #[cfg(feature = "lighting")]
+    GetLightingOutputMode = 0x0920: () => LightingOutputModeStateResult;
 }
 
 // Define topics: `Name = value: Payload;`

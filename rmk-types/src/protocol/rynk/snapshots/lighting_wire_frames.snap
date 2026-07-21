@@ -19,7 +19,7 @@ CommitLightingOverlayReplace reply                     0f 09 01 0c 00 00 00 09 0
 CommitLightingOverlayReplace request                   0f 09 01 01 00 0d
 CommitLightingSceneReplace reply                       18 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
 CommitLightingSceneReplace request                     18 09 01 01 00 15
-GetLightingCapabilities reply                          01 09 01 10 00 00 00 01 02 03 04 05 06 07 08 09 08 08 bf 03 07
+GetLightingCapabilities reply                          01 09 01 10 00 00 00 01 02 03 04 05 06 07 08 09 08 08 bf 0b 07
 GetLightingCapabilities request                        01 09 01 00 00
 GetLightingCompiledSceneStatus reply                   1c 09 01 06 00 00 00 01 01 00 08
 GetLightingCompiledSceneStatus request                 1c 09 01 00 00
@@ -29,6 +29,8 @@ GetLightingKeys reply                                  11 09 01 07 00 00 00 01 0
 GetLightingKeys request                                11 09 01 02 00 01 00
 GetLightingLeds reply                                  05 09 01 12 00 00 00 01 01 01 2a 01 01 02 01 ff 01 80 04 80 01 03 01
 GetLightingLeds request                                05 09 01 02 00 01 00
+GetLightingOutputMode reply                            20 09 01 18 00 00 00 02 01 00 01 01 0d 01 02 01 2a 00 00 09 00 00 09 00 00 00 00 00 09
+GetLightingOutputMode request                          20 09 01 00 00
 GetLightingOutputs reply                               08 09 01 0a 00 00 00 01 01 01 01 02 28 14 00
 GetLightingOutputs request                             08 09 01 02 00 01 00
 GetLightingOverlay reply                               1b 09 01 12 00 00 00 09 01 01 2a 01 01 02 03 e8 07 fa 01 32 01 88 27

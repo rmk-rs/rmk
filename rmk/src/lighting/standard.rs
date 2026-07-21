@@ -20,7 +20,10 @@ use super::context::{LightingContext, LightingContextProvider};
 use super::effect::{BuiltinEffect, LightingEffect};
 use super::output::BrightnessTransform;
 use super::service::{CommandResult, Invalidation, LightingEngine, RenderInput, RenderOutcome};
-use super::source::{LayerPolicy, LayerScenes, OverlayError, OverlayUpdate, TtlOverlay};
+use super::source::{
+    LayerPolicy, LayerScenes, LightingControls, OutputMode, OverlayError, OverlayUpdate, SceneCell, SparseScene,
+    TtlOverlay,
+};
 use super::topology::LedSlot;
 use crate::RawMutex;
 
@@ -572,6 +575,9 @@ pub struct StandardMutableState {
 pub struct StandardState {
     pub revision: u32,
     pub output_enabled: bool,
+    pub output_mode: OutputMode,
+    pub powered: bool,
+    pub wake_active: bool,
     pub output_brightness: u8,
     pub background: BackgroundState,
     pub overlay_len: usize,
@@ -639,6 +645,7 @@ impl StandardReply {
 pub struct StandardReplicaState<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
     pub revision: u32,
     pub mutable: StandardMutableState,
+    pub output_mode: OutputMode,
     pub overlay: OverlayBatch<OVERLAY_CAP>,
     pub scenes: SceneTable<SCENE_CAP>,
     pub context: LightingContext,
@@ -814,7 +821,11 @@ pub struct StandardLightingEngine<
     scene_expired_transaction: Option<u32>,
     scene_committed_transaction: Option<u32>,
     revision: u32,
-    output_enabled: bool,
+    controls: LightingControls,
+    output_mode: OutputMode,
+    powered: bool,
+    wake_active: bool,
+    effective_output_enabled: bool,
     output_brightness: u8,
 }
 
@@ -841,15 +852,49 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             scene_expired_transaction: None,
             scene_committed_transaction: None,
             revision: 0,
-            output_enabled: true,
+            controls: LightingControls::default(),
+            output_mode: OutputMode::AlwaysOn,
+            powered: false,
+            wake_active: false,
+            effective_output_enabled: true,
             output_brightness: u8::MAX,
         }
+    }
+
+    /// Install the board's declarative lighting controls before the engine is
+    /// served. The configured initial mode becomes authoritative on boot.
+    pub const fn with_controls(mut self, controls: LightingControls) -> Self {
+        self.output_mode = controls.initial_output_mode;
+        self.effective_output_enabled = matches!(self.output_mode, OutputMode::AlwaysOn);
+        self.controls = controls;
+        self
+    }
+
+    pub const fn output_mode(&self) -> OutputMode {
+        self.output_mode
+    }
+
+    pub const fn powered(&self) -> bool {
+        self.powered
+    }
+
+    pub const fn wake_active(&self) -> bool {
+        self.wake_active
+    }
+
+    const fn effective_output(&self) -> bool {
+        self.wake_active
+            || matches!(self.output_mode, OutputMode::AlwaysOn)
+            || matches!(self.output_mode, OutputMode::PoweredOnly) && self.powered
     }
 
     pub fn state(&self) -> StandardState {
         StandardState {
             revision: self.revision,
-            output_enabled: self.output_enabled,
+            output_enabled: self.effective_output(),
+            output_mode: self.output_mode,
+            powered: self.powered,
+            wake_active: self.wake_active,
             output_brightness: self.output_brightness,
             background: self.background.state(),
             overlay_len: self.overlay.active_len(),
@@ -898,9 +943,16 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
         const STEP: u8 = 17;
         let background = &mut self.background.state;
         match action {
-            LightAction::BacklightOn => self.output_enabled = true,
-            LightAction::BacklightOff => self.output_enabled = false,
-            LightAction::BacklightToggle => self.output_enabled = !self.output_enabled,
+            LightAction::BacklightOn => self.output_mode = OutputMode::AlwaysOn,
+            LightAction::BacklightOff => self.output_mode = OutputMode::AlwaysOff,
+            LightAction::BacklightToggle => {
+                self.output_mode = if matches!(self.output_mode, OutputMode::AlwaysOff) {
+                    OutputMode::AlwaysOn
+                } else {
+                    OutputMode::AlwaysOff
+                }
+            }
+            LightAction::OutputModeCycle => self.output_mode = self.output_mode.next(),
             LightAction::BacklightDown => self.output_brightness = self.output_brightness.saturating_sub(STEP),
             LightAction::BacklightUp => self.output_brightness = self.output_brightness.saturating_add(STEP),
             LightAction::BacklightStep => self.output_brightness = self.output_brightness.wrapping_add(STEP),
@@ -950,14 +1002,18 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
     }
 
     fn set_mutable_state(&mut self, state: StandardMutableState) {
-        self.output_enabled = state.output_enabled;
+        self.output_mode = if state.output_enabled {
+            OutputMode::AlwaysOn
+        } else {
+            OutputMode::AlwaysOff
+        };
         self.output_brightness = state.output_brightness;
         self.background.set_state(state.background);
     }
 
     fn mutable_state(&self) -> StandardMutableState {
         StandardMutableState {
-            output_enabled: self.output_enabled,
+            output_enabled: self.effective_output(),
             output_brightness: self.output_brightness,
             background: self.background.state(),
         }
@@ -988,6 +1044,7 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
         Ok(StandardReplicaState {
             revision: self.revision,
             mutable: self.mutable_state(),
+            output_mode: self.output_mode,
             overlay,
             scenes: self.scenes,
             context: *context.lighting_context(),
@@ -1020,6 +1077,7 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
         self.overlay
             .replace(replica.sample_time_ms, &updates[..replica.overlay.as_slice().len()])?;
         self.set_mutable_state(replica.mutable);
+        self.output_mode = replica.output_mode;
         self.scenes = replica.scenes;
         self.revision = replica.revision;
         self.animation_clock.anchor(local_now_ms, replica.sample_time_ms);
@@ -1311,7 +1369,11 @@ where
 
         let (mut invalidation, advances_revision) = match command {
             StandardCommand::SetOutputEnabled(enabled) => {
-                self.output_enabled = enabled;
+                self.output_mode = if enabled {
+                    OutputMode::AlwaysOn
+                } else {
+                    OutputMode::AlwaysOff
+                };
                 (Invalidation::Render, true)
             }
             StandardCommand::SetOutputBrightness(level) => {
@@ -1503,10 +1565,32 @@ where
         let effect_now_ms = self.animation_clock.sample_time(input.now_ms);
         let overlay_len = self.overlay.active_len();
         self.overlay.prune_expired(effect_now_ms);
-        let state_changed = self.overlay.active_len() != overlay_len;
+        let mut state_changed = self.overlay.active_len() != overlay_len;
         if state_changed {
             self.advance_revision();
         }
+        let context = input.snapshot.lighting_context();
+        let powered = context.powered;
+        let wake_active = self
+            .controls
+            .wake_layer
+            .is_some_and(|layer| context.layers.is_active(layer));
+        let effective_output_enabled = wake_active
+            || matches!(self.output_mode, OutputMode::AlwaysOn)
+            || matches!(self.output_mode, OutputMode::PoweredOnly) && powered;
+        if self.powered != powered
+            || self.wake_active != wake_active
+            || self.effective_output_enabled != effective_output_enabled
+        {
+            self.powered = powered;
+            self.wake_active = wake_active;
+            self.effective_output_enabled = effective_output_enabled;
+            state_changed = true;
+        }
+        let indicator_cell = self.controls.output_mode_indicator.map(|indicator| SceneCell {
+            slot: indicator.slot,
+            effect: indicator.effect(self.output_mode),
+        });
         let Self {
             compositor,
             background,
@@ -1516,7 +1600,11 @@ where
             overlay,
             status,
             animation_clock: _,
-            output_enabled,
+            controls: _,
+            output_mode: _,
+            powered: _,
+            wake_active: _,
+            effective_output_enabled,
             output_brightness,
             scene_replace: _,
             scene_next_transaction: _,
@@ -1532,7 +1620,17 @@ where
         transaction.apply(priority::LAYER, scenes)?;
         transaction.apply(priority::HOST_OVERLAY, overlay)?;
         transaction.apply(priority::STATUS, status)?;
-        let mut transform = BrightnessTransform::new(if *output_enabled { *output_brightness } else { 0 });
+        if wake_active && let Some(indicator_cell) = indicator_cell.as_ref() {
+            let mut indicator = SparseScene {
+                cells: core::slice::from_ref(indicator_cell),
+            };
+            transaction.apply(priority::STATUS, &mut indicator)?;
+        }
+        let mut transform = BrightnessTransform::new(if *effective_output_enabled {
+            *output_brightness
+        } else {
+            0
+        });
         let result = transaction.finish_with(&mut transform);
         let next_wake_in_ms = result.next_wake_ms.map(|deadline| {
             let delay = deadline.saturating_sub(effect_now_ms).clamp(1, u32::MAX as u64);
@@ -1612,6 +1710,7 @@ mod tests {
         LightingContext {
             layers: LayerState::new(layer, 0, 1 | (1 << layer)),
             indicators: Default::default(),
+            powered: false,
         }
     }
 
@@ -1725,6 +1824,7 @@ mod tests {
                 output_brightness: 42,
                 background: BackgroundState::default(),
             },
+            output_mode: OutputMode::AlwaysOn,
             overlay: OverlayBatch::new(),
             scenes: SceneTable::new(),
             context: context(0),
@@ -1734,6 +1834,85 @@ mod tests {
         assert_eq!(slot.put(snapshot), Err(ReplicaSlotError::Busy));
         assert_eq!(slot.take(), Ok(snapshot));
         assert_eq!(slot.take(), Err(ReplicaSlotError::Empty));
+    }
+
+    #[test]
+    fn output_mode_cycles_and_wake_layer_temporarily_overrides_policy() {
+        let mut engine = engine().with_controls(LightingControls {
+            output_toggle_user_action: None,
+            output_mode_cycle_user_action: Some(13),
+            wake_layer: Some(2),
+            initial_output_mode: OutputMode::PoweredOnly,
+            output_mode_indicator: Some(super::super::source::OutputModeIndicator {
+                slot: LedSlot(1),
+                always_on: BuiltinEffect::Solid { color: GREEN },
+                always_off: BuiltinEffect::Solid { color: RED },
+                powered_only: BuiltinEffect::Solid {
+                    color: Rgb8::new(0, 0, 200),
+                },
+            }),
+        });
+        let mut frame = LogicalFrame::new(Rgb8::BLACK);
+        let battery_context = context(0);
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 0,
+                    snapshot: &battery_context,
+                },
+                &mut frame,
+            )
+            .unwrap();
+        assert_eq!(frame.as_slice(), &[Rgb8::BLACK, Rgb8::BLACK]);
+        assert!(!engine.state().output_enabled);
+
+        let mut powered_context = battery_context;
+        powered_context.powered = true;
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 1,
+                    snapshot: &powered_context,
+                },
+                &mut frame,
+            )
+            .unwrap();
+        assert!(engine.state().output_enabled);
+
+        engine
+            .on_input(StandardInput(LightAction::OutputModeCycle), &powered_context)
+            .unwrap();
+        assert_eq!(engine.output_mode(), OutputMode::AlwaysOn);
+        engine
+            .on_input(StandardInput(LightAction::OutputModeCycle), &powered_context)
+            .unwrap();
+        assert_eq!(engine.output_mode(), OutputMode::AlwaysOff);
+
+        let magic_context = context(2);
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 2,
+                    snapshot: &magic_context,
+                },
+                &mut frame,
+            )
+            .unwrap();
+        assert!(engine.state().wake_active);
+        assert!(engine.state().output_enabled);
+        assert_eq!(frame.as_slice()[1], RED);
+
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 3,
+                    snapshot: &battery_context,
+                },
+                &mut frame,
+            )
+            .unwrap();
+        assert_eq!(frame.as_slice(), &[Rgb8::BLACK, Rgb8::BLACK]);
+        assert_eq!(engine.output_mode(), OutputMode::AlwaysOff);
     }
 
     #[test]

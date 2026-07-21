@@ -610,11 +610,33 @@ pub(crate) struct LightingTomlConfig {
     pub background: Option<LightingBackgroundTomlConfig>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LightingControlsTomlConfig {
     pub output_toggle_user_action: Option<u8>,
+    pub output_mode_cycle_user_action: Option<u8>,
     pub wake_layer: Option<u8>,
+    #[serde(default)]
+    pub initial_output_mode: LightingOutputModeToml,
+    pub output_mode_indicator: Option<LightingOutputModeIndicatorTomlConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LightingOutputModeToml {
+    #[default]
+    AlwaysOn,
+    AlwaysOff,
+    PoweredOnly,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingOutputModeIndicatorTomlConfig {
+    pub target: LightingTargetTomlConfig,
+    pub always_on: LightingEffectTomlConfig,
+    pub always_off: LightingEffectTomlConfig,
+    pub powered_only: LightingEffectTomlConfig,
 }
 
 fn default_topology_revision() -> u32 {

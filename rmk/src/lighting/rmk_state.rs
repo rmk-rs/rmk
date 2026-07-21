@@ -51,6 +51,7 @@ impl SnapshotProvider for KeymapLightingState<'_, '_> {
         LightingContext {
             layers: LayerState::new(effective, default, active),
             indicators: indicator_state(),
+            powered: crate::state::current_usb_state().is_powered(),
         }
     }
 }
