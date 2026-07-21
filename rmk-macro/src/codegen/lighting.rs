@@ -12,7 +12,13 @@ use rmk_config::resolved::{FixedPoint3, PhysicalLayout};
 /// directly from `KEYBOARD_TOML_PATH` without the full `#[rmk_keyboard]`
 /// pipeline (which would require a `[matrix]` or `[split]` section).
 pub(crate) fn expand_standalone_lighting_config() -> TokenStream2 {
-    let config = crate::codegen::keyboard_config::read_keyboard_toml_config();
+    // Load without the chip-default layer: it requires `[keyboard].chip` and
+    // only fills in sections ([storage], [ble], ...) that a hand-written main
+    // configures in Rust. rmk-types' build.rs treats such tomls the same way.
+    let config_toml_path = std::env::var("KEYBOARD_TOML_PATH")
+        .expect("[ERROR]: KEYBOARD_TOML_PATH should be set in `.cargo/config.toml`");
+    let config =
+        rmk_config::KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&config_toml_path);
     let layout = config
         .layout_standalone()
         .expect("failed to resolve layout config");
@@ -525,6 +531,8 @@ mod tests {
                     ],
                 },
             ],
+            conditional_scene_cells: Vec::new(),
+            controls: Default::default(),
             background: LightingBackground {
                 enabled: false,
                 hue: 11,
@@ -564,5 +572,560 @@ mod tests {
     fn omits_all_lighting_symbols_without_resolved_lighting() {
         assert!(expand_lighting_topology(None).is_empty());
         assert!(expand_lighting_renderer_config(None).is_empty());
+    }
+
+    // Exact copy of rmk-zsa-voyager/keyboard.toml: a board-wide 12x7 layout
+    // with 52 emitters split across two IS31FL3731 outputs on a single node.
+    const VOYAGER_TOML: &str = r#"# Consumed at build time by rmk-types (event channel sizing) and by the
+# `rmk_lighting_config!` macro in main.rs (physical layout + `[lighting]`
+# statics). The scan hardware and keymap stay in Rust: the left half is a
+# direct-GPIO matrix and the right half arrives over an MCP23018, which the
+# `#[rmk_keyboard]` generated main cannot express.
+
+# The logical 12x7 matrix. Rows 0-5 are the left half, rows 6-11 the right
+# half; see src/keymap.rs for the physical wiring behind this arrangement.
+[layout]
+rows = 12
+cols = 7
+map = """
+(0,1) (0,2) (0,3) (0,4) (0,5) (0,6)
+(1,1) (1,2) (1,3) (1,4) (1,5) (1,6)
+(2,1) (2,2) (2,3) (2,4) (2,5) (2,6)
+(3,1) (3,2) (3,3) (3,4) (3,5)
+(4,4)
+(5,0) (5,1)
+(6,0) (6,1) (6,2) (6,3) (6,4) (6,5)
+(7,0) (7,1) (7,2) (7,3) (7,4) (7,5)
+(8,0) (8,1) (8,2) (8,3) (8,4) (8,5)
+(9,1) (9,2) (9,3) (9,4) (9,5)
+(10,2)
+(11,5) (11,6)
+"""
+
+# Layer count only; the default keymap itself lives in src/keymap.rs.
+[keymap]
+layers = 3
+
+# Board-wide lighting topology: one node (the Voyager is not an RMK split),
+# two IS31FL3731 chips as separate outputs. Emitter ids 0-25 are the left
+# chip and 26-51 the right chip, in `LED_TABLE` order (src/is31fl3731.rs);
+# `physical_index` is the chip-relative index into that table.
+[lighting]
+topology_revision = 1
+
+[[lighting.zone]]
+id = 1
+name = "per-key"
+
+[[lighting.output]]
+node = 0
+id = 0
+pixel_count = 26
+capabilities = ["rgb", "addressable"]
+
+[[lighting.output]]
+node = 0
+id = 1
+pixel_count = 26
+capabilities = ["rgb", "addressable"]
+
+# The animated base-layer background comes from the rmk-palettefx extension
+# source, not the uniform background.
+[lighting.background]
+enabled = false
+hue = 0
+saturation = 0
+value = 0
+speed = 128
+mode = "solid"
+
+[lighting.controls]
+initial_output_mode = "always_on"
+
+# Non-base layers replace the animation with a solid wash, exactly covering
+# every emitter so the extension band sleeps while a layer is held.
+[[lighting.layer_scene]]
+layer = 1
+
+[[lighting.layer_scene.cell]]
+target = { all = true }
+effect = { kind = "solid", color = [0, 16, 64] } # symbols/F-keys: cool blue
+
+[[lighting.layer_scene]]
+layer = 2
+
+[[lighting.layer_scene.cell]]
+target = { all = true }
+effect = { kind = "solid", color = [48, 0, 48] } # media/nav: magenta
+
+# Left chip (0x74), LED_TABLE entries 0-25.
+[[lighting.emitter]]
+id = 0
+key = [0, 1]
+zones = [1]
+node = 0
+output = 0
+physical_index = 0
+
+[[lighting.emitter]]
+id = 1
+key = [0, 2]
+zones = [1]
+node = 0
+output = 0
+physical_index = 1
+
+[[lighting.emitter]]
+id = 2
+key = [0, 3]
+zones = [1]
+node = 0
+output = 0
+physical_index = 2
+
+[[lighting.emitter]]
+id = 3
+key = [0, 4]
+zones = [1]
+node = 0
+output = 0
+physical_index = 3
+
+[[lighting.emitter]]
+id = 4
+key = [0, 5]
+zones = [1]
+node = 0
+output = 0
+physical_index = 4
+
+[[lighting.emitter]]
+id = 5
+key = [0, 6]
+zones = [1]
+node = 0
+output = 0
+physical_index = 5
+
+[[lighting.emitter]]
+id = 6
+key = [1, 1]
+zones = [1]
+node = 0
+output = 0
+physical_index = 6
+
+[[lighting.emitter]]
+id = 7
+key = [1, 2]
+zones = [1]
+node = 0
+output = 0
+physical_index = 7
+
+[[lighting.emitter]]
+id = 8
+key = [1, 3]
+zones = [1]
+node = 0
+output = 0
+physical_index = 8
+
+[[lighting.emitter]]
+id = 9
+key = [1, 4]
+zones = [1]
+node = 0
+output = 0
+physical_index = 9
+
+[[lighting.emitter]]
+id = 10
+key = [1, 5]
+zones = [1]
+node = 0
+output = 0
+physical_index = 10
+
+[[lighting.emitter]]
+id = 11
+key = [1, 6]
+zones = [1]
+node = 0
+output = 0
+physical_index = 11
+
+[[lighting.emitter]]
+id = 12
+key = [2, 1]
+zones = [1]
+node = 0
+output = 0
+physical_index = 12
+
+[[lighting.emitter]]
+id = 13
+key = [2, 2]
+zones = [1]
+node = 0
+output = 0
+physical_index = 13
+
+[[lighting.emitter]]
+id = 14
+key = [2, 3]
+zones = [1]
+node = 0
+output = 0
+physical_index = 14
+
+[[lighting.emitter]]
+id = 15
+key = [2, 4]
+zones = [1]
+node = 0
+output = 0
+physical_index = 15
+
+[[lighting.emitter]]
+id = 16
+key = [2, 5]
+zones = [1]
+node = 0
+output = 0
+physical_index = 16
+
+[[lighting.emitter]]
+id = 17
+key = [2, 6]
+zones = [1]
+node = 0
+output = 0
+physical_index = 17
+
+[[lighting.emitter]]
+id = 18
+key = [3, 1]
+zones = [1]
+node = 0
+output = 0
+physical_index = 18
+
+[[lighting.emitter]]
+id = 19
+key = [3, 2]
+zones = [1]
+node = 0
+output = 0
+physical_index = 19
+
+[[lighting.emitter]]
+id = 20
+key = [3, 3]
+zones = [1]
+node = 0
+output = 0
+physical_index = 20
+
+[[lighting.emitter]]
+id = 21
+key = [3, 4]
+zones = [1]
+node = 0
+output = 0
+physical_index = 21
+
+[[lighting.emitter]]
+id = 22
+key = [3, 5]
+zones = [1]
+node = 0
+output = 0
+physical_index = 22
+
+[[lighting.emitter]]
+id = 23
+key = [4, 4]
+zones = [1]
+node = 0
+output = 0
+physical_index = 23
+
+[[lighting.emitter]]
+id = 24
+key = [5, 0]
+zones = [1]
+node = 0
+output = 0
+physical_index = 24
+
+[[lighting.emitter]]
+id = 25
+key = [5, 1]
+zones = [1]
+node = 0
+output = 0
+physical_index = 25
+
+# Right chip (0x77), LED_TABLE entries 26-51.
+[[lighting.emitter]]
+id = 26
+key = [6, 0]
+zones = [1]
+node = 0
+output = 1
+physical_index = 0
+
+[[lighting.emitter]]
+id = 27
+key = [6, 1]
+zones = [1]
+node = 0
+output = 1
+physical_index = 1
+
+[[lighting.emitter]]
+id = 28
+key = [6, 2]
+zones = [1]
+node = 0
+output = 1
+physical_index = 2
+
+[[lighting.emitter]]
+id = 29
+key = [6, 3]
+zones = [1]
+node = 0
+output = 1
+physical_index = 3
+
+[[lighting.emitter]]
+id = 30
+key = [6, 4]
+zones = [1]
+node = 0
+output = 1
+physical_index = 4
+
+[[lighting.emitter]]
+id = 31
+key = [6, 5]
+zones = [1]
+node = 0
+output = 1
+physical_index = 5
+
+[[lighting.emitter]]
+id = 32
+key = [7, 0]
+zones = [1]
+node = 0
+output = 1
+physical_index = 6
+
+[[lighting.emitter]]
+id = 33
+key = [7, 1]
+zones = [1]
+node = 0
+output = 1
+physical_index = 7
+
+[[lighting.emitter]]
+id = 34
+key = [7, 2]
+zones = [1]
+node = 0
+output = 1
+physical_index = 8
+
+[[lighting.emitter]]
+id = 35
+key = [7, 3]
+zones = [1]
+node = 0
+output = 1
+physical_index = 9
+
+[[lighting.emitter]]
+id = 36
+key = [7, 4]
+zones = [1]
+node = 0
+output = 1
+physical_index = 10
+
+[[lighting.emitter]]
+id = 37
+key = [7, 5]
+zones = [1]
+node = 0
+output = 1
+physical_index = 11
+
+[[lighting.emitter]]
+id = 38
+key = [8, 0]
+zones = [1]
+node = 0
+output = 1
+physical_index = 12
+
+[[lighting.emitter]]
+id = 39
+key = [8, 1]
+zones = [1]
+node = 0
+output = 1
+physical_index = 13
+
+[[lighting.emitter]]
+id = 40
+key = [8, 2]
+zones = [1]
+node = 0
+output = 1
+physical_index = 14
+
+[[lighting.emitter]]
+id = 41
+key = [8, 3]
+zones = [1]
+node = 0
+output = 1
+physical_index = 15
+
+[[lighting.emitter]]
+id = 42
+key = [8, 4]
+zones = [1]
+node = 0
+output = 1
+physical_index = 16
+
+[[lighting.emitter]]
+id = 43
+key = [8, 5]
+zones = [1]
+node = 0
+output = 1
+physical_index = 17
+
+[[lighting.emitter]]
+id = 44
+key = [10, 2]
+zones = [1]
+node = 0
+output = 1
+physical_index = 18
+
+[[lighting.emitter]]
+id = 45
+key = [9, 1]
+zones = [1]
+node = 0
+output = 1
+physical_index = 19
+
+[[lighting.emitter]]
+id = 46
+key = [9, 2]
+zones = [1]
+node = 0
+output = 1
+physical_index = 20
+
+[[lighting.emitter]]
+id = 47
+key = [9, 3]
+zones = [1]
+node = 0
+output = 1
+physical_index = 21
+
+[[lighting.emitter]]
+id = 48
+key = [9, 4]
+zones = [1]
+node = 0
+output = 1
+physical_index = 22
+
+[[lighting.emitter]]
+id = 49
+key = [9, 5]
+zones = [1]
+node = 0
+output = 1
+physical_index = 23
+
+[[lighting.emitter]]
+id = 50
+key = [11, 5]
+zones = [1]
+node = 0
+output = 1
+physical_index = 24
+
+[[lighting.emitter]]
+id = 51
+key = [11, 6]
+zones = [1]
+node = 0
+output = 1
+physical_index = 25
+
+# Event channel sizing beyond the defaults: the status-LED task and the
+# lighting processor both subscribe to layer changes.
+[event.layer_change]
+subs = 2
+"#;
+
+    #[test]
+    fn resolves_and_expands_the_voyager_keyboard_toml() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "rmk-macro-voyager-{}-{unique}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&path, VOYAGER_TOML).unwrap();
+        let config = rmk_config::KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+        let _ = std::fs::remove_file(&path);
+
+        let layout = config.layout_standalone().unwrap();
+        assert_eq!(layout.keys.len(), 52);
+        let lighting = config.lighting_standalone(&layout).unwrap().unwrap();
+        assert_eq!(lighting.emitters.len(), 52);
+        assert_eq!(lighting.outputs.len(), 2);
+        assert_eq!(lighting.routes.len(), 52);
+        let scenes: Vec<_> = lighting
+            .layer_scenes
+            .iter()
+            .map(|scene| (scene.layer, scene.cells.len()))
+            .collect();
+        assert_eq!(
+            scenes,
+            vec![(1, 52), (2, 52)],
+            "target {{ all = true }} must expand to every emitter slot"
+        );
+
+        let geometry = expand_physical_layout(&layout.physical).to_string();
+        assert!(geometry.contains("PHYSICAL_LAYOUT"));
+
+        let topology = expand_lighting_topology(Some(&lighting)).to_string();
+        assert!(topology.contains("LIGHTING_LED_COUNT : usize = 52usize"));
+        for symbol in [
+            "LIGHTING_TOPOLOGY",
+            "LIGHTING_ROUTING",
+            "LIGHTING_LAYER_SCENES",
+            "LIGHTING_CONTROLS",
+            "LIGHTING_BACKGROUND",
+        ] {
+            assert!(topology.contains(symbol), "missing {symbol}");
+        }
     }
 }
