@@ -344,6 +344,19 @@ impl<E: Copy + Default, const CAP: usize> TtlOverlay<E, CAP> {
         self.entries.iter().filter(|entry| entry.active).count()
     }
 
+    /// Iterate the currently stored absolute updates in stable slot order.
+    ///
+    /// This is intentionally a read-only state boundary rather than an
+    /// encoding API. A board-level replication transport can take an atomic
+    /// engine snapshot, convert absolute expiries to remaining TTLs, and
+    /// choose its own bounded wire representation.
+    pub fn active_updates(&self) -> impl Iterator<Item = OverlayUpdate<E>> + '_ {
+        self.entries
+            .iter()
+            .filter(|entry| entry.active)
+            .map(|entry| entry.update)
+    }
+
     fn active_entry(&self, wanted: usize) -> &OverlayEntry<E> {
         self.entries
             .iter()

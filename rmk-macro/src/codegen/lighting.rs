@@ -128,6 +128,43 @@ pub(crate) fn expand_lighting_topology(lighting: Option<&Lighting>) -> TokenStre
         }
     });
     let route_count = lighting.routes.len();
+    let renderer_config = expand_lighting_renderer_config(Some(lighting));
+
+    quote! {
+        pub const LIGHTING_TOPOLOGY_REVISION: u32 = #revision;
+        pub const LIGHTING_LED_COUNT: usize = #led_count;
+        pub static LIGHTING_KEYS: [::rmk::lighting::topology::MatrixPosition; #key_count] = [#(#keys),*];
+        pub static LIGHTING_ZONES: [::rmk::lighting::topology::ZoneMetadata<'static>; #zone_count] = [#(#zones),*];
+        pub static LIGHTING_EMITTERS: [::rmk::lighting::topology::LedMetadata; #led_count] = [#(#emitters),*];
+        pub static LIGHTING_ZONE_MEMBERSHIPS: [::rmk::lighting::topology::ZoneId; #membership_count] = [#(#memberships),*];
+        pub static LIGHTING_OUTPUTS: [::rmk::lighting::topology::OutputMetadata; #output_count] = [#(#outputs),*];
+        pub static LIGHTING_ROUTES: [::rmk::lighting::topology::PhysicalRoute; #route_count] = [#(#routes),*];
+        pub const LIGHTING_TOPOLOGY: ::rmk::lighting::topology::LightingTopology<'static> =
+            ::rmk::lighting::topology::LightingTopology {
+                matrix: ::rmk::lighting::topology::MatrixSize::new(#rows, #cols),
+                keys: &LIGHTING_KEYS,
+                physical_layout: PHYSICAL_LAYOUT,
+                leds: &LIGHTING_EMITTERS,
+                zones: &LIGHTING_ZONES,
+                zone_memberships: &LIGHTING_ZONE_MEMBERSHIPS,
+            };
+        pub const LIGHTING_ROUTING: ::rmk::lighting::topology::LightingRouting<'static> =
+            ::rmk::lighting::topology::LightingRouting {
+                outputs: &LIGHTING_OUTPUTS,
+                routes: &LIGHTING_ROUTES,
+            };
+
+        #renderer_config
+    }
+}
+
+/// Generate the semantic configuration required by a local renderer. Split
+/// peripherals do not need the central's host-facing topology and routing,
+/// but they do need the same built-in scenes and background configuration.
+pub(crate) fn expand_lighting_renderer_config(lighting: Option<&Lighting>) -> TokenStream2 {
+    let Some(lighting) = lighting else {
+        return TokenStream2::new();
+    };
     let layer_scene_cells = lighting.layer_scenes.iter().enumerate().map(|(index, scene)| {
         let name = quote::format_ident!("LIGHTING_LAYER_SCENE_{index}_CELLS");
         let cells = scene.cells.iter().map(expand_scene_cell);
@@ -164,29 +201,6 @@ pub(crate) fn expand_lighting_topology(lighting: Option<&Lighting>) -> TokenStre
     };
 
     quote! {
-        pub const LIGHTING_TOPOLOGY_REVISION: u32 = #revision;
-        pub const LIGHTING_LED_COUNT: usize = #led_count;
-        pub static LIGHTING_KEYS: [::rmk::lighting::topology::MatrixPosition; #key_count] = [#(#keys),*];
-        pub static LIGHTING_ZONES: [::rmk::lighting::topology::ZoneMetadata<'static>; #zone_count] = [#(#zones),*];
-        pub static LIGHTING_EMITTERS: [::rmk::lighting::topology::LedMetadata; #led_count] = [#(#emitters),*];
-        pub static LIGHTING_ZONE_MEMBERSHIPS: [::rmk::lighting::topology::ZoneId; #membership_count] = [#(#memberships),*];
-        pub static LIGHTING_OUTPUTS: [::rmk::lighting::topology::OutputMetadata; #output_count] = [#(#outputs),*];
-        pub static LIGHTING_ROUTES: [::rmk::lighting::topology::PhysicalRoute; #route_count] = [#(#routes),*];
-        pub const LIGHTING_TOPOLOGY: ::rmk::lighting::topology::LightingTopology<'static> =
-            ::rmk::lighting::topology::LightingTopology {
-                matrix: ::rmk::lighting::topology::MatrixSize::new(#rows, #cols),
-                keys: &LIGHTING_KEYS,
-                physical_layout: PHYSICAL_LAYOUT,
-                leds: &LIGHTING_EMITTERS,
-                zones: &LIGHTING_ZONES,
-                zone_memberships: &LIGHTING_ZONE_MEMBERSHIPS,
-            };
-        pub const LIGHTING_ROUTING: ::rmk::lighting::topology::LightingRouting<'static> =
-            ::rmk::lighting::topology::LightingRouting {
-                outputs: &LIGHTING_OUTPUTS,
-                routes: &LIGHTING_ROUTES,
-            };
-
         #(#layer_scene_cells)*
         pub static LIGHTING_LAYER_SCENE_TABLE:
             [::rmk::lighting::LayerScene<'static, ::rmk::lighting::BuiltinEffect>; #layer_scene_count] =
@@ -396,10 +410,17 @@ mod tests {
         assert!(topology.contains("enabled : false"));
         assert!(topology.contains("hue : 11u8"));
         assert!(topology.contains("mode : :: rmk :: lighting :: BackgroundMode :: Breathe"));
+
+        let renderer = expand_lighting_renderer_config(Some(&lighting)).to_string();
+        assert!(renderer.contains("LIGHTING_LAYER_SCENES"));
+        assert!(renderer.contains("LIGHTING_BACKGROUND"));
+        assert!(!renderer.contains("LIGHTING_TOPOLOGY"));
+        assert!(!renderer.contains("LIGHTING_ROUTING"));
     }
 
     #[test]
     fn omits_all_lighting_symbols_without_resolved_lighting() {
         assert!(expand_lighting_topology(None).is_empty());
+        assert!(expand_lighting_renderer_config(None).is_empty());
     }
 }

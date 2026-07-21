@@ -41,8 +41,9 @@ pub use source::{
     OverlayUpdate, SceneCell, SparseScene, TtlOverlay,
 };
 pub use standard::{
-    BackgroundMode, BackgroundPatch, BackgroundState, EmptySource, OverlayBatch, OverlayCell, StandardCommand,
-    StandardError, StandardInput, StandardLightingEngine, StandardMutableState, StandardState, UniformBackground,
+    BackgroundMode, BackgroundPatch, BackgroundState, EmptySource, OverlayBatch, OverlayCell, ReplicaSlotError,
+    StandardCommand, StandardError, StandardInput, StandardLightingEngine, StandardMutableState, StandardReplicaSlot,
+    StandardReplicaState, StandardState, UniformBackground,
 };
 pub use topology::*;
 

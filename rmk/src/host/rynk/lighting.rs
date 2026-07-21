@@ -445,6 +445,7 @@ fn map_standard_error(error: StandardError, capacity: usize) -> LightingError {
         }
         StandardError::Overlay(error) => map_overlay_error(error, capacity),
         StandardError::DeadlineOverflow => LightingError::InvalidTtl,
+        StandardError::ReplicaSlot(_) => LightingError::Unsupported,
         StandardError::Render(_) => LightingError::Unsupported,
     }
 }

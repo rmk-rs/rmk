@@ -15,6 +15,8 @@ use {
 
 use super::SplitMessage;
 use super::driver::{SplitReader, SplitWriter};
+#[cfg(feature = "_render_state")]
+use crate::event::SleepStateEvent;
 use crate::event::{
     KeyboardEvent, LayerChangeEvent, LedIndicatorEvent, PointingEvent, SubscribableEvent, publish_event,
 };
@@ -208,6 +210,7 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                             #[cfg(feature = "_render_state")]
                             SplitMessage::SleepState(sleeping) => {
                                 crate::state::set_sleeping(sleeping);
+                                publish_event(SleepStateEvent::new(sleeping));
                             }
                             // --- dfu_split: firmware update handlers ---
                             #[cfg(feature = "dfu_split")]
