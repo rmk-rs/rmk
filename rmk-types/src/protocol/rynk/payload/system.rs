@@ -195,6 +195,31 @@ pub struct BehaviorConfig {
     pub morse_prior_idle_time_ms: u16,
 }
 
+/// Active-mode split BLE latency policy. Values count connection events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct SplitCentralLatencyPolicy {
+    /// Maximum skipped connection events when USB power is present.
+    pub powered: u16,
+    /// Maximum skipped connection events when running on battery.
+    pub battery: u16,
+    /// Forced value for both power states; `None` restores automatic selection.
+    pub override_latency: Option<u16>,
+}
+
+/// Current split BLE latency selection and its policy inputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct SplitCentralLatencyState {
+    pub policy: SplitCentralLatencyPolicy,
+    /// Whether USB power is currently present.
+    pub powered: bool,
+    /// Value currently requested for the active split connection.
+    pub effective: u16,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +382,20 @@ mod tests {
         };
         round_trip(&cfg);
         assert_max_size_bound(&cfg);
+    }
+
+    #[test]
+    fn round_trip_split_central_latency() {
+        let policy = SplitCentralLatencyPolicy {
+            powered: 0,
+            battery: 4,
+            override_latency: Some(2),
+        };
+        round_trip(&policy);
+        round_trip(&SplitCentralLatencyState {
+            policy,
+            powered: true,
+            effective: 2,
+        });
     }
 }

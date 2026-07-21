@@ -1,0 +1,11 @@
+# Split BLE wire-format FRAME snapshot — DO NOT edit by hand.
+# File: snapshots/split_ble_wire_frames.snap
+# Each entry is one complete feature-gated split BLE latency-policy frame.
+#   UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features rynk --features "rynk _ble split" split_ble_wire_frames
+# Format: <label>  <hex bytes>
+
+GetSplitCentralLatency reply Ok(state)     06 07 01 07 00 00 00 04 01 02 01 02
+GetSplitCentralLatency request ()          06 07 01 00 00
+SetSplitCentralLatency reply Err(Invalid)  07 07 01 02 00 01 05
+SetSplitCentralLatency reply Ok(state)     07 07 01 07 00 00 00 04 01 02 01 02
+SetSplitCentralLatency request policy      07 07 01 04 00 00 04 01 02

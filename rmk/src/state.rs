@@ -107,6 +107,11 @@ pub(crate) fn update_status(f: impl FnOnce(&mut ConnectionStatus)) {
         crate::channel::clear_and_release_report_channel(prev_active);
     }
 
+    #[cfg(all(feature = "_ble", feature = "split"))]
+    if prev.usb != new.usb {
+        crate::split::ble::central::power_source_changed();
+    }
+
     publish_event(ConnectionStatusChangeEvent(new));
 }
 

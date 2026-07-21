@@ -2,7 +2,7 @@
 # File: snapshots/wire_values.snap
 # Each entry is the postcard byte encoding of one wire-type exemplar. A diff
 # here means a type's payload encoding changed (field reorder, variant
-# renumber, …). If intentional, bump ProtocolVersion::CURRENT and regenerate:
+# renumber, …). If intentional, regenerate and review compatibility:
 #   UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features host wire_values
 # Format: <label>  <hex bytes>
 

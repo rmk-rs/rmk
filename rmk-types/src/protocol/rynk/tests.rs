@@ -5,8 +5,8 @@
 //! one postcard-encoded exemplar per wire type; `wire_frames.snap` holds one
 //! full frame (header + payload) per protocol message. Any field reorder /
 //! type change / variant renumber / CMD renumber flips the bytes and fails
-//! CI. If the change is intentional, bump `ProtocolVersion::CURRENT` and
-//! regenerate the snapshots.
+//! CI. If the change is intentional, regenerate the snapshots and review the
+//! compatibility impact. Protocol versions are minted upstream only.
 
 extern crate alloc;
 
@@ -159,7 +159,7 @@ mod snapshot {
                 "snapshot mismatch: {}\n\
                  --- expected ---\n{}\
                  --- actual ---\n{}\
-                 If intentional, regenerate with UPDATE_SNAPSHOTS=1 and bump ProtocolVersion::CURRENT.",
+                 If intentional, regenerate with UPDATE_SNAPSHOTS=1 and review protocol compatibility.",
                 path.display(),
                 expected,
                 actual,
@@ -349,7 +349,7 @@ fn exemplars() -> Exemplars {
 
 /// Lock down postcard's actual byte encoding for stability-critical
 /// values. A diff in this snapshot indicates wire-format drift; if
-/// intentional, regenerate the snapshot and bump `ProtocolVersion::CURRENT`.
+/// intentional, regenerate the snapshot and review protocol compatibility.
 ///
 /// One exemplar per Rynk wire type, plus every variant of the positional
 /// enums (`KeyAction`, `Action`, and the status enums) so a reordered or
@@ -379,6 +379,16 @@ fn wire_values_locked() {
         active_bitmap: [0x05, 0, 0, 0, 0, 0, 0, 0x80],
     };
     let profile = MorseProfile::new(None, Some(MorseMode::Normal), Some(200), Some(150));
+    let split_latency_policy = SplitCentralLatencyPolicy {
+        powered: 0,
+        battery: 4,
+        override_latency: Some(2),
+    };
+    let split_latency_state = SplitCentralLatencyState {
+        policy: split_latency_policy,
+        powered: true,
+        effective: 2,
+    };
 
     let entries: alloc::vec::Vec<(&str, alloc::vec::Vec<u8>)> = alloc::vec![
         // --- Response envelope + connection ---
@@ -500,6 +510,8 @@ fn wire_values_locked() {
         ("DeviceInfo{1.2.3,4,5,RMK,..}", encode(&ex.device_info)),
         ("BuildInfo{my-firmware..}", encode(&ex.build_info)),
         ("BehaviorConfig{50..120}", encode(&ex.behavior)),
+        ("SplitLatencyPolicy{0,4,Some(2)}", encode(&split_latency_policy),),
+        ("SplitLatencyState{policy,true,2}", encode(&split_latency_state),),
         ("ConnectionStatus{Configured,{1,Adv},Ble}", encode(&ex.connection)),
         ("ProtocolVersion{1,0}", encode(&ProtocolVersion { major: 1, minor: 0 })),
         ("ProtocolVersion::CURRENT", encode(&ProtocolVersion::CURRENT)),
@@ -590,7 +602,7 @@ fn wire_values_locked() {
         "Wire-format TYPE snapshot",
         "# Each entry is the postcard byte encoding of one wire-type exemplar. A diff\n\
          # here means a type's payload encoding changed (field reorder, variant\n\
-         # renumber, …). If intentional, bump ProtocolVersion::CURRENT and regenerate:",
+         # renumber, …). If intentional, regenerate and review compatibility:",
         "wire_values",
         &view,
     );
@@ -601,7 +613,7 @@ fn wire_values_locked() {
 /// COBS-encoded with a trailing `0x00` delimiter — one per feature-independent
 /// protocol message: every request, its `Ok` reply, a representative `Err`
 /// reply, and every topic push. A diff means the wire format changed; if
-/// intentional, regenerate and bump `ProtocolVersion::CURRENT`.
+/// intentional, regenerate and review protocol compatibility.
 ///
 /// Requests and replies use SEQ 1 (a reply echoes its request's SEQ); topics
 /// always use SEQ 0. The `GetVersion` probe and reply are frozen across all
@@ -1064,11 +1076,75 @@ fn wire_frames_locked() {
         "# Each entry is a full Rynk frame — a 3-byte header (CMD u16 LE + SEQ u8) + postcard\n\
          # payload, COBS-encoded with a trailing 0x00 delimiter — one per protocol message; the\n\
          # label names the decoded payload (`()` = empty). A diff means the header, a CMD number,\n\
-         # or a message frame changed. If intentional, bump ProtocolVersion::CURRENT and regenerate:",
+         # or a message frame changed. If intentional, regenerate and review protocol compatibility:",
         "wire_frames",
         &view,
     );
     snapshot::assert_snapshot("snapshots/wire_frames.snap", actual);
+}
+
+/// Split-BLE connection-policy commands have their own feature-gated golden
+/// file so the base snapshots remain identical for non-split builds.
+#[cfg(all(feature = "_ble", feature = "split"))]
+#[test]
+fn split_ble_wire_frames_locked() {
+    const SEQ: u8 = 1;
+    let policy = SplitCentralLatencyPolicy {
+        powered: 0,
+        battery: 4,
+        override_latency: Some(2),
+    };
+    let state = SplitCentralLatencyState {
+        policy,
+        powered: true,
+        effective: 2,
+    };
+    let entries: alloc::vec::Vec<(&str, alloc::vec::Vec<u8>)> = alloc::vec![
+        (
+            "GetSplitCentralLatency request ()",
+            encode_frame(Cmd::GetSplitCentralLatency, SEQ, &()),
+        ),
+        (
+            "GetSplitCentralLatency reply Ok(state)",
+            encode_frame(
+                Cmd::GetSplitCentralLatency,
+                SEQ,
+                &Ok::<SplitCentralLatencyState, RynkError>(state),
+            ),
+        ),
+        (
+            "SetSplitCentralLatency request policy",
+            encode_frame(Cmd::SetSplitCentralLatency, SEQ, &policy),
+        ),
+        (
+            "SetSplitCentralLatency reply Ok(state)",
+            encode_frame(
+                Cmd::SetSplitCentralLatency,
+                SEQ,
+                &Ok::<SplitCentralLatencyState, RynkError>(state),
+            ),
+        ),
+        (
+            "SetSplitCentralLatency reply Err(Invalid)",
+            encode_frame(
+                Cmd::SetSplitCentralLatency,
+                SEQ,
+                &Err::<SplitCentralLatencyState, RynkError>(RynkError::Invalid),
+            ),
+        ),
+    ];
+    let view: alloc::vec::Vec<(&str, &[u8])> = entries
+        .iter()
+        .map(|(label, bytes)| (*label, bytes.as_slice()))
+        .collect();
+    let actual = snapshot::format_value_snapshot(
+        "snapshots/split_ble_wire_frames.snap",
+        "Split BLE wire-format FRAME snapshot",
+        "# Each entry is one complete feature-gated split BLE latency-policy frame.",
+        "--features \"rynk _ble split\" split_ble_wire_frames",
+        &view,
+    );
+    snapshot::assert_snapshot("snapshots/split_ble_wire_frames.snap", actual);
 }
 
 /// Lighting has its own feature-gated golden file so the base Rynk snapshots
@@ -1805,7 +1881,7 @@ mod protocol_reference {
     /// Pull the doc text (Notes) and `cfg` feature out of a row's stringified
     /// attributes. `///` docs stringify as raw strings `#[doc = r"…"]`, wrapping
     /// after `doc =` when long — hence the whitespace skip and raw-delimiter scan.
-    fn parse_attrs(attrs: &str) -> (String, Option<&str>) {
+    fn parse_attrs(attrs: &str) -> (String, Vec<String>) {
         let mut notes = String::new();
         let mut rest = attrs;
         while let Some(i) = rest.find("doc =") {
@@ -1825,11 +1901,20 @@ mod protocol_reference {
         }
         // Rustdoc intra-links render as broken md links; keep just the code span.
         let notes = notes.replace("[`", "`").replace("`]", "`");
-        let feature = attrs.find("feature = \"").and_then(|i| {
-            let s = &attrs[i + 11..];
-            s.find('"').map(|end| &s[..end])
-        });
-        (notes, feature)
+        let mut features = Vec::new();
+        let mut feature_attrs = attrs;
+        while let Some(i) = feature_attrs.find("feature = \"") {
+            let s = &feature_attrs[i + 11..];
+            let Some(end) = s.find('"') else {
+                break;
+            };
+            let feature = String::from(&s[..end]);
+            if !features.contains(&feature) {
+                features.push(feature);
+            }
+            feature_attrs = &s[end + 1..];
+        }
+        (notes, features)
     }
 
     /// Render `rows` as a column-aligned GFM table.
@@ -1868,7 +1953,7 @@ mod protocol_reference {
                      attrs,
                  }| {
                     let (notes, feature) = parse_attrs(attrs);
-                    let feature = feature.map(|f| format!("`{f}`")).unwrap_or_default();
+                    let feature = feature.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(" + ");
                     alloc::vec![
                         format!("`0x{cmd:04X}`"),
                         format!("`{name}`"),
@@ -1897,7 +1982,7 @@ mod protocol_reference {
                         format!("`0x{cmd:04X}`"),
                         format!("`{name}`"),
                         format!("`{payload}`"),
-                        feature.map(|f| format!("`{f}`")).unwrap_or_default(),
+                        feature.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(" + "),
                         notes,
                     ]
                 },

@@ -101,6 +101,14 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         "pub const SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS: u32 = {};",
         bc.split_central_sleep_timeout_seconds
     ));
+    lines.push(format!(
+        "pub const SPLIT_CENTRAL_MAX_LATENCY_POWERED: u16 = {};",
+        bc.split_central_max_latency_powered
+    ));
+    lines.push(format!(
+        "pub const SPLIT_CENTRAL_MAX_LATENCY_BATTERY: u16 = {};",
+        bc.split_central_max_latency_battery
+    ));
     lines.push(format!("pub const MORSE_MAX_NUM: usize = {};", bc.morse_max_num));
     lines.push(format!(
         "pub const MORSE_PROFILE_MAX_NUM: usize = {};",

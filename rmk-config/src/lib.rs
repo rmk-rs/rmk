@@ -334,6 +334,14 @@ pub(crate) struct RmkConstantsConfig {
     /// BLE Split Central sleep timeout in seconds (0 = disabled)
     #[serde_inline_default(0)]
     pub split_central_sleep_timeout_seconds: u32,
+    /// Maximum BLE peripheral latency on external power, in active connection events.
+    #[serde_inline_default(30)]
+    #[serde(deserialize_with = "check_split_central_max_latency")]
+    pub split_central_max_latency_powered: u16,
+    /// Maximum BLE peripheral latency on battery, in active connection events.
+    #[serde_inline_default(30)]
+    #[serde(deserialize_with = "check_split_central_max_latency")]
+    pub split_central_max_latency_battery: u16,
     /// Maximum macro data chunk size for protocol transfers (bytes).
     /// Smaller values reduce firmware RAM usage but require more round-trips.
     #[serde_inline_default(64)]
@@ -417,6 +425,19 @@ where
     Ok(value)
 }
 
+fn check_split_central_max_latency<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let value = Deserialize::deserialize(deserializer)?;
+    if value >= 500 {
+        return Err(de::Error::custom(format!(
+            "split_central_max_latency must be between 0 and 499, got {value}"
+        )));
+    }
+    Ok(value)
+}
+
 /// This separate Default impl is needed when `[rmk]` section is not set in keyboard.toml
 impl Default for RmkConstantsConfig {
     fn default() -> Self {
@@ -437,6 +458,8 @@ impl Default for RmkConstantsConfig {
             split_peripherals_num: 0,
             ble_profiles_num: 3,
             split_central_sleep_timeout_seconds: 0,
+            split_central_max_latency_powered: 30,
+            split_central_max_latency_battery: 30,
             protocol_macro_chunk_size: 64,
             auto_mouse_layer_max_num: None,
             rynk_buffer_size: 488,
@@ -1678,6 +1701,33 @@ fork_max_num = 255
             let err = toml::from_str::<KeyboardTomlConfig>(&toml).unwrap_err();
             assert!(err.to_string().contains(message), "{err}");
         }
+    }
+
+    #[test]
+    fn split_central_max_latency_matches_ble_limit() {
+        let ok: KeyboardTomlConfig = toml::from_str(
+            r#"
+[rmk]
+split_central_max_latency_powered = 499
+split_central_max_latency_battery = 498
+"#,
+        )
+        .unwrap();
+        assert_eq!(ok.rmk.split_central_max_latency_powered, 499);
+        assert_eq!(ok.rmk.split_central_max_latency_battery, 498);
+
+        let err = toml::from_str::<KeyboardTomlConfig>(
+            r#"
+[rmk]
+split_central_max_latency_battery = 500
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("split_central_max_latency must be between 0 and 499"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -46,6 +46,8 @@ use crate::protocol::rynk::{
     PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest, SetLightingOverlayRequest,
     SetLightingSceneCellRequest, SetLightingStateRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
+#[cfg(all(feature = "_ble", feature = "split"))]
+use crate::protocol::rynk::{SplitCentralLatencyPolicy, SplitCentralLatencyState};
 
 /// CMD high bit marking a topic (server → host push).
 const RYNK_TOPIC_BIT: u16 = 0x8000;
@@ -341,6 +343,12 @@ endpoints! {
     SwitchBleProfile = 0x0704: u8 => ();
     #[cfg(feature = "_ble")]
     ClearBleProfile = 0x0705: u8 => ();
+    #[cfg(all(feature = "_ble", feature = "split"))]
+    /// Read the volatile active-mode policy, current USB-power selection, and effective value.
+    GetSplitCentralLatency = 0x0706: () => SplitCentralLatencyState;
+    #[cfg(all(feature = "_ble", feature = "split"))]
+    /// Replace the volatile policy. Each connection-event count must be `0..=499`.
+    SetSplitCentralLatency = 0x0707: SplitCentralLatencyPolicy => SplitCentralLatencyState;
 
     // Status (0x08xx).
     GetCurrentLayer = 0x0801: () => u8;

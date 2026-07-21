@@ -35,7 +35,8 @@ use rmk_types::protocol::rynk::{
     StorageResetMode, UnsetLightingOverlayRequest, command, BuildInfo, LightingScenePageRequest, LightingSceneStatus,
     LightingSceneTransaction, LightingScenesPage, PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest,
     SetLightingSceneCellRequest, UnsetLightingSceneCellRequest, LayerState, LightingCompiledSceneStatus,
-    LightingCompiledScenesPage, LightingOverlayPage, LightingOverlayPageRequest,
+    LightingCompiledScenesPage, LightingOverlayPage, LightingOverlayPageRequest, SplitCentralLatencyPolicy,
+    SplitCentralLatencyState,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -649,6 +650,19 @@ impl Client {
     /// push.
     pub async fn get_connection_status(&self) -> Result<ConnectionStatus, RynkHostError> {
         self.request::<command::GetConnectionStatus>(&()).await
+    }
+
+    /// Read active split BLE latency defaults, override, and effective value.
+    pub async fn get_split_central_latency(&self) -> Result<SplitCentralLatencyState, RynkHostError> {
+        self.request::<command::GetSplitCentralLatency>(&()).await
+    }
+
+    /// Replace the volatile active split BLE latency policy.
+    pub async fn set_split_central_latency(
+        &self,
+        policy: SplitCentralLatencyPolicy,
+    ) -> Result<SplitCentralLatencyState, RynkHostError> {
+        self.request::<command::SetSplitCentralLatency>(&policy).await
     }
 
     /// Read BLE status (active profile, connection state). Requires
