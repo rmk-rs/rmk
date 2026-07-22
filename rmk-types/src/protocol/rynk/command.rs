@@ -35,18 +35,23 @@ use crate::morse::Morse;
 use crate::protocol::rynk::PeripheralStatus;
 #[cfg(feature = "lighting")]
 use crate::protocol::rynk::{
-    AbortLightingOverlayReplaceRequest, AbortLightingSceneReplaceRequest, BeginLightingOverlayReplaceRequest,
-    BeginLightingSceneReplaceRequest, ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest,
+    AbortLightingOverlayReplaceRequest, AbortLightingRuntimeConditionalSceneReplaceRequest,
+    AbortLightingSceneReplaceRequest, BeginLightingOverlayReplaceRequest,
+    BeginLightingRuntimeConditionalSceneReplaceRequest, BeginLightingSceneReplaceRequest, ClearLightingOverlayRequest,
+    CommitLightingOverlayReplaceRequest, CommitLightingRuntimeConditionalSceneReplaceRequest,
     CommitLightingSceneReplaceRequest, LightingCapabilitiesResult, LightingChanged, LightingCompiledSceneStatusResult,
     LightingCompiledScenesPageResult, LightingConditionalSceneStatusResult, LightingConditionalScenesPageResult,
     LightingExtensionNamesPageResult, LightingExtensionNamesRequest, LightingExtensionResult, LightingKeysPageResult,
     LightingLedsPageResult, LightingOutputModeStateResult, LightingOutputsPageResult, LightingOverlayPageRequest,
     LightingOverlayPageResult, LightingOverlayTransactionResult, LightingPageRequest, LightingPhysicalKeysPageResult,
-    LightingRoutesPageResult, LightingScenePageRequest, LightingSceneStatusResult, LightingSceneTransactionResult,
-    LightingScenesPageResult, LightingStateResult, LightingUnitResult, LightingZoneMembershipsPageResult,
-    LightingZonesPageResult, PutLightingOverlayChunkRequest, PutLightingSceneChunkRequest,
-    SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest, SetLightingOverlayRequest,
-    SetLightingSceneCellRequest, SetLightingStateRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
+    LightingRoutesPageResult, LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatusResult,
+    LightingRuntimeConditionalSceneTransactionResult, LightingRuntimeConditionalScenesPageResult,
+    LightingScenePageRequest, LightingSceneStatusResult, LightingSceneTransactionResult, LightingScenesPageResult,
+    LightingStateResult, LightingUnitResult, LightingZoneMembershipsPageResult, LightingZonesPageResult,
+    PutLightingOverlayChunkRequest, PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest,
+    SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest, SetLightingOutputModeRequest,
+    SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest, UnsetLightingOverlayRequest,
+    UnsetLightingSceneCellRequest,
 };
 #[cfg(all(feature = "_ble", feature = "split"))]
 use crate::protocol::rynk::{SplitCentralLatencyPolicy, SplitCentralLatencyState};
@@ -455,6 +460,23 @@ endpoints! {
     /// Replace the extension selection when the state revision matches.
     #[cfg(feature = "lighting")]
     SetLightingExtensionState = 0x0923: SetLightingExtensionStateRequest => LightingStateResult;
+    /// Set the three-state output policy with optimistic concurrency.
+    #[cfg(feature = "lighting")]
+    SetLightingOutputMode = 0x0924: SetLightingOutputModeRequest => LightingOutputModeStateResult;
+    /// Discover the mutable ordered conditional-scene table.
+    #[cfg(feature = "lighting")]
+    GetLightingRuntimeConditionalSceneStatus = 0x0925: () => LightingRuntimeConditionalSceneStatusResult;
+    /// Runtime conditional pages are pinned to `LightingState.revision`.
+    #[cfg(feature = "lighting")]
+    GetLightingRuntimeConditionalScenes = 0x0926: LightingRuntimeConditionalScenePageRequest => LightingRuntimeConditionalScenesPageResult;
+    #[cfg(feature = "lighting")]
+    BeginLightingRuntimeConditionalSceneReplace = 0x0927: BeginLightingRuntimeConditionalSceneReplaceRequest => LightingRuntimeConditionalSceneTransactionResult;
+    #[cfg(feature = "lighting")]
+    PutLightingRuntimeConditionalSceneChunk = 0x0928: PutLightingRuntimeConditionalSceneChunkRequest => LightingUnitResult;
+    #[cfg(feature = "lighting")]
+    CommitLightingRuntimeConditionalSceneReplace = 0x0929: CommitLightingRuntimeConditionalSceneReplaceRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    AbortLightingRuntimeConditionalSceneReplace = 0x092A: AbortLightingRuntimeConditionalSceneReplaceRequest => LightingUnitResult;
 }
 
 // Define topics: `Name = value: Payload;`

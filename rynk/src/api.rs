@@ -38,7 +38,11 @@ use rmk_types::protocol::rynk::{
     LightingCompiledScenesPage, LightingOverlayPage, LightingOverlayPageRequest, SplitCentralLatencyPolicy,
     SplitCentralLatencyState, LightingConditionalSceneStatus, LightingConditionalScenesPage, LightingOutputModeState,
     LightingExtension, LightingExtensionNameKind, LightingExtensionNamesPage, LightingExtensionNamesRequest,
-    SetLightingExtensionStateRequest,
+    SetLightingExtensionStateRequest, AbortLightingRuntimeConditionalSceneReplaceRequest,
+    BeginLightingRuntimeConditionalSceneReplaceRequest, CommitLightingRuntimeConditionalSceneReplaceRequest,
+    LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatus,
+    LightingRuntimeConditionalSceneTransaction, LightingRuntimeConditionalScenesPage,
+    PutLightingRuntimeConditionalSceneChunkRequest, SetLightingOutputModeRequest,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -433,6 +437,14 @@ impl Client {
         Self::flatten_lighting(self.request::<command::GetLightingOutputMode>(&()).await?)
     }
 
+    pub async fn set_lighting_output_mode(
+        &self,
+        request: SetLightingOutputModeRequest,
+    ) -> Result<LightingOutputModeState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingOutputMode)?;
+        Self::flatten_lighting(self.request::<command::SetLightingOutputMode>(&request).await?)
+    }
+
     /// Atomically replace standard mutable state when the revision still matches.
     pub async fn set_lighting_state(&self, request: SetLightingStateRequest) -> Result<LightingState, RynkHostError> {
         self.require_lighting(Cmd::SetLightingState)?;
@@ -631,6 +643,70 @@ impl Client {
         Self::flatten_lighting(self.request::<command::SetLightingExtensionState>(&request).await?)
     }
 
+    pub async fn get_lighting_runtime_conditional_scene_status(
+        &self,
+    ) -> Result<LightingRuntimeConditionalSceneStatus, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingRuntimeConditionalSceneStatus)?;
+        Self::flatten_lighting(
+            self.request::<command::GetLightingRuntimeConditionalSceneStatus>(&())
+                .await?,
+        )
+    }
+
+    pub async fn get_lighting_runtime_conditional_scenes(
+        &self,
+        request: LightingRuntimeConditionalScenePageRequest,
+    ) -> Result<LightingRuntimeConditionalScenesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingRuntimeConditionalScenes)?;
+        Self::flatten_lighting(
+            self.request::<command::GetLightingRuntimeConditionalScenes>(&request)
+                .await?,
+        )
+    }
+
+    pub async fn begin_lighting_runtime_conditional_scene_replace(
+        &self,
+        request: BeginLightingRuntimeConditionalSceneReplaceRequest,
+    ) -> Result<LightingRuntimeConditionalSceneTransaction, RynkHostError> {
+        self.require_lighting(Cmd::BeginLightingRuntimeConditionalSceneReplace)?;
+        Self::flatten_lighting(
+            self.request::<command::BeginLightingRuntimeConditionalSceneReplace>(&request)
+                .await?,
+        )
+    }
+
+    pub async fn put_lighting_runtime_conditional_scene_chunk(
+        &self,
+        request: PutLightingRuntimeConditionalSceneChunkRequest,
+    ) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::PutLightingRuntimeConditionalSceneChunk)?;
+        Self::flatten_lighting(
+            self.request::<command::PutLightingRuntimeConditionalSceneChunk>(&request)
+                .await?,
+        )
+    }
+
+    pub async fn commit_lighting_runtime_conditional_scene_replace(
+        &self,
+        request: CommitLightingRuntimeConditionalSceneReplaceRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::CommitLightingRuntimeConditionalSceneReplace)?;
+        Self::flatten_lighting(
+            self.request::<command::CommitLightingRuntimeConditionalSceneReplace>(&request)
+                .await?,
+        )
+    }
+
+    pub async fn abort_lighting_runtime_conditional_scene_replace(
+        &self,
+        request: AbortLightingRuntimeConditionalSceneReplaceRequest,
+    ) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::AbortLightingRuntimeConditionalSceneReplace)?;
+        Self::flatten_lighting(
+            self.request::<command::AbortLightingRuntimeConditionalSceneReplace>(&request)
+                .await?,
+        )
+    }
     /// Insert or update one durable scene cell when the revision matches.
     pub async fn set_lighting_scene_cell(
         &self,

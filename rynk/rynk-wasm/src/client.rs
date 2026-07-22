@@ -37,6 +37,11 @@ use rynk::rmk_types::protocol::rynk::{
     LightingOverlayPage, LightingOverlayPageRequest, SplitCentralLatencyPolicy, SplitCentralLatencyState,
     LightingConditionalSceneStatus, LightingConditionalScenesPage, LightingOutputModeState, LightingExtension,
     LightingExtensionNamesPage, LightingExtensionNamesRequest, SetLightingExtensionStateRequest,
+    AbortLightingRuntimeConditionalSceneReplaceRequest, BeginLightingRuntimeConditionalSceneReplaceRequest,
+    CommitLightingRuntimeConditionalSceneReplaceRequest, LightingRuntimeConditionalScenePageRequest,
+    LightingRuntimeConditionalSceneStatus, LightingRuntimeConditionalSceneTransaction,
+    LightingRuntimeConditionalScenesPage, PutLightingRuntimeConditionalSceneChunkRequest,
+    SetLightingOutputModeRequest,
 };
 use rynk::{Client, Driver, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
 use wasm_bindgen::prelude::*;
@@ -179,6 +184,7 @@ endpoints! {
     get_lighting_capabilities() -> LightingCapabilities,
     get_lighting_state() -> LightingState,
     get_lighting_output_mode() -> LightingOutputModeState,
+    set_lighting_output_mode(request: SetLightingOutputModeRequest) -> LightingOutputModeState,
     set_lighting_state(request: SetLightingStateRequest) -> LightingState,
     get_lighting_keys(request: LightingPageRequest) -> LightingKeysPage,
     get_lighting_physical_keys(request: LightingPageRequest) -> LightingPhysicalKeysPage,
@@ -204,6 +210,12 @@ endpoints! {
     get_lighting_compiled_scenes(request: LightingPageRequest) -> LightingCompiledScenesPage,
     get_lighting_conditional_scene_status() -> LightingConditionalSceneStatus,
     get_lighting_conditional_scenes(request: LightingPageRequest) -> LightingConditionalScenesPage,
+    get_lighting_runtime_conditional_scene_status() -> LightingRuntimeConditionalSceneStatus,
+    get_lighting_runtime_conditional_scenes(request: LightingRuntimeConditionalScenePageRequest) -> LightingRuntimeConditionalScenesPage,
+    begin_lighting_runtime_conditional_scene_replace(request: BeginLightingRuntimeConditionalSceneReplaceRequest) -> LightingRuntimeConditionalSceneTransaction,
+    put_lighting_runtime_conditional_scene_chunk(request: PutLightingRuntimeConditionalSceneChunkRequest) -> (),
+    commit_lighting_runtime_conditional_scene_replace(request: CommitLightingRuntimeConditionalSceneReplaceRequest) -> LightingState,
+    abort_lighting_runtime_conditional_scene_replace(request: AbortLightingRuntimeConditionalSceneReplaceRequest) -> (),
     set_lighting_scene_cell(request: SetLightingSceneCellRequest) -> LightingState,
     unset_lighting_scene_cell(request: UnsetLightingSceneCellRequest) -> LightingState,
     set_lighting_layer_policy(request: SetLightingLayerPolicyRequest) -> LightingState,

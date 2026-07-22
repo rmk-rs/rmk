@@ -242,7 +242,7 @@ pub struct LightingControls {
 }
 
 impl ConditionSet {
-    fn matches<Context, Batteries>(&self, context: &Context, batteries: &Batteries) -> bool
+    pub(crate) fn matches<Context, Batteries>(&self, context: &Context, batteries: &Batteries) -> bool
     where
         Context: LightingContextProvider,
         Batteries: BatteryStatusProvider + ?Sized,

@@ -198,6 +198,8 @@ impl LightingFeatureFlags {
     pub const OUTPUT_MODE: u16 = 1 << 10;
     /// Host-selectable animated extension effects served by an effect pack.
     pub const EXTENSION_EFFECTS: u16 = 1 << 11;
+    /// Persistent, ordered conditional rules authored at runtime.
+    pub const RUNTIME_CONDITIONAL_SCENES: u16 = 1 << 12;
 
     pub const fn contains(self, bits: u16) -> bool {
         self.0 & bits == bits
@@ -628,6 +630,20 @@ wire_type! {
     }
 }
 
+impl LightingConditionalSceneCell {
+    pub fn validate(&self) -> LightingResult<()> {
+        if let Some(battery) = self.conditions.battery {
+            if battery.min_level.is_some_and(|level| level > 100)
+                || battery.max_level.is_some_and(|level| level > 100)
+                || matches!((battery.min_level, battery.max_level), (Some(min), Some(max)) if min > max)
+            {
+                return Err(LightingError::InvalidRequest);
+            }
+        }
+        self.effect.validate()
+    }
+}
+
 wire_type! {
     /// Key/layer controls that gate the configured lighting presentation.
     pub struct LightingControls {
@@ -760,6 +776,91 @@ pub struct LightingConditionalScenesPage {
     pub items: Vec<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>,
 }
 
+wire_type! {
+    /// Mutable ordered conditional-table status. Unlike the compiled source,
+    /// this table participates in the lighting state revision.
+    pub struct LightingRuntimeConditionalSceneStatus {
+        pub revision: u32,
+        pub capacity: u16,
+        pub cell_len: u16,
+        pub chunk_capacity: u8,
+    }
+}
+
+wire_type! {
+    pub struct LightingRuntimeConditionalScenePageRequest {
+        pub revision: u32,
+        pub offset: u16,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingRuntimeConditionalScenesPage {
+    pub revision: u32,
+    pub total_count: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingConditionalSceneCell[]"))]
+    pub items: Vec<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for LightingRuntimeConditionalScenesPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>();
+}
+
+wire_type! {
+    pub struct SetLightingOutputModeRequest {
+        pub expected_revision: u32,
+        pub mode: LightingOutputMode,
+    }
+}
+
+wire_type! {
+    pub struct BeginLightingRuntimeConditionalSceneReplaceRequest {
+        pub expected_revision: u32,
+        pub cell_count: u16,
+    }
+}
+
+wire_type! {
+    pub struct LightingRuntimeConditionalSceneTransaction {
+        pub id: u32,
+        pub cell_count: u16,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct PutLightingRuntimeConditionalSceneChunkRequest {
+    pub transaction_id: u32,
+    pub offset: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingConditionalSceneCell[]"))]
+    pub cells: Vec<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for PutLightingRuntimeConditionalSceneChunkRequest {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>();
+}
+
+wire_type! {
+    pub struct CommitLightingRuntimeConditionalSceneReplaceRequest {
+        pub transaction_id: u32,
+    }
+}
+
+wire_type! {
+    pub struct AbortLightingRuntimeConditionalSceneReplaceRequest {
+        pub transaction_id: u32,
+    }
+}
+
 impl MaxSize for LightingConditionalScenesPage {
     const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
         + u16::POSTCARD_MAX_SIZE
@@ -859,6 +960,7 @@ wire_type! {
         // from the new scene endpoints, so older hosts never decode them.
         UnknownLayer { layer: u8 },
         SceneFull { capacity: u16 },
+        ConditionalSceneFull { capacity: u16 },
     }
 }
 
@@ -885,6 +987,9 @@ pub type LightingOutputModeStateResult = LightingResult<LightingOutputModeState>
 pub type LightingExtensionResult = LightingResult<LightingExtension>;
 pub type LightingExtensionNamesPageResult = LightingResult<LightingExtensionNamesPage>;
 pub type LightingSceneTransactionResult = LightingResult<LightingSceneTransaction>;
+pub type LightingRuntimeConditionalSceneStatusResult = LightingResult<LightingRuntimeConditionalSceneStatus>;
+pub type LightingRuntimeConditionalScenesPageResult = LightingResult<LightingRuntimeConditionalScenesPage>;
+pub type LightingRuntimeConditionalSceneTransactionResult = LightingResult<LightingRuntimeConditionalSceneTransaction>;
 pub type LightingUnitResult = LightingResult<()>;
 
 wire_type! {
@@ -931,6 +1036,19 @@ const _: () = {
     assert_endpoint_fits!((), LightingExtensionResult);
     assert_endpoint_fits!(LightingExtensionNamesRequest, LightingExtensionNamesPageResult);
     assert_endpoint_fits!(SetLightingExtensionStateRequest, LightingStateResult);
+    assert_endpoint_fits!(SetLightingOutputModeRequest, LightingOutputModeStateResult);
+    assert_endpoint_fits!((), LightingRuntimeConditionalSceneStatusResult);
+    assert_endpoint_fits!(
+        LightingRuntimeConditionalScenePageRequest,
+        LightingRuntimeConditionalScenesPageResult
+    );
+    assert_endpoint_fits!(
+        BeginLightingRuntimeConditionalSceneReplaceRequest,
+        LightingRuntimeConditionalSceneTransactionResult
+    );
+    assert_endpoint_fits!(PutLightingRuntimeConditionalSceneChunkRequest, LightingUnitResult);
+    assert_endpoint_fits!(CommitLightingRuntimeConditionalSceneReplaceRequest, LightingStateResult);
+    assert_endpoint_fits!(AbortLightingRuntimeConditionalSceneReplaceRequest, LightingUnitResult);
     assert_endpoint_fits!(SetLightingSceneCellRequest, LightingStateResult);
     assert_endpoint_fits!(UnsetLightingSceneCellRequest, LightingStateResult);
     assert_endpoint_fits!(SetLightingLayerPolicyRequest, LightingStateResult);

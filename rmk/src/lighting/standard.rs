@@ -22,8 +22,8 @@ use super::effect::{BuiltinEffect, LightingEffect};
 use super::output::BrightnessTransform;
 use super::service::{CommandResult, Invalidation, LightingEngine, RenderInput, RenderOutcome};
 use super::source::{
-    LayerPolicy, LayerScenes, LightingControls, OutputMode, OverlayError, OverlayUpdate, SceneCell, SparseScene,
-    TtlOverlay,
+    BatteryStatusProvider, ConditionSet, LayerPolicy, LayerScenes, LightingControls, OutputMode, OverlayError,
+    OverlayUpdate, SceneCell, SparseScene, TtlOverlay,
 };
 use super::topology::LedSlot;
 use crate::RawMutex;
@@ -35,6 +35,9 @@ pub const OVERLAY_CHUNK_SIZE: usize = 8;
 /// Cells per scene page/replacement chunk. Kept equal to the wire chunk size
 /// so protocol adapters can forward chunks without re-batching.
 pub const SCENE_CHUNK_SIZE: usize = 8;
+
+/// Cells per runtime conditional-scene page/replacement chunk.
+pub const CONDITIONAL_SCENE_CHUNK_SIZE: usize = 8;
 
 /// A staged scene replacement expires after this much command inactivity.
 pub const SCENE_TRANSACTION_TIMEOUT_MS: u64 = 5_000;
@@ -467,6 +470,166 @@ where
     }
 }
 
+/// One ordered, runtime-authored conditional rule.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeConditionalSceneCell {
+    pub conditions: ConditionSet,
+    pub slot: LedSlot,
+    pub effect: BuiltinEffect,
+}
+
+const EMPTY_CONDITIONAL_SCENE_CELL: RuntimeConditionalSceneCell = RuntimeConditionalSceneCell {
+    conditions: ConditionSet {
+        layer: None,
+        battery: None,
+    },
+    slot: LedSlot(0),
+    effect: BuiltinEffect::Solid { color: Rgb8::BLACK },
+};
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeConditionalSceneChunk {
+    cells: [RuntimeConditionalSceneCell; CONDITIONAL_SCENE_CHUNK_SIZE],
+    len: usize,
+}
+
+impl RuntimeConditionalSceneChunk {
+    pub const fn new() -> Self {
+        Self {
+            cells: [EMPTY_CONDITIONAL_SCENE_CELL; CONDITIONAL_SCENE_CHUNK_SIZE],
+            len: 0,
+        }
+    }
+
+    pub fn push(&mut self, cell: RuntimeConditionalSceneCell) -> Result<(), StandardError> {
+        if self.len == CONDITIONAL_SCENE_CHUNK_SIZE {
+            return Err(StandardError::InvalidConditionalSceneRequest);
+        }
+        self.cells[self.len] = cell;
+        self.len += 1;
+        Ok(())
+    }
+
+    pub fn as_slice(&self) -> &[RuntimeConditionalSceneCell] {
+        &self.cells[..self.len]
+    }
+}
+
+impl Default for RuntimeConditionalSceneChunk {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Fixed-capacity ordered conditional source. Order is semantic: later
+/// matching rules override earlier rules at the same compositor priority.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeConditionalSceneTable<const CAP: usize> {
+    cells: [RuntimeConditionalSceneCell; CAP],
+    len: usize,
+}
+
+impl<const CAP: usize> RuntimeConditionalSceneTable<CAP> {
+    pub const fn new() -> Self {
+        Self {
+            cells: [EMPTY_CONDITIONAL_SCENE_CELL; CAP],
+            len: 0,
+        }
+    }
+
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn as_slice(&self) -> &[RuntimeConditionalSceneCell] {
+        &self.cells[..self.len]
+    }
+
+    pub fn push(&mut self, cell: RuntimeConditionalSceneCell) -> Result<(), StandardError> {
+        if self.len == CAP {
+            return Err(StandardError::ConditionalSceneFull { capacity: CAP });
+        }
+        self.cells[self.len] = cell;
+        self.len += 1;
+        Ok(())
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    pub fn page(&self, offset: u16) -> RuntimeConditionalSceneChunk {
+        let start = (offset as usize).min(self.len);
+        let end = (start + CONDITIONAL_SCENE_CHUNK_SIZE).min(self.len);
+        let mut chunk = RuntimeConditionalSceneChunk::new();
+        for cell in &self.cells[start..end] {
+            chunk.push(*cell).expect("page is chunk-bounded");
+        }
+        chunk
+    }
+}
+
+impl<const CAP: usize> Default for RuntimeConditionalSceneTable<CAP> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+struct RuntimeConditionalSource<'a, Batteries: ?Sized, const CAP: usize> {
+    table: &'a RuntimeConditionalSceneTable<CAP>,
+    batteries: &'a Batteries,
+}
+
+impl<Context, Batteries, const CAP: usize> LightingSource<Rgb8, Context>
+    for RuntimeConditionalSource<'_, Batteries, CAP>
+where
+    Context: LightingContextProvider,
+    Batteries: BatteryStatusProvider + ?Sized,
+{
+    fn len(&self, input: &SourceRenderInput<'_, Context>) -> usize {
+        self.table
+            .as_slice()
+            .iter()
+            .filter(|cell| cell.conditions.matches(input.context, self.batteries))
+            .count()
+    }
+
+    fn slot(&self, index: usize, input: &SourceRenderInput<'_, Context>) -> LedSlot {
+        self.table
+            .as_slice()
+            .iter()
+            .filter(|cell| cell.conditions.matches(input.context, self.batteries))
+            .nth(index)
+            .expect("LightingSource index must be below len")
+            .slot
+    }
+
+    fn contribution(&mut self, index: usize, input: &SourceRenderInput<'_, Context>) -> Contribution<Rgb8> {
+        let cell = self
+            .table
+            .as_slice()
+            .iter()
+            .filter(|cell| cell.conditions.matches(input.context, self.batteries))
+            .nth(index)
+            .expect("LightingSource index must be below len");
+        Contribution::Opaque(cell.effect.sample(input.now_ms))
+    }
+}
+
+struct NoBatteryStatus;
+
+impl BatteryStatusProvider for NoBatteryStatus {
+    fn battery_status(&self, _node: u8) -> crate::types::battery::BatteryStatus {
+        crate::types::battery::BatteryStatus::Unavailable
+    }
+}
+
+static NO_BATTERY_STATUS: NoBatteryStatus = NoBatteryStatus;
+
 /// One in-progress, chunk-staged atomic scene replacement.
 ///
 /// The overlay replacement stages host-side because a whole overlay batch
@@ -482,9 +645,22 @@ struct SceneReplace<const CAP: usize> {
     last_activity_ms: u64,
 }
 
+struct RuntimeConditionalSceneReplace<const CAP: usize> {
+    id: u32,
+    expected_revision: u32,
+    expected_count: u16,
+    cells: [RuntimeConditionalSceneCell; CAP],
+    len: usize,
+    last_activity_ms: u64,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum StandardCommand<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
     SetOutputEnabled(bool),
+    SetOutputModeIfRevision {
+        expected_revision: u32,
+        mode: OutputMode,
+    },
     SetOutputBrightness(u8),
     SetBackground(BackgroundState),
     PatchBackground(BackgroundPatch),
@@ -567,6 +743,24 @@ pub enum StandardCommand<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
     ReadCompiledScenes {
         offset: u16,
     },
+    ReadRuntimeConditionalScenes {
+        offset: u16,
+    },
+    BeginRuntimeConditionalSceneReplace {
+        expected_revision: u32,
+        cell_count: u16,
+    },
+    PutRuntimeConditionalSceneChunk {
+        transaction_id: u32,
+        offset: u16,
+        cells: RuntimeConditionalSceneChunk,
+    },
+    CommitRuntimeConditionalSceneReplace {
+        transaction_id: u32,
+    },
+    AbortRuntimeConditionalSceneReplace {
+        transaction_id: u32,
+    },
 }
 
 /// Mutable standard state excluding the transient overlay contents and the
@@ -590,6 +784,7 @@ pub struct StandardState {
     pub overlay_len: usize,
     pub scene_len: usize,
     pub scene_policy: LayerPolicy,
+    pub runtime_conditional_scene_len: usize,
 }
 
 /// One page of transient overlay cells with remaining TTLs.
@@ -626,6 +821,13 @@ pub struct CompiledScenePage {
     pub cells: SceneChunk,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeConditionalScenePage {
+    pub revision: u32,
+    pub total: u16,
+    pub cells: RuntimeConditionalSceneChunk,
+}
+
 /// Protocol-independent readback for [`StandardCommand`]s. Most commands
 /// answer with authoritative [`StandardState`]; scene reads and transaction
 /// reservation carry their own shapes.
@@ -637,6 +839,8 @@ pub enum StandardReply {
     CompiledScenesPage(CompiledScenePage),
     SceneTransaction { id: u32, cell_count: u16 },
     Extension(ExtensionPage),
+    RuntimeConditionalScenesPage(RuntimeConditionalScenePage),
+    RuntimeConditionalSceneTransaction { id: u32, cell_count: u16 },
 }
 
 impl StandardReply {
@@ -666,6 +870,7 @@ pub struct StandardReplicaState<const OVERLAY_CAP: usize, const SCENE_CAP: usize
     pub output_mode: OutputMode,
     pub overlay: OverlayBatch<OVERLAY_CAP>,
     pub scenes: SceneTable<SCENE_CAP>,
+    pub runtime_conditional_scenes: RuntimeConditionalSceneTable<SCENE_CAP>,
     pub context: LightingContext,
     pub sample_time_ms: u64,
     /// Extension-source selection, carried so split renderer replicas track
@@ -763,6 +968,17 @@ pub enum StandardError {
         expected: u16,
         received: u16,
     },
+    ConditionalSceneFull {
+        capacity: usize,
+    },
+    InvalidConditionalSceneRequest,
+    ConditionalSceneTransactionBusy,
+    InvalidConditionalSceneTransaction,
+    ConditionalSceneTransactionExpired,
+    ConditionalSceneTransactionIncomplete {
+        expected: u16,
+        received: u16,
+    },
 }
 
 impl From<RenderError> for StandardError {
@@ -838,6 +1054,8 @@ pub struct StandardLightingEngine<
     extension: Extension,
     layers: LayerScenes<'scenes, BuiltinEffect>,
     scenes: SceneTable<SCENE_CAP>,
+    runtime_conditional_scenes: RuntimeConditionalSceneTable<SCENE_CAP>,
+    battery_status: &'scenes dyn BatteryStatusProvider,
     overlay: TtlOverlay<BuiltinEffect, OVERLAY_CAP>,
     status: Status,
     animation_clock: AnimationClock,
@@ -845,6 +1063,10 @@ pub struct StandardLightingEngine<
     scene_next_transaction: u32,
     scene_expired_transaction: Option<u32>,
     scene_committed_transaction: Option<u32>,
+    runtime_conditional_scene_replace: Option<RuntimeConditionalSceneReplace<SCENE_CAP>>,
+    runtime_conditional_scene_next_transaction: u32,
+    runtime_conditional_scene_expired_transaction: Option<u32>,
+    runtime_conditional_scene_committed_transaction: Option<u32>,
     revision: u32,
     controls: LightingControls,
     output_mode: OutputMode,
@@ -869,6 +1091,8 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             extension,
             layers,
             scenes: SceneTable::new(),
+            runtime_conditional_scenes: RuntimeConditionalSceneTable::new(),
+            battery_status: &NO_BATTERY_STATUS,
             overlay: TtlOverlay::new(),
             status,
             animation_clock: AnimationClock::local(),
@@ -876,6 +1100,10 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             scene_next_transaction: 1,
             scene_expired_transaction: None,
             scene_committed_transaction: None,
+            runtime_conditional_scene_replace: None,
+            runtime_conditional_scene_next_transaction: 1,
+            runtime_conditional_scene_expired_transaction: None,
+            runtime_conditional_scene_committed_transaction: None,
             revision: 0,
             controls: LightingControls::default(),
             output_mode: OutputMode::AlwaysOn,
@@ -892,6 +1120,12 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
         self.output_mode = controls.initial_output_mode;
         self.effective_output_enabled = matches!(self.output_mode, OutputMode::AlwaysOn);
         self.controls = controls;
+        self
+    }
+
+    /// Supply live board battery state for runtime conditional predicates.
+    pub const fn with_battery_status_provider(mut self, battery_status: &'scenes dyn BatteryStatusProvider) -> Self {
+        self.battery_status = battery_status;
         self
     }
 
@@ -925,6 +1159,7 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             overlay_len: self.overlay.active_len(),
             scene_len: self.scenes.len(),
             scene_policy: self.scenes.policy(),
+            runtime_conditional_scene_len: self.runtime_conditional_scenes.len(),
         }
     }
 
@@ -934,6 +1169,10 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
 
     pub const fn scenes(&self) -> &SceneTable<SCENE_CAP> {
         &self.scenes
+    }
+
+    pub const fn runtime_conditional_scenes(&self) -> &RuntimeConditionalSceneTable<SCENE_CAP> {
+        &self.runtime_conditional_scenes
     }
 
     /// Install one persisted scene cell during startup, before the engine is
@@ -946,6 +1185,15 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
     /// Install the persisted layer policy during startup.
     pub fn install_scene_policy(&mut self, policy: LayerPolicy) {
         self.scenes.set_policy(policy);
+    }
+
+    /// Install one persisted runtime conditional rule during startup.
+    pub fn install_runtime_conditional_scene_cell(
+        &mut self,
+        cell: RuntimeConditionalSceneCell,
+    ) -> Result<(), StandardError> {
+        Self::check_scene_slot(cell.slot)?;
+        self.runtime_conditional_scenes.push(cell)
     }
 
     pub const fn extension(&self) -> &Extension {
@@ -1072,6 +1320,7 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             output_mode: self.output_mode,
             overlay,
             scenes: self.scenes,
+            runtime_conditional_scenes: self.runtime_conditional_scenes,
             context: *context.lighting_context(),
             sample_time_ms,
             // Filled by handle_command, where the LightingSource bound is
@@ -1115,6 +1364,7 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
         self.set_mutable_state(replica.mutable);
         self.output_mode = replica.output_mode;
         self.scenes = replica.scenes;
+        self.runtime_conditional_scenes = replica.runtime_conditional_scenes;
         self.revision = replica.revision;
         self.animation_clock.anchor(local_now_ms, replica.sample_time_ms);
     }
@@ -1268,6 +1518,137 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
         }
         Err(self.scene_transaction_error(transaction_id))
     }
+
+    fn expire_runtime_conditional_scene_replace(&mut self, now_ms: u64) {
+        if self
+            .runtime_conditional_scene_replace
+            .as_ref()
+            .is_some_and(|replace| now_ms.saturating_sub(replace.last_activity_ms) >= SCENE_TRANSACTION_TIMEOUT_MS)
+        {
+            self.runtime_conditional_scene_expired_transaction = self
+                .runtime_conditional_scene_replace
+                .as_ref()
+                .map(|replace| replace.id);
+            self.runtime_conditional_scene_replace = None;
+        }
+    }
+
+    fn runtime_conditional_scene_transaction_error(&self, id: u32) -> StandardError {
+        if self.runtime_conditional_scene_expired_transaction == Some(id) {
+            StandardError::ConditionalSceneTransactionExpired
+        } else {
+            StandardError::InvalidConditionalSceneTransaction
+        }
+    }
+
+    fn begin_runtime_conditional_scene_replace(
+        &mut self,
+        now_ms: u64,
+        expected_revision: u32,
+        cell_count: u16,
+    ) -> Result<u32, StandardError> {
+        self.expire_runtime_conditional_scene_replace(now_ms);
+        if self.runtime_conditional_scene_replace.is_some() {
+            return Err(StandardError::ConditionalSceneTransactionBusy);
+        }
+        if cell_count as usize > SCENE_CAP {
+            return Err(StandardError::ConditionalSceneFull { capacity: SCENE_CAP });
+        }
+        let id = self.runtime_conditional_scene_next_transaction;
+        self.runtime_conditional_scene_next_transaction =
+            self.runtime_conditional_scene_next_transaction.wrapping_add(1).max(1);
+        self.runtime_conditional_scene_expired_transaction = None;
+        self.runtime_conditional_scene_replace = Some(RuntimeConditionalSceneReplace {
+            id,
+            expected_revision,
+            expected_count: cell_count,
+            cells: [EMPTY_CONDITIONAL_SCENE_CELL; SCENE_CAP],
+            len: 0,
+            last_activity_ms: now_ms,
+        });
+        Ok(id)
+    }
+
+    fn put_runtime_conditional_scene_chunk(
+        &mut self,
+        now_ms: u64,
+        transaction_id: u32,
+        offset: u16,
+        cells: &RuntimeConditionalSceneChunk,
+    ) -> Result<(), StandardError> {
+        self.expire_runtime_conditional_scene_replace(now_ms);
+        for cell in cells.as_slice() {
+            Self::check_scene_slot(cell.slot)?;
+        }
+        let error = self.runtime_conditional_scene_transaction_error(transaction_id);
+        let replace = self
+            .runtime_conditional_scene_replace
+            .as_mut()
+            .filter(|replace| replace.id == transaction_id)
+            .ok_or(error)?;
+        if offset as usize != replace.len || replace.len + cells.as_slice().len() > replace.expected_count as usize {
+            return Err(StandardError::InvalidConditionalSceneRequest);
+        }
+        for cell in cells.as_slice() {
+            replace.cells[replace.len] = *cell;
+            replace.len += 1;
+        }
+        replace.last_activity_ms = now_ms;
+        Ok(())
+    }
+
+    fn commit_runtime_conditional_scene_replace(
+        &mut self,
+        now_ms: u64,
+        transaction_id: u32,
+    ) -> Result<bool, StandardError> {
+        self.expire_runtime_conditional_scene_replace(now_ms);
+        if self.runtime_conditional_scene_committed_transaction == Some(transaction_id)
+            && self.runtime_conditional_scene_replace.is_none()
+        {
+            return Ok(false);
+        }
+        let error = self.runtime_conditional_scene_transaction_error(transaction_id);
+        let replace = self
+            .runtime_conditional_scene_replace
+            .as_ref()
+            .filter(|replace| replace.id == transaction_id)
+            .ok_or(error)?;
+        if replace.len != replace.expected_count as usize {
+            return Err(StandardError::ConditionalSceneTransactionIncomplete {
+                expected: replace.expected_count,
+                received: replace.len as u16,
+            });
+        }
+        self.check_revision(replace.expected_revision)?;
+        let replace = self.runtime_conditional_scene_replace.take().expect("checked above");
+        self.runtime_conditional_scenes.clear();
+        for cell in &replace.cells[..replace.len] {
+            self.runtime_conditional_scenes
+                .push(*cell)
+                .expect("staged length is table-bounded");
+        }
+        self.runtime_conditional_scene_committed_transaction = Some(transaction_id);
+        self.runtime_conditional_scene_expired_transaction = None;
+        Ok(true)
+    }
+
+    fn abort_runtime_conditional_scene_replace(
+        &mut self,
+        now_ms: u64,
+        transaction_id: u32,
+    ) -> Result<(), StandardError> {
+        self.expire_runtime_conditional_scene_replace(now_ms);
+        if self
+            .runtime_conditional_scene_replace
+            .as_ref()
+            .is_some_and(|replace| replace.id == transaction_id)
+        {
+            self.runtime_conditional_scene_replace = None;
+            return Ok(());
+        }
+        Err(self.runtime_conditional_scene_transaction_error(transaction_id))
+    }
 }
 
 impl<'scenes, Context, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const SCENE_CAP: usize>
@@ -1364,6 +1745,15 @@ where
                     },
                 )));
             }
+            StandardCommand::ReadRuntimeConditionalScenes { offset } => {
+                return Ok(CommandResult::unchanged(StandardReply::RuntimeConditionalScenesPage(
+                    RuntimeConditionalScenePage {
+                        revision: self.revision,
+                        total: self.runtime_conditional_scenes.len().min(u16::MAX as usize) as u16,
+                        cells: self.runtime_conditional_scenes.page(offset),
+                    },
+                )));
+            }
             StandardCommand::BeginSceneReplace {
                 expected_revision,
                 cell_count,
@@ -1399,6 +1789,38 @@ where
                 self.abort_scene_replace(now_ms, transaction_id)?;
                 return Ok(CommandResult::unchanged(StandardReply::State(self.state())));
             }
+            StandardCommand::BeginRuntimeConditionalSceneReplace {
+                expected_revision,
+                cell_count,
+            } => {
+                let id = self.begin_runtime_conditional_scene_replace(now_ms, expected_revision, cell_count)?;
+                return Ok(CommandResult::unchanged(
+                    StandardReply::RuntimeConditionalSceneTransaction { id, cell_count },
+                ));
+            }
+            StandardCommand::PutRuntimeConditionalSceneChunk {
+                transaction_id,
+                offset,
+                cells,
+            } => {
+                self.put_runtime_conditional_scene_chunk(now_ms, transaction_id, offset, &cells)?;
+                return Ok(CommandResult::unchanged(StandardReply::State(self.state())));
+            }
+            StandardCommand::CommitRuntimeConditionalSceneReplace { transaction_id } => {
+                let committed = self.commit_runtime_conditional_scene_replace(now_ms, transaction_id)?;
+                if committed {
+                    self.advance_revision();
+                    return Ok(CommandResult::new(
+                        StandardReply::State(self.state()),
+                        Invalidation::Render,
+                    ));
+                }
+                return Ok(CommandResult::unchanged(StandardReply::State(self.state())));
+            }
+            StandardCommand::AbortRuntimeConditionalSceneReplace { transaction_id } => {
+                self.abort_runtime_conditional_scene_replace(now_ms, transaction_id)?;
+                return Ok(CommandResult::unchanged(StandardReply::State(self.state())));
+            }
             _ => {}
         }
 
@@ -1409,6 +1831,14 @@ where
                 } else {
                     OutputMode::AlwaysOff
                 };
+                (Invalidation::Render, true)
+            }
+            StandardCommand::SetOutputModeIfRevision {
+                expected_revision,
+                mode,
+            } => {
+                self.check_revision(expected_revision)?;
+                self.output_mode = mode;
                 (Invalidation::Render, true)
             }
             StandardCommand::SetOutputBrightness(level) => {
@@ -1604,10 +2034,15 @@ where
             StandardCommand::ReadOverlay { .. }
             | StandardCommand::ReadScenes { .. }
             | StandardCommand::ReadCompiledScenes { .. }
+            | StandardCommand::ReadRuntimeConditionalScenes { .. }
             | StandardCommand::BeginSceneReplace { .. }
             | StandardCommand::PutSceneChunk { .. }
             | StandardCommand::CommitSceneReplace { .. }
             | StandardCommand::AbortSceneReplace { .. } => unreachable!("handled above"),
+            StandardCommand::BeginRuntimeConditionalSceneReplace { .. }
+            | StandardCommand::PutRuntimeConditionalSceneChunk { .. }
+            | StandardCommand::CommitRuntimeConditionalSceneReplace { .. }
+            | StandardCommand::AbortRuntimeConditionalSceneReplace { .. } => unreachable!("handled above"),
         };
         if advances_revision {
             self.advance_revision();
@@ -1658,6 +2093,8 @@ where
             extension,
             layers,
             scenes,
+            runtime_conditional_scenes,
+            battery_status,
             overlay,
             status,
             animation_clock: _,
@@ -1671,11 +2108,20 @@ where
             scene_next_transaction: _,
             scene_expired_transaction: _,
             scene_committed_transaction: _,
+            runtime_conditional_scene_replace: _,
+            runtime_conditional_scene_next_transaction: _,
+            runtime_conditional_scene_expired_transaction: _,
+            runtime_conditional_scene_committed_transaction: _,
             revision: _,
         } = self;
         let mut transaction = compositor.begin(effect_now_ms, input.snapshot, Rgb8::BLACK, frame);
         transaction.apply(priority::BACKGROUND, background)?;
         transaction.apply(priority::EXTENSION, extension)?;
+        let mut runtime_conditional_source = RuntimeConditionalSource {
+            table: runtime_conditional_scenes,
+            batteries: *battery_status,
+        };
+        transaction.apply(priority::EXTENSION, &mut runtime_conditional_source)?;
         transaction.apply(priority::LAYER, layers)?;
         // Same band, later call: runtime cells override static defaults.
         transaction.apply(priority::LAYER, scenes)?;
@@ -1943,6 +2389,7 @@ mod tests {
             output_mode: OutputMode::AlwaysOn,
             overlay: OverlayBatch::new(),
             scenes: SceneTable::new(),
+            runtime_conditional_scenes: RuntimeConditionalSceneTable::new(),
             context: context(0),
             sample_time_ms: 9,
             extension: None,
@@ -1974,6 +2421,7 @@ mod tests {
             output_mode: OutputMode::AlwaysOff,
             overlay: OverlayBatch::new(),
             scenes: SceneTable::new(),
+            runtime_conditional_scenes: RuntimeConditionalSceneTable::new(),
             context: context(0),
             sample_time_ms: 50,
             extension: Some(next_extension),
@@ -2024,6 +2472,7 @@ mod tests {
             output_mode: OutputMode::AlwaysOn,
             overlay,
             scenes: SceneTable::new(),
+            runtime_conditional_scenes: RuntimeConditionalSceneTable::new(),
             context: context(0),
             sample_time_ms: 50,
             extension: Some(ExtensionState {
@@ -2914,7 +3363,6 @@ mod tests {
             Err(StandardError::InvalidSceneTransaction)
         );
     }
-
     #[test]
     fn extension_source_claims_light_actions_before_background() {
         #[derive(Default)]
@@ -2971,5 +3419,130 @@ mod tests {
             hue_before,
             "unclaimed actions still fall through to the background"
         );
+    }
+
+    #[test]
+    fn runtime_conditional_replace_preserves_order_and_output_mode_is_revision_checked() {
+        use rmk_types::battery::{BatteryStatus, ChargeState};
+
+        use crate::lighting::{BatteryCondition, ChargeCondition, LayerCondition};
+
+        struct Batteries;
+        impl BatteryStatusProvider for Batteries {
+            fn battery_status(&self, node: u8) -> BatteryStatus {
+                if node == 1 {
+                    BatteryStatus::Available {
+                        charge_state: ChargeState::Discharging,
+                        level: Some(50),
+                    }
+                } else {
+                    BatteryStatus::Unavailable
+                }
+            }
+        }
+        static BATTERIES: Batteries = Batteries;
+
+        let mut engine = scene_engine().with_battery_status_provider(&BATTERIES);
+        let snapshot = context(0);
+        let transaction_id = match engine
+            .handle_command(
+                0,
+                StandardCommand::BeginRuntimeConditionalSceneReplace {
+                    expected_revision: 0,
+                    cell_count: 2,
+                },
+                &snapshot,
+            )
+            .unwrap()
+            .reply
+        {
+            StandardReply::RuntimeConditionalSceneTransaction { id, .. } => id,
+            other => panic!("expected runtime conditional transaction, got {other:?}"),
+        };
+        let mut cells = RuntimeConditionalSceneChunk::new();
+        cells
+            .push(RuntimeConditionalSceneCell {
+                conditions: ConditionSet {
+                    layer: None,
+                    battery: Some(BatteryCondition {
+                        node: 1,
+                        min_level: Some(25),
+                        max_level: Some(75),
+                        charge: ChargeCondition::Discharging,
+                    }),
+                },
+                slot: LedSlot(1),
+                effect: BuiltinEffect::Solid { color: RED },
+            })
+            .unwrap();
+        cells
+            .push(RuntimeConditionalSceneCell {
+                conditions: ConditionSet {
+                    layer: Some(LayerCondition { layer: 0, active: true }),
+                    battery: None,
+                },
+                slot: LedSlot(1),
+                effect: BuiltinEffect::Solid { color: GREEN },
+            })
+            .unwrap();
+        engine
+            .handle_command(
+                1,
+                StandardCommand::PutRuntimeConditionalSceneChunk {
+                    transaction_id,
+                    offset: 0,
+                    cells,
+                },
+                &snapshot,
+            )
+            .unwrap();
+        let committed = engine
+            .handle_command(
+                2,
+                StandardCommand::CommitRuntimeConditionalSceneReplace { transaction_id },
+                &snapshot,
+            )
+            .unwrap();
+        assert_eq!(committed.reply.state().unwrap().revision, 1);
+        assert_eq!(engine.runtime_conditional_scenes().as_slice(), cells.as_slice());
+
+        let mut frame = LogicalFrame::new(Rgb8::BLACK);
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 2,
+                    snapshot: &snapshot,
+                },
+                &mut frame,
+            )
+            .unwrap();
+        assert_eq!(frame.as_slice()[1], GREEN, "later matching rules win");
+
+        assert_eq!(
+            engine.handle_command(
+                3,
+                StandardCommand::SetOutputModeIfRevision {
+                    expected_revision: 0,
+                    mode: OutputMode::PoweredOnly,
+                },
+                &snapshot,
+            ),
+            Err(StandardError::RevisionConflict {
+                expected: 0,
+                current: 1,
+            })
+        );
+        let set = engine
+            .handle_command(
+                3,
+                StandardCommand::SetOutputModeIfRevision {
+                    expected_revision: 1,
+                    mode: OutputMode::PoweredOnly,
+                },
+                &snapshot,
+            )
+            .unwrap();
+        assert_eq!(set.reply.state().unwrap().output_mode, OutputMode::PoweredOnly);
+        assert_eq!(set.reply.state().unwrap().revision, 2);
     }
 }

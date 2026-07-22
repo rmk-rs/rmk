@@ -27,7 +27,8 @@ pub use rynk::RynkService as HostService;
 #[cfg(all(feature = "rynk", feature = "lighting"))]
 pub use rynk::{
     RYNK_LIGHTING_TRANSACTION_CAPACITY, RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox,
-    RynkLightingReadback, StandardRynkLightingAdapter, install_lighting_scenes,
+    RynkLightingReadback, StandardRynkLightingAdapter, install_lighting_runtime_conditional_scenes,
+    install_lighting_scenes,
 };
 /// RMK's semantic version, available to downstream firmware build labels.
 #[cfg(feature = "rynk")]

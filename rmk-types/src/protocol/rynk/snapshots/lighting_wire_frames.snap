@@ -7,19 +7,25 @@
 
 AbortLightingOverlayReplace reply                      10 09 01 02 00 00 00
 AbortLightingOverlayReplace request                    10 09 01 01 00 0d
+AbortLightingRuntimeConditionalSceneReplace reply      2a 09 01 02 00 00 00
+AbortLightingRuntimeConditionalSceneReplace request    2a 09 01 01 00 1f
 AbortLightingSceneReplace reply                        19 09 01 02 00 00 00
 AbortLightingSceneReplace request                      19 09 01 01 00 15
 BeginLightingOverlayReplace reply                      0d 09 01 04 00 00 00 0d 01
 BeginLightingOverlayReplace request                    0d 09 01 02 00 0c 01
+BeginLightingRuntimeConditionalSceneReplace reply      27 09 01 04 00 00 00 1f 01
+BeginLightingRuntimeConditionalSceneReplace request    27 09 01 02 00 09 01
 BeginLightingSceneReplace reply                        16 09 01 04 00 00 00 15 01
 BeginLightingSceneReplace request                      16 09 01 02 00 0c 01
 ClearLightingOverlay reply                             0c 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
 ClearLightingOverlay request                           0c 09 01 01 00 0b
 CommitLightingOverlayReplace reply                     0f 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
 CommitLightingOverlayReplace request                   0f 09 01 01 00 0d
+CommitLightingRuntimeConditionalSceneReplace reply     29 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
+CommitLightingRuntimeConditionalSceneReplace request   29 09 01 01 00 1f
 CommitLightingSceneReplace reply                       18 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
 CommitLightingSceneReplace request                     18 09 01 01 00 15
-GetLightingCapabilities reply                          01 09 01 10 00 00 00 01 02 03 04 05 06 07 08 09 08 08 bf 0b 07
+GetLightingCapabilities reply                          01 09 01 10 00 00 00 01 02 03 04 05 06 07 08 09 08 08 bf 2b 07
 GetLightingCapabilities request                        01 09 01 00 00
 GetLightingCompiledSceneStatus reply                   1c 09 01 06 00 00 00 01 01 00 08
 GetLightingCompiledSceneStatus request                 1c 09 01 00 00
@@ -44,6 +50,10 @@ GetLightingPhysicalKeys reply                          04 09 01 13 00 00 00 01 0
 GetLightingPhysicalKeys request                        04 09 01 02 00 01 00
 GetLightingRoutes reply                                09 09 01 09 00 00 00 01 01 01 2a 01 02 07
 GetLightingRoutes request                              09 09 01 02 00 01 00
+GetLightingRuntimeConditionalSceneStatus reply         25 09 01 06 00 00 00 09 40 01 08
+GetLightingRuntimeConditionalSceneStatus request       25 09 01 00 00
+GetLightingRuntimeConditionalScenes reply              26 09 01 14 00 00 00 09 01 01 01 02 01 01 01 01 14 01 50 02 2a 00 07 08 09
+GetLightingRuntimeConditionalScenes request            26 09 01 02 00 09 00
 GetLightingSceneStatus reply                           12 09 01 08 00 00 00 09 80 02 01 01 08
 GetLightingSceneStatus request                         12 09 01 00 00
 GetLightingScenes reply                                13 09 01 0b 00 00 00 09 01 01 02 2a 00 07 08 09
@@ -58,12 +68,16 @@ LightingChange topic                                   07 80 00 00 00
 PutLightingOverlayChunk inner Err(TransactionExpired)  0e 09 01 03 00 00 01 0a
 PutLightingOverlayChunk reply                          0e 09 01 02 00 00 00
 PutLightingOverlayChunk request                        0e 09 01 10 00 0d 00 01 2a 01 01 02 03 e8 07 fa 01 32 01 88 27
+PutLightingRuntimeConditionalSceneChunk reply          28 09 01 02 00 00 00
+PutLightingRuntimeConditionalSceneChunk request        28 09 01 12 00 1f 00 01 01 02 01 01 01 01 14 01 50 02 2a 00 07 08 09
 PutLightingSceneChunk reply                            17 09 01 02 00 00 00
 PutLightingSceneChunk request                          17 09 01 09 00 15 00 01 02 2a 00 07 08 09
 SetLightingExtensionState reply                        23 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
 SetLightingExtensionState request                      23 09 01 05 00 09 01 02 03 04
 SetLightingLayerPolicy reply                           1a 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
 SetLightingLayerPolicy request                         1a 09 01 02 00 0b 00
+SetLightingOutputMode reply                            24 09 01 19 00 00 00 02 01 00 01 01 01 0d 01 02 01 2a 00 00 09 00 00 09 00 00 00 00 00 09
+SetLightingOutputMode request                          24 09 01 02 00 09 01
 SetLightingOverlay inner Err(UnknownLed)               0a 09 01 05 00 00 01 06 e7 07
 SetLightingOverlay outer Err(Locked)                   0a 09 01 02 00 01 07
 SetLightingOverlay reply                               0a 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01

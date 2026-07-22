@@ -10,8 +10,7 @@ use rmk_types::fork::Fork;
 use rmk_types::led_indicator::LedIndicator;
 use rmk_types::morse::{Morse, MorseProfile};
 #[cfg(feature = "rynk")]
-use rmk_types::protocol::rynk::BehaviorConfig;
-use rmk_types::protocol::rynk::{LAYER_STATE_BITMAP_SIZE, LAYER_STATE_CAPACITY, LayerState};
+use rmk_types::protocol::rynk::{BehaviorConfig, LAYER_STATE_BITMAP_SIZE, LAYER_STATE_CAPACITY, LayerState};
 
 use crate::event::KeyboardEventPos;
 use crate::keyboard::combo::Combo;
@@ -344,6 +343,7 @@ impl<'a> KeyboardContext<'a> {
     ///
     /// The mutable keymap mask does not contain the default layer, so its bit
     /// is added explicitly to make this snapshot authoritative.
+    #[cfg(feature = "rynk")]
     pub fn layer_state(&self) -> LayerState {
         let default_layer = self.keymap.get_default_layer();
         let mut active_bitmap = [0; LAYER_STATE_BITMAP_SIZE];
@@ -407,7 +407,7 @@ impl<'a> KeyboardContext<'a> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "rynk"))]
 mod tests {
     use rmk_types::action::KeyAction;
 
