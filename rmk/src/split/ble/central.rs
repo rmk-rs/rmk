@@ -324,11 +324,18 @@ pub(crate) async fn run_peripheral_session<
 }
 
 fn default_central_conn_param() -> RequestedConnParams {
+    let max_latency = latency_state().effective;
+    // Supervision must exceed the longest legal radio silence,
+    // interval * (1 + latency). Keep three such periods of margin, with a 2 s
+    // floor: a powered-off peripheral is only rediscovered after the dead
+    // connection times out, so this bounds reconnect latency for fast
+    // off/on cycles.
+    let latency_period_us = 7_500 * (1 + max_latency as u64);
     RequestedConnParams {
         min_connection_interval: Duration::from_micros(7500),
         max_connection_interval: Duration::from_micros(7500),
-        max_latency: latency_state().effective,
-        supervision_timeout: Duration::from_secs(5),
+        max_latency,
+        supervision_timeout: Duration::from_micros((3 * latency_period_us).max(2_000_000)),
         ..Default::default()
     }
 }
