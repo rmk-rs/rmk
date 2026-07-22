@@ -45,6 +45,45 @@ pub trait LightingSource<C, Context> {
     fn handle_light_action(&mut self, _action: LightAction) -> bool {
         false
     }
+
+    /// Describe this source's selectable content, if any.
+    ///
+    /// An animated extension source (an effect pack) advertises its effect
+    /// and palette names here so hosts can render controls without
+    /// compiled-in assumptions. The default — and sources that are not
+    /// user-selectable — report nothing.
+    fn extension_descriptor(&self) -> Option<ExtensionDescriptor> {
+        None
+    }
+
+    /// Current selection and tuning, indexed against
+    /// [`Self::extension_descriptor`]'s name lists.
+    fn extension_state(&self) -> Option<ExtensionState> {
+        None
+    }
+
+    /// Apply a host-selected state. Return `true` if accepted; the engine
+    /// then re-renders and advances its revision. The default declines.
+    fn apply_extension_state(&mut self, _state: ExtensionState) -> bool {
+        false
+    }
+}
+
+/// Static description of an extension source's selectable content.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ExtensionDescriptor {
+    pub effects: &'static [&'static str],
+    pub palettes: &'static [&'static str],
+}
+
+/// Runtime-adjustable state of an extension source. `effect` and `palette`
+/// index into the descriptor's name lists; `value` and `speed` are 0-255.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ExtensionState {
+    pub effect: u8,
+    pub palette: u8,
+    pub value: u8,
+    pub speed: u8,
 }
 
 /// User-level transform applied after composition but before changed

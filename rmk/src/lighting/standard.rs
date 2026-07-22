@@ -13,7 +13,7 @@ use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use rmk_types::action::LightAction;
 
 use super::Rgb8;
-use super::compositor::{
+use super::compositor::{ExtensionDescriptor, ExtensionState, 
     Compositor, Contribution, LightingSource, LogicalFrame, RenderError, RenderInput as SourceRenderInput,
 };
 use super::context::{LightingContext, LightingContextProvider};
@@ -518,6 +518,12 @@ pub enum StandardCommand<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
     /// slot. Intended for a renderer replica, not a second authority.
     ApplyReplica(&'static StandardReplicaSlot<OVERLAY_CAP, SCENE_CAP>),
     ReadState,
+    /// Descriptor and current selection of the extension source, if any.
+    ReadExtension,
+    SetExtensionIfRevision {
+        expected_revision: u32,
+        state: ExtensionState,
+    },
     /// One atomically sampled page of the transient overlay.
     ReadOverlay {
         offset: u16,
@@ -601,6 +607,16 @@ pub struct ScenePage {
     pub cells: SceneChunk,
 }
 
+/// Extension-source readback: selectable content plus current selection.
+/// `descriptor`/`state` are `None` when the engine's extension band is not
+/// user-selectable (e.g. `EmptySource`).
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ExtensionPage {
+    pub revision: u32,
+    pub descriptor: Option<ExtensionDescriptor>,
+    pub state: Option<ExtensionState>,
+}
+
 /// One page of immutable board-compiled layer scenes.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct CompiledScenePage {
@@ -619,6 +635,7 @@ pub enum StandardReply {
     ScenesPage(ScenePage),
     CompiledScenesPage(CompiledScenePage),
     SceneTransaction { id: u32, cell_count: u16 },
+    Extension(ExtensionPage),
 }
 
 impl StandardReply {
@@ -650,6 +667,10 @@ pub struct StandardReplicaState<const OVERLAY_CAP: usize, const SCENE_CAP: usize
     pub scenes: SceneTable<SCENE_CAP>,
     pub context: LightingContext,
     pub sample_time_ms: u64,
+    /// Extension-source selection, carried so split renderer replicas track
+    /// the authority's animated band. `None` when the authority has no
+    /// selectable extension.
+    pub extension: Option<ExtensionState>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -731,6 +752,9 @@ pub enum StandardError {
     /// Malformed scene request: bad chunk order, count overflow, or a
     /// duplicate `(layer, slot)` within one staged replacement.
     InvalidSceneRequest,
+    /// The extension source declined the state (none installed, or an index
+    /// out of its descriptor's range).
+    ExtensionUnsupported,
     SceneTransactionBusy,
     InvalidSceneTransaction,
     SceneTransactionExpired,
@@ -1049,6 +1073,9 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             scenes: self.scenes,
             context: *context.lighting_context(),
             sample_time_ms,
+            // Filled by handle_command, where the LightingSource bound is
+            // available on the Extension parameter.
+            extension: None,
         })
     }
 
@@ -1492,11 +1519,19 @@ where
                 (Invalidation::Render, true)
             }
             StandardCommand::ExportReplica(slot) => {
-                slot.put(self.replica_state(now_ms, snapshot)?)?;
+                let mut replica = self.replica_state(now_ms, snapshot)?;
+                replica.extension = self.extension.extension_state();
+                slot.put(replica)?;
                 (Invalidation::None, false)
             }
             StandardCommand::ApplyReplica(slot) => {
-                self.apply_replica(now_ms, slot.take()?)?;
+                let replica = slot.take()?;
+                let extension = replica.extension;
+                self.apply_replica(now_ms, replica)?;
+                if let Some(extension) = extension {
+                    // A replica without a matching extension declines harmlessly.
+                    let _ = self.extension.apply_extension_state(extension);
+                }
                 (Invalidation::Render, false)
             }
             StandardCommand::SetSceneCellIfRevision {
@@ -1538,6 +1573,23 @@ where
                     },
                     true,
                 )
+            }
+            StandardCommand::ReadExtension => {
+                return Ok(CommandResult::unchanged(StandardReply::Extension(ExtensionPage {
+                    revision: self.revision,
+                    descriptor: self.extension.extension_descriptor(),
+                    state: self.extension.extension_state(),
+                })));
+            }
+            StandardCommand::SetExtensionIfRevision {
+                expected_revision,
+                state,
+            } => {
+                self.check_revision(expected_revision)?;
+                if !self.extension.apply_extension_state(state) {
+                    return Err(StandardError::ExtensionUnsupported);
+                }
+                (Invalidation::Render, true)
             }
             StandardCommand::ReadState => (Invalidation::None, false),
             StandardCommand::ReadOverlay { .. }
@@ -1829,6 +1881,7 @@ mod tests {
             scenes: SceneTable::new(),
             context: context(0),
             sample_time_ms: 9,
+            extension: None,
         };
         slot.put(snapshot).unwrap();
         assert_eq!(slot.put(snapshot), Err(ReplicaSlotError::Busy));

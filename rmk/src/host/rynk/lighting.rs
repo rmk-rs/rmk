@@ -1055,6 +1055,7 @@ fn map_standard_error(error: StandardError, capacity: usize) -> LightingError {
         StandardError::SceneTransactionIncomplete { expected, received } => {
             LightingError::TransactionIncomplete { expected, received }
         }
+        StandardError::ExtensionUnsupported => LightingError::Unsupported,
     }
 }
 
