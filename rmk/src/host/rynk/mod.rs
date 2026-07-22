@@ -329,6 +329,7 @@ impl<'a> RynkService<'a> {
             Cmd::GetLightingExtensionNames => Serve::<command::GetLightingExtensionNames, _>::serve(self, msg).await,
             #[cfg(feature = "lighting")]
             Cmd::SetLightingExtensionState => Serve::<command::SetLightingExtensionState, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
             Cmd::SetLightingOutputMode => Serve::<command::SetLightingOutputMode, _>::serve(self, msg).await,
             #[cfg(feature = "lighting")]
             Cmd::GetLightingRuntimeConditionalSceneStatus => {
