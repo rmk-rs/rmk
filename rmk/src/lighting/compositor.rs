@@ -63,13 +63,17 @@ pub trait LightingSource<C, Context> {
     }
 
     /// Apply a host-selected state. Return `true` if accepted; the engine
-    /// then re-renders and advances its revision. The default declines.
+    /// then re-renders and advances its revision. Returning `false` must
+    /// leave the source unchanged so replica application can remain atomic.
+    /// The default declines.
     fn apply_extension_state(&mut self, _state: ExtensionState) -> bool {
         false
     }
 }
 
 /// Static description of an extension source's selectable content.
+///
+/// Each list is limited to 255 entries by the standard wire protocol.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ExtensionDescriptor {
     pub effects: &'static [&'static str],

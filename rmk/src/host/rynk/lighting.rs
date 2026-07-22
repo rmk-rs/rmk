@@ -693,10 +693,13 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                 let (Some(descriptor), Some(state)) = (page.descriptor, page.state) else {
                     return Err(LightingError::Unsupported);
                 };
+                if descriptor.effects.len() > u8::MAX as usize || descriptor.palettes.len() > u8::MAX as usize {
+                    return Err(LightingError::InvalidRequest);
+                }
                 return Ok(RynkLightingReadback::Extension(LightingExtension {
                     revision: page.revision,
-                    effect_count: descriptor.effects.len().min(u8::MAX as usize) as u8,
-                    palette_count: descriptor.palettes.len().min(u8::MAX as usize) as u8,
+                    effect_count: descriptor.effects.len() as u8,
+                    palette_count: descriptor.palettes.len() as u8,
                     state: WireExtensionState {
                         effect: state.effect,
                         palette: state.palette,
@@ -710,6 +713,9 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                 let Some(descriptor) = page.descriptor else {
                     return Err(LightingError::Unsupported);
                 };
+                if descriptor.effects.len() > u8::MAX as usize || descriptor.palettes.len() > u8::MAX as usize {
+                    return Err(LightingError::InvalidRequest);
+                }
                 let names = match kind {
                     LightingExtensionNameKind::Effects => descriptor.effects,
                     LightingExtensionNameKind::Palettes => descriptor.palettes,
@@ -721,7 +727,7 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                     items.push(super::truncated(name)).expect("page is bounded");
                 }
                 return Ok(RynkLightingReadback::ExtensionNamesPage(LightingExtensionNamesPage {
-                    total: names.len().min(u8::MAX as usize) as u8,
+                    total: names.len() as u8,
                     items,
                 }));
             }
@@ -1261,6 +1267,7 @@ mod tests {
 
     static TEST_EFFECT_NAMES: &[&str] = &["Gradient", "Flow", "ABCDEFGHIJKLMNOé tail"];
     static TEST_PALETTE_NAMES: &[&str] = &["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"];
+    static TOO_MANY_EFFECT_NAMES: [&str; 256] = ["Effect"; 256];
 
     /// Zero-target source whose only job is serving the extension hooks.
     struct TestExtensionSource {
@@ -1302,6 +1309,41 @@ mod tests {
         fn apply_extension_state(&mut self, state: crate::lighting::compositor::ExtensionState) -> bool {
             self.state = state;
             true
+        }
+    }
+
+    struct TooManyNamesSource(TestExtensionSource);
+
+    impl<Context> crate::lighting::compositor::LightingSource<Rgb8, Context> for TooManyNamesSource {
+        fn len(&self, _: &crate::lighting::compositor::RenderInput<'_, Context>) -> usize {
+            0
+        }
+
+        fn slot(
+            &self,
+            _: usize,
+            _: &crate::lighting::compositor::RenderInput<'_, Context>,
+        ) -> crate::lighting::LedSlot {
+            unreachable!("test extension source has no targets")
+        }
+
+        fn contribution(
+            &mut self,
+            _: usize,
+            _: &crate::lighting::compositor::RenderInput<'_, Context>,
+        ) -> crate::lighting::compositor::Contribution<Rgb8> {
+            unreachable!("test extension source has no samples")
+        }
+
+        fn extension_descriptor(&self) -> Option<crate::lighting::compositor::ExtensionDescriptor> {
+            Some(crate::lighting::compositor::ExtensionDescriptor {
+                effects: &TOO_MANY_EFFECT_NAMES,
+                palettes: TEST_PALETTE_NAMES,
+            })
+        }
+
+        fn extension_state(&self) -> Option<crate::lighting::compositor::ExtensionState> {
+            Some(self.0.state)
         }
     }
 
@@ -1489,5 +1531,34 @@ mod tests {
                 .await;
             assert_eq!(set, Err(LightingError::Unsupported));
         });
+    }
+
+    #[test]
+    fn extension_commands_reject_descriptors_that_exceed_wire_counts() {
+        run_extension_flow(
+            TooManyNamesSource(TestExtensionSource {
+                state: crate::lighting::compositor::ExtensionState {
+                    effect: 0,
+                    palette: 0,
+                    value: 128,
+                    speed: 20,
+                },
+            }),
+            async |protocol| {
+                assert_eq!(
+                    protocol.request(RynkLightingCommand::ReadExtension).await,
+                    Err(LightingError::InvalidRequest)
+                );
+                assert_eq!(
+                    protocol
+                        .request(RynkLightingCommand::ReadExtensionNames {
+                            kind: LightingExtensionNameKind::Effects,
+                            offset: 248,
+                        })
+                        .await,
+                    Err(LightingError::InvalidRequest)
+                );
+            },
+        );
     }
 }
