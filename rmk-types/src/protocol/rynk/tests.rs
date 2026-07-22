@@ -1394,6 +1394,29 @@ fn lighting_wire_frames_locked() {
     let scene_abort = AbortLightingSceneReplaceRequest {
         transaction_id: scene_transaction.id,
     };
+    let extension = LightingExtension {
+        revision: state.revision,
+        effect_count: 6,
+        palette_count: 16,
+        state: LightingExtensionState {
+            effect: 1,
+            palette: 2,
+            value: 3,
+            speed: 4,
+        },
+    };
+    let extension_names_request = LightingExtensionNamesRequest {
+        kind: LightingExtensionNameKind::Palettes,
+        offset: LIGHTING_EXTENSION_NAME_CHUNK as u8,
+    };
+    let extension_names_page = LightingExtensionNamesPage {
+        total: 16,
+        items: one(heapless::String::try_from("Ocean").unwrap()),
+    };
+    let set_extension_state = SetLightingExtensionStateRequest {
+        expected_revision: state.revision,
+        state: extension.state,
+    };
     let output_mode = LightingOutputModeState {
         mode: LightingOutputMode::PoweredOnly,
         powered: true,
@@ -1817,6 +1840,50 @@ fn lighting_wire_frames_locked() {
                 Cmd::SetLightingSceneCell,
                 SEQ,
                 &Ok::<LightingStateResult, RynkError>(Err(LightingError::SceneFull { capacity: 256 }))
+            )
+        ),
+        (
+            "GetLightingExtension request",
+            encode_frame(Cmd::GetLightingExtension, SEQ, &())
+        ),
+        (
+            "GetLightingExtension reply",
+            encode_frame(
+                Cmd::GetLightingExtension,
+                SEQ,
+                &Ok::<LightingExtensionResult, RynkError>(Ok(extension))
+            )
+        ),
+        (
+            "GetLightingExtension inner Err(Unsupported)",
+            encode_frame(
+                Cmd::GetLightingExtension,
+                SEQ,
+                &Ok::<LightingExtensionResult, RynkError>(Err(LightingError::Unsupported))
+            )
+        ),
+        (
+            "GetLightingExtensionNames request",
+            encode_frame(Cmd::GetLightingExtensionNames, SEQ, &extension_names_request)
+        ),
+        (
+            "GetLightingExtensionNames reply",
+            encode_frame(
+                Cmd::GetLightingExtensionNames,
+                SEQ,
+                &Ok::<LightingExtensionNamesPageResult, RynkError>(Ok(extension_names_page))
+            )
+        ),
+        (
+            "SetLightingExtensionState request",
+            encode_frame(Cmd::SetLightingExtensionState, SEQ, &set_extension_state)
+        ),
+        (
+            "SetLightingExtensionState reply",
+            encode_frame(
+                Cmd::SetLightingExtensionState,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
             )
         ),
         (

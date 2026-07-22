@@ -37,6 +37,8 @@ use rmk_types::protocol::rynk::{
     SetLightingSceneCellRequest, UnsetLightingSceneCellRequest, LayerState, LightingCompiledSceneStatus,
     LightingCompiledScenesPage, LightingOverlayPage, LightingOverlayPageRequest, SplitCentralLatencyPolicy,
     SplitCentralLatencyState, LightingConditionalSceneStatus, LightingConditionalScenesPage, LightingOutputModeState,
+    LightingExtension, LightingExtensionNameKind, LightingExtensionNamesPage, LightingExtensionNamesRequest,
+    SetLightingExtensionStateRequest,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -601,6 +603,34 @@ impl Client {
         Self::flatten_lighting(self.request::<command::GetLightingConditionalScenes>(&request).await?)
     }
 
+    /// Discover the animated extension band: name-list sizes plus the live
+    /// selection. Extension support is discovered through
+    /// [`LightingCapabilities::features`] (`EXTENSION_EFFECTS`); firmware
+    /// without a selectable extension source rejects it with `Unsupported`.
+    pub async fn get_lighting_extension(&self) -> Result<LightingExtension, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingExtension)?;
+        Self::flatten_lighting(self.request::<command::GetLightingExtension>(&()).await?)
+    }
+
+    /// Read one page of extension effect or palette names. Names are static
+    /// per firmware build, so pages carry no revision pin.
+    pub async fn get_lighting_extension_names(
+        &self,
+        request: LightingExtensionNamesRequest,
+    ) -> Result<LightingExtensionNamesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingExtensionNames)?;
+        Self::flatten_lighting(self.request::<command::GetLightingExtensionNames>(&request).await?)
+    }
+
+    /// Replace the extension selection when the state revision matches.
+    pub async fn set_lighting_extension_state(
+        &self,
+        request: SetLightingExtensionStateRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingExtensionState)?;
+        Self::flatten_lighting(self.request::<command::SetLightingExtensionState>(&request).await?)
+    }
+
     /// Insert or update one durable scene cell when the revision matches.
     pub async fn set_lighting_scene_cell(
         &self,
@@ -1008,6 +1038,38 @@ impl Client {
             }
         }
         Err(last_error.expect("a retried read only exits with a recorded conflict"))
+    }
+
+    /// Read every extension name of one kind by paging
+    /// `GetLightingExtensionNames`. Names are static per firmware build, so no
+    /// revision pin is needed: the read simply walks offsets until the
+    /// advertised total, and non-advancing pages are rejected so it is bounded.
+    pub async fn read_all_lighting_extension_names(
+        &self,
+        kind: LightingExtensionNameKind,
+    ) -> Result<Vec<heapless::String<{ rmk_types::protocol::rynk::LIGHTING_EXTENSION_NAME_SIZE }>>, RynkHostError> {
+        let mut names = Vec::new();
+        let mut offset: u8 = 0;
+        loop {
+            let page = self
+                .get_lighting_extension_names(LightingExtensionNamesRequest { kind, offset })
+                .await?;
+            if offset >= page.total {
+                break;
+            }
+            if page.items.is_empty() || offset as usize + page.items.len() > page.total as usize {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingExtensionNames,
+                    reason: "names page is empty or extends beyond the advertised total",
+                });
+            }
+            offset += page.items.len() as u8;
+            names.extend(page.items.iter().cloned());
+            if offset >= page.total {
+                break;
+            }
+        }
+        Ok(names)
     }
 
     /// Atomically replace the whole stored scene table: begin, stage in

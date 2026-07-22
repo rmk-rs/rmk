@@ -35,7 +35,8 @@ use rynk::rmk_types::protocol::rynk::{
     LightingScenesPage, PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest, SetLightingSceneCellRequest,
     UnsetLightingSceneCellRequest, LayerState, LightingCompiledSceneStatus, LightingCompiledScenesPage,
     LightingOverlayPage, LightingOverlayPageRequest, SplitCentralLatencyPolicy, SplitCentralLatencyState,
-    LightingConditionalSceneStatus, LightingConditionalScenesPage, LightingOutputModeState,
+    LightingConditionalSceneStatus, LightingConditionalScenesPage, LightingOutputModeState, LightingExtension,
+    LightingExtensionNamesPage, LightingExtensionNamesRequest, SetLightingExtensionStateRequest,
 };
 use rynk::{Client, Driver, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
 use wasm_bindgen::prelude::*;
@@ -194,6 +195,9 @@ endpoints! {
     commit_lighting_overlay_replace(request: CommitLightingOverlayReplaceRequest) -> LightingState,
     abort_lighting_overlay_replace(request: AbortLightingOverlayReplaceRequest) -> (),
     get_lighting_overlay(request: LightingOverlayPageRequest) -> LightingOverlayPage,
+    get_lighting_extension() -> LightingExtension,
+    get_lighting_extension_names(request: LightingExtensionNamesRequest) -> LightingExtensionNamesPage,
+    set_lighting_extension_state(request: SetLightingExtensionStateRequest) -> LightingState,
     get_lighting_scene_status() -> LightingSceneStatus,
     get_lighting_scenes(request: LightingScenePageRequest) -> LightingScenesPage,
     get_lighting_compiled_scene_status() -> LightingCompiledSceneStatus,

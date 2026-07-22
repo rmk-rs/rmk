@@ -4,11 +4,11 @@ use embassy_time::Instant;
 use heapless::{String, Vec};
 use rmk_types::protocol::rynk::command::{
     ClearLightingOverlay, GetLightingCapabilities, GetLightingCompiledSceneStatus, GetLightingCompiledScenes,
-    GetLightingConditionalSceneStatus, GetLightingConditionalScenes, GetLightingKeys, GetLightingLeds,
-    GetLightingOutputMode, GetLightingOutputs, GetLightingOverlay, GetLightingPhysicalKeys, GetLightingRoutes,
-    GetLightingSceneStatus, GetLightingScenes, GetLightingState, GetLightingZoneMemberships, GetLightingZones,
-    SetLightingLayerPolicy, SetLightingOverlay, SetLightingSceneCell, SetLightingState, UnsetLightingOverlay,
-    UnsetLightingSceneCell,
+    GetLightingConditionalSceneStatus, GetLightingConditionalScenes, GetLightingExtension, GetLightingExtensionNames,
+    GetLightingKeys, GetLightingLeds, GetLightingOutputMode, GetLightingOutputs, GetLightingOverlay,
+    GetLightingPhysicalKeys, GetLightingRoutes, GetLightingSceneStatus, GetLightingScenes, GetLightingState,
+    GetLightingZoneMemberships, GetLightingZones, SetLightingExtensionState, SetLightingLayerPolicy,
+    SetLightingOverlay, SetLightingSceneCell, SetLightingState, UnsetLightingOverlay, UnsetLightingSceneCell,
 };
 use rmk_types::protocol::rynk::{
     AbortLightingOverlayReplaceRequest, AbortLightingSceneReplaceRequest, BeginLightingOverlayReplaceRequest,
@@ -18,8 +18,9 @@ use rmk_types::protocol::rynk::{
     LightingCompiledSceneStatus, LightingCompiledSceneStatusResult, LightingCompiledScenesPageResult,
     LightingConditionalSceneCell, LightingConditionalSceneStatus, LightingConditionalSceneStatusResult,
     LightingConditionalScenesPage, LightingConditionalScenesPageResult, LightingEffectFlags, LightingError,
-    LightingFeatureFlags, LightingKeysPage, LightingKeysPageResult, LightingLed, LightingLedId, LightingLedsPage,
-    LightingLedsPageResult, LightingMatrixPosition, LightingOutput, LightingOutputCapabilities, LightingOutputCoverage,
+    LightingExtensionNamesPageResult, LightingExtensionNamesRequest, LightingExtensionResult, LightingFeatureFlags,
+    LightingKeysPage, LightingKeysPageResult, LightingLed, LightingLedId, LightingLedsPage, LightingLedsPageResult,
+    LightingMatrixPosition, LightingOutput, LightingOutputCapabilities, LightingOutputCoverage,
     LightingOutputModeStateResult, LightingOutputsPage, LightingOutputsPageResult, LightingOverlayCell,
     LightingOverlayPageRequest, LightingOverlayPageResult, LightingOverlayTransaction,
     LightingOverlayTransactionResult, LightingPageRequest, LightingPhysicalKey, LightingPhysicalKeysPage,
@@ -28,8 +29,8 @@ use rmk_types::protocol::rynk::{
     LightingSceneTransactionResult, LightingScenesPageResult, LightingState, LightingStateResult, LightingUnitResult,
     LightingZone, LightingZoneId, LightingZoneMembershipsPage, LightingZoneMembershipsPageResult, LightingZonesPage,
     LightingZonesPageResult, PutLightingOverlayChunkRequest, PutLightingSceneChunkRequest, RynkError, RynkMessage,
-    SetLightingLayerPolicyRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
-    UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
+    SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest, SetLightingOverlayRequest,
+    SetLightingSceneCellRequest, SetLightingStateRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
 
 use super::super::lighting::{
@@ -50,6 +51,16 @@ fn controller<'a>(service: &RynkService<'a>) -> LightingResult<RynkLightingContr
 fn scene_controller<'a>(service: &RynkService<'a>) -> LightingResult<RynkLightingController<'a>> {
     let controller = controller(service)?;
     if controller.scene_capacity == 0 {
+        return Err(LightingError::Unsupported);
+    }
+    Ok(controller)
+}
+
+/// Extension endpoints require a board that advertised a host-selectable
+/// extension source via `with_extension_effects`.
+fn extension_controller<'a>(service: &RynkService<'a>) -> LightingResult<RynkLightingController<'a>> {
+    let controller = controller(service)?;
+    if !controller.extension_effects {
         return Err(LightingError::Unsupported);
     }
     Ok(controller)
@@ -466,6 +477,57 @@ impl Handle<rmk_types::protocol::rynk::command::AbortLightingSceneReplace> for R
     }
 }
 
+impl Handle<GetLightingExtension> for RynkService<'_> {
+    async fn handle(&self, _: ()) -> Result<LightingExtensionResult, RynkError> {
+        let result = match extension_controller(self) {
+            Ok(controller) => match controller.request(RynkLightingCommand::ReadExtension).await {
+                Ok(RynkLightingReadback::Extension(extension)) => Ok(extension),
+                Ok(_) => Err(LightingError::InvalidRequest),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<GetLightingExtensionNames> for RynkService<'_> {
+    async fn handle(&self, req: LightingExtensionNamesRequest) -> Result<LightingExtensionNamesPageResult, RynkError> {
+        let result = match extension_controller(self) {
+            Ok(controller) => match controller
+                .request(RynkLightingCommand::ReadExtensionNames {
+                    kind: req.kind,
+                    offset: req.offset,
+                })
+                .await
+            {
+                Ok(RynkLightingReadback::ExtensionNamesPage(page)) => Ok(page),
+                Ok(_) => Err(LightingError::InvalidRequest),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<SetLightingExtensionState> for RynkService<'_> {
+    async fn handle(&self, req: SetLightingExtensionStateRequest) -> Result<LightingStateResult, RynkError> {
+        let result = match extension_controller(self) {
+            Ok(controller) => {
+                controller
+                    .request_state(RynkLightingCommand::SetExtensionState {
+                        expected_revision: req.expected_revision,
+                        state: req.state,
+                    })
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
 impl Handle<GetLightingKeys> for RynkService<'_> {
     async fn handle(&self, req: LightingPageRequest) -> Result<LightingKeysPageResult, RynkError> {
         Ok(controller(self).and_then(|binding| keys_page(binding, req)))
@@ -536,6 +598,9 @@ fn capabilities(binding: RynkLightingController<'_>) -> LightingCapabilities {
     }
     if binding.controls.output_mode_cycle_user_action.is_some() {
         features.0 |= LightingFeatureFlags::OUTPUT_MODE;
+    }
+    if binding.extension_effects {
+        features.0 |= LightingFeatureFlags::EXTENSION_EFFECTS;
     }
     LightingCapabilities {
         topology_revision: descriptor.topology_revision,

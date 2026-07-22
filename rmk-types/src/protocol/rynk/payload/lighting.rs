@@ -21,6 +21,10 @@ pub const LIGHTING_SCENE_CHUNK_SIZE: usize = 8;
 pub const LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 8;
 /// Maximum UTF-8 byte length of a zone name.
 pub const LIGHTING_ZONE_NAME_SIZE: usize = 24;
+/// Maximum UTF-8 byte length of one extension effect or palette name.
+pub const LIGHTING_EXTENSION_NAME_SIZE: usize = 16;
+/// Number of names in one extension-names page.
+pub const LIGHTING_EXTENSION_NAME_CHUNK: usize = 8;
 
 macro_rules! wire_type {
     ($item:item) => {
@@ -192,6 +196,8 @@ impl LightingFeatureFlags {
     pub const COMPILED_CONDITIONAL_SCENES: u16 = 1 << 9;
     /// Declarative three-state output policy and live readback.
     pub const OUTPUT_MODE: u16 = 1 << 10;
+    /// Host-selectable animated extension effects served by an effect pack.
+    pub const EXTENSION_EFFECTS: u16 = 1 << 11;
 
     pub const fn contains(self, bits: u16) -> bool {
         self.0 & bits == bits
@@ -673,6 +679,68 @@ wire_type! {
 }
 
 wire_type! {
+    /// Current selection of the firmware's animated extension band. Indices
+    /// address the name lists served by `GetLightingExtensionNames`.
+    pub struct LightingExtensionState {
+        pub effect: u8,
+        pub palette: u8,
+        pub value: u8,
+        pub speed: u8,
+    }
+}
+
+wire_type! {
+    /// Extension-effects discovery: name-list sizes plus the live selection,
+    /// revision-pinned like every other lighting mutation surface.
+    pub struct LightingExtension {
+        pub revision: u32,
+        pub effect_count: u8,
+        pub palette_count: u8,
+        pub state: LightingExtensionState,
+    }
+}
+
+wire_type! {
+    /// Which extension name list a page request addresses.
+    pub enum LightingExtensionNameKind {
+        Effects,
+        Palettes,
+    }
+}
+
+wire_type! {
+    pub struct LightingExtensionNamesRequest {
+        pub kind: LightingExtensionNameKind,
+        pub offset: u8,
+    }
+}
+
+/// One page of extension effect or palette names. Names are static for a
+/// firmware build, so pages carry no revision pin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingExtensionNamesPage {
+    pub total: u8,
+    #[cfg_attr(feature = "wasm", tsify(type = "string[]"))]
+    pub items: Vec<String<LIGHTING_EXTENSION_NAME_SIZE>, LIGHTING_EXTENSION_NAME_CHUNK>,
+}
+
+impl MaxSize for LightingExtensionNamesPage {
+    const POSTCARD_MAX_SIZE: usize = u8::POSTCARD_MAX_SIZE
+        + crate::varint_max_size(LIGHTING_EXTENSION_NAME_CHUNK)
+        + LIGHTING_EXTENSION_NAME_CHUNK * crate::heapless_vec_max_size::<u8, LIGHTING_EXTENSION_NAME_SIZE>();
+}
+
+wire_type! {
+    pub struct SetLightingExtensionStateRequest {
+        pub expected_revision: u32,
+        pub state: LightingExtensionState,
+    }
+}
+
+wire_type! {
     pub struct LightingConditionalSceneStatus {
         pub topology_revision: u32,
         pub cell_len: u16,
@@ -814,6 +882,8 @@ pub type LightingCompiledScenesPageResult = LightingResult<LightingCompiledScene
 pub type LightingConditionalSceneStatusResult = LightingResult<LightingConditionalSceneStatus>;
 pub type LightingConditionalScenesPageResult = LightingResult<LightingConditionalScenesPage>;
 pub type LightingOutputModeStateResult = LightingResult<LightingOutputModeState>;
+pub type LightingExtensionResult = LightingResult<LightingExtension>;
+pub type LightingExtensionNamesPageResult = LightingResult<LightingExtensionNamesPage>;
 pub type LightingSceneTransactionResult = LightingResult<LightingSceneTransaction>;
 pub type LightingUnitResult = LightingResult<()>;
 
@@ -858,6 +928,9 @@ const _: () = {
     assert_endpoint_fits!((), LightingConditionalSceneStatusResult);
     assert_endpoint_fits!(LightingPageRequest, LightingConditionalScenesPageResult);
     assert_endpoint_fits!((), LightingOutputModeStateResult);
+    assert_endpoint_fits!((), LightingExtensionResult);
+    assert_endpoint_fits!(LightingExtensionNamesRequest, LightingExtensionNamesPageResult);
+    assert_endpoint_fits!(SetLightingExtensionStateRequest, LightingStateResult);
     assert_endpoint_fits!(SetLightingSceneCellRequest, LightingStateResult);
     assert_endpoint_fits!(UnsetLightingSceneCellRequest, LightingStateResult);
     assert_endpoint_fits!(SetLightingLayerPolicyRequest, LightingStateResult);
@@ -1063,6 +1136,60 @@ mod tests {
         round_trip(&page);
         assert_max_size_bound(&page);
         assert!(LightingConditionalScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+    }
+
+    #[test]
+    fn extension_types_round_trip() {
+        round_trip(&LightingExtensionState {
+            effect: 1,
+            palette: 2,
+            value: 3,
+            speed: 4,
+        });
+        round_trip(&LightingExtension {
+            revision: u32::MAX,
+            effect_count: 6,
+            palette_count: 16,
+            state: LightingExtensionState {
+                effect: 5,
+                palette: 15,
+                value: u8::MAX,
+                speed: 0,
+            },
+        });
+        round_trip(&LightingExtensionNamesRequest {
+            kind: LightingExtensionNameKind::Effects,
+            offset: 0,
+        });
+        round_trip(&LightingExtensionNamesRequest {
+            kind: LightingExtensionNameKind::Palettes,
+            offset: LIGHTING_EXTENSION_NAME_CHUNK as u8,
+        });
+        round_trip(&SetLightingExtensionStateRequest {
+            expected_revision: u32::MAX,
+            state: LightingExtensionState {
+                effect: 0,
+                palette: 1,
+                value: 2,
+                speed: 3,
+            },
+        });
+    }
+
+    #[test]
+    fn maximum_extension_names_page_respects_bound() {
+        let mut items = Vec::new();
+        for _ in 0..LIGHTING_EXTENSION_NAME_CHUNK {
+            let mut name = String::new();
+            for _ in 0..LIGHTING_EXTENSION_NAME_SIZE {
+                name.push('x').unwrap();
+            }
+            items.push(name).unwrap();
+        }
+        let page = LightingExtensionNamesPage { total: u8::MAX, items };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingExtensionNamesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
     }
 
     #[test]

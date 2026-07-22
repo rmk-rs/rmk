@@ -25,6 +25,11 @@ GetLightingCompiledSceneStatus reply                   1c 09 01 06 00 00 00 01 0
 GetLightingCompiledSceneStatus request                 1c 09 01 00 00
 GetLightingCompiledScenes reply                        1d 09 01 0b 00 00 00 01 01 01 02 2a 00 07 08 09
 GetLightingCompiledScenes request                      1d 09 01 02 00 01 00
+GetLightingExtension inner Err(Unsupported)            21 09 01 03 00 00 01 00
+GetLightingExtension reply                             21 09 01 09 00 00 00 09 06 10 01 02 03 04
+GetLightingExtension request                           21 09 01 00 00
+GetLightingExtensionNames reply                        22 09 01 0a 00 00 00 10 01 05 4f 63 65 61 6e
+GetLightingExtensionNames request                      22 09 01 02 00 01 08
 GetLightingKeys reply                                  11 09 01 07 00 00 00 01 01 01 01 02
 GetLightingKeys request                                11 09 01 02 00 01 00
 GetLightingLeds reply                                  05 09 01 12 00 00 00 01 01 01 2a 01 01 02 01 ff 01 80 04 80 01 03 01
@@ -55,6 +60,8 @@ PutLightingOverlayChunk reply                          0e 09 01 02 00 00 00
 PutLightingOverlayChunk request                        0e 09 01 10 00 0d 00 01 2a 01 01 02 03 e8 07 fa 01 32 01 88 27
 PutLightingSceneChunk reply                            17 09 01 02 00 00 00
 PutLightingSceneChunk request                          17 09 01 09 00 15 00 01 02 2a 00 07 08 09
+SetLightingExtensionState reply                        23 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
+SetLightingExtensionState request                      23 09 01 05 00 09 01 02 03 04
 SetLightingLayerPolicy reply                           1a 09 01 0c 00 00 00 09 01 c8 01 0a 14 1e 28 01 01
 SetLightingLayerPolicy request                         1a 09 01 02 00 0b 00
 SetLightingOverlay inner Err(UnknownLed)               0a 09 01 05 00 00 01 06 e7 07

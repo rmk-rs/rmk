@@ -174,7 +174,8 @@ impl<'a> RynkService<'a> {
             | Cmd::BeginLightingSceneReplace
             | Cmd::PutLightingSceneChunk
             | Cmd::CommitLightingSceneReplace
-            | Cmd::AbortLightingSceneReplace => self.lock_config.write_requires_unlock,
+            | Cmd::AbortLightingSceneReplace
+            | Cmd::SetLightingExtensionState => self.lock_config.write_requires_unlock,
             _ => false,
         }
     }
@@ -316,6 +317,12 @@ impl<'a> RynkService<'a> {
             }
             #[cfg(feature = "lighting")]
             Cmd::GetLightingOutputMode => Serve::<command::GetLightingOutputMode, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingExtension => Serve::<command::GetLightingExtension, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingExtensionNames => Serve::<command::GetLightingExtensionNames, _>::serve(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingExtensionState => Serve::<command::SetLightingExtensionState, _>::serve(self, msg).await,
             #[cfg(feature = "lighting")]
             Cmd::SetLightingSceneCell => Serve::<command::SetLightingSceneCell, _>::serve(self, msg).await,
             #[cfg(feature = "lighting")]

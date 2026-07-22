@@ -13,11 +13,13 @@ use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
-use heapless::Vec;
+use heapless::{String, Vec};
 use rmk_types::protocol::rynk::{
-    LIGHTING_OVERLAY_CHUNK_SIZE, LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode, LightingBackgroundState,
-    LightingCompiledScenesPage, LightingConditionalSceneCell as WireConditionalSceneCell,
-    LightingControls as WireLightingControls, LightingError, LightingLayerPolicy, LightingMutableState,
+    LIGHTING_EXTENSION_NAME_CHUNK, LIGHTING_EXTENSION_NAME_SIZE, LIGHTING_OVERLAY_CHUNK_SIZE,
+    LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode, LightingBackgroundState, LightingCompiledScenesPage,
+    LightingConditionalSceneCell as WireConditionalSceneCell, LightingControls as WireLightingControls, LightingError,
+    LightingExtension, LightingExtensionNameKind, LightingExtensionNamesPage,
+    LightingExtensionState as WireExtensionState, LightingLayerPolicy, LightingMutableState,
     LightingOutputMode as WireLightingOutputMode, LightingOutputModeIndicator as WireLightingOutputModeIndicator,
     LightingOutputModeState, LightingOverlayCell, LightingOverlayPage, LightingResult, LightingRgb8, LightingSceneCell,
     LightingSceneTransaction, LightingScenesPage, LightingState,
@@ -68,6 +70,9 @@ pub struct RynkLightingController<'a> {
     pub(super) scene_capacity: u16,
     pub(super) conditional_scenes: &'a [ConditionalSceneCell<BuiltinEffect>],
     pub(super) controls: LightingControls,
+    /// Whether the board wired a host-selectable extension source; gates the
+    /// `EXTENSION_EFFECTS` capability bit and the extension endpoints.
+    pub(super) extension_effects: bool,
     mailbox: &'a RynkLightingMailbox,
 }
 
@@ -97,8 +102,16 @@ impl<'a> RynkLightingController<'a> {
                 powered_only_scope: crate::lighting::PoweredOnlyScope::Authority,
                 output_mode_indicator: None,
             },
+            extension_effects: false,
             mailbox,
         }
+    }
+
+    /// Advertise the engine's host-selectable animated extension source.
+    /// Boards whose extension band is not user-selectable skip this call.
+    pub const fn with_extension_effects(mut self) -> Self {
+        self.extension_effects = true;
+        self
     }
 
     /// Advertise runtime scene support. Pass the engine's scene capacity;
@@ -219,6 +232,8 @@ pub enum RynkLightingReadback {
     },
     CompiledScenesPage(LightingCompiledScenesPage),
     SceneTransaction(LightingSceneTransaction),
+    Extension(LightingExtension),
+    ExtensionNamesPage(LightingExtensionNamesPage),
     Unit,
 }
 
@@ -383,6 +398,15 @@ pub(super) enum RynkLightingCommand {
     ReadCompiledScenes {
         offset: u16,
     },
+    ReadExtension,
+    ReadExtensionNames {
+        kind: LightingExtensionNameKind,
+        offset: u8,
+    },
+    SetExtensionState {
+        expected_revision: u32,
+        state: WireExtensionState,
+    },
     SetSceneCell {
         expected_revision: u32,
         cell: LightingSceneCell,
@@ -493,6 +517,15 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
     ) -> LightingResult<StandardState> {
         match self.request_core(command).await? {
             StandardReply::State(state) => Ok(state),
+            _ => Err(LightingError::InvalidRequest),
+        }
+    }
+
+    /// Extension readback shared by discovery and name paging. `None`
+    /// descriptor/state (e.g. `EmptySource`) is not selectable → `Unsupported`.
+    async fn request_extension_page(&self) -> LightingResult<crate::lighting::standard::ExtensionPage> {
+        match self.request_core(StandardCommand::ReadExtension).await? {
+            StandardReply::Extension(page) => Ok(page),
             _ => Err(LightingError::InvalidRequest),
         }
     }
@@ -655,6 +688,55 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                     items,
                 }));
             }
+            RynkLightingCommand::ReadExtension => {
+                let page = self.request_extension_page().await?;
+                let (Some(descriptor), Some(state)) = (page.descriptor, page.state) else {
+                    return Err(LightingError::Unsupported);
+                };
+                return Ok(RynkLightingReadback::Extension(LightingExtension {
+                    revision: page.revision,
+                    effect_count: descriptor.effects.len().min(u8::MAX as usize) as u8,
+                    palette_count: descriptor.palettes.len().min(u8::MAX as usize) as u8,
+                    state: WireExtensionState {
+                        effect: state.effect,
+                        palette: state.palette,
+                        value: state.value,
+                        speed: state.speed,
+                    },
+                }));
+            }
+            RynkLightingCommand::ReadExtensionNames { kind, offset } => {
+                let page = self.request_extension_page().await?;
+                let Some(descriptor) = page.descriptor else {
+                    return Err(LightingError::Unsupported);
+                };
+                let names = match kind {
+                    LightingExtensionNameKind::Effects => descriptor.effects,
+                    LightingExtensionNameKind::Palettes => descriptor.palettes,
+                };
+                let start = (offset as usize).min(names.len());
+                let end = (start + LIGHTING_EXTENSION_NAME_CHUNK).min(names.len());
+                let mut items: Vec<String<LIGHTING_EXTENSION_NAME_SIZE>, LIGHTING_EXTENSION_NAME_CHUNK> = Vec::new();
+                for name in &names[start..end] {
+                    items.push(super::truncated(name)).expect("page is bounded");
+                }
+                return Ok(RynkLightingReadback::ExtensionNamesPage(LightingExtensionNamesPage {
+                    total: names.len().min(u8::MAX as usize) as u8,
+                    items,
+                }));
+            }
+            RynkLightingCommand::SetExtensionState {
+                expected_revision,
+                state,
+            } => StandardCommand::SetExtensionIfRevision {
+                expected_revision,
+                state: crate::lighting::compositor::ExtensionState {
+                    effect: state.effect,
+                    palette: state.palette,
+                    value: state.value,
+                    speed: state.speed,
+                },
+            },
             RynkLightingCommand::SetSceneCell {
                 expected_revision,
                 cell,
@@ -998,10 +1080,11 @@ fn effect_to_wire(effect: BuiltinEffect) -> rmk_types::protocol::rynk::LightingE
 }
 
 fn condition_set_to_wire(conditions: crate::lighting::ConditionSet) -> rmk_types::protocol::rynk::LightingConditionSet {
-    use crate::lighting::ChargeCondition;
     use rmk_types::protocol::rynk::{
         LightingBatteryCondition, LightingChargeCondition, LightingConditionSet, LightingLayerCondition, LightingNodeId,
     };
+
+    use crate::lighting::ChargeCondition;
 
     LightingConditionSet {
         layer: conditions.layer.map(|condition| LightingLayerCondition {
@@ -1174,5 +1257,237 @@ mod tests {
 
         let (reply, ()) = block_on(join(protocol.request_replace(0, &cells), adapter.process_next()));
         assert_eq!(reply, Err(LightingError::InvalidRequest));
+    }
+
+    static TEST_EFFECT_NAMES: &[&str] = &["Gradient", "Flow", "ABCDEFGHIJKLMNOé tail"];
+    static TEST_PALETTE_NAMES: &[&str] = &["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"];
+
+    /// Zero-target source whose only job is serving the extension hooks.
+    struct TestExtensionSource {
+        state: crate::lighting::compositor::ExtensionState,
+    }
+
+    impl<Context> crate::lighting::compositor::LightingSource<Rgb8, Context> for TestExtensionSource {
+        fn len(&self, _: &crate::lighting::compositor::RenderInput<'_, Context>) -> usize {
+            0
+        }
+
+        fn slot(
+            &self,
+            _: usize,
+            _: &crate::lighting::compositor::RenderInput<'_, Context>,
+        ) -> crate::lighting::LedSlot {
+            unreachable!("test extension source has no targets")
+        }
+
+        fn contribution(
+            &mut self,
+            _: usize,
+            _: &crate::lighting::compositor::RenderInput<'_, Context>,
+        ) -> crate::lighting::compositor::Contribution<Rgb8> {
+            unreachable!("test extension source has no samples")
+        }
+
+        fn extension_descriptor(&self) -> Option<crate::lighting::compositor::ExtensionDescriptor> {
+            Some(crate::lighting::compositor::ExtensionDescriptor {
+                effects: TEST_EFFECT_NAMES,
+                palettes: TEST_PALETTE_NAMES,
+            })
+        }
+
+        fn extension_state(&self) -> Option<crate::lighting::compositor::ExtensionState> {
+            Some(self.state)
+        }
+
+        fn apply_extension_state(&mut self, state: crate::lighting::compositor::ExtensionState) -> bool {
+            self.state = state;
+            true
+        }
+    }
+
+    /// Serve `client` against a live adapter + engine built around `extension`.
+    fn run_extension_flow<Extension, T>(extension: Extension, client: impl AsyncFnOnce(&RynkLightingMailbox) -> T) -> T
+    where
+        Extension: crate::lighting::compositor::LightingSource<Rgb8, crate::lighting::LightingContext>,
+    {
+        use embassy_futures::select::{Either3, select3};
+
+        use crate::lighting::{
+            BackgroundState, EmptySource, LayerPolicy, LayerScenes, LightingContext, LightingEngine,
+            StandardLightingEngine,
+        };
+
+        block_on(async {
+            let protocol = RynkLightingMailbox::new();
+            let core = LightingMailbox::<StandardCommand<2>, StandardReply, StandardError, 1>::new();
+            let mut adapter = StandardRynkLightingAdapter::<2, 1>::new(&protocol, &core, topology());
+            let mut engine: StandardLightingEngine<'static, Extension, EmptySource, 1, 2, 0> =
+                StandardLightingEngine::new(
+                    BackgroundState::default(),
+                    LayerScenes {
+                        scenes: &[],
+                        policy: LayerPolicy::EffectiveOnly,
+                    },
+                    extension,
+                    EmptySource,
+                );
+
+            let adapter_loop = async {
+                loop {
+                    adapter.process_next().await;
+                }
+            };
+            let context = LightingContext::default();
+            let engine_loop = async {
+                loop {
+                    let (id, command) = core.receive_request().await;
+                    let result = engine.handle_command(0, command, &context).map(|outcome| outcome.reply);
+                    core.publish_reply(id, result);
+                }
+            };
+            match select3(client(&protocol), adapter_loop, engine_loop).await {
+                Either3::First(value) => value,
+                _ => panic!("service loops must not finish"),
+            }
+        })
+    }
+
+    #[test]
+    fn extension_flow_reads_pages_truncates_and_guards_revision() {
+        run_extension_flow(
+            TestExtensionSource {
+                state: crate::lighting::compositor::ExtensionState {
+                    effect: 0,
+                    palette: 1,
+                    value: 128,
+                    speed: 20,
+                },
+            },
+            async |protocol| {
+                let extension = match protocol.request(RynkLightingCommand::ReadExtension).await {
+                    Ok(RynkLightingReadback::Extension(extension)) => extension,
+                    other => panic!("expected extension readback, got {other:?}"),
+                };
+                assert_eq!(extension.revision, 0);
+                assert_eq!(extension.effect_count, 3);
+                assert_eq!(extension.palette_count, 10);
+                assert_eq!(
+                    extension.state,
+                    WireExtensionState {
+                        effect: 0,
+                        palette: 1,
+                        value: 128,
+                        speed: 20,
+                    }
+                );
+
+                // Overlong names are truncated to the wire size on a char
+                // boundary: the multi-byte 'é' straddling byte 16 is dropped.
+                let effects = match protocol
+                    .request(RynkLightingCommand::ReadExtensionNames {
+                        kind: LightingExtensionNameKind::Effects,
+                        offset: 0,
+                    })
+                    .await
+                {
+                    Ok(RynkLightingReadback::ExtensionNamesPage(page)) => page,
+                    other => panic!("expected names page, got {other:?}"),
+                };
+                assert_eq!(effects.total, 3);
+                assert_eq!(effects.items.len(), 3);
+                assert_eq!(effects.items[0].as_str(), "Gradient");
+                assert_eq!(effects.items[2].as_str(), "ABCDEFGHIJKLMNO");
+
+                // Ten palettes page as one full chunk plus a two-name tail;
+                // an out-of-range offset yields an empty page, correct total.
+                for (offset, expected) in [
+                    (0u8, &TEST_PALETTE_NAMES[..8]),
+                    (8, &TEST_PALETTE_NAMES[8..]),
+                    (32, &[][..]),
+                ] {
+                    let page = match protocol
+                        .request(RynkLightingCommand::ReadExtensionNames {
+                            kind: LightingExtensionNameKind::Palettes,
+                            offset,
+                        })
+                        .await
+                    {
+                        Ok(RynkLightingReadback::ExtensionNamesPage(page)) => page,
+                        other => panic!("expected names page, got {other:?}"),
+                    };
+                    assert_eq!(page.total, 10);
+                    assert_eq!(page.items.len(), expected.len());
+                    for (item, name) in page.items.iter().zip(expected) {
+                        assert_eq!(item.as_str(), *name);
+                    }
+                }
+
+                let selected = WireExtensionState {
+                    effect: 2,
+                    palette: 9,
+                    value: 7,
+                    speed: 3,
+                };
+                let state = match protocol
+                    .request(RynkLightingCommand::SetExtensionState {
+                        expected_revision: 0,
+                        state: selected,
+                    })
+                    .await
+                {
+                    Ok(RynkLightingReadback::State(state)) => state,
+                    other => panic!("expected state readback, got {other:?}"),
+                };
+                assert_eq!(state.revision, 1);
+
+                let extension = match protocol.request(RynkLightingCommand::ReadExtension).await {
+                    Ok(RynkLightingReadback::Extension(extension)) => extension,
+                    other => panic!("expected extension readback, got {other:?}"),
+                };
+                assert_eq!(extension.revision, 1);
+                assert_eq!(extension.state, selected);
+
+                let stale = protocol
+                    .request(RynkLightingCommand::SetExtensionState {
+                        expected_revision: 0,
+                        state: selected,
+                    })
+                    .await;
+                assert_eq!(
+                    stale,
+                    Err(LightingError::StateRevisionConflict {
+                        expected: 0,
+                        current: 1,
+                    })
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn extension_commands_are_unsupported_with_an_empty_source() {
+        run_extension_flow(crate::lighting::EmptySource, async |protocol| {
+            let read = protocol.request(RynkLightingCommand::ReadExtension).await;
+            assert_eq!(read, Err(LightingError::Unsupported));
+            let names = protocol
+                .request(RynkLightingCommand::ReadExtensionNames {
+                    kind: LightingExtensionNameKind::Effects,
+                    offset: 0,
+                })
+                .await;
+            assert_eq!(names, Err(LightingError::Unsupported));
+            let set = protocol
+                .request(RynkLightingCommand::SetExtensionState {
+                    expected_revision: 0,
+                    state: WireExtensionState {
+                        effect: 0,
+                        palette: 0,
+                        value: 0,
+                        speed: 0,
+                    },
+                })
+                .await;
+            assert_eq!(set, Err(LightingError::Unsupported));
+        });
     }
 }

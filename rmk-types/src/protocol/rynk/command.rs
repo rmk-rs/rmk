@@ -39,12 +39,13 @@ use crate::protocol::rynk::{
     BeginLightingSceneReplaceRequest, ClearLightingOverlayRequest, CommitLightingOverlayReplaceRequest,
     CommitLightingSceneReplaceRequest, LightingCapabilitiesResult, LightingChanged, LightingCompiledSceneStatusResult,
     LightingCompiledScenesPageResult, LightingConditionalSceneStatusResult, LightingConditionalScenesPageResult,
-    LightingKeysPageResult, LightingLedsPageResult, LightingOutputModeStateResult, LightingOutputsPageResult,
-    LightingOverlayPageRequest, LightingOverlayPageResult, LightingOverlayTransactionResult, LightingPageRequest,
-    LightingPhysicalKeysPageResult, LightingRoutesPageResult, LightingScenePageRequest, LightingSceneStatusResult,
-    LightingSceneTransactionResult, LightingScenesPageResult, LightingStateResult, LightingUnitResult,
-    LightingZoneMembershipsPageResult, LightingZonesPageResult, PutLightingOverlayChunkRequest,
-    PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest, SetLightingOverlayRequest,
+    LightingExtensionNamesPageResult, LightingExtensionNamesRequest, LightingExtensionResult, LightingKeysPageResult,
+    LightingLedsPageResult, LightingOutputModeStateResult, LightingOutputsPageResult, LightingOverlayPageRequest,
+    LightingOverlayPageResult, LightingOverlayTransactionResult, LightingPageRequest, LightingPhysicalKeysPageResult,
+    LightingRoutesPageResult, LightingScenePageRequest, LightingSceneStatusResult, LightingSceneTransactionResult,
+    LightingScenesPageResult, LightingStateResult, LightingUnitResult, LightingZoneMembershipsPageResult,
+    LightingZonesPageResult, PutLightingOverlayChunkRequest, PutLightingSceneChunkRequest,
+    SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest, SetLightingOverlayRequest,
     SetLightingSceneCellRequest, SetLightingStateRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
 #[cfg(all(feature = "_ble", feature = "split"))]
@@ -445,6 +446,15 @@ endpoints! {
     /// Read the configured three-state output policy and its live state.
     #[cfg(feature = "lighting")]
     GetLightingOutputMode = 0x0920: () => LightingOutputModeStateResult;
+    /// Discover the animated extension band: name-list sizes and selection.
+    #[cfg(feature = "lighting")]
+    GetLightingExtension = 0x0921: () => LightingExtensionResult;
+    /// Extension names are static per firmware build; page until `total`.
+    #[cfg(feature = "lighting")]
+    GetLightingExtensionNames = 0x0922: LightingExtensionNamesRequest => LightingExtensionNamesPageResult;
+    /// Replace the extension selection when the state revision matches.
+    #[cfg(feature = "lighting")]
+    SetLightingExtensionState = 0x0923: SetLightingExtensionStateRequest => LightingStateResult;
 }
 
 // Define topics: `Name = value: Payload;`
