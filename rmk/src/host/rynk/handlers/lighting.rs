@@ -1382,10 +1382,24 @@ mod tests {
         E::Request: Serialize,
         E::Response: DeserializeOwned + Debug,
     {
+        use rmk_types::protocol::rynk::{Deframer, RYNK_HEADER_SIZE, RynkHeader, RynkMessage};
+
         let mut buffer = Box::new([0u8; rmk_types::constants::RYNK_BUFFER_SIZE]);
-        let mut message = RynkMessage::build(&mut buffer[..], E::CMD, 1, request).unwrap();
-        service.dispatch(session, &mut message).await;
-        postcard::from_bytes(message.payload()).unwrap()
+        // Build the decoded logical frame the dispatcher expects: 3-byte
+        // header + postcard payload.
+        let header = RynkHeader { cmd: E::CMD, seq: 1 };
+        buffer[..RYNK_HEADER_SIZE].copy_from_slice(&header.to_bytes());
+        let payload_len = postcard::to_slice(request, &mut buffer[RYNK_HEADER_SIZE..]).unwrap().len();
+        let req_len = RYNK_HEADER_SIZE + payload_len;
+        let mut message = RynkMessage::from_decoded(&mut buffer[..], req_len);
+        service.dispatch(session, &mut message).await.unwrap();
+        // The reply is COBS-framed in place; deframe it back to [cmd, seq, payload].
+        let mut reply = message.frame().to_vec();
+        let framed_len = reply.len();
+        let mut deframer = Deframer::new();
+        deframer.commit(framed_len);
+        let decoded_len = deframer.next(&mut reply).expect("framed reply");
+        postcard::from_bytes(&reply[RYNK_HEADER_SIZE..decoded_len]).unwrap()
     }
 
     fn overlay_cell(id: u16) -> LightingOverlayCell {

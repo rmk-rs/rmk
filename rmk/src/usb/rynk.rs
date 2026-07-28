@@ -1,14 +1,14 @@
 //! Rynk over USB HID.
 //!
 //! Rynk frames are fragmented into the same fixed 32-byte reports used by
-//! Rynk's BLE WebHID transport. The frame header's length trims padding from
-//! the final report before the byte stream reaches `RynkService`.
+//! Rynk's BLE WebHID transport. Report padding is zero bytes, which the COBS
+//! deframer inside `RynkService` treats as inter-frame delimiters.
 
 use embassy_usb::Builder;
 use embassy_usb::class::hid::{HidReader, HidWriter};
 use embassy_usb::driver::Driver;
 use embedded_io_async::{ErrorType, Read, Write};
-use rmk_types::protocol::rynk::{RYNK_HID_REPORT_SIZE, RynkHeader};
+use rmk_types::protocol::rynk::RYNK_HID_REPORT_SIZE;
 
 use super::HostSession;
 use crate::hid::RynkHidReport;
@@ -58,7 +58,6 @@ struct RynkUsbRx<'a, D: Driver<'static>> {
     report: [u8; RYNK_HID_REPORT_SIZE],
     pos: usize,
     end: usize,
-    remaining: usize,
 }
 
 impl<'a, D: Driver<'static>> RynkUsbRx<'a, D> {
@@ -68,7 +67,6 @@ impl<'a, D: Driver<'static>> RynkUsbRx<'a, D> {
             report: [0; RYNK_HID_REPORT_SIZE],
             pos: 0,
             end: 0,
-            remaining: 0,
         }
     }
 }
@@ -95,15 +93,8 @@ impl<D: Driver<'static>> Read for RynkUsbRx<'_, D> {
                 .read(&mut self.report)
                 .await
                 .map_err(|_| HostTransportError)?;
-            if self.remaining == 0 {
-                let Some(frame_len) = RynkHeader::peek_frame_len(&self.report[..n]) else {
-                    continue;
-                };
-                self.remaining = frame_len;
-            }
             self.pos = 0;
-            self.end = self.remaining.min(n);
-            self.remaining -= self.end;
+            self.end = n;
         }
     }
 }
