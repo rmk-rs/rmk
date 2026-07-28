@@ -3,7 +3,7 @@
 # Each entry is a full Rynk frame — a 3-byte header (CMD u16 LE + SEQ u8) + postcard
 # payload, COBS-encoded with a trailing 0x00 delimiter — one per protocol message; the
 # label names the decoded payload (`()` = empty). A diff means the header, a CMD number,
-# or a message frame changed. If intentional, bump ProtocolVersion::CURRENT and regenerate:
+# or a message frame changed. If intentional, regenerate and review protocol compatibility:
 #   UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features host wire_frames
 # Format: <label>  <hex bytes>
 
@@ -19,6 +19,8 @@ GetBehaviorConfig reply Ok(BehaviorConfig{50..120})                             
 GetBehaviorConfig request ()                                                    04 01 06 01 00
 GetBleStatus reply Ok(BleStatus{1,Advertising})                                 04 03 07 01 02 01 01 00
 GetBleStatus request ()                                                         04 03 07 01 00
+GetBuildInfo reply Ok(BuildInfo{my-firmware..})                                 02 0b 02 01 21 1f 6d 79 2d 66 69 72 6d 77 61 72 65 20 76 34 2e 35 2e 36 20 2f 20 52 4d 4b 20 76 31 2e 32 2e 33 00
+GetBuildInfo request ()                                                         02 0b 02 01 00
 GetCapabilities reply Ok(DeviceCapabilities{1..16})                             02 02 02 01 0c 01 02 03 04 05 06 07 08 09 0a 01 03 01 0b 07 0c 0d 0e 0f 10 01 00
 GetCapabilities request ()                                                      02 02 02 01 00
 GetCombo reply Ok(Combo{[Single(A)],Morse(1),L2})                               04 01 03 01 04 01 02 01 06 04 05 01 01 02 00
@@ -39,6 +41,8 @@ GetFork reply Ok(Fork{Single(A),No,Morse(2)})                                   
 GetFork request 2                                                               05 01 05 01 02 00
 GetKeyAction reply Ok(Morse(7))                                                 04 01 01 01 03 05 07 00
 GetKeyAction request KeyPosition{0,5,13}                                        04 01 01 01 03 05 0d 00
+GetLayerState reply Ok(LayerState{default:2,active:[0x05,..,0x80]})             04 08 08 01 03 02 05 01 01 01 01 01 02 80 00
+GetLayerState request ()                                                        04 08 08 01 00
 GetLayout reply Ok(LayoutChunk{300,[0x0a,0x0b,0x0c]})                           02 09 02 01 07 ac 02 03 0a 0b 0c 00
 GetLayout request 256                                                           02 09 04 01 80 02 00
 GetLedIndicator reply Ok(LedIndicator(Num|Scroll))                              04 07 08 01 02 05 00
@@ -49,6 +53,8 @@ GetMacro reply Ok(MacroData{[0x01,0x02,0x03]})                                  
 GetMacro request GetMacroRequest{256}                                           06 01 02 01 80 02 00
 GetMatrixState reply Ok(MatrixState{[0x05,0x00,0x20]})                          04 02 08 01 03 03 05 02 20 00
 GetMatrixState request ()                                                       04 02 08 01 00
+GetModifierState reply Ok(ModifierCombination(LShift|RAlt))                     04 09 08 01 02 42 00
+GetModifierState request ()                                                     04 09 08 01 00
 GetMorse reply Ok(Morse{TAP->Key(A)})                                           04 01 04 01 01 04 01 02 01 02 04 00
 GetMorse request 0                                                              04 01 04 01 01 00
 GetPeripheralStatus reply Ok(PeripheralStatus{true,Available{Discharging,85}})  04 04 08 01 06 01 01 01 01 55 00
@@ -63,6 +69,9 @@ LayerChange topic 3                                                             
 LedIndicatorChange topic LedIndicator(Num|Scroll)                               03 05 80 02 05 00
 Lock reply Ok(())                                                               02 08 02 01 01 00
 Lock request ()                                                                 02 08 02 01 00
+ModifierChange topic ModifierCombination(LShift|RAlt)                           03 08 80 02 42 00
+PeripheralBootloaderJump reply Ok(())                                           02 0c 02 01 01 00
+PeripheralBootloaderJump request slot 1                                         02 0c 03 01 01 00
 Reboot reply Ok(())                                                             02 03 02 01 01 00
 Reboot request ()                                                               02 03 02 01 00
 SetBehaviorConfig reply Ok(())                                                  04 02 06 01 01 00
