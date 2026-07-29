@@ -38,6 +38,7 @@ use rmk_types::protocol::rynk::{
     LightingCompiledScenesPage, LightingOverlayPage, LightingOverlayPageRequest, SplitCentralLatencyPolicy,
     SplitCentralLatencyState, LightingConditionalSceneStatus, LightingConditionalScenesPage, LightingOutputModeState,
     LightingExtension, LightingExtensionNameKind, LightingExtensionNamesPage, LightingExtensionNamesRequest,
+    LightingExtensionParamsPage, LightingExtensionParamsRequest, SetLightingExtensionParamRequest,
     SetLightingExtensionStateRequest, AbortLightingRuntimeConditionalSceneReplaceRequest,
     BeginLightingRuntimeConditionalSceneReplaceRequest, CommitLightingRuntimeConditionalSceneReplaceRequest,
     LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatus,
@@ -641,6 +642,27 @@ impl Client {
     ) -> Result<LightingState, RynkHostError> {
         self.require_lighting(Cmd::SetLightingExtensionState)?;
         Self::flatten_lighting(self.request::<command::SetLightingExtensionState>(&request).await?)
+    }
+
+    /// Read one page of an extension effect's tunable parameters. Unlike name
+    /// pages these carry live values, so they are pinned to
+    /// `LightingState.revision`.
+    pub async fn get_lighting_extension_params(
+        &self,
+        request: LightingExtensionParamsRequest,
+    ) -> Result<LightingExtensionParamsPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingExtensionParams)?;
+        Self::flatten_lighting(self.request::<command::GetLightingExtensionParams>(&request).await?)
+    }
+
+    /// Set one effect parameter when the state revision matches. The effect
+    /// need not be the active one.
+    pub async fn set_lighting_extension_param(
+        &self,
+        request: SetLightingExtensionParamRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingExtensionParam)?;
+        Self::flatten_lighting(self.request::<command::SetLightingExtensionParam>(&request).await?)
     }
 
     pub async fn get_lighting_runtime_conditional_scene_status(

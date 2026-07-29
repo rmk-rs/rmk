@@ -855,6 +855,78 @@ impl ExtensionParamsPage {
     }
 }
 
+/// The active effect's live parameter values, carried in a replica snapshot
+/// so a split renderer tracks the authority's tuning.
+///
+/// Only the active effect travels: it is the only one a replica renders, and
+/// bounding the row at [`EXTENSION_PARAM_CHUNK`] keeps the snapshot `Copy`
+/// with a fixed RAM cost. Parameters of inactive effects ride along when
+/// that effect becomes active, since export always reads live values.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ExtensionReplicaParams {
+    pub effect: u8,
+    pub len: u8,
+    pub values: [u8; EXTENSION_PARAM_CHUNK],
+}
+
+impl ExtensionReplicaParams {
+    /// The populated values, in parameter order.
+    pub fn values(&self) -> &[u8] {
+        &self.values[..(self.len as usize).min(EXTENSION_PARAM_CHUNK)]
+    }
+}
+
+/// The parameter specs an extension source advertises for `effect`.
+///
+/// A free function because the callers live in the engine's `LightingEngine`
+/// impl, where `Context` is in scope but no inherent impl carries the
+/// [`LightingSource`] bound.
+fn extension_param_specs<C, Context, S>(source: &S, effect: u8) -> Result<&'static [ExtensionParamSpec], StandardError>
+where
+    S: LightingSource<C, Context> + ?Sized,
+{
+    source
+        .extension_descriptor()
+        .and_then(|descriptor| descriptor.effect_params(effect))
+        .ok_or(StandardError::ExtensionUnsupported)
+}
+
+/// Check one parameter's address and its spec's range without applying it.
+///
+/// Split from the apply so replica application can validate a whole batch
+/// before mutating anything, the way the overlay is validated first.
+fn check_extension_param<C, Context, S>(source: &S, effect: u8, index: u8, value: u8) -> Result<(), StandardError>
+where
+    S: LightingSource<C, Context> + ?Sized,
+{
+    let specs = extension_param_specs::<C, Context, S>(source, effect)?;
+    let spec = specs.get(index as usize).ok_or(StandardError::ExtensionUnsupported)?;
+    if value < spec.min || value > spec.max {
+        return Err(StandardError::ExtensionUnsupported);
+    }
+    Ok(())
+}
+
+/// Validate one parameter against its spec, then offer it to the source.
+///
+/// Shared by the host-facing set command and replica application so both
+/// reject the same addresses and the same out-of-range values.
+fn apply_extension_param_checked<C, Context, S>(
+    source: &mut S,
+    effect: u8,
+    index: u8,
+    value: u8,
+) -> Result<(), StandardError>
+where
+    S: LightingSource<C, Context> + ?Sized,
+{
+    check_extension_param::<C, Context, S>(source, effect, index, value)?;
+    if !source.apply_extension_param(effect, index, value) {
+        return Err(StandardError::ExtensionUnsupported);
+    }
+    Ok(())
+}
+
 /// One page of immutable board-compiled layer scenes.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct CompiledScenePage {
@@ -920,6 +992,9 @@ pub struct StandardReplicaState<const OVERLAY_CAP: usize, const SCENE_CAP: usize
     /// the authority's animated band. `None` when the authority has no
     /// selectable extension.
     pub extension: Option<ExtensionState>,
+    /// The active effect's live parameter values. `None` when the authority
+    /// has no selectable extension or the active effect has no parameters.
+    pub extension_params: Option<ExtensionReplicaParams>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1369,6 +1444,7 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             // Filled by handle_command, where the LightingSource bound is
             // available on the Extension parameter.
             extension: None,
+            extension_params: None,
         })
     }
 
@@ -2002,16 +2078,61 @@ where
             StandardCommand::ExportReplica(slot) => {
                 let mut replica = self.replica_state(now_ms, snapshot)?;
                 replica.extension = self.extension.extension_state();
+                replica.extension_params = replica.extension.and_then(|state| {
+                    // A source with no descriptor, an active effect the
+                    // descriptor does not know, or an effect without
+                    // parameters all export nothing to replicate.
+                    let specs = extension_param_specs::<Rgb8, Context, _>(&self.extension, state.effect).ok()?;
+                    let len = specs.len().min(EXTENSION_PARAM_CHUNK);
+                    if len == 0 {
+                        return None;
+                    }
+                    let mut values = [0u8; EXTENSION_PARAM_CHUNK];
+                    for (value, (index, spec)) in values.iter_mut().zip(specs[..len].iter().enumerate()) {
+                        *value = self
+                            .extension
+                            .extension_param(state.effect, index as u8)
+                            .unwrap_or(spec.default);
+                    }
+                    Some(ExtensionReplicaParams {
+                        effect: state.effect,
+                        len: len as u8,
+                        values,
+                    })
+                });
                 slot.put(replica)?;
                 (Invalidation::None, false)
             }
             StandardCommand::ApplyReplica(slot) => {
                 let replica = slot.take()?;
                 let overlay = Self::replica_overlay(&replica)?;
+                // Parameter addresses and ranges are checked against the
+                // static descriptor before anything is applied, so a
+                // malformed snapshot cannot leave the selection updated and
+                // the tuning behind -- the same guarantee the overlay gets.
+                if let Some(params) = replica.extension_params {
+                    for (index, value) in params.values().iter().copied().enumerate() {
+                        check_extension_param::<Rgb8, Context, _>(&self.extension, params.effect, index as u8, value)?;
+                    }
+                }
                 match (replica.extension, self.extension.extension_state()) {
                     (None, None) => {}
                     (Some(extension), Some(_)) if self.extension.apply_extension_state(extension) => {}
                     _ => return Err(StandardError::ExtensionUnsupported),
+                }
+                // Parameters follow the selection so the addressed effect is
+                // already active. Values go through the same validated path a
+                // host set uses; only the revision pin is skipped, matching
+                // how replica extension state is applied.
+                if let Some(params) = replica.extension_params {
+                    for (index, value) in params.values().iter().copied().enumerate() {
+                        apply_extension_param_checked::<Rgb8, Context, _>(
+                            &mut self.extension,
+                            params.effect,
+                            index as u8,
+                            value,
+                        )?;
+                    }
                 }
                 self.apply_replica(now_ms, replica, overlay);
                 (Invalidation::Render, false)
@@ -2074,11 +2195,7 @@ where
                 (Invalidation::Render, true)
             }
             StandardCommand::ReadExtensionParams { effect, offset } => {
-                let specs = self
-                    .extension
-                    .extension_descriptor()
-                    .and_then(|descriptor| descriptor.effect_params(effect))
-                    .ok_or(StandardError::ExtensionUnsupported)?;
+                let specs = extension_param_specs::<Rgb8, Context, _>(&self.extension, effect)?;
                 let start = (offset as usize).min(specs.len());
                 let end = (start + EXTENSION_PARAM_CHUNK).min(specs.len());
                 let mut items = [None; EXTENSION_PARAM_CHUNK];
@@ -2105,18 +2222,7 @@ where
                 value,
             } => {
                 self.check_revision(expected_revision)?;
-                let specs = self
-                    .extension
-                    .extension_descriptor()
-                    .and_then(|descriptor| descriptor.effect_params(effect))
-                    .ok_or(StandardError::ExtensionUnsupported)?;
-                let spec = specs.get(index as usize).ok_or(StandardError::ExtensionUnsupported)?;
-                if value < spec.min || value > spec.max {
-                    return Err(StandardError::ExtensionUnsupported);
-                }
-                if !self.extension.apply_extension_param(effect, index, value) {
-                    return Err(StandardError::ExtensionUnsupported);
-                }
+                apply_extension_param_checked::<Rgb8, Context, _>(&mut self.extension, effect, index, value)?;
                 (Invalidation::Render, true)
             }
             StandardCommand::ReadState => (Invalidation::None, false),
@@ -2274,10 +2380,29 @@ mod tests {
 
     type Engine = StandardLightingEngine<'static, EmptySource, EmptySource, 2, 2>;
 
+    /// Effect 0 advertises two parameters; effect 1 advertises none, so the
+    /// "active effect has nothing to replicate" path stays covered.
+    static REPLICA_EFFECT_NAMES: &[&str] = &["A", "B"];
+    static REPLICA_EFFECT_PARAMS: &[&[ExtensionParamSpec]] = &[&[
+        ExtensionParamSpec {
+            name: "Density",
+            min: 1,
+            max: 8,
+            default: 3,
+        },
+        ExtensionParamSpec {
+            name: "Fade",
+            min: 0,
+            max: 255,
+            default: 128,
+        },
+    ]];
+
     #[derive(Copy, Clone)]
     struct ReplicaExtension {
         state: ExtensionState,
         accept: bool,
+        params: [u8; 2],
     }
 
     impl<Context> LightingSource<Rgb8, Context> for ReplicaExtension {
@@ -2303,6 +2428,34 @@ mod tests {
             }
             self.state = state;
             true
+        }
+
+        fn extension_descriptor(&self) -> Option<ExtensionDescriptor> {
+            Some(ExtensionDescriptor {
+                effects: REPLICA_EFFECT_NAMES,
+                palettes: &[],
+                params: REPLICA_EFFECT_PARAMS,
+            })
+        }
+
+        fn extension_param(&self, effect: u8, index: u8) -> Option<u8> {
+            if effect != 0 {
+                return None;
+            }
+            self.params.get(index as usize).copied()
+        }
+
+        fn apply_extension_param(&mut self, effect: u8, index: u8, value: u8) -> bool {
+            if !self.accept || effect != 0 {
+                return false;
+            }
+            match self.params.get_mut(index as usize) {
+                Some(slot) => {
+                    *slot = value;
+                    true
+                }
+                None => false,
+            }
         }
     }
 
@@ -2352,6 +2505,7 @@ mod tests {
                     speed: 20,
                 },
                 accept,
+                params: [3, 128],
             },
             EmptySource,
         )
@@ -2482,6 +2636,7 @@ mod tests {
             context: context(0),
             sample_time_ms: 9,
             extension: None,
+            extension_params: None,
         };
         slot.put(snapshot).unwrap();
         assert_eq!(slot.put(snapshot), Err(ReplicaSlotError::Busy));
@@ -2514,6 +2669,7 @@ mod tests {
             context: context(0),
             sample_time_ms: 50,
             extension: Some(next_extension),
+            extension_params: None,
         };
 
         let mut declining = replica_engine(false);
@@ -2537,6 +2693,122 @@ mod tests {
         assert_eq!(accepting.state().revision, 9);
         assert_eq!(accepting.state().output_brightness, 42);
         assert_eq!(accepting.extension().state, next_extension);
+    }
+
+    #[test]
+    fn replica_export_carries_the_active_effect_parameters() {
+        let mut authority = replica_engine(true);
+        authority
+            .handle_command(
+                0,
+                StandardCommand::SetExtensionParamIfRevision {
+                    expected_revision: 0,
+                    effect: 0,
+                    index: 1,
+                    value: 200,
+                },
+                &context(0),
+            )
+            .unwrap();
+
+        static EXPORT_SLOT: StandardReplicaSlot<2> = StandardReplicaSlot::new();
+        authority
+            .handle_command(10, StandardCommand::ExportReplica(&EXPORT_SLOT), &context(0))
+            .unwrap();
+        let snapshot = EXPORT_SLOT.take().unwrap();
+        let params = snapshot.extension_params.expect("active effect has parameters");
+        assert_eq!(params.effect, 0);
+        assert_eq!(params.values(), &[3, 200]);
+
+        // An active effect without parameters exports nothing to replicate.
+        authority
+            .handle_command(
+                20,
+                StandardCommand::SetExtensionIfRevision {
+                    expected_revision: authority.state().revision,
+                    state: ExtensionState {
+                        effect: 1,
+                        palette: 0,
+                        value: 10,
+                        speed: 20,
+                    },
+                },
+                &context(0),
+            )
+            .unwrap();
+        authority
+            .handle_command(30, StandardCommand::ExportReplica(&EXPORT_SLOT), &context(0))
+            .unwrap();
+        assert_eq!(EXPORT_SLOT.take().unwrap().extension_params, None);
+    }
+
+    #[test]
+    fn replica_application_installs_exported_parameters() {
+        let mut authority = replica_engine(true);
+        authority
+            .handle_command(
+                0,
+                StandardCommand::SetExtensionParamIfRevision {
+                    expected_revision: 0,
+                    effect: 0,
+                    index: 0,
+                    value: 7,
+                },
+                &context(0),
+            )
+            .unwrap();
+        static ROUND_TRIP_SLOT: StandardReplicaSlot<2> = StandardReplicaSlot::new();
+        authority
+            .handle_command(10, StandardCommand::ExportReplica(&ROUND_TRIP_SLOT), &context(0))
+            .unwrap();
+        let snapshot = ROUND_TRIP_SLOT.take().unwrap();
+
+        let mut replica = replica_engine(true);
+        assert_eq!(replica.extension().params, [3, 128]);
+        ROUND_TRIP_SLOT.put(snapshot).unwrap();
+        replica
+            .handle_command(100, StandardCommand::ApplyReplica(&ROUND_TRIP_SLOT), &context(0))
+            .unwrap();
+        assert_eq!(replica.extension().params, [7, 128]);
+        assert_eq!(replica.state().revision, snapshot.revision);
+    }
+
+    #[test]
+    fn replica_parameters_are_validated_like_a_host_set() {
+        let mut authority = replica_engine(true);
+        static SEED_SLOT: StandardReplicaSlot<2> = StandardReplicaSlot::new();
+        authority
+            .handle_command(0, StandardCommand::ExportReplica(&SEED_SLOT), &context(0))
+            .unwrap();
+        let mut snapshot = SEED_SLOT.take().unwrap();
+        // A selection change that must not survive the rejected parameter.
+        snapshot.extension = Some(ExtensionState {
+            effect: 0,
+            palette: 7,
+            value: 77,
+            speed: 88,
+        });
+        // 9 is outside the "Density" spec's 1..=8 range.
+        snapshot.extension_params = Some(ExtensionReplicaParams {
+            effect: 0,
+            len: 1,
+            values: [9, 0, 0, 0, 0, 0, 0, 0],
+        });
+
+        let mut replica = replica_engine(true);
+        let before = replica.extension().params;
+        let before_state = replica.extension().state;
+        static INVALID_PARAM_SLOT: StandardReplicaSlot<2> = StandardReplicaSlot::new();
+        INVALID_PARAM_SLOT.put(snapshot).unwrap();
+        assert_eq!(
+            replica.handle_command(100, StandardCommand::ApplyReplica(&INVALID_PARAM_SLOT), &context(0)),
+            Err(StandardError::ExtensionUnsupported)
+        );
+        // The pre-apply check keeps the whole extension untouched, selection
+        // included, not just the parameter that failed.
+        assert_eq!(replica.extension().params, before);
+        assert_eq!(replica.extension().state, before_state);
+        assert_eq!(replica.state().revision, 0);
     }
 
     #[test]
@@ -2570,6 +2842,7 @@ mod tests {
                 value: 30,
                 speed: 40,
             }),
+            extension_params: None,
         };
         let mut engine = replica_engine(true);
         let before = engine.extension().state;
