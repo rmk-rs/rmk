@@ -69,6 +69,34 @@ pub trait LightingSource<C, Context> {
     fn apply_extension_state(&mut self, _state: ExtensionState) -> bool {
         false
     }
+
+    /// Live value of one per-effect parameter, addressed by the effect's
+    /// index in [`ExtensionDescriptor::effects`] and the parameter's ordinal
+    /// in that effect's [`ExtensionDescriptor::params`] row. `None` means the
+    /// source does not know that address.
+    fn extension_param(&self, _effect: u8, _index: u8) -> Option<u8> {
+        None
+    }
+
+    /// Apply one per-effect parameter. Return `true` if accepted; the engine
+    /// then re-renders and advances its revision. Returning `false` must
+    /// leave the source unchanged, matching the atomic-decline convention of
+    /// [`Self::apply_extension_state`]. The default declines.
+    fn apply_extension_param(&mut self, _effect: u8, _index: u8, _value: u8) -> bool {
+        false
+    }
+}
+
+/// One tunable parameter advertised by an extension effect.
+///
+/// Firmware owns the meaning entirely: the name is what a host renders, and
+/// the source is the sole judge of whether a value is acceptable.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ExtensionParamSpec {
+    pub name: &'static str,
+    pub min: u8,
+    pub max: u8,
+    pub default: u8,
 }
 
 /// Static description of an extension source's selectable content.
@@ -78,6 +106,21 @@ pub trait LightingSource<C, Context> {
 pub struct ExtensionDescriptor {
     pub effects: &'static [&'static str],
     pub palettes: &'static [&'static str],
+    /// Per-effect parameter lists, indexed identically to `effects`. A
+    /// shorter slice is legal: effects past its end have no parameters.
+    pub params: &'static [&'static [ExtensionParamSpec]],
+}
+
+impl ExtensionDescriptor {
+    /// Parameter specs advertised for `effect`, or `None` when `effect` is
+    /// not a valid effect index. A valid effect whose `params` row is absent
+    /// simply has no parameters.
+    pub fn effect_params(&self, effect: u8) -> Option<&'static [ExtensionParamSpec]> {
+        if effect as usize >= self.effects.len() {
+            return None;
+        }
+        Some(self.params.get(effect as usize).copied().unwrap_or(&[]))
+    }
 }
 
 /// Runtime-adjustable state of an extension source. `effect` and `palette`

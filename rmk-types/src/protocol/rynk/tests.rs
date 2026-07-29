@@ -1418,6 +1418,24 @@ fn lighting_wire_frames_locked() {
         expected_revision: state.revision,
         state: extension.state,
     };
+    let extension_params_request = LightingExtensionParamsRequest { effect: 1, offset: 0 };
+    let extension_params_page = LightingExtensionParamsPage {
+        revision: state.revision,
+        total: 2,
+        items: one(LightingExtensionParam {
+            name: heapless::String::try_from("Density").unwrap(),
+            min: 1,
+            max: 8,
+            default: 3,
+            value: 5,
+        }),
+    };
+    let set_extension_param = SetLightingExtensionParamRequest {
+        expected_revision: state.revision,
+        effect: 1,
+        index: 0,
+        value: 5,
+    };
     let output_mode = LightingOutputModeState {
         mode: LightingOutputMode::PoweredOnly,
         powered: true,
@@ -2035,6 +2053,30 @@ fn lighting_wire_frames_locked() {
             "SetLightingExtensionState reply",
             encode_frame(
                 Cmd::SetLightingExtensionState,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "GetLightingExtensionParams request",
+            encode_frame(Cmd::GetLightingExtensionParams, SEQ, &extension_params_request)
+        ),
+        (
+            "GetLightingExtensionParams reply",
+            encode_frame(
+                Cmd::GetLightingExtensionParams,
+                SEQ,
+                &Ok::<LightingExtensionParamsPageResult, RynkError>(Ok(extension_params_page))
+            )
+        ),
+        (
+            "SetLightingExtensionParam request",
+            encode_frame(Cmd::SetLightingExtensionParam, SEQ, &set_extension_param)
+        ),
+        (
+            "SetLightingExtensionParam reply",
+            encode_frame(
+                Cmd::SetLightingExtensionParam,
                 SEQ,
                 &Ok::<LightingStateResult, RynkError>(Ok(state))
             )

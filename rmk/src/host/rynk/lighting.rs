@@ -15,10 +15,11 @@ use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use heapless::{String, Vec};
 use rmk_types::protocol::rynk::{
-    LIGHTING_EXTENSION_NAME_CHUNK, LIGHTING_EXTENSION_NAME_SIZE, LIGHTING_OVERLAY_CHUNK_SIZE,
-    LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode, LightingBackgroundState, LightingCompiledScenesPage,
-    LightingConditionalSceneCell as WireConditionalSceneCell, LightingControls as WireLightingControls, LightingError,
-    LightingExtension, LightingExtensionNameKind, LightingExtensionNamesPage,
+    LIGHTING_EXTENSION_NAME_CHUNK, LIGHTING_EXTENSION_NAME_SIZE, LIGHTING_EXTENSION_PARAM_CHUNK,
+    LIGHTING_OVERLAY_CHUNK_SIZE, LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode, LightingBackgroundState,
+    LightingCompiledScenesPage, LightingConditionalSceneCell as WireConditionalSceneCell,
+    LightingControls as WireLightingControls, LightingError, LightingExtension, LightingExtensionNameKind,
+    LightingExtensionNamesPage, LightingExtensionParam, LightingExtensionParamsPage,
     LightingExtensionState as WireExtensionState, LightingLayerPolicy, LightingMutableState,
     LightingOutputMode as WireLightingOutputMode, LightingOutputModeIndicator as WireLightingOutputModeIndicator,
     LightingOutputModeState, LightingOverlayCell, LightingOverlayPage, LightingResult, LightingRgb8,
@@ -42,6 +43,10 @@ const _: () = core::assert!(
 const _: () = core::assert!(
     OVERLAY_CHUNK_SIZE == LIGHTING_OVERLAY_CHUNK_SIZE,
     "engine overlay page must match the wire chunk so adapters forward pages unmodified"
+);
+const _: () = core::assert!(
+    crate::lighting::standard::EXTENSION_PARAM_CHUNK == LIGHTING_EXTENSION_PARAM_CHUNK,
+    "engine extension-param page must match the wire chunk so adapters forward pages unmodified"
 );
 
 /// Maximum number of cells staged by one Rynk overlay replacement.
@@ -247,6 +252,7 @@ pub enum RynkLightingReadback {
     SceneTransaction(LightingSceneTransaction),
     Extension(LightingExtension),
     ExtensionNamesPage(LightingExtensionNamesPage),
+    ExtensionParamsPage(LightingExtensionParamsPage),
     RuntimeConditionalScenesPage(LightingRuntimeConditionalScenesPage),
     RuntimeConditionalSceneTransaction(LightingRuntimeConditionalSceneTransaction),
     Unit,
@@ -425,6 +431,16 @@ pub(super) enum RynkLightingCommand {
     SetExtensionState {
         expected_revision: u32,
         state: WireExtensionState,
+    },
+    ReadExtensionParams {
+        effect: u8,
+        offset: u8,
+    },
+    SetExtensionParam {
+        expected_revision: u32,
+        effect: u8,
+        index: u8,
+        value: u8,
     },
     ReadRuntimeConditionalSceneStatus,
     ReadRuntimeConditionalScenes {
@@ -846,6 +862,43 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                     value: state.value,
                     speed: state.speed,
                 },
+            },
+            RynkLightingCommand::ReadExtensionParams { effect, offset } => {
+                let page = match self
+                    .request_core(StandardCommand::ReadExtensionParams { effect, offset })
+                    .await?
+                {
+                    StandardReply::ExtensionParams(page) => page,
+                    _ => return Err(LightingError::InvalidRequest),
+                };
+                let mut items: Vec<LightingExtensionParam, LIGHTING_EXTENSION_PARAM_CHUNK> = Vec::new();
+                for entry in page.items() {
+                    items
+                        .push(LightingExtensionParam {
+                            name: super::truncated(entry.spec.name),
+                            min: entry.spec.min,
+                            max: entry.spec.max,
+                            default: entry.spec.default,
+                            value: entry.value,
+                        })
+                        .map_err(|_| LightingError::InvalidRequest)?;
+                }
+                return Ok(RynkLightingReadback::ExtensionParamsPage(LightingExtensionParamsPage {
+                    revision: page.revision,
+                    total: page.total,
+                    items,
+                }));
+            }
+            RynkLightingCommand::SetExtensionParam {
+                expected_revision,
+                effect,
+                index,
+                value,
+            } => StandardCommand::SetExtensionParamIfRevision {
+                expected_revision,
+                effect,
+                index,
+                value,
             },
             RynkLightingCommand::ReadRuntimeConditionalSceneStatus => {
                 let state = self.request_core_state(StandardCommand::ReadState).await?;
@@ -1563,10 +1616,28 @@ mod tests {
     static TEST_EFFECT_NAMES: &[&str] = &["Gradient", "Flow", "ABCDEFGHIJKLMNOé tail"];
     static TEST_PALETTE_NAMES: &[&str] = &["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9"];
     static TOO_MANY_EFFECT_NAMES: [&str; 256] = ["Effect"; 256];
+    /// Effect 0 advertises parameters; the remaining effects do not, and the
+    /// outer slice is deliberately shorter than `TEST_EFFECT_NAMES` so the
+    /// "missing tail means no parameters" rule is exercised.
+    static TEST_EFFECT_PARAMS: &[&[crate::lighting::compositor::ExtensionParamSpec]] = &[&[
+        crate::lighting::compositor::ExtensionParamSpec {
+            name: "Density",
+            min: 1,
+            max: 8,
+            default: 3,
+        },
+        crate::lighting::compositor::ExtensionParamSpec {
+            name: "Fade",
+            min: 0,
+            max: 255,
+            default: 128,
+        },
+    ]];
 
     /// Zero-target source whose only job is serving the extension hooks.
     struct TestExtensionSource {
         state: crate::lighting::compositor::ExtensionState,
+        params: [u8; 2],
     }
 
     impl<Context> crate::lighting::compositor::LightingSource<Rgb8, Context> for TestExtensionSource {
@@ -1594,6 +1665,7 @@ mod tests {
             Some(crate::lighting::compositor::ExtensionDescriptor {
                 effects: TEST_EFFECT_NAMES,
                 palettes: TEST_PALETTE_NAMES,
+                params: TEST_EFFECT_PARAMS,
             })
         }
 
@@ -1604,6 +1676,26 @@ mod tests {
         fn apply_extension_state(&mut self, state: crate::lighting::compositor::ExtensionState) -> bool {
             self.state = state;
             true
+        }
+
+        fn extension_param(&self, effect: u8, index: u8) -> Option<u8> {
+            if effect != 0 {
+                return None;
+            }
+            self.params.get(index as usize).copied()
+        }
+
+        fn apply_extension_param(&mut self, effect: u8, index: u8, value: u8) -> bool {
+            if effect != 0 {
+                return false;
+            }
+            match self.params.get_mut(index as usize) {
+                Some(slot) => {
+                    *slot = value;
+                    true
+                }
+                None => false,
+            }
         }
     }
 
@@ -1634,6 +1726,7 @@ mod tests {
             Some(crate::lighting::compositor::ExtensionDescriptor {
                 effects: &TOO_MANY_EFFECT_NAMES,
                 palettes: TEST_PALETTE_NAMES,
+                params: &[],
             })
         }
 
@@ -1699,6 +1792,7 @@ mod tests {
                     value: 128,
                     speed: 20,
                 },
+                params: [3, 128],
             },
             async |protocol| {
                 let extension = match protocol.request(RynkLightingCommand::ReadExtension).await {
@@ -1802,6 +1896,142 @@ mod tests {
     }
 
     #[test]
+    fn extension_param_flow_reads_pages_sets_values_and_rejects_bad_addresses() {
+        run_extension_flow(
+            TestExtensionSource {
+                state: crate::lighting::compositor::ExtensionState {
+                    effect: 0,
+                    palette: 1,
+                    value: 128,
+                    speed: 20,
+                },
+                params: [3, 128],
+            },
+            async |protocol| {
+                let page = match protocol
+                    .request(RynkLightingCommand::ReadExtensionParams { effect: 0, offset: 0 })
+                    .await
+                {
+                    Ok(RynkLightingReadback::ExtensionParamsPage(page)) => page,
+                    other => panic!("expected params readback, got {other:?}"),
+                };
+                assert_eq!(page.revision, 0);
+                assert_eq!(page.total, 2);
+                assert_eq!(page.items.len(), 2);
+                assert_eq!(page.items[0].name.as_str(), "Density");
+                assert_eq!((page.items[0].min, page.items[0].max, page.items[0].default), (1, 8, 3));
+                assert_eq!(page.items[0].value, 3);
+                assert_eq!(page.items[1].name.as_str(), "Fade");
+                assert_eq!(page.items[1].value, 128);
+
+                // Paging past the end yields an empty page, not an error.
+                let tail = match protocol
+                    .request(RynkLightingCommand::ReadExtensionParams { effect: 0, offset: 2 })
+                    .await
+                {
+                    Ok(RynkLightingReadback::ExtensionParamsPage(page)) => page,
+                    other => panic!("expected params readback, got {other:?}"),
+                };
+                assert_eq!(tail.total, 2);
+                assert!(tail.items.is_empty());
+
+                // An effect past the `params` tail simply has none.
+                let none = match protocol
+                    .request(RynkLightingCommand::ReadExtensionParams { effect: 1, offset: 0 })
+                    .await
+                {
+                    Ok(RynkLightingReadback::ExtensionParamsPage(page)) => page,
+                    other => panic!("expected params readback, got {other:?}"),
+                };
+                assert_eq!(none.total, 0);
+                assert!(none.items.is_empty());
+
+                // An unknown effect index is declined.
+                assert_eq!(
+                    protocol
+                        .request(RynkLightingCommand::ReadExtensionParams { effect: 9, offset: 0 })
+                        .await,
+                    Err(LightingError::Unsupported)
+                );
+
+                // A successful set advances the revision.
+                let state = match protocol
+                    .request(RynkLightingCommand::SetExtensionParam {
+                        expected_revision: 0,
+                        effect: 0,
+                        index: 0,
+                        value: 7,
+                    })
+                    .await
+                {
+                    Ok(RynkLightingReadback::State(state)) => state,
+                    other => panic!("expected state readback, got {other:?}"),
+                };
+                assert_eq!(state.revision, 1);
+
+                let page = match protocol
+                    .request(RynkLightingCommand::ReadExtensionParams { effect: 0, offset: 0 })
+                    .await
+                {
+                    Ok(RynkLightingReadback::ExtensionParamsPage(page)) => page,
+                    other => panic!("expected params readback, got {other:?}"),
+                };
+                assert_eq!(page.revision, 1);
+                assert_eq!(page.items[0].value, 7);
+
+                // Out-of-range values, unknown ordinals, and stale revisions
+                // are all declined without mutating the source.
+                assert_eq!(
+                    protocol
+                        .request(RynkLightingCommand::SetExtensionParam {
+                            expected_revision: 1,
+                            effect: 0,
+                            index: 0,
+                            value: 9,
+                        })
+                        .await,
+                    Err(LightingError::Unsupported)
+                );
+                assert_eq!(
+                    protocol
+                        .request(RynkLightingCommand::SetExtensionParam {
+                            expected_revision: 1,
+                            effect: 0,
+                            index: 5,
+                            value: 1,
+                        })
+                        .await,
+                    Err(LightingError::Unsupported)
+                );
+                assert_eq!(
+                    protocol
+                        .request(RynkLightingCommand::SetExtensionParam {
+                            expected_revision: 0,
+                            effect: 0,
+                            index: 0,
+                            value: 4,
+                        })
+                        .await,
+                    Err(LightingError::StateRevisionConflict {
+                        expected: 0,
+                        current: 1,
+                    })
+                );
+
+                let page = match protocol
+                    .request(RynkLightingCommand::ReadExtensionParams { effect: 0, offset: 0 })
+                    .await
+                {
+                    Ok(RynkLightingReadback::ExtensionParamsPage(page)) => page,
+                    other => panic!("expected params readback, got {other:?}"),
+                };
+                assert_eq!(page.revision, 1);
+                assert_eq!(page.items[0].value, 7);
+            },
+        );
+    }
+
+    #[test]
     fn extension_commands_are_unsupported_with_an_empty_source() {
         run_extension_flow(crate::lighting::EmptySource, async |protocol| {
             let read = protocol.request(RynkLightingCommand::ReadExtension).await;
@@ -1825,6 +2055,19 @@ mod tests {
                 })
                 .await;
             assert_eq!(set, Err(LightingError::Unsupported));
+            let params = protocol
+                .request(RynkLightingCommand::ReadExtensionParams { effect: 0, offset: 0 })
+                .await;
+            assert_eq!(params, Err(LightingError::Unsupported));
+            let set_param = protocol
+                .request(RynkLightingCommand::SetExtensionParam {
+                    expected_revision: 0,
+                    effect: 0,
+                    index: 0,
+                    value: 0,
+                })
+                .await;
+            assert_eq!(set_param, Err(LightingError::Unsupported));
         });
     }
 
@@ -1838,6 +2081,7 @@ mod tests {
                     value: 128,
                     speed: 20,
                 },
+                params: [0, 0],
             }),
             async |protocol| {
                 assert_eq!(

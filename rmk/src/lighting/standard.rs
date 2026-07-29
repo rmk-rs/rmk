@@ -14,8 +14,8 @@ use rmk_types::action::LightAction;
 
 use super::Rgb8;
 use super::compositor::{
-    Compositor, Contribution, ExtensionDescriptor, ExtensionState, LightingSource, LogicalFrame, RenderError,
-    RenderInput as SourceRenderInput,
+    Compositor, Contribution, ExtensionDescriptor, ExtensionParamSpec, ExtensionState, LightingSource, LogicalFrame,
+    RenderError, RenderInput as SourceRenderInput,
 };
 use super::context::{LightingContext, LightingContextProvider};
 use super::effect::{BuiltinEffect, LightingEffect};
@@ -701,6 +701,18 @@ pub enum StandardCommand<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
         expected_revision: u32,
         state: ExtensionState,
     },
+    /// One page of the addressed effect's parameter specs paired with the
+    /// source's live values.
+    ReadExtensionParams {
+        effect: u8,
+        offset: u8,
+    },
+    SetExtensionParamIfRevision {
+        expected_revision: u32,
+        effect: u8,
+        index: u8,
+        value: u8,
+    },
     /// One atomically sampled page of the transient overlay.
     ReadOverlay {
         offset: u16,
@@ -813,6 +825,36 @@ pub struct ExtensionPage {
     pub state: Option<ExtensionState>,
 }
 
+/// Number of extension parameters carried by one [`ExtensionParamsPage`].
+pub const EXTENSION_PARAM_CHUNK: usize = 8;
+
+/// One extension parameter: its static spec plus the source's live value.
+/// The value falls back to the spec's default when the source does not
+/// report one.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ExtensionParamValue {
+    pub spec: ExtensionParamSpec,
+    pub value: u8,
+}
+
+/// One page of an extension effect's parameters. Pinned to the engine
+/// revision like every other mutable readback.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ExtensionParamsPage {
+    pub revision: u32,
+    /// Total parameters the addressed effect advertises.
+    pub total: u8,
+    /// Rows starting at the request's offset; trailing entries are `None`.
+    pub items: [Option<ExtensionParamValue>; EXTENSION_PARAM_CHUNK],
+}
+
+impl ExtensionParamsPage {
+    /// The populated rows, in order.
+    pub fn items(&self) -> impl Iterator<Item = ExtensionParamValue> + '_ {
+        self.items.iter().copied().flatten()
+    }
+}
+
 /// One page of immutable board-compiled layer scenes.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct CompiledScenePage {
@@ -839,6 +881,7 @@ pub enum StandardReply {
     CompiledScenesPage(CompiledScenePage),
     SceneTransaction { id: u32, cell_count: u16 },
     Extension(ExtensionPage),
+    ExtensionParams(ExtensionParamsPage),
     RuntimeConditionalScenesPage(RuntimeConditionalScenePage),
     RuntimeConditionalSceneTransaction { id: u32, cell_count: u16 },
 }
@@ -2026,6 +2069,52 @@ where
             } => {
                 self.check_revision(expected_revision)?;
                 if !self.extension.apply_extension_state(state) {
+                    return Err(StandardError::ExtensionUnsupported);
+                }
+                (Invalidation::Render, true)
+            }
+            StandardCommand::ReadExtensionParams { effect, offset } => {
+                let specs = self
+                    .extension
+                    .extension_descriptor()
+                    .and_then(|descriptor| descriptor.effect_params(effect))
+                    .ok_or(StandardError::ExtensionUnsupported)?;
+                let start = (offset as usize).min(specs.len());
+                let end = (start + EXTENSION_PARAM_CHUNK).min(specs.len());
+                let mut items = [None; EXTENSION_PARAM_CHUNK];
+                for (item, (index, spec)) in items.iter_mut().zip((start..end).zip(&specs[start..end])) {
+                    let value = self
+                        .extension
+                        .extension_param(effect, index as u8)
+                        .unwrap_or(spec.default);
+                    *item = Some(ExtensionParamValue { spec: *spec, value });
+                }
+                return Ok(CommandResult::unchanged(StandardReply::ExtensionParams(
+                    ExtensionParamsPage {
+                        revision: self.revision,
+                        // The wire caps one effect's parameter list at 255.
+                        total: specs.len().min(u8::MAX as usize) as u8,
+                        items,
+                    },
+                )));
+            }
+            StandardCommand::SetExtensionParamIfRevision {
+                expected_revision,
+                effect,
+                index,
+                value,
+            } => {
+                self.check_revision(expected_revision)?;
+                let specs = self
+                    .extension
+                    .extension_descriptor()
+                    .and_then(|descriptor| descriptor.effect_params(effect))
+                    .ok_or(StandardError::ExtensionUnsupported)?;
+                let spec = specs.get(index as usize).ok_or(StandardError::ExtensionUnsupported)?;
+                if value < spec.min || value > spec.max {
+                    return Err(StandardError::ExtensionUnsupported);
+                }
+                if !self.extension.apply_extension_param(effect, index, value) {
                     return Err(StandardError::ExtensionUnsupported);
                 }
                 (Invalidation::Render, true)

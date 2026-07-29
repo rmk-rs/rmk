@@ -25,6 +25,8 @@ pub const LIGHTING_ZONE_NAME_SIZE: usize = 24;
 pub const LIGHTING_EXTENSION_NAME_SIZE: usize = 16;
 /// Number of names in one extension-names page.
 pub const LIGHTING_EXTENSION_NAME_CHUNK: usize = 8;
+/// Number of per-effect parameter rows in one extension-params page.
+pub const LIGHTING_EXTENSION_PARAM_CHUNK: usize = 8;
 
 macro_rules! wire_type {
     ($item:item) => {
@@ -756,6 +758,73 @@ wire_type! {
     }
 }
 
+/// One tunable parameter advertised by an extension effect: its static
+/// descriptor plus the source's live value. Descriptor and value travel in
+/// one row so a host can render a control from a single read.
+///
+/// Parameters are generic: firmware names them, bounds them, and applies
+/// them; the protocol ascribes no meaning to any particular name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingExtensionParam {
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
+    pub name: String<LIGHTING_EXTENSION_NAME_SIZE>,
+    pub min: u8,
+    pub max: u8,
+    pub default: u8,
+    pub value: u8,
+}
+
+impl MaxSize for LightingExtensionParam {
+    const POSTCARD_MAX_SIZE: usize =
+        crate::heapless_vec_max_size::<u8, LIGHTING_EXTENSION_NAME_SIZE>() + 4 * u8::POSTCARD_MAX_SIZE;
+}
+
+wire_type! {
+    /// Which effect's parameter list a page request addresses. `effect`
+    /// indexes the effect-name list served by `GetLightingExtensionNames`;
+    /// it need not be the active effect.
+    pub struct LightingExtensionParamsRequest {
+        pub effect: u8,
+        pub offset: u8,
+    }
+}
+
+/// One page of an effect's parameters. Unlike name pages these carry live
+/// values, so they are pinned to `LightingState.revision` like every other
+/// mutable lighting read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingExtensionParamsPage {
+    pub revision: u32,
+    pub total: u8,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingExtensionParam[]"))]
+    pub items: Vec<LightingExtensionParam, LIGHTING_EXTENSION_PARAM_CHUNK>,
+}
+
+impl MaxSize for LightingExtensionParamsPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u8::POSTCARD_MAX_SIZE
+        + crate::varint_max_size(LIGHTING_EXTENSION_PARAM_CHUNK)
+        + LIGHTING_EXTENSION_PARAM_CHUNK * LightingExtensionParam::POSTCARD_MAX_SIZE;
+}
+
+wire_type! {
+    /// Set one parameter of one effect. `index` is the ordinal within that
+    /// effect's parameter list. Setting a parameter of an inactive effect is
+    /// allowed if the source accepts it.
+    pub struct SetLightingExtensionParamRequest {
+        pub expected_revision: u32,
+        pub effect: u8,
+        pub index: u8,
+        pub value: u8,
+    }
+}
+
 wire_type! {
     pub struct LightingConditionalSceneStatus {
         pub topology_revision: u32,
@@ -986,6 +1055,7 @@ pub type LightingConditionalScenesPageResult = LightingResult<LightingConditiona
 pub type LightingOutputModeStateResult = LightingResult<LightingOutputModeState>;
 pub type LightingExtensionResult = LightingResult<LightingExtension>;
 pub type LightingExtensionNamesPageResult = LightingResult<LightingExtensionNamesPage>;
+pub type LightingExtensionParamsPageResult = LightingResult<LightingExtensionParamsPage>;
 pub type LightingSceneTransactionResult = LightingResult<LightingSceneTransaction>;
 pub type LightingRuntimeConditionalSceneStatusResult = LightingResult<LightingRuntimeConditionalSceneStatus>;
 pub type LightingRuntimeConditionalScenesPageResult = LightingResult<LightingRuntimeConditionalScenesPage>;
@@ -1036,6 +1106,8 @@ const _: () = {
     assert_endpoint_fits!((), LightingExtensionResult);
     assert_endpoint_fits!(LightingExtensionNamesRequest, LightingExtensionNamesPageResult);
     assert_endpoint_fits!(SetLightingExtensionStateRequest, LightingStateResult);
+    assert_endpoint_fits!(LightingExtensionParamsRequest, LightingExtensionParamsPageResult);
+    assert_endpoint_fits!(SetLightingExtensionParamRequest, LightingStateResult);
     assert_endpoint_fits!(SetLightingOutputModeRequest, LightingOutputModeStateResult);
     assert_endpoint_fits!((), LightingRuntimeConditionalSceneStatusResult);
     assert_endpoint_fits!(
@@ -1292,6 +1364,56 @@ mod tests {
                 speed: 3,
             },
         });
+    }
+
+    #[test]
+    fn extension_param_types_round_trip() {
+        round_trip(&LightingExtensionParam {
+            name: String::try_from("Density").unwrap(),
+            min: 1,
+            max: 8,
+            default: 3,
+            value: 5,
+        });
+        round_trip(&LightingExtensionParamsRequest { effect: 0, offset: 0 });
+        round_trip(&LightingExtensionParamsRequest {
+            effect: u8::MAX,
+            offset: LIGHTING_EXTENSION_PARAM_CHUNK as u8,
+        });
+        round_trip(&SetLightingExtensionParamRequest {
+            expected_revision: u32::MAX,
+            effect: 2,
+            index: 1,
+            value: u8::MAX,
+        });
+    }
+
+    #[test]
+    fn maximum_extension_params_page_respects_bound() {
+        let mut items = Vec::new();
+        for _ in 0..LIGHTING_EXTENSION_PARAM_CHUNK {
+            let mut name = String::new();
+            for _ in 0..LIGHTING_EXTENSION_NAME_SIZE {
+                name.push('x').unwrap();
+            }
+            items
+                .push(LightingExtensionParam {
+                    name,
+                    min: 0,
+                    max: u8::MAX,
+                    default: u8::MAX,
+                    value: u8::MAX,
+                })
+                .unwrap();
+        }
+        let page = LightingExtensionParamsPage {
+            revision: u32::MAX,
+            total: u8::MAX,
+            items,
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingExtensionParamsPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
     }
 
     #[test]

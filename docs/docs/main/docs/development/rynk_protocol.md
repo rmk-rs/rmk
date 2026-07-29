@@ -163,6 +163,8 @@ The lock is per session and starts locked; `Lock` or the end of the session (unp
 | `0x0928` | `PutLightingRuntimeConditionalSceneChunk`      | `PutLightingRuntimeConditionalSceneChunkRequest`      | `LightingUnitResult`                               | `lighting`       |                                                                                                                                |
 | `0x0929` | `CommitLightingRuntimeConditionalSceneReplace` | `CommitLightingRuntimeConditionalSceneReplaceRequest` | `LightingStateResult`                              | `lighting`       |                                                                                                                                |
 | `0x092A` | `AbortLightingRuntimeConditionalSceneReplace`  | `AbortLightingRuntimeConditionalSceneReplaceRequest`  | `LightingUnitResult`                               | `lighting`       |                                                                                                                                |
+| `0x092B` | `GetLightingExtensionParams`                   | `LightingExtensionParamsRequest`                      | `LightingExtensionParamsPageResult`                | `lighting`       | Per-effect tunable parameters: descriptors plus live values, pinned to `LightingState.revision`. Page until `total`.           |
+| `0x092C` | `SetLightingExtensionParam`                    | `SetLightingExtensionParamRequest`                    | `LightingStateResult`                              | `lighting`       | Set one effect parameter when the state revision matches.                                                                      |
 
 ## Topics
 
