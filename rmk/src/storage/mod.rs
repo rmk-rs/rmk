@@ -10,8 +10,8 @@ use rmk_types::connection::ConnectionType;
 use rmk_types::morse::MorseProfile;
 #[cfg(all(feature = "lighting", feature = "rynk"))]
 use rmk_types::protocol::rynk::{
-    LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE, LIGHTING_SCENE_CHUNK_SIZE, LightingConditionalSceneCell,
-    LightingLayerPolicy, LightingSceneCell,
+    LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE, LIGHTING_EXTENSION_PARAM_CHUNK, LIGHTING_SCENE_CHUNK_SIZE,
+    LightingConditionalSceneCell, LightingLayerPolicy, LightingSceneCell,
 };
 use sequential_storage::Error as SSError;
 use sequential_storage::cache::{Cache, Uncached};
@@ -182,6 +182,9 @@ pub(crate) enum FlashOperationMessage {
         index: u8,
         cells: heapless::Vec<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>,
     },
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    // Animated extension-band selection and the selected effect's parameters
+    LightingExtensionState(LightingExtensionRecord),
     #[cfg(feature = "_ble")]
     // Read bond info for the given slot; storage task replies via `BOND_INFO_RESPONSE`.
     ReadBleBondInfo(u8),
@@ -236,6 +239,8 @@ pub(crate) enum StorageKey {
     LightingRuntimeConditionalSceneTable,
     #[cfg(all(feature = "lighting", feature = "rynk"))]
     LightingRuntimeConditionalSceneShard(u8),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionState,
 }
 
 impl StorageKey {
@@ -327,12 +332,44 @@ pub(crate) enum StorageData {
     LightingRuntimeConditionalSceneShard(
         heapless::Vec<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>,
     ),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionState(LightingExtensionRecord),
 }
 
 impl<'a> PostcardValue<'a> for StorageData {}
 
 /// Persisted lighting scene-table header. Shards beyond `len` are stale
 /// leftovers from a larger previous table and are ignored at load.
+/// Persisted animated-extension selection, plus the parameter values of the
+/// effect it names. Only the selected effect's parameters are kept: they are
+/// what a reboot has to reproduce, and a fixed-size record keeps the write
+/// cost of a single flash entry predictable.
+///
+/// Every index here is validated against the running firmware before it is
+/// applied. Effect and palette lists are compiled in, so inserting one effect
+/// shifts every later index; a record written by an older build would
+/// otherwise resurrect a selection that now names something else.
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct LightingExtensionRecord {
+    pub effect: u8,
+    pub palette: u8,
+    pub value: u8,
+    pub speed: u8,
+    /// Valid entries in `params`; the remainder is padding.
+    pub param_len: u8,
+    pub params: [u8; LIGHTING_EXTENSION_PARAM_CHUNK],
+}
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+impl LightingExtensionRecord {
+    /// The parameter values that belong to [`Self::effect`].
+    pub fn params(&self) -> &[u8] {
+        &self.params[..(self.param_len as usize).min(LIGHTING_EXTENSION_PARAM_CHUNK)]
+    }
+}
+
 #[cfg(all(feature = "lighting", feature = "rynk"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -583,6 +620,17 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
         }
 
         Ok(())
+    }
+
+    /// Read the persisted animated-extension selection at startup, before the
+    /// storage task takes ownership. The caller validates every index against
+    /// its own compiled effect/palette lists before applying it.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub async fn read_lighting_extension_state(&mut self) -> Option<LightingExtensionRecord> {
+        match self.fetch_data(StorageKey::LightingExtensionState).await {
+            Some(StorageData::LightingExtensionState(record)) => Some(record),
+            _ => None,
+        }
     }
 
     /// Read the persisted lighting scene configuration at startup, before the
@@ -943,6 +991,22 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                         &StorageData::BehaviorConfig(behavior_config),
                     )
                     .await
+                }
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingExtensionState(record) => {
+                    // The selection changes on every RGB key press and every
+                    // host edit, so skip writes that would store what is
+                    // already there rather than spending a flash entry.
+                    match self.fetch_data(StorageKey::LightingExtensionState).await {
+                        Some(StorageData::LightingExtensionState(saved)) if saved == record => Ok(()),
+                        _ => {
+                            self.store_data(
+                                StorageKey::LightingExtensionState,
+                                &StorageData::LightingExtensionState(record),
+                            )
+                            .await
+                        }
+                    }
                 }
                 #[cfg(all(feature = "lighting", feature = "rynk"))]
                 FlashOperationMessage::LightingSceneTable { len, policy } => {

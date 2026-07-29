@@ -597,6 +597,64 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
         Ok(state)
     }
 
+    /// Run an extension-band mutation and persist the resulting selection, so
+    /// the effect a user picked is what the board comes up on after a power
+    /// cycle instead of the compiled-in default.
+    async fn extension_mutation(
+        &self,
+        command: StandardCommand<OVERLAY_CAPACITY, SCENE_CAP>,
+    ) -> LightingResult<StandardState> {
+        let state = self.request_core_state(command).await?;
+        self.persist_extension().await;
+        Ok(state)
+    }
+
+    /// Persist by readback rather than from the request, so a mutation the
+    /// engine clamped or partially declined stores what actually took effect.
+    #[cfg(feature = "storage")]
+    async fn persist_extension(&self) {
+        use crate::channel::FLASH_CHANNEL;
+        use crate::storage::{FlashOperationMessage, LightingExtensionRecord};
+
+        let Ok(page) = self.request_extension_page().await else {
+            return;
+        };
+        let Some(state) = page.state else {
+            return;
+        };
+
+        // Only the selected effect's parameters are persisted; `record.effect`
+        // is what they belong to.
+        let mut params = [0u8; LIGHTING_EXTENSION_PARAM_CHUNK];
+        let mut param_len = 0u8;
+        if let Ok(StandardReply::ExtensionParams(page)) = self
+            .request_core(StandardCommand::ReadExtensionParams {
+                effect: state.effect,
+                offset: 0,
+            })
+            .await
+        {
+            for (slot, entry) in params.iter_mut().zip(page.items()) {
+                *slot = entry.value;
+                param_len += 1;
+            }
+        }
+
+        FLASH_CHANNEL
+            .send(FlashOperationMessage::LightingExtensionState(LightingExtensionRecord {
+                effect: state.effect,
+                palette: state.palette,
+                value: state.value,
+                speed: state.speed,
+                param_len,
+                params,
+            }))
+            .await;
+    }
+
+    #[cfg(not(feature = "storage"))]
+    async fn persist_extension(&self) {}
+
     async fn runtime_conditional_scene_mutation(
         &self,
         command: StandardCommand<OVERLAY_CAPACITY, SCENE_CAP>,
@@ -854,15 +912,20 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
             RynkLightingCommand::SetExtensionState {
                 expected_revision,
                 state,
-            } => StandardCommand::SetExtensionIfRevision {
-                expected_revision,
-                state: crate::lighting::compositor::ExtensionState {
-                    effect: state.effect,
-                    palette: state.palette,
-                    value: state.value,
-                    speed: state.speed,
-                },
-            },
+            } => {
+                let state = self
+                    .extension_mutation(StandardCommand::SetExtensionIfRevision {
+                        expected_revision,
+                        state: crate::lighting::compositor::ExtensionState {
+                            effect: state.effect,
+                            palette: state.palette,
+                            value: state.value,
+                            speed: state.speed,
+                        },
+                    })
+                    .await?;
+                return Ok(RynkLightingReadback::State(state_to_wire(state)));
+            }
             RynkLightingCommand::ReadExtensionParams { effect, offset } => {
                 let page = match self
                     .request_core(StandardCommand::ReadExtensionParams { effect, offset })
@@ -894,12 +957,17 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                 effect,
                 index,
                 value,
-            } => StandardCommand::SetExtensionParamIfRevision {
-                expected_revision,
-                effect,
-                index,
-                value,
-            },
+            } => {
+                let state = self
+                    .extension_mutation(StandardCommand::SetExtensionParamIfRevision {
+                        expected_revision,
+                        effect,
+                        index,
+                        value,
+                    })
+                    .await?;
+                return Ok(RynkLightingReadback::State(state_to_wire(state)));
+            }
             RynkLightingCommand::ReadRuntimeConditionalSceneStatus => {
                 let state = self.request_core_state(StandardCommand::ReadState).await?;
                 return Ok(RynkLightingReadback::RuntimeConditionalSceneStatus {
@@ -2029,6 +2097,72 @@ mod tests {
                 assert_eq!(page.items[0].value, 7);
             },
         );
+    }
+
+    /// The selection has to outlive a power cycle: a board that forgets it
+    /// can only ever boot into its compiled-in default, which is what makes
+    /// changing the default a firmware rebuild.
+    #[cfg(feature = "storage")]
+    #[test]
+    fn extension_mutations_persist_the_selection_and_its_parameters() {
+        use crate::storage::FlashOperationMessage;
+
+        run_extension_flow(
+            TestExtensionSource {
+                state: crate::lighting::compositor::ExtensionState {
+                    effect: 0,
+                    palette: 1,
+                    value: 128,
+                    speed: 20,
+                },
+                params: [3, 128],
+            },
+            async |protocol| {
+                let revision = match protocol
+                    .request(RynkLightingCommand::SetExtensionState {
+                        expected_revision: 0,
+                        state: WireExtensionState {
+                            effect: 0,
+                            palette: 2,
+                            value: 200,
+                            speed: 40,
+                        },
+                    })
+                    .await
+                {
+                    Ok(RynkLightingReadback::State(state)) => state.revision,
+                    other => panic!("expected state readback, got {other:?}"),
+                };
+
+                match protocol
+                    .request(RynkLightingCommand::SetExtensionParam {
+                        expected_revision: revision,
+                        effect: 0,
+                        index: 1,
+                        value: 77,
+                    })
+                    .await
+                {
+                    Ok(RynkLightingReadback::State(_)) => {}
+                    other => panic!("expected state readback, got {other:?}"),
+                }
+            },
+        );
+
+        // Persisting by readback means the last record is the settled state,
+        // parameters included, no matter which command produced it.
+        let mut last = None;
+        while let Ok(message) = crate::channel::FLASH_CHANNEL.try_receive() {
+            if let FlashOperationMessage::LightingExtensionState(record) = message {
+                last = Some(record);
+            }
+        }
+        let record = last.expect("extension mutations persist a record");
+        assert_eq!(
+            (record.effect, record.palette, record.value, record.speed),
+            (0, 2, 200, 40)
+        );
+        assert_eq!(record.params(), &[3, 77]);
     }
 
     #[test]
