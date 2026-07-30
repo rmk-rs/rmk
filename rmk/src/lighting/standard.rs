@@ -313,14 +313,20 @@ pub const SCENE_STYLE_CAP: usize = 64;
 /// affect storage: an animated effect costs one pool entry exactly like a solid
 /// one, so blink and breathe need no separate table.
 ///
-/// Releasing a style is deliberately not reference counted. [`Self::unset`]
-/// leaves its pool entry in place, which is harmless -- an unreferenced entry
-/// only occupies a pool slot -- and [`Self::clear`] resets the pool, so the
-/// host's atomic replace rebuilds and re-dedupes it as a matter of course.
+/// Releasing a style needs no reference counts. Whenever an assignment drops
+/// or is overwritten, the index table is scanned for any remaining use of the
+/// old entry and it is freed if there is none. The table is one byte per slot,
+/// so that is a few hundred byte comparisons on an operation the host drives --
+/// never the renderer -- which is cheaper to run than a set of counters is to
+/// keep correct. It also means a session that repaints keys one at a time,
+/// which is what painting in a configurator does, cannot slowly exhaust the
+/// pool the way waiting for an atomic replace to reset it would.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SceneStyles<const LAYERS: usize, const SLOTS: usize> {
     styles: [BuiltinEffect; SCENE_STYLE_CAP],
-    style_len: usize,
+    /// Occupied pool entries. A freed entry leaves a hole that the next
+    /// allocation reuses, so entries never move and no index needs rewriting.
+    used: u64,
     /// Nested rather than `[u8; LAYERS * SLOTS]`, which needs const-generic
     /// arithmetic that is not stable.
     index: [[u8; SLOTS]; LAYERS],
@@ -337,7 +343,7 @@ impl<const LAYERS: usize, const SLOTS: usize> SceneStyles<LAYERS, SLOTS> {
     pub const fn new() -> Self {
         Self {
             styles: [BuiltinEffect::Solid { color: Rgb8::BLACK }; SCENE_STYLE_CAP],
-            style_len: 0,
+            used: 0,
             index: [[0; SLOTS]; LAYERS],
             assigned: 0,
         }
@@ -354,7 +360,7 @@ impl<const LAYERS: usize, const SLOTS: usize> SceneStyles<LAYERS, SLOTS> {
 
     /// Distinct effects currently named. Bounded by [`SCENE_STYLE_CAP`].
     pub const fn style_len(&self) -> usize {
-        self.style_len
+        self.used.count_ones() as usize
     }
 
     /// Paint `(layer, slot)`, reusing a pool entry when the effect is already
@@ -364,24 +370,22 @@ impl<const LAYERS: usize, const SLOTS: usize> SceneStyles<LAYERS, SLOTS> {
         let cursor = self.cursor(layer, slot).ok_or(StandardError::SceneFull {
             capacity: LAYERS * SLOTS,
         })?;
-        let style = match self.styles[..self.style_len].iter().position(|held| *held == effect) {
+        let style = match self.find(effect) {
             Some(existing) => existing,
-            None => {
-                if self.style_len == SCENE_STYLE_CAP {
-                    return Err(StandardError::SceneFull {
-                        capacity: SCENE_STYLE_CAP,
-                    });
-                }
-                self.styles[self.style_len] = effect;
-                self.style_len += 1;
-                self.style_len - 1
-            }
+            None => self.allocate(effect).ok_or(StandardError::SceneFull {
+                capacity: SCENE_STYLE_CAP,
+            })?,
         };
         let (row, column) = cursor;
-        if self.index[row][column] == 0 {
+        let previous = self.index[row][column];
+        if previous == 0 {
             self.assigned += 1;
         }
         self.index[row][column] = (style + 1) as u8;
+        // Overwriting can strand whatever was here before.
+        if previous != 0 && previous != style as u8 + 1 {
+            self.release_if_unused(previous);
+        }
         Ok(())
     }
 
@@ -390,18 +394,20 @@ impl<const LAYERS: usize, const SLOTS: usize> SceneStyles<LAYERS, SLOTS> {
         let Some((row, column)) = self.cursor(layer, slot) else {
             return false;
         };
-        if self.index[row][column] == 0 {
+        let previous = self.index[row][column];
+        if previous == 0 {
             return false;
         }
         self.index[row][column] = 0;
         self.assigned -= 1;
+        self.release_if_unused(previous);
         true
     }
 
     /// Drop every assignment and release the whole style pool.
     pub fn clear(&mut self) {
         self.index = [[0; SLOTS]; LAYERS];
-        self.style_len = 0;
+        self.used = 0;
         self.assigned = 0;
     }
 
@@ -424,6 +430,33 @@ impl<const LAYERS: usize, const SLOTS: usize> SceneStyles<LAYERS, SLOTS> {
                 })
             })
         })
+    }
+
+    fn find(&self, effect: BuiltinEffect) -> Option<usize> {
+        (0..SCENE_STYLE_CAP).find(|&index| self.holds(index) && self.styles[index] == effect)
+    }
+
+    fn allocate(&mut self, effect: BuiltinEffect) -> Option<usize> {
+        let index = (0..SCENE_STYLE_CAP).find(|&index| !self.holds(index))?;
+        self.styles[index] = effect;
+        self.used |= 1 << index;
+        Some(index)
+    }
+
+    const fn holds(&self, index: usize) -> bool {
+        self.used & (1 << index) != 0
+    }
+
+    /// Free the pool entry behind `style` (a one-based index) when no slot
+    /// still points at it.
+    fn release_if_unused(&mut self, style: u8) {
+        let referenced = self
+            .index
+            .iter()
+            .any(|columns| columns.iter().any(|&held| held == style));
+        if !referenced {
+            self.used &= !(1 << (style as usize - 1));
+        }
     }
 
     fn cursor(&self, layer: u8, slot: LedSlot) -> Option<(usize, usize)> {
@@ -4108,23 +4141,46 @@ mod tests {
         assert!(styles.set(0, LedSlot(80), held).is_err());
     }
 
-    /// `unset` deliberately leaves the pool entry behind, and `clear` is what
-    /// releases it -- which is why the host's atomic replace re-dedupes.
+    /// A style is freed as soon as nothing points at it, found by scanning the
+    /// index rather than by keeping counts. A style still in use elsewhere must
+    /// survive its other references going away.
     #[test]
-    fn unset_keeps_the_pool_and_clear_releases_it() {
+    fn dropping_the_last_reference_frees_the_style() {
         let mut styles = SceneStyles::<8, 80>::new();
         let red = BuiltinEffect::solid(Rgb8::new(9, 0, 0));
         styles.set(0, LedSlot(0), red).unwrap();
-        assert_eq!((styles.len(), styles.style_len()), (1, 1));
+        styles.set(0, LedSlot(1), red).unwrap();
+        assert_eq!((styles.len(), styles.style_len()), (2, 1));
 
+        // One of two references: the entry stays.
         assert!(styles.unset(0, LedSlot(0)));
-        assert!(!styles.unset(0, LedSlot(0)), "already unpainted");
-        assert_eq!(styles.len(), 0);
-        assert_eq!(styles.style_len(), 1, "the entry outlives its last use");
-        assert!(styles.get(0, LedSlot(0)).is_none());
+        assert_eq!(styles.style_len(), 1, "still referenced by the other slot");
+        assert_eq!(styles.get(0, LedSlot(1)), Some(red));
+
+        // The last one: the entry goes.
+        assert!(styles.unset(0, LedSlot(1)));
+        assert!(!styles.unset(0, LedSlot(1)), "already unpainted");
+        assert_eq!((styles.len(), styles.style_len()), (0, 0));
 
         styles.clear();
         assert_eq!((styles.len(), styles.style_len()), (0, 0));
+    }
+
+    /// Repainting one key at a time is what a configurator does, and it must
+    /// not slowly exhaust the pool. Waiting for an atomic replace to reset it
+    /// would strand an entry per repaint and run out after 64.
+    #[test]
+    fn repainting_a_slot_does_not_strand_styles() {
+        let mut styles = SceneStyles::<8, 80>::new();
+        for shade in 0..(SCENE_STYLE_CAP as u8 * 3) {
+            let effect = BuiltinEffect::solid(Rgb8::new(shade, shade, shade));
+            styles
+                .set(0, LedSlot(0), effect)
+                .expect("overwriting one slot never needs a second entry");
+            assert_eq!(styles.style_len(), 1, "the previous shade was freed");
+            assert_eq!(styles.get(0, LedSlot(0)), Some(effect));
+        }
+        assert_eq!(styles.len(), 1);
     }
 
     #[test]
