@@ -850,9 +850,12 @@ fn capabilities(binding: RynkLightingController<'_>) -> LightingCapabilities {
     if binding.runtime_conditional_scene_capacity > 0 {
         features.0 |= LightingFeatureFlags::RUNTIME_CONDITIONAL_SCENES;
     }
-    if binding.controls.output_mode_cycle_user_action.is_some() {
-        features.0 |= LightingFeatureFlags::OUTPUT_MODE;
-    }
+    // The standard engine always owns an output-mode policy, so this advertises
+    // the engine's support rather than whether a board happened to bind a key to
+    // cycling it. Gating on the binding meant retiring that binding in favour of
+    // a real keycode silently withdrew the whole capability, and hosts stopped
+    // reading or writing the mode at all.
+    features.0 |= LightingFeatureFlags::OUTPUT_MODE;
     if binding.extension_effects {
         features.0 |= LightingFeatureFlags::EXTENSION_EFFECTS;
     }
