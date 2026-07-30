@@ -32,8 +32,7 @@ pub(super) struct RuntimeConditionalSceneReplace<const CAP: usize> {
     pub(super) id: u32,
     pub(super) expected_revision: u32,
     pub(super) expected_count: u16,
-    pub(super) cells: [RuntimeConditionalSceneCell; CAP],
-    pub(super) len: usize,
+    pub(super) table: RuntimeConditionalSceneTable<CAP>,
     pub(super) last_activity_ms: u64,
 }
 

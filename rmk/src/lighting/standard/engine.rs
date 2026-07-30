@@ -580,8 +580,7 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             id,
             expected_revision,
             expected_count: cell_count,
-            cells: [EMPTY_CONDITIONAL_SCENE_CELL; SCENE_CAP],
-            len: 0,
+            table: RuntimeConditionalSceneTable::new(),
             last_activity_ms: now_ms,
         });
         Ok(id)
@@ -604,12 +603,13 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             .as_mut()
             .filter(|replace| replace.id == transaction_id)
             .ok_or(error)?;
-        if offset as usize != replace.len || replace.len + cells.as_slice().len() > replace.expected_count as usize {
+        if offset as usize != replace.table.len()
+            || replace.table.len() + cells.as_slice().len() > replace.expected_count as usize
+        {
             return Err(StandardError::InvalidConditionalSceneRequest);
         }
         for cell in cells.as_slice() {
-            replace.cells[replace.len] = *cell;
-            replace.len += 1;
+            replace.table.push(*cell)?;
         }
         replace.last_activity_ms = now_ms;
         Ok(())
@@ -632,20 +632,15 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             .as_ref()
             .filter(|replace| replace.id == transaction_id)
             .ok_or(error)?;
-        if replace.len != replace.expected_count as usize {
+        if replace.table.len() != replace.expected_count as usize {
             return Err(StandardError::ConditionalSceneTransactionIncomplete {
                 expected: replace.expected_count,
-                received: replace.len as u16,
+                received: replace.table.len() as u16,
             });
         }
         self.check_revision(replace.expected_revision)?;
         let replace = self.runtime_conditional_scene_replace.take().expect("checked above");
-        self.runtime_conditional_scenes.clear();
-        for cell in &replace.cells[..replace.len] {
-            self.runtime_conditional_scenes
-                .push(*cell)
-                .expect("staged length is table-bounded");
-        }
+        self.runtime_conditional_scenes = replace.table;
         self.runtime_conditional_scene_committed_transaction = Some(transaction_id);
         self.runtime_conditional_scene_expired_transaction = None;
         Ok(true)

@@ -1507,7 +1507,12 @@ fn runtime_conditional_replace_preserves_order_and_output_mode_is_revision_check
         )
         .unwrap();
     assert_eq!(committed.reply.state().unwrap().revision, 1);
-    assert_eq!(engine.runtime_conditional_scenes().as_slice(), cells.as_slice());
+    assert!(
+        engine
+            .runtime_conditional_scenes()
+            .iter()
+            .eq(cells.as_slice().iter().copied())
+    );
 
     let mut frame = LogicalFrame::new(Rgb8::BLACK);
     engine
@@ -1623,6 +1628,84 @@ fn repainting_a_cell_does_not_strand_styles() {
         assert_eq!(table.pool.len(), 1, "the previous shade was freed");
     }
     assert_eq!(table.len(), 1);
+}
+
+#[test]
+fn conditional_rules_share_styles_without_losing_order_or_conditions() {
+    let mut table = RuntimeConditionalSceneTable::<4>::new();
+    let effect = BuiltinEffect::solid(Rgb8::new(9, 8, 7));
+    let rules = [
+        RuntimeConditionalSceneCell {
+            conditions: ConditionSet {
+                layer: Some(crate::lighting::LayerCondition { layer: 2, active: true }),
+                battery: None,
+                output_mode: Some(OutputMode::AlwaysOn),
+            },
+            slot: LedSlot(3),
+            effect,
+        },
+        RuntimeConditionalSceneCell {
+            conditions: ConditionSet {
+                layer: Some(crate::lighting::LayerCondition { layer: 2, active: true }),
+                battery: None,
+                output_mode: Some(OutputMode::PoweredOnly),
+            },
+            slot: LedSlot(3),
+            effect,
+        },
+    ];
+    for rule in rules {
+        table.push(rule).unwrap();
+    }
+
+    assert_eq!(table.pool.len(), 1, "identical effects share one style");
+    assert!(table.iter().eq(rules));
+
+    table.clear();
+    assert!(table.is_empty());
+    assert!(table.pool.is_empty(), "clearing rules releases their styles");
+}
+
+#[test]
+fn conditional_style_capacity_rejects_only_a_new_effect() {
+    let mut table = RuntimeConditionalSceneTable::<{ SCENE_STYLE_CAP + 1 }>::new();
+    for shade in 0..SCENE_STYLE_CAP {
+        table
+            .push(RuntimeConditionalSceneCell {
+                conditions: ConditionSet::default(),
+                slot: LedSlot(shade as u16),
+                effect: BuiltinEffect::solid(Rgb8::new(shade as u8, 0, 0)),
+            })
+            .unwrap();
+    }
+    let held = RuntimeConditionalSceneCell {
+        conditions: ConditionSet::default(),
+        slot: LedSlot(SCENE_STYLE_CAP as u16),
+        effect: BuiltinEffect::solid(Rgb8::new(0, 0, 0)),
+    };
+    table.push(held).unwrap();
+
+    let mut full = RuntimeConditionalSceneTable::<{ SCENE_STYLE_CAP + 1 }>::new();
+    for shade in 0..SCENE_STYLE_CAP {
+        full.push(RuntimeConditionalSceneCell {
+            conditions: ConditionSet::default(),
+            slot: LedSlot(shade as u16),
+            effect: BuiltinEffect::solid(Rgb8::new(shade as u8, 0, 0)),
+        })
+        .unwrap();
+    }
+    let before = full;
+    assert_eq!(
+        full.push(RuntimeConditionalSceneCell {
+            conditions: ConditionSet::default(),
+            slot: LedSlot(SCENE_STYLE_CAP as u16),
+            effect: BuiltinEffect::solid(Rgb8::new(0, 1, 0)),
+        }),
+        Err(StandardError::ConditionalSceneFull {
+            capacity: SCENE_STYLE_CAP,
+        })
+    );
+    assert_eq!(full, before, "a rejected style leaves the staged table intact");
 }
 
 /// Waking is a mask over layers, not one designated layer, and it is settable
