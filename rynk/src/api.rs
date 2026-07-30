@@ -1242,7 +1242,7 @@ impl Client {
                 cells: Default::default(),
             };
             for cell in chunk {
-                request.cells.push(cell.clone()).expect("chunks are chunk-size bounded");
+                request.cells.push(*cell).expect("chunks are chunk-size bounded");
             }
             if let Err(error) = self.put_lighting_runtime_conditional_scene_chunk(request).await {
                 let _ = self
