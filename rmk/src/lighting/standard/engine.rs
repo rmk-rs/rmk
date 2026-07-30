@@ -859,6 +859,14 @@ where
                 self.output_mode = mode;
                 (Invalidation::Render, true)
             }
+            StandardCommand::SetWakeLayersIfRevision {
+                expected_revision,
+                layers,
+            } => {
+                self.check_revision(expected_revision)?;
+                self.controls.wake_layers = layers;
+                (Invalidation::Render, true)
+            }
             StandardCommand::SetOutputBrightness(level) => {
                 self.output_brightness = level;
                 (Invalidation::Render, true)
@@ -1161,10 +1169,7 @@ where
         }
         let context = input.snapshot.lighting_context();
         let powered = context.powered;
-        let wake_active = self
-            .controls
-            .wake_layer
-            .is_some_and(|layer| context.layers.is_active(layer));
+        let wake_active = context.layers.active_bits() & self.controls.wake_layers != 0;
         let effective_output_enabled = wake_active
             || matches!(self.output_mode, OutputMode::AlwaysOn)
             || matches!(self.output_mode, OutputMode::PoweredOnly) && powered;

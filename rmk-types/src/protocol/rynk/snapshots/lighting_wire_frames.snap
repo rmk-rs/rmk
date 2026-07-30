@@ -42,7 +42,7 @@ GetLightingKeys reply                                  04 11 09 01 01 06 01 01 0
 GetLightingKeys request                                05 11 09 01 01 01 00
 GetLightingLeds reply                                  04 05 09 01 01 11 01 01 01 2a 01 01 02 01 ff 01 80 04 80 01 03 01 00
 GetLightingLeds request                                05 05 09 01 01 01 00
-GetLightingOutputMode reply                            04 20 09 01 01 03 02 01 09 01 01 01 0d 01 02 01 2a 01 02 09 01 02 09 01 01 01 01 02 09 00
+GetLightingOutputMode reply                            04 20 09 01 01 03 02 01 08 01 01 01 0d 04 01 2a 01 02 09 01 02 09 01 01 01 01 02 09 00
 GetLightingOutputMode request                          04 20 09 01 00
 GetLightingOutputs reply                               04 08 09 01 01 08 01 01 01 01 02 28 14 01 00
 GetLightingOutputs request                             05 08 09 01 01 01 00
@@ -80,7 +80,7 @@ SetLightingExtensionState reply                        04 23 09 01 01 0b 09 01 c
 SetLightingExtensionState request                      09 23 09 01 09 01 02 03 04 00
 SetLightingLayerPolicy reply                           04 1a 09 01 01 0b 09 01 c8 01 0a 14 1e 28 01 01 00
 SetLightingLayerPolicy request                         05 1a 09 01 0b 01 00
-SetLightingOutputMode reply                            04 24 09 01 01 03 02 01 09 01 01 01 0d 01 02 01 2a 01 02 09 01 02 09 01 01 01 01 02 09 00
+SetLightingOutputMode reply                            04 24 09 01 01 03 02 01 08 01 01 01 0d 04 01 2a 01 02 09 01 02 09 01 01 01 01 02 09 00
 SetLightingOutputMode request                          06 24 09 01 09 01 00
 SetLightingOverlay inner Err(UnknownLed)               04 0a 09 01 05 01 06 e7 07 00
 SetLightingOverlay outer Err(Locked)                   06 0a 09 01 01 07 00

@@ -501,7 +501,7 @@ fn output_mode_cycles_and_wake_layer_temporarily_overrides_policy() {
     let mut engine = engine().with_controls(LightingControls {
         output_toggle_user_action: None,
         output_mode_cycle_user_action: Some(13),
-        wake_layer: Some(2),
+        wake_layers: 1 << 2,
         initial_output_mode: OutputMode::PoweredOnly,
         powered_only_scope: super::super::source::PoweredOnlyScope::Local,
         output_mode_indicator: Some(super::super::source::OutputModeIndicator {
@@ -1625,6 +1625,66 @@ fn repainting_a_cell_does_not_strand_styles() {
     assert_eq!(table.len(), 1);
 }
 
+/// Waking is a mask over layers, not one designated layer, and it is settable
+/// at runtime -- which is what keeps "which layers wake lighting" out of the
+/// firmware image.
+#[test]
+fn wake_layers_accept_any_layer_set_and_are_settable() {
+    let mut engine: Engine = StandardLightingEngine::new(
+        BackgroundState {
+            value: 10,
+            ..BackgroundState::default()
+        },
+        LayerScenes {
+            scenes: &[],
+            policy: LayerPolicy::EffectiveOnly,
+        },
+        EmptySource,
+        EmptySource,
+    )
+    .with_controls(LightingControls {
+        // Off unless woken, so "is anything lit" answers "did a layer wake it".
+        initial_output_mode: OutputMode::AlwaysOff,
+        wake_layers: (1 << 2) | (1 << 5),
+        ..LightingControls::default()
+    });
+
+    let lit = |engine: &mut Engine, layer: u8| {
+        let snapshot = context(layer);
+        let mut frame = LogicalFrame::new(Rgb8::BLACK);
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 0,
+                    snapshot: &snapshot,
+                },
+                &mut frame,
+            )
+            .unwrap();
+        frame.as_slice()[0] != Rgb8::BLACK
+    };
+
+    // Either masked layer wakes it; an unmasked one does not.
+    assert!(lit(&mut engine, 2));
+    assert!(lit(&mut engine, 5), "a mask holds more than one layer");
+    assert!(!lit(&mut engine, 3));
+
+    // And the mask is replaceable at runtime, so this is not a compiled choice.
+    let revision = engine.state().revision;
+    engine
+        .handle_command(
+            0,
+            StandardCommand::SetWakeLayersIfRevision {
+                expected_revision: revision,
+                layers: 1 << 3,
+            },
+            &context(3),
+        )
+        .unwrap();
+    assert!(lit(&mut engine, 3));
+    assert!(!lit(&mut engine, 2), "the old mask no longer wakes");
+}
+
 /// The point of the output-mode condition: the mode indicator stops being
 /// something the board compiles in and becomes an ordinary runtime rule a host
 /// can edit. A rule gated on one policy lights only under that policy, and
@@ -1663,7 +1723,7 @@ fn output_mode_conditions_select_between_runtime_rules() {
         powered: true,
     };
     let mut frame = LogicalFrame::new(Rgb8::BLACK);
-    let mut render = |engine: &mut ConditionalEngine, frame: &mut LogicalFrame<Rgb8, 2>| {
+    let render = |engine: &mut ConditionalEngine, frame: &mut LogicalFrame<Rgb8, 2>| {
         engine
             .render(
                 RenderInput {

@@ -11,13 +11,13 @@ mod topics;
 
 use embassy_futures::select::{Either, select};
 use embedded_io_async::{Read, Write};
-use postcard::experimental::max_size::MaxSize;
 #[cfg(feature = "lighting")]
 pub use lighting::{
     RYNK_LIGHTING_TRANSACTION_CAPACITY, RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox,
     RynkLightingReadback, StandardRynkLightingAdapter, install_lighting_runtime_conditional_scenes,
     install_lighting_scenes,
 };
+use postcard::experimental::max_size::MaxSize;
 use rmk_types::constants::RYNK_BUFFER_SIZE;
 use rmk_types::protocol::rynk::{
     BuildInfo, Cmd, Deframer, FirmwareVersion, RYNK_HEADER_SIZE, RynkError, RynkMessage, command, encode_frame,
@@ -179,6 +179,7 @@ impl<'a> RynkService<'a> {
             | Cmd::SetLightingExtensionState
             | Cmd::SetLightingExtensionParam
             | Cmd::SetLightingOutputMode
+            | Cmd::SetLightingWakeLayers
             | Cmd::BeginLightingRuntimeConditionalSceneReplace
             | Cmd::PutLightingRuntimeConditionalSceneChunk
             | Cmd::CommitLightingRuntimeConditionalSceneReplace
@@ -336,6 +337,7 @@ impl<'a> RynkService<'a> {
             Cmd::SetLightingExtensionParam => Serve::<command::SetLightingExtensionParam, _>::serve(self, msg).await,
             #[cfg(feature = "lighting")]
             Cmd::SetLightingOutputMode => Serve::<command::SetLightingOutputMode, _>::serve(self, msg).await,
+            Cmd::SetLightingWakeLayers => Serve::<command::SetLightingWakeLayers, _>::serve(self, msg).await,
             #[cfg(feature = "lighting")]
             Cmd::GetLightingRuntimeConditionalSceneStatus => {
                 Serve::<command::GetLightingRuntimeConditionalSceneStatus, _>::serve(self, msg).await

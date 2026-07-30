@@ -52,7 +52,7 @@ use crate::protocol::rynk::{
     PutLightingOverlayChunkRequest, PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest,
     SetLightingExtensionParamRequest, SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest,
     SetLightingOutputModeRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
-    UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
+    SetLightingWakeLayersRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
 #[cfg(all(feature = "_ble", feature = "split"))]
 use crate::protocol::rynk::{SplitCentralLatencyPolicy, SplitCentralLatencyState};
@@ -485,6 +485,10 @@ endpoints! {
     /// Set one effect parameter when the state revision matches.
     #[cfg(feature = "lighting")]
     SetLightingExtensionParam = 0x092C: SetLightingExtensionParamRequest => LightingStateResult;
+    /// Replace the wake-layer mask. Policy rather than lighting content, but
+    /// dynamic so which layers wake lighting is not a firmware rebuild.
+    #[cfg(feature = "lighting")]
+    SetLightingWakeLayers = 0x092D: SetLightingWakeLayersRequest => LightingOutputModeStateResult;
 }
 
 // Define topics: `Name = value: Payload;`

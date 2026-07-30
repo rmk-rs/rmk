@@ -654,7 +654,9 @@ wire_type! {
     /// Key/layer controls that gate the configured lighting presentation.
     pub struct LightingControls {
         pub output_toggle_user_action: Option<u8>,
-        pub wake_layer: Option<u8>,
+        /// Layers that wake lighting while held, as a bitmask. A set rather
+        /// than a single layer so waking is not tied to one "magic" layer.
+        pub wake_layers: u64,
     }
 }
 
@@ -695,7 +697,9 @@ wire_type! {
         pub effective_enabled: bool,
         pub powered_only_scope: LightingPoweredOnlyScope,
         pub cycle_user_action: Option<u8>,
-        pub wake_layer: Option<u8>,
+        /// Layers that wake lighting while held, as a bitmask. A set rather
+        /// than a single layer so waking is not tied to one "magic" layer.
+        pub wake_layers: u64,
         pub indicator: Option<LightingOutputModeIndicator>,
     }
 }
@@ -888,6 +892,15 @@ wire_type! {
     pub struct SetLightingOutputModeRequest {
         pub expected_revision: u32,
         pub mode: LightingOutputMode,
+    }
+}
+
+wire_type! {
+    /// Replace the set of layers that wake lighting while held. A mask, so any
+    /// combination of layers can wake it rather than one designated layer.
+    pub struct SetLightingWakeLayersRequest {
+        pub expected_revision: u32,
+        pub layers: u64,
     }
 }
 

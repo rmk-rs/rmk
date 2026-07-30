@@ -1443,7 +1443,7 @@ fn lighting_wire_frames_locked() {
         effective_enabled: true,
         powered_only_scope: LightingPoweredOnlyScope::Local,
         cycle_user_action: Some(13),
-        wake_layer: Some(2),
+        wake_layers: 1 << 2,
         indicator: Some(LightingOutputModeIndicator {
             led_id: led.id,
             always_on: LightingEffect::Solid {

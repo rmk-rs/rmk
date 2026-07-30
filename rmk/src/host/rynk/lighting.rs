@@ -105,7 +105,7 @@ impl<'a> RynkLightingController<'a> {
             controls: LightingControls {
                 output_toggle_user_action: None,
                 output_mode_cycle_user_action: None,
-                wake_layer: None,
+                wake_layers: 0,
                 initial_output_mode: crate::lighting::OutputMode::AlwaysOn,
                 powered_only_scope: crate::lighting::PoweredOnlyScope::Authority,
                 output_mode_indicator: None,
@@ -149,7 +149,7 @@ impl<'a> RynkLightingController<'a> {
     pub(super) const fn controls_to_wire(&self) -> WireLightingControls {
         WireLightingControls {
             output_toggle_user_action: self.controls.output_toggle_user_action,
-            wake_layer: self.controls.wake_layer,
+            wake_layers: self.controls.wake_layers,
         }
     }
 
@@ -170,7 +170,7 @@ impl<'a> RynkLightingController<'a> {
                 crate::lighting::PoweredOnlyScope::Local => rmk_types::protocol::rynk::LightingPoweredOnlyScope::Local,
             },
             cycle_user_action: self.controls.output_mode_cycle_user_action,
-            wake_layer: self.controls.wake_layer,
+            wake_layers: self.controls.wake_layers,
             indicator: self.controls.output_mode_indicator.and_then(|indicator| {
                 self.descriptor
                     .topology
@@ -409,6 +409,10 @@ pub(super) enum RynkLightingCommand {
     SetOutputMode {
         expected_revision: u32,
         mode: WireLightingOutputMode,
+    },
+    SetWakeLayers {
+        expected_revision: u32,
+        layers: u64,
     },
     ReadOverlay {
         expected_revision: u32,
@@ -768,6 +772,18 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                     .request_core_state(StandardCommand::SetOutputModeIfRevision {
                         expected_revision,
                         mode: output_mode_from_wire(mode),
+                    })
+                    .await?;
+                return Ok(RynkLightingReadback::OutputMode(state));
+            }
+            RynkLightingCommand::SetWakeLayers {
+                expected_revision,
+                layers,
+            } => {
+                let state = self
+                    .request_core_state(StandardCommand::SetWakeLayersIfRevision {
+                        expected_revision,
+                        layers,
                     })
                     .await?;
                 return Ok(RynkLightingReadback::OutputMode(state));

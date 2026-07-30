@@ -44,6 +44,11 @@ pub enum StandardCommand<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
         expected_revision: u32,
         mode: OutputMode,
     },
+    /// Replace the wake-layer mask; see [`LightingControls::wake_layers`].
+    SetWakeLayersIfRevision {
+        expected_revision: u32,
+        layers: u64,
+    },
     SetOutputBrightness(u8),
     SetBackground(BackgroundState),
     PatchBackground(BackgroundPatch),

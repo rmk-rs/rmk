@@ -12,7 +12,7 @@ use rmk_types::protocol::rynk::command::{
     GetLightingScenes, GetLightingState, GetLightingZoneMemberships, GetLightingZones,
     PutLightingRuntimeConditionalSceneChunk, SetLightingExtensionParam, SetLightingExtensionState,
     SetLightingLayerPolicy, SetLightingOutputMode, SetLightingOverlay, SetLightingSceneCell, SetLightingState,
-    UnsetLightingOverlay, UnsetLightingSceneCell,
+    SetLightingWakeLayers, UnsetLightingOverlay, UnsetLightingSceneCell,
 };
 use rmk_types::protocol::rynk::{
     AbortLightingOverlayReplaceRequest, AbortLightingRuntimeConditionalSceneReplaceRequest,
@@ -41,7 +41,7 @@ use rmk_types::protocol::rynk::{
     PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest, RynkError, RynkMessage,
     SetLightingExtensionParamRequest, SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest,
     SetLightingOutputModeRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
-    UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
+    SetLightingWakeLayersRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
 
 use super::super::lighting::{
@@ -123,6 +123,24 @@ impl Handle<SetLightingOutputMode> for RynkService<'_> {
                 .request(RynkLightingCommand::SetOutputMode {
                     expected_revision: req.expected_revision,
                     mode: req.mode,
+                })
+                .await
+                .and_then(|reply| match reply {
+                    RynkLightingReadback::OutputMode(state) => Ok(controller.output_mode_to_wire(state)),
+                    _ => Err(LightingError::InvalidRequest),
+                }),
+            Err(error) => Err(error),
+        })
+    }
+}
+
+impl Handle<SetLightingWakeLayers> for RynkService<'_> {
+    async fn handle(&self, req: SetLightingWakeLayersRequest) -> Result<LightingOutputModeStateResult, RynkError> {
+        Ok(match controller(self) {
+            Ok(controller) => controller
+                .request(RynkLightingCommand::SetWakeLayers {
+                    expected_revision: req.expected_revision,
+                    layers: req.layers,
                 })
                 .await
                 .and_then(|reply| match reply {
@@ -1899,7 +1917,7 @@ mod tests {
             let controls = LightingControls {
                 output_toggle_user_action: Some(13),
                 output_mode_cycle_user_action: Some(14),
-                wake_layer: Some(1),
+                wake_layers: 1 << 1,
                 initial_output_mode: OutputMode::PoweredOnly,
                 powered_only_scope: crate::lighting::PoweredOnlyScope::Local,
                 output_mode_indicator: Some(OutputModeIndicator {
@@ -1982,7 +2000,7 @@ mod tests {
                 assert_eq!(conditional_status.topology_revision, 7);
                 assert_eq!(conditional_status.cell_len, 1);
                 assert_eq!(conditional_status.controls.output_toggle_user_action, Some(13));
-                assert_eq!(conditional_status.controls.wake_layer, Some(1));
+                assert_eq!(conditional_status.controls.wake_layers, 1 << 1);
                 let output_mode = call::<GetLightingOutputMode>(&service, &session, &())
                     .await
                     .unwrap()
@@ -1992,7 +2010,7 @@ mod tests {
                     rmk_types::protocol::rynk::LightingOutputMode::PoweredOnly
                 );
                 assert_eq!(output_mode.cycle_user_action, Some(14));
-                assert_eq!(output_mode.wake_layer, Some(1));
+                assert_eq!(output_mode.wake_layers, 1 << 1);
                 assert_eq!(output_mode.indicator.unwrap().led_id, LightingLedId(10));
                 let conditional = call::<GetLightingConditionalScenes>(
                     &service,

@@ -239,7 +239,12 @@ pub struct LightingControls {
     /// Legacy two-state action retained for existing boards.
     pub output_toggle_user_action: Option<u8>,
     pub output_mode_cycle_user_action: Option<u8>,
-    pub wake_layer: Option<u8>,
+    /// Layers that temporarily wake lighting while held, as a bitmask over
+    /// [`LayerState`](crate::lighting::LayerState)'s layers. A set rather than
+    /// one layer, so waking is not limited to a single "magic" layer, and a
+    /// mask rather than a list because the active layers are already one --
+    /// the check is a single AND. Zero means no layer wakes lighting.
+    pub wake_layers: u64,
     pub initial_output_mode: OutputMode,
     pub powered_only_scope: PoweredOnlyScope,
     pub output_mode_indicator: Option<OutputModeIndicator>,
