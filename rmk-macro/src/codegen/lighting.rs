@@ -230,10 +230,7 @@ pub(crate) fn expand_lighting_renderer_config(lighting: Option<&Lighting>) -> To
         Some(action) => quote! { Some(#action) },
         None => quote! { None },
     };
-    let wake_layer = match lighting.controls.wake_layer {
-        Some(layer) => quote! { Some(#layer) },
-        None => quote! { None },
-    };
+    let wake_layers = lighting.controls.wake_layers;
     let initial_output_mode = match lighting.controls.initial_output_mode {
         LightingOutputMode::AlwaysOn => quote! { ::rmk::lighting::OutputMode::AlwaysOn },
         LightingOutputMode::AlwaysOff => quote! { ::rmk::lighting::OutputMode::AlwaysOff },
@@ -291,7 +288,7 @@ pub(crate) fn expand_lighting_renderer_config(lighting: Option<&Lighting>) -> To
             ::rmk::lighting::LightingControls {
                 output_toggle_user_action: #output_toggle_user_action,
                 output_mode_cycle_user_action: #output_mode_cycle_user_action,
-                wake_layer: #wake_layer,
+                wake_layers: #wake_layers,
                 initial_output_mode: #initial_output_mode,
                 powered_only_scope: #powered_only_scope,
                 output_mode_indicator: #output_mode_indicator,

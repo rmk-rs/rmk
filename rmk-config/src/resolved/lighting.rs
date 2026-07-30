@@ -142,7 +142,7 @@ pub struct LightingOutputModeIndicator {
 pub struct LightingControls {
     pub output_toggle_user_action: Option<u8>,
     pub output_mode_cycle_user_action: Option<u8>,
-    pub wake_layer: Option<u8>,
+    pub wake_layers: u64,
     pub initial_output_mode: LightingOutputMode,
     pub powered_only_scope: LightingPoweredOnlyScope,
     pub output_mode_indicator: Option<LightingOutputModeIndicator>,
@@ -309,18 +309,20 @@ impl crate::KeyboardTomlConfig {
             .controls
             .clone()
             .map_or(Ok(LightingControls::default()), |controls| {
-                if let Some(layer) = controls.wake_layer
-                    && layer >= keymap.layers
-                {
-                    return Err(format!(
-                        "lighting.controls wake_layer {} is outside keymap layer count {}",
-                        layer, keymap.layers
-                    ));
+                let mut wake_layers = 0u64;
+                for layer in controls.wake_layers.clone().unwrap_or_default() {
+                    if layer >= keymap.layers {
+                        return Err(format!(
+                            "lighting.controls wake_layers {} is outside keymap layer count {}",
+                            layer, keymap.layers
+                        ));
+                    }
+                    wake_layers |= 1 << layer;
                 }
                 Ok(LightingControls {
                     output_toggle_user_action: controls.output_toggle_user_action,
                     output_mode_cycle_user_action: controls.output_mode_cycle_user_action,
-                    wake_layer: controls.wake_layer,
+                    wake_layers,
                     initial_output_mode: match controls.initial_output_mode {
                         LightingOutputModeToml::AlwaysOn => LightingOutputMode::AlwaysOn,
                         LightingOutputModeToml::AlwaysOff => LightingOutputMode::AlwaysOff,
@@ -883,7 +885,7 @@ effect = {{ kind = "solid", color = [9, 8, 7] }}
 [lighting.controls]
 output_toggle_user_action = 13
 output_mode_cycle_user_action = 14
-wake_layer = 1
+wake_layers = [1]
 initial_output_mode = "powered_only"
 powered_only_scope = "local"
 
@@ -900,12 +902,12 @@ powered_only = {{ kind = "solid", color = [0, 0, 9] }}
         let lighting = config.lighting(&layout, &keymap).unwrap().unwrap();
         assert_eq!(lighting.controls.output_toggle_user_action, Some(13));
         assert_eq!(lighting.controls.output_mode_cycle_user_action, Some(14));
-        assert_eq!(lighting.controls.wake_layer, Some(1));
+        assert_eq!(lighting.controls.wake_layers, 1 << 1);
         assert_eq!(lighting.controls.initial_output_mode, LightingOutputMode::PoweredOnly);
         assert_eq!(lighting.controls.powered_only_scope, LightingPoweredOnlyScope::Local);
         assert_eq!(lighting.controls.output_mode_indicator.unwrap().slot, 0);
 
-        let invalid = parse(&source.replace("wake_layer = 1", "wake_layer = 2"));
+        let invalid = parse(&source.replace("wake_layers = [1]", "wake_layers = [2]"));
         let error = invalid.lighting(&layout, &keymap).unwrap_err();
         assert!(error.contains("outside keymap layer count"), "{error}");
     }

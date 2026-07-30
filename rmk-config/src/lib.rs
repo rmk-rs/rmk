@@ -615,7 +615,9 @@ pub(crate) struct LightingTomlConfig {
 pub(crate) struct LightingControlsTomlConfig {
     pub output_toggle_user_action: Option<u8>,
     pub output_mode_cycle_user_action: Option<u8>,
-    pub wake_layer: Option<u8>,
+    /// Layers that wake lighting while held. A list, since any set of layers
+    /// may wake it; the host can replace the resolved mask at runtime.
+    pub wake_layers: Option<Vec<u8>>,
     #[serde(default)]
     pub initial_output_mode: LightingOutputModeToml,
     #[serde(default)]
