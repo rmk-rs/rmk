@@ -1459,7 +1459,8 @@ fn effect_to_wire(effect: BuiltinEffect) -> rmk_types::protocol::rynk::LightingE
 
 fn condition_set_to_wire(conditions: crate::lighting::ConditionSet) -> rmk_types::protocol::rynk::LightingConditionSet {
     use rmk_types::protocol::rynk::{
-        LightingBatteryCondition, LightingChargeCondition, LightingConditionSet, LightingLayerCondition, LightingNodeId,
+        LightingBatteryCondition, LightingChargeCondition, LightingConditionSet, LightingLayerCondition,
+        LightingNodeId, LightingOutputMode,
     };
 
     use crate::lighting::ChargeCondition;
@@ -1479,6 +1480,11 @@ fn condition_set_to_wire(conditions: crate::lighting::ConditionSet) -> rmk_types
                 ChargeCondition::Discharging => LightingChargeCondition::Discharging,
                 ChargeCondition::Unknown => LightingChargeCondition::Unknown,
             },
+        }),
+        output_mode: conditions.output_mode.map(|mode| match mode {
+            crate::lighting::OutputMode::AlwaysOn => LightingOutputMode::AlwaysOn,
+            crate::lighting::OutputMode::AlwaysOff => LightingOutputMode::AlwaysOff,
+            crate::lighting::OutputMode::PoweredOnly => LightingOutputMode::PoweredOnly,
         }),
     }
 }
@@ -1505,6 +1511,11 @@ fn condition_set_from_wire(
                 LightingChargeCondition::Discharging => ChargeCondition::Discharging,
                 LightingChargeCondition::Unknown => ChargeCondition::Unknown,
             },
+        }),
+        output_mode: conditions.output_mode.map(|mode| match mode {
+            rmk_types::protocol::rynk::LightingOutputMode::AlwaysOn => crate::lighting::OutputMode::AlwaysOn,
+            rmk_types::protocol::rynk::LightingOutputMode::AlwaysOff => crate::lighting::OutputMode::AlwaysOff,
+            rmk_types::protocol::rynk::LightingOutputMode::PoweredOnly => crate::lighting::OutputMode::PoweredOnly,
         }),
     }
 }

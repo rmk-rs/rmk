@@ -1181,6 +1181,9 @@ where
             slot: indicator.slot,
             effect: indicator.effect(self.output_mode),
         });
+        // Captured before the destructuring below borrows the rest of `self`;
+        // the runtime conditional source needs it to evaluate output-mode rules.
+        let output_mode = self.output_mode;
         let Self {
             compositor,
             background,
@@ -1222,6 +1225,7 @@ where
         let mut runtime_conditional_source = RuntimeConditionalSource {
             table: runtime_conditional_scenes,
             batteries: *battery_status,
+            output_mode,
         };
         transaction.apply(priority::STATUS, &mut runtime_conditional_source)?;
         if wake_active && let Some(indicator_cell) = indicator_cell.as_ref() {

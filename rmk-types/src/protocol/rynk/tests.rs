@@ -1470,6 +1470,7 @@ fn lighting_wire_frames_locked() {
                 max_level: Some(80),
                 charge: LightingChargeCondition::Discharging,
             }),
+            output_mode: None,
         },
         led_id: led.id,
         effect: scene_cell.effect,

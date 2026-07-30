@@ -181,6 +181,10 @@ pub struct BatteryCondition {
 pub struct ConditionSet {
     pub layer: Option<LayerCondition>,
     pub battery: Option<BatteryCondition>,
+    /// Satisfied when the live output-mode policy equals this. Sources that
+    /// cannot observe the policy treat it as unsatisfiable rather than true,
+    /// so a rule gated on it never fires where it cannot be evaluated.
+    pub output_mode: Option<OutputMode>,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -242,11 +246,21 @@ pub struct LightingControls {
 }
 
 impl ConditionSet {
-    pub(crate) fn matches<Context, Batteries>(&self, context: &Context, batteries: &Batteries) -> bool
+    pub(crate) fn matches<Context, Batteries>(
+        &self,
+        context: &Context,
+        batteries: &Batteries,
+        output_mode: Option<OutputMode>,
+    ) -> bool
     where
         Context: LightingContextProvider,
         Batteries: BatteryStatusProvider + ?Sized,
     {
+        if let Some(wanted) = self.output_mode
+            && output_mode != Some(wanted)
+        {
+            return false;
+        }
         if let Some(condition) = self.layer
             && context.lighting_context().layers.is_active(condition.layer) != condition.active
         {
@@ -311,7 +325,7 @@ impl<'a, E, Batteries: ?Sized> ConditionalScenes<'a, E, Batteries> {
         for cell in self
             .cells
             .iter()
-            .filter(|cell| cell.conditions.matches(context, self.batteries))
+            .filter(|cell| cell.conditions.matches(context, self.batteries, None))
         {
             if wanted == 0 {
                 return cell;
@@ -331,7 +345,7 @@ where
     fn len(&self, input: &RenderInput<'_, Context>) -> usize {
         self.cells
             .iter()
-            .filter(|cell| cell.conditions.matches(input.context, self.batteries))
+            .filter(|cell| cell.conditions.matches(input.context, self.batteries, None))
             .count()
     }
 
@@ -744,6 +758,7 @@ mod tests {
                         max_level: None,
                         charge: ChargeCondition::Any,
                     }),
+                    output_mode: None,
                 },
                 slot: LedSlot(0),
                 effect: BuiltinEffect::solid(GREEN),
@@ -757,6 +772,7 @@ mod tests {
                         max_level: None,
                         charge: ChargeCondition::Any,
                     }),
+                    output_mode: None,
                 },
                 slot: LedSlot(1),
                 effect: BuiltinEffect::solid(BLUE),
@@ -771,6 +787,7 @@ mod tests {
                         max_level: Some(40),
                         charge: ChargeCondition::Discharging,
                     }),
+                    output_mode: None,
                 },
                 slot: LedSlot(0),
                 effect: BuiltinEffect::solid(RED),

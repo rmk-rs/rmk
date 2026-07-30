@@ -4,7 +4,7 @@ use crate::lighting::Rgb8;
 use crate::lighting::compositor::{Contribution, LightingSource, RenderInput as SourceRenderInput};
 use crate::lighting::context::LightingContextProvider;
 use crate::lighting::effect::{BuiltinEffect, LightingEffect};
-use crate::lighting::source::{BatteryStatusProvider, ConditionSet};
+use crate::lighting::source::{BatteryStatusProvider, ConditionSet, OutputMode};
 use crate::lighting::topology::LedSlot;
 
 /// One ordered, runtime-authored conditional rule.
@@ -19,6 +19,7 @@ pub(super) const EMPTY_CONDITIONAL_SCENE_CELL: RuntimeConditionalSceneCell = Run
     conditions: ConditionSet {
         layer: None,
         battery: None,
+        output_mode: None,
     },
     slot: LedSlot(0),
     effect: BuiltinEffect::Solid { color: Rgb8::BLACK },
@@ -119,6 +120,9 @@ impl<const CAP: usize> Default for RuntimeConditionalSceneTable<CAP> {
 pub(super) struct RuntimeConditionalSource<'a, Batteries: ?Sized, const CAP: usize> {
     pub(super) table: &'a RuntimeConditionalSceneTable<CAP>,
     pub(super) batteries: &'a Batteries,
+    /// The engine owns the policy, so unlike the board's compiled source this
+    /// one can evaluate an output-mode condition.
+    pub(super) output_mode: OutputMode,
 }
 
 impl<Context, Batteries, const CAP: usize> LightingSource<Rgb8, Context>
@@ -131,7 +135,10 @@ where
         self.table
             .as_slice()
             .iter()
-            .filter(|cell| cell.conditions.matches(input.context, self.batteries))
+            .filter(|cell| {
+                cell.conditions
+                    .matches(input.context, self.batteries, Some(self.output_mode))
+            })
             .count()
     }
 
@@ -139,7 +146,10 @@ where
         self.table
             .as_slice()
             .iter()
-            .filter(|cell| cell.conditions.matches(input.context, self.batteries))
+            .filter(|cell| {
+                cell.conditions
+                    .matches(input.context, self.batteries, Some(self.output_mode))
+            })
             .nth(index)
             .expect("LightingSource index must be below len")
             .slot
@@ -150,7 +160,10 @@ where
             .table
             .as_slice()
             .iter()
-            .filter(|cell| cell.conditions.matches(input.context, self.batteries))
+            .filter(|cell| {
+                cell.conditions
+                    .matches(input.context, self.batteries, Some(self.output_mode))
+            })
             .nth(index)
             .expect("LightingSource index must be below len");
         Contribution::Opaque(cell.effect.sample(input.now_ms))

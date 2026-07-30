@@ -1368,6 +1368,7 @@ mod tests {
                 max_level: Some(40),
                 charge: ChargeCondition::Discharging,
             }),
+            output_mode: None,
         },
         slot: crate::lighting::LedSlot(0),
         effect: BuiltinEffect::Solid {
@@ -1433,7 +1434,9 @@ mod tests {
         // header + postcard payload.
         let header = RynkHeader { cmd: E::CMD, seq: 1 };
         buffer[..RYNK_HEADER_SIZE].copy_from_slice(&header.to_bytes());
-        let payload_len = postcard::to_slice(request, &mut buffer[RYNK_HEADER_SIZE..]).unwrap().len();
+        let payload_len = postcard::to_slice(request, &mut buffer[RYNK_HEADER_SIZE..])
+            .unwrap()
+            .len();
         let req_len = RYNK_HEADER_SIZE + payload_len;
         let mut message = RynkMessage::from_decoded(&mut buffer[..], req_len);
         service.dispatch(session, &mut message).await.unwrap();
@@ -2271,6 +2274,7 @@ mod tests {
                     conditions: rmk_types::protocol::rynk::LightingConditionSet {
                         layer: Some(rmk_types::protocol::rynk::LightingLayerCondition { layer: 1, active: true }),
                         battery: None,
+                        output_mode: None,
                     },
                     led_id: LightingLedId(42),
                     effect: rmk_types::protocol::rynk::LightingEffect::Solid {

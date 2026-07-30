@@ -1471,6 +1471,7 @@ fn runtime_conditional_replace_preserves_order_and_output_mode_is_revision_check
                     max_level: Some(75),
                     charge: ChargeCondition::Discharging,
                 }),
+                output_mode: None,
             },
             slot: LedSlot(1),
             effect: BuiltinEffect::Solid { color: RED },
@@ -1481,6 +1482,7 @@ fn runtime_conditional_replace_preserves_order_and_output_mode_is_revision_check
             conditions: ConditionSet {
                 layer: Some(LayerCondition { layer: 0, active: true }),
                 battery: None,
+                output_mode: None,
             },
             slot: LedSlot(1),
             effect: BuiltinEffect::Solid { color: GREEN },
@@ -1623,6 +1625,77 @@ fn repainting_a_cell_does_not_strand_styles() {
     assert_eq!(table.len(), 1);
 }
 
+/// The point of the output-mode condition: the mode indicator stops being
+/// something the board compiles in and becomes an ordinary runtime rule a host
+/// can edit. A rule gated on one policy lights only under that policy, and
+/// switching policy changes which rule is eligible without touching the table.
+#[test]
+fn output_mode_conditions_select_between_runtime_rules() {
+    let rule = |mode: OutputMode, color: Rgb8| RuntimeConditionalSceneCell {
+        conditions: ConditionSet {
+            layer: None,
+            battery: None,
+            output_mode: Some(mode),
+        },
+        slot: LedSlot(0),
+        effect: BuiltinEffect::Solid { color },
+    };
+
+    type ConditionalEngine = StandardLightingEngine<'static, EmptySource, EmptySource, 2, 2, 4>;
+    let mut engine: ConditionalEngine = StandardLightingEngine::new(
+        BackgroundState::default(),
+        LayerScenes {
+            scenes: &[],
+            policy: LayerPolicy::EffectiveOnly,
+        },
+        EmptySource,
+        EmptySource,
+    );
+    for cell in [rule(OutputMode::AlwaysOn, GREEN), rule(OutputMode::PoweredOnly, RED)] {
+        engine.install_runtime_conditional_scene_cell(cell).unwrap();
+    }
+
+    // Powered, so both AlwaysOn and PoweredOnly actually render; AlwaysOff
+    // would blank the frame outright and prove nothing about conditions.
+    let snapshot = LightingContext {
+        layers: LayerState::new(0, 0, 1),
+        indicators: Default::default(),
+        powered: true,
+    };
+    let mut frame = LogicalFrame::new(Rgb8::BLACK);
+    let mut render = |engine: &mut ConditionalEngine, frame: &mut LogicalFrame<Rgb8, 2>| {
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 0,
+                    snapshot: &snapshot,
+                },
+                frame,
+            )
+            .unwrap();
+    };
+
+    // AlwaysOn is the engine's starting policy, so only the green rule is
+    // eligible; the red one is filtered out rather than overpainted.
+    render(&mut engine, &mut frame);
+    assert_eq!(frame.as_slice()[0], GREEN);
+
+    // Flipping the policy swaps which rule matches, with no edit to the table.
+    let revision = engine.state().revision;
+    engine
+        .handle_command(
+            0,
+            StandardCommand::SetOutputModeIfRevision {
+                expected_revision: revision,
+                mode: OutputMode::PoweredOnly,
+            },
+            &snapshot,
+        )
+        .unwrap();
+    render(&mut engine, &mut frame);
+    assert_eq!(frame.as_slice()[0], RED);
+}
+
 #[test]
 fn runtime_conditional_cells_outrank_layer_scenes_and_compiled_conditional_rules() {
     use rmk_types::battery::BatteryStatus;
@@ -1644,6 +1717,7 @@ fn runtime_conditional_cells_outrank_layer_scenes_and_compiled_conditional_rules
         conditions: ConditionSet {
             layer: Some(LayerCondition { layer: 1, active: true }),
             battery: None,
+            output_mode: None,
         },
         slot: LedSlot(0),
         effect: BuiltinEffect::Solid { color: GREEN },
@@ -1692,6 +1766,7 @@ fn runtime_conditional_cells_outrank_layer_scenes_and_compiled_conditional_rules
             conditions: ConditionSet {
                 layer: Some(LayerCondition { layer: 1, active: true }),
                 battery: None,
+                output_mode: None,
             },
             slot: LedSlot(0),
             effect: BuiltinEffect::Solid { color: BLUE },

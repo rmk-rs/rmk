@@ -18,7 +18,7 @@ pub const LIGHTING_OVERLAY_CHUNK_SIZE: usize = 8;
 /// Number of scene cells in one scene page or replacement chunk.
 pub const LIGHTING_SCENE_CHUNK_SIZE: usize = 8;
 /// Number of immutable conditional cells in one readback page.
-pub const LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 8;
+pub const LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 7;
 /// Maximum UTF-8 byte length of a zone name.
 pub const LIGHTING_ZONE_NAME_SIZE: usize = 24;
 /// Maximum UTF-8 byte length of one extension effect or palette name.
@@ -616,10 +616,14 @@ wire_type! {
 }
 
 wire_type! {
-    /// A conjunction of optional layer and battery predicates.
+    /// A conjunction of optional layer, battery and output-mode predicates.
     pub struct LightingConditionSet {
         pub layer: Option<LightingLayerCondition>,
         pub battery: Option<LightingBatteryCondition>,
+        /// Gate on the live output-mode policy. This is what lets the mode
+        /// indicator be an ordinary conditional rule a host can edit, rather
+        /// than something the board has to compile in.
+        pub output_mode: Option<LightingOutputMode>,
     }
 }
 
@@ -1306,6 +1310,7 @@ mod tests {
                             max_level: Some(100),
                             charge: LightingChargeCondition::Charging,
                         }),
+                        output_mode: None,
                     },
                     led_id: LightingLedId(id),
                     effect: LightingEffect::Solid {
