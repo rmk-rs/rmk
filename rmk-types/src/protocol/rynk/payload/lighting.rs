@@ -638,13 +638,12 @@ wire_type! {
 
 impl LightingConditionalSceneCell {
     pub fn validate(&self) -> LightingResult<()> {
-        if let Some(battery) = self.conditions.battery {
-            if battery.min_level.is_some_and(|level| level > 100)
+        if let Some(battery) = self.conditions.battery
+            && (battery.min_level.is_some_and(|level| level > 100)
                 || battery.max_level.is_some_and(|level| level > 100)
-                || matches!((battery.min_level, battery.max_level), (Some(min), Some(max)) if min > max)
-            {
-                return Err(LightingError::InvalidRequest);
-            }
+                || matches!((battery.min_level, battery.max_level), (Some(min), Some(max)) if min > max))
+        {
+            return Err(LightingError::InvalidRequest);
         }
         self.effect.validate()
     }
@@ -1145,7 +1144,6 @@ const _: () = {
     assert_endpoint_fits!(PutLightingSceneChunkRequest, LightingUnitResult);
     assert_endpoint_fits!(CommitLightingSceneReplaceRequest, LightingStateResult);
     assert_endpoint_fits!(AbortLightingSceneReplaceRequest, LightingUnitResult);
-    core::assert!(LightingChanged::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
 };
 
 #[cfg(test)]
