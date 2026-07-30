@@ -111,8 +111,9 @@ pub struct LightingConditionalSceneCell {
     pub effect: LightingEffect,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum LightingOutputMode {
+    #[default]
     AlwaysOn,
     AlwaysOff,
     PoweredOnly,
@@ -123,12 +124,6 @@ pub enum LightingPoweredOnlyScope {
     #[default]
     Authority,
     Local,
-}
-
-impl Default for LightingOutputMode {
-    fn default() -> Self {
-        Self::AlwaysOn
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
