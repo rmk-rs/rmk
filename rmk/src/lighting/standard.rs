@@ -2312,16 +2312,19 @@ where
         let mut transaction = compositor.begin(effect_now_ms, input.snapshot, Rgb8::BLACK, frame);
         transaction.apply(priority::BACKGROUND, background)?;
         transaction.apply(priority::EXTENSION, extension)?;
-        let mut runtime_conditional_source = RuntimeConditionalSource {
-            table: runtime_conditional_scenes,
-            batteries: *battery_status,
-        };
-        transaction.apply(priority::EXTENSION, &mut runtime_conditional_source)?;
         transaction.apply(priority::LAYER, layers)?;
         // Same band, later call: runtime cells override static defaults.
         transaction.apply(priority::LAYER, scenes)?;
         transaction.apply(priority::HOST_OVERLAY, overlay)?;
         transaction.apply(priority::STATUS, status)?;
+        // Status band, after the compiled rules: a runtime conditional cell is
+        // the host's replacement for a compiled one, so it must reach the same
+        // altitude and win on the slots the two share.
+        let mut runtime_conditional_source = RuntimeConditionalSource {
+            table: runtime_conditional_scenes,
+            batteries: *battery_status,
+        };
+        transaction.apply(priority::STATUS, &mut runtime_conditional_source)?;
         if wake_active && let Some(indicator_cell) = indicator_cell.as_ref() {
             let mut indicator = SparseScene {
                 cells: core::slice::from_ref(indicator_cell),
@@ -3906,5 +3909,96 @@ mod tests {
             .unwrap();
         assert_eq!(set.reply.state().unwrap().output_mode, OutputMode::PoweredOnly);
         assert_eq!(set.reply.state().unwrap().revision, 2);
+    }
+
+    #[test]
+    fn runtime_conditional_cells_outrank_layer_scenes_and_compiled_conditional_rules() {
+        use rmk_types::battery::BatteryStatus;
+
+        use crate::lighting::{ConditionalSceneCell, ConditionalScenes, LayerCondition};
+
+        struct NoBatteries;
+        impl BatteryStatusProvider for NoBatteries {
+            fn battery_status(&self, _node: u8) -> BatteryStatus {
+                BatteryStatus::Unavailable
+            }
+        }
+        static NO_BATTERIES: NoBatteries = NoBatteries;
+
+        // Slot 0 is contested three ways: a compiled layer scene paints it RED
+        // on layer 1, a compiled conditional rule paints it GREEN, and the
+        // runtime table paints it BLUE. Only the host's rule should survive.
+        static COMPILED_CONDITIONAL: [ConditionalSceneCell<BuiltinEffect>; 1] = [ConditionalSceneCell {
+            conditions: ConditionSet {
+                layer: Some(LayerCondition { layer: 1, active: true }),
+                battery: None,
+            },
+            slot: LedSlot(0),
+            effect: BuiltinEffect::Solid { color: GREEN },
+        }];
+
+        let mut engine: StandardLightingEngine<
+            'static,
+            EmptySource,
+            ConditionalScenes<'static, BuiltinEffect, NoBatteries>,
+            2,
+            2,
+            4,
+        > = StandardLightingEngine::new(
+            BackgroundState {
+                value: 10,
+                ..BackgroundState::default()
+            },
+            LayerScenes {
+                scenes: &LAYERS,
+                policy: LayerPolicy::ActiveStack,
+            },
+            EmptySource,
+            ConditionalScenes::new(&COMPILED_CONDITIONAL, &NO_BATTERIES),
+        )
+        .with_battery_status_provider(&NO_BATTERIES);
+
+        let snapshot = context(1);
+        let mut frame = LogicalFrame::new(Rgb8::BLACK);
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 0,
+                    snapshot: &snapshot,
+                },
+                &mut frame,
+            )
+            .unwrap();
+        assert_eq!(
+            frame.as_slice()[0],
+            GREEN,
+            "compiled conditional rules outrank compiled layer scenes"
+        );
+
+        engine
+            .install_runtime_conditional_scene_cell(RuntimeConditionalSceneCell {
+                conditions: ConditionSet {
+                    layer: Some(LayerCondition { layer: 1, active: true }),
+                    battery: None,
+                },
+                slot: LedSlot(0),
+                effect: BuiltinEffect::Solid { color: BLUE },
+            })
+            .unwrap();
+        let mut frame = LogicalFrame::new(Rgb8::BLACK);
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 1,
+                    snapshot: &snapshot,
+                },
+                &mut frame,
+            )
+            .unwrap();
+        assert_eq!(
+            frame.as_slice()[0],
+            BLUE,
+            "a runtime conditional cell replaces the compiled rule on the same slot"
+        );
     }
 }

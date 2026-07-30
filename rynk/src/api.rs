@@ -1170,6 +1170,100 @@ impl Client {
         Ok(names)
     }
 
+    /// Read the whole runtime conditional table by paging
+    /// `GetLightingRuntimeConditionalScenes` under one pinned revision. Order
+    /// is meaningful — matching rules compose in table order — so pages are
+    /// stitched in offset order and never sorted.
+    pub async fn read_all_lighting_runtime_conditional_scenes(
+        &self,
+    ) -> Result<(u32, Vec<rmk_types::protocol::rynk::LightingConditionalSceneCell>), RynkHostError> {
+        const ATTEMPTS: usize = 4;
+        let mut last_error = None;
+        for _ in 0..ATTEMPTS {
+            let status = self.get_lighting_runtime_conditional_scene_status().await?;
+            let mut cells = Vec::new();
+            let mut offset: u16 = 0;
+            let mut conflicted = false;
+            while offset < status.cell_len {
+                match self
+                    .get_lighting_runtime_conditional_scenes(LightingRuntimeConditionalScenePageRequest {
+                        revision: status.revision,
+                        offset,
+                    })
+                    .await
+                {
+                    Ok(page) => {
+                        if page.items.is_empty() {
+                            break;
+                        }
+                        offset += page.items.len() as u16;
+                        cells.extend(page.items.iter().cloned());
+                    }
+                    Err(
+                        error @ RynkHostError::LightingRejected(
+                            rmk_types::protocol::rynk::LightingError::StateRevisionConflict { .. },
+                        ),
+                    ) => {
+                        last_error = Some(error);
+                        conflicted = true;
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if !conflicted {
+                return Ok((status.revision, cells));
+            }
+        }
+        Err(last_error.expect("a retried read only exits with a recorded conflict"))
+    }
+
+    /// Atomically replace the whole runtime conditional table, in the order
+    /// given. Shaped like [`Self::replace_all_lighting_scenes`], including the
+    /// best-effort abort when staging fails.
+    pub async fn replace_all_lighting_runtime_conditional_scenes(
+        &self,
+        expected_revision: u32,
+        cells: &[rmk_types::protocol::rynk::LightingConditionalSceneCell],
+    ) -> Result<LightingState, RynkHostError> {
+        let transaction = self
+            .begin_lighting_runtime_conditional_scene_replace(
+                BeginLightingRuntimeConditionalSceneReplaceRequest {
+                    expected_revision,
+                    cell_count: cells.len() as u16,
+                },
+            )
+            .await?;
+        let mut offset: u16 = 0;
+        for chunk in cells.chunks(rmk_types::protocol::rynk::LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE) {
+            let mut request = PutLightingRuntimeConditionalSceneChunkRequest {
+                transaction_id: transaction.id,
+                offset,
+                cells: Default::default(),
+            };
+            for cell in chunk {
+                request.cells.push(cell.clone()).expect("chunks are chunk-size bounded");
+            }
+            if let Err(error) = self.put_lighting_runtime_conditional_scene_chunk(request).await {
+                let _ = self
+                    .abort_lighting_runtime_conditional_scene_replace(
+                        AbortLightingRuntimeConditionalSceneReplaceRequest {
+                            transaction_id: transaction.id,
+                        },
+                    )
+                    .await;
+                return Err(error);
+            }
+            offset += chunk.len() as u16;
+        }
+        self.commit_lighting_runtime_conditional_scene_replace(
+            CommitLightingRuntimeConditionalSceneReplaceRequest {
+                transaction_id: transaction.id,
+            },
+        )
+        .await
+    }
+
     /// Atomically replace the whole stored scene table: begin, stage in
     /// chunk-sized pages, and commit. A staging failure is followed by a
     /// best-effort abort so the firmware transaction is not left dangling.
