@@ -291,180 +291,111 @@ impl SceneChunk {
     }
 }
 
-/// Distinct effects one [`SceneStyles`] can name at once.
+/// Distinct effects one [`StylePool`] can hold at once.
 ///
-/// This replaces a per-cell capacity with a per-*style* one, which is the far
-/// looser limit: a keyboard paints many keys from a small set of colours, so a
-/// config with a hundred painted keys typically names a handful of effects.
+/// This is the only capacity interning adds, and it is a far looser bound than
+/// a per-cell one: a keyboard paints many keys from a small set of colours, so
+/// a config with hundreds of painted keys typically names a handful of effects.
 pub const SCENE_STYLE_CAP: usize = 64;
 
-/// Dense scene storage: one style index per (layer, slot), plus a pool holding
-/// each distinct effect once.
+/// Effects held once and referenced by index, so a scene cell can carry one
+/// byte instead of a whole effect.
 ///
-/// A sparse cell list costs 20 bytes per painted key and caps how many keys can
-/// be painted at all -- a cap this board already exceeds with its compiled
-/// lighting. Here the cost is proportional to the board (`LAYERS × SLOTS`
-/// index bytes plus the pool) rather than to how much of it is painted, so
-/// every key on every layer can carry an effect and the only limit left is how
-/// many *different* effects are in play. Lookup is also a direct index rather
-/// than a scan of the cell list, which the renderer does per LED per frame.
+/// An inline [`BuiltinEffect`] is 16 bytes because blink and breathe each carry
+/// two millisecond timers, so a solid colour pays for animation fields it never
+/// uses and a cell costs 20 bytes. Interning moves the effect here and leaves
+/// the cell at 4, which matters more than it looks: the same capacity sizes the
+/// live tables, the replace staging buffer, the replica snapshot and the queued
+/// mailbox commands, so every byte saved per cell is saved several times over.
 ///
-/// Index `0` means unset, so the pool is addressed from 1. Effect type does not
-/// affect storage: an animated effect costs one pool entry exactly like a solid
-/// one, so blink and breathe need no separate table.
-///
-/// Releasing a style needs no reference counts. Whenever an assignment drops
-/// or is overwritten, the index table is scanned for any remaining use of the
-/// old entry and it is freed if there is none. The table is one byte per slot,
-/// so that is a few hundred byte comparisons on an operation the host drives --
-/// never the renderer -- which is cheaper to run than a set of counters is to
-/// keep correct. It also means a session that repaints keys one at a time,
-/// which is what painting in a configurator does, cannot slowly exhaust the
-/// pool the way waiting for an atomic replace to reset it would.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SceneStyles<const LAYERS: usize, const SLOTS: usize> {
+/// Freeing needs no reference counts. When a reference drops or is overwritten
+/// the caller reports it, the table is scanned for any remaining use, and the
+/// entry is freed if there is none -- cheaper to run on a host-driven operation
+/// than a set of counters is to keep correct. Occupancy is a bitmask, so a
+/// freed entry leaves a hole the next allocation reuses and entries never move,
+/// which means no cell's index ever needs rewriting.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct StylePool {
     styles: [BuiltinEffect; SCENE_STYLE_CAP],
-    /// Occupied pool entries. A freed entry leaves a hole that the next
-    /// allocation reuses, so entries never move and no index needs rewriting.
     used: u64,
-    /// Nested rather than `[u8; LAYERS * SLOTS]`, which needs const-generic
-    /// arithmetic that is not stable.
-    index: [[u8; SLOTS]; LAYERS],
-    assigned: usize,
 }
 
-impl<const LAYERS: usize, const SLOTS: usize> Default for SceneStyles<LAYERS, SLOTS> {
+impl Default for StylePool {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<const LAYERS: usize, const SLOTS: usize> SceneStyles<LAYERS, SLOTS> {
+impl StylePool {
     pub const fn new() -> Self {
         Self {
             styles: [BuiltinEffect::Solid { color: Rgb8::BLACK }; SCENE_STYLE_CAP],
             used: 0,
-            index: [[0; SLOTS]; LAYERS],
-            assigned: 0,
         }
     }
 
-    /// Painted (layer, slot) pairs, which is what readback pages over.
+    /// Distinct effects currently held. Bounded by [`SCENE_STYLE_CAP`].
     pub const fn len(&self) -> usize {
-        self.assigned
-    }
-
-    pub const fn is_empty(&self) -> bool {
-        self.assigned == 0
-    }
-
-    /// Distinct effects currently named. Bounded by [`SCENE_STYLE_CAP`].
-    pub const fn style_len(&self) -> usize {
         self.used.count_ones() as usize
     }
 
-    /// Paint `(layer, slot)`, reusing a pool entry when the effect is already
-    /// named. Fails only when a *new* effect would overflow the pool, and then
-    /// leaves the table untouched.
-    pub fn set(&mut self, layer: u8, slot: LedSlot, effect: BuiltinEffect) -> Result<(), StandardError> {
-        let cursor = self.cursor(layer, slot).ok_or(StandardError::SceneFull {
-            capacity: LAYERS * SLOTS,
-        })?;
-        let style = match self.find(effect) {
-            Some(existing) => existing,
-            None => self.allocate(effect).ok_or(StandardError::SceneFull {
-                capacity: SCENE_STYLE_CAP,
-            })?,
-        };
-        let (row, column) = cursor;
-        let previous = self.index[row][column];
-        if previous == 0 {
-            self.assigned += 1;
-        }
-        self.index[row][column] = (style + 1) as u8;
-        // Overwriting can strand whatever was here before.
-        if previous != 0 && previous != style as u8 + 1 {
-            self.release_if_unused(previous);
-        }
-        Ok(())
+    pub const fn is_empty(&self) -> bool {
+        self.used == 0
     }
 
-    /// Unpaint `(layer, slot)`, reporting whether it had been painted.
-    pub fn unset(&mut self, layer: u8, slot: LedSlot) -> bool {
-        let Some((row, column)) = self.cursor(layer, slot) else {
-            return false;
-        };
-        let previous = self.index[row][column];
-        if previous == 0 {
-            return false;
+    /// Index for `effect`, reusing an entry when it is already held. `None`
+    /// only when a *new* effect would overflow, and then nothing is mutated.
+    pub fn intern(&mut self, effect: BuiltinEffect) -> Option<u8> {
+        if let Some(held) = self.find(effect) {
+            return Some(held);
         }
-        self.index[row][column] = 0;
-        self.assigned -= 1;
-        self.release_if_unused(previous);
-        true
+        let free = (0..SCENE_STYLE_CAP).find(|&index| !self.holds(index))?;
+        self.styles[free] = effect;
+        self.used |= 1 << free;
+        Some(free as u8)
     }
 
-    /// Drop every assignment and release the whole style pool.
+    pub fn get(&self, style: u8) -> Option<BuiltinEffect> {
+        let index = style as usize;
+        (index < SCENE_STYLE_CAP && self.holds(index)).then(|| self.styles[index])
+    }
+
+    /// Free `style` unless it is still referenced. The caller does the check,
+    /// so the pool's borrow stays independent of whatever holds the references.
+    pub fn release(&mut self, style: u8, still_referenced: bool) {
+        if (style as usize) < SCENE_STYLE_CAP && !still_referenced {
+            self.used &= !(1 << style as usize);
+        }
+    }
+
     pub fn clear(&mut self) {
-        self.index = [[0; SLOTS]; LAYERS];
         self.used = 0;
-        self.assigned = 0;
     }
 
-    pub fn get(&self, layer: u8, slot: LedSlot) -> Option<BuiltinEffect> {
-        let (row, column) = self.cursor(layer, slot)?;
-        let style = self.index[row][column];
-        (style != 0).then(|| self.styles[style as usize - 1])
-    }
-
-    /// Painted cells in `(layer, slot)` order. Scene cells carry no meaningful
-    /// order of their own -- the sparse table swap-removes on unset -- so a
-    /// stable ordering here is a readback improvement rather than a change.
-    pub fn iter(&self) -> impl Iterator<Item = SceneTableCell> + '_ {
-        self.index.iter().enumerate().flat_map(move |(row, columns)| {
-            columns.iter().enumerate().filter_map(move |(column, &style)| {
-                (style != 0).then(|| SceneTableCell {
-                    layer: row as u8,
-                    slot: LedSlot(column as u16),
-                    effect: self.styles[style as usize - 1],
-                })
-            })
-        })
-    }
-
-    fn find(&self, effect: BuiltinEffect) -> Option<usize> {
-        (0..SCENE_STYLE_CAP).find(|&index| self.holds(index) && self.styles[index] == effect)
-    }
-
-    fn allocate(&mut self, effect: BuiltinEffect) -> Option<usize> {
-        let index = (0..SCENE_STYLE_CAP).find(|&index| !self.holds(index))?;
-        self.styles[index] = effect;
-        self.used |= 1 << index;
-        Some(index)
+    fn find(&self, effect: BuiltinEffect) -> Option<u8> {
+        (0..SCENE_STYLE_CAP)
+            .find(|&index| self.holds(index) && self.styles[index] == effect)
+            .map(|index| index as u8)
     }
 
     const fn holds(&self, index: usize) -> bool {
         self.used & (1 << index) != 0
     }
-
-    /// Free the pool entry behind `style` (a one-based index) when no slot
-    /// still points at it.
-    fn release_if_unused(&mut self, style: u8) {
-        let referenced = self
-            .index
-            .iter()
-            .any(|columns| columns.iter().any(|&held| held == style));
-        if !referenced {
-            self.used &= !(1 << (style as usize - 1));
-        }
-    }
-
-    fn cursor(&self, layer: u8, slot: LedSlot) -> Option<(usize, usize)> {
-        let row = layer as usize;
-        let column = slot.0 as usize;
-        (row < LAYERS && column < SLOTS).then_some((row, column))
-    }
 }
+
+/// A scene cell as stored: the effect lives in the table's [`StylePool`].
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct InternedSceneCell {
+    layer: u8,
+    slot: LedSlot,
+    style: u8,
+}
+
+const EMPTY_INTERNED_CELL: InternedSceneCell = InternedSceneCell {
+    layer: 0,
+    slot: LedSlot(0),
+    style: 0,
+};
 
 /// Fixed-capacity runtime scene table with layer-aware composition.
 ///
@@ -473,16 +404,18 @@ impl<const LAYERS: usize, const SLOTS: usize> SceneStyles<LAYERS, SLOTS> {
 /// and same-layer cells can never target the same slot.
 #[derive(Copy, Clone, Debug)]
 pub struct SceneTable<const CAP: usize> {
-    cells: [SceneTableCell; CAP],
+    cells: [InternedSceneCell; CAP],
     len: usize,
+    pool: StylePool,
     policy: LayerPolicy,
 }
 
 impl<const CAP: usize> SceneTable<CAP> {
     pub const fn new() -> Self {
         Self {
-            cells: [EMPTY_SCENE_CELL; CAP],
+            cells: [EMPTY_INTERNED_CELL; CAP],
             len: 0,
+            pool: StylePool::new(),
             policy: LayerPolicy::ActiveStack,
         }
     }
@@ -505,25 +438,55 @@ impl<const CAP: usize> SceneTable<CAP> {
         changed
     }
 
-    pub fn as_slice(&self) -> &[SceneTableCell] {
-        &self.cells[..self.len]
-    }
-
     /// Insert or update the cell addressed by `(layer, slot)`.
     pub fn set(&mut self, cell: SceneTableCell) -> Result<(), StandardError> {
-        if let Some(existing) = self.cells[..self.len]
-            .iter_mut()
-            .find(|existing| existing.layer == cell.layer && existing.slot == cell.slot)
-        {
-            *existing = cell;
-            return Ok(());
-        }
-        if self.len == CAP {
+        let occupied = self.cells[..self.len]
+            .iter()
+            .position(|held| held.layer == cell.layer && held.slot == cell.slot);
+        if occupied.is_none() && self.len == CAP {
             return Err(StandardError::SceneFull { capacity: CAP });
         }
-        self.cells[self.len] = cell;
-        self.len += 1;
+        // Interning first means a full pool declines before anything is
+        // mutated, so a rejected set leaves the table exactly as it was.
+        let style = self.pool.intern(cell.effect).ok_or(StandardError::SceneFull {
+            capacity: SCENE_STYLE_CAP,
+        })?;
+        let interned = InternedSceneCell {
+            layer: cell.layer,
+            slot: cell.slot,
+            style,
+        };
+        match occupied {
+            Some(index) => {
+                let replaced = self.cells[index].style;
+                self.cells[index] = interned;
+                if replaced != style {
+                    self.release(replaced);
+                }
+            }
+            None => {
+                self.cells[self.len] = interned;
+                self.len += 1;
+            }
+        }
         Ok(())
+    }
+
+    /// Free a style that no cell references any more.
+    fn release(&mut self, style: u8) {
+        let referenced = self.cells[..self.len].iter().any(|held| held.style == style);
+        self.pool.release(style, referenced);
+    }
+
+    /// Painted cells, with their effects resolved out of the pool.
+    pub fn iter(&self) -> impl Iterator<Item = SceneTableCell> + '_ {
+        self.cells[..self.len].iter().filter_map(move |held| {
+            self.pool.get(held.style).map(|effect| SceneTableCell {
+                layer: held.layer,
+                slot: held.slot,
+                effect,
+            })
+        })
     }
 
     /// Remove the cell addressed by `(layer, slot)`.
@@ -532,8 +495,10 @@ impl<const CAP: usize> SceneTable<CAP> {
             .iter()
             .position(|cell| cell.layer == layer && cell.slot == slot)
         {
+            let removed = self.cells[index].style;
             self.len -= 1;
             self.cells[index] = self.cells[self.len];
+            self.release(removed);
             true
         } else {
             false
@@ -542,21 +507,20 @@ impl<const CAP: usize> SceneTable<CAP> {
 
     pub fn clear(&mut self) {
         self.len = 0;
+        self.pool.clear();
     }
 
     /// One readback page starting at `offset`, clamped at the table's end.
     pub fn page(&self, offset: u16) -> SceneChunk {
-        let start = (offset as usize).min(self.len);
-        let end = (start + SCENE_CHUNK_SIZE).min(self.len);
         let mut chunk = SceneChunk::new();
-        for cell in &self.cells[start..end] {
-            chunk.push(*cell).expect("page is chunk-bounded");
+        for cell in self.iter().skip(offset as usize).take(SCENE_CHUNK_SIZE) {
+            chunk.push(cell).expect("page is chunk-bounded");
         }
         chunk
     }
 
-    fn cell_for_layer(&self, layer: u8, wanted: &mut usize) -> Option<&SceneTableCell> {
-        for cell in self.cells[..self.len].iter().filter(|cell| cell.layer == layer) {
+    fn cell_for_layer(&self, layer: u8, wanted: &mut usize) -> Option<SceneTableCell> {
+        for cell in self.iter().filter(|cell| cell.layer == layer) {
             if *wanted == 0 {
                 return Some(cell);
             }
@@ -565,7 +529,7 @@ impl<const CAP: usize> SceneTable<CAP> {
         None
     }
 
-    fn cell_at(&self, context: &LightingContext, mut wanted: usize) -> &SceneTableCell {
+    fn cell_at(&self, context: &LightingContext, mut wanted: usize) -> SceneTableCell {
         let effective = context.layers.effective;
         match self.policy {
             LayerPolicy::EffectiveOnly => self.cell_for_layer(effective, &mut wanted),
@@ -617,8 +581,10 @@ impl<const CAP: usize> Default for SceneTable<CAP> {
 
 impl<const CAP: usize> PartialEq for SceneTable<CAP> {
     fn eq(&self, other: &Self) -> bool {
-        // Cells past `len` are stale storage, not state.
-        self.policy == other.policy && self.as_slice() == other.as_slice()
+        // Cells past `len` are stale storage, not state, and a style index is
+        // an allocation detail -- two tables holding the same effects can
+        // number them differently -- so this compares resolved cells.
+        self.policy == other.policy && self.iter().eq(other.iter())
     }
 }
 
@@ -2762,7 +2728,7 @@ mod tests {
         assert_eq!(snapshot.context, authority_context);
         assert_eq!(snapshot.sample_time_ms, 120);
         assert_eq!(snapshot.overlay.as_slice()[0].ttl_ms, NonZeroU32::new(80));
-        assert_eq!(snapshot.scenes.as_slice(), &[scene_cell]);
+        assert_eq!(snapshot.scenes.iter().collect::<heapless::Vec<_, 4>>(), &[scene_cell]);
 
         let mut authority_frame = LogicalFrame::new(Rgb8::BLACK);
         authority
@@ -2793,7 +2759,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(replica.state().revision, snapshot.revision);
-        assert_eq!(replica.scenes().as_slice(), &[scene_cell]);
+        assert_eq!(replica.scenes().iter().collect::<heapless::Vec<_, 4>>(), &[scene_cell]);
         assert_eq!(replica_frame, authority_frame);
     }
 
@@ -4086,101 +4052,80 @@ mod tests {
         assert_eq!(set.reply.state().unwrap().revision, 2);
     }
 
-    /// The point of the styles pool: cost tracks the board, not how much of it
-    /// is painted, so every key on every layer can carry an effect and the only
-    /// limit left is how many *distinct* effects are named.
+    /// Interning is what shrinks a cell from 20 bytes to 4: many keys painted
+    /// from few colours share one entry, and the effect's type stops mattering
+    /// to the cell, so blink and breathe need no separate table.
     #[test]
-    fn dense_scene_storage_paints_every_slot_from_a_shared_style_pool() {
-        let mut styles = SceneStyles::<8, 80>::new();
+    fn interning_shares_one_entry_per_distinct_effect() {
+        let mut pool = StylePool::new();
         let blue = BuiltinEffect::solid(Rgb8::new(0, 0, 9));
         let green = BuiltinEffect::solid(Rgb8::new(0, 9, 0));
 
-        // Fill the whole board -- 640 cells, ten times what the sparse table
-        // held -- from two styles.
-        for layer in 0..8u8 {
-            for slot in 0..80u16 {
-                let effect = if slot % 2 == 0 { blue } else { green };
-                styles.set(layer, LedSlot(slot), effect).unwrap();
-            }
-        }
-        assert_eq!(styles.len(), 640);
-        assert_eq!(styles.style_len(), 2, "identical effects share one entry");
-        assert_eq!(styles.get(3, LedSlot(4)), Some(blue));
-        assert_eq!(styles.get(3, LedSlot(5)), Some(green));
-        assert_eq!(styles.iter().count(), 640);
-
-        // Readback order is stable by (layer, slot).
-        let first = styles.iter().next().unwrap();
-        assert_eq!((first.layer, first.slot), (0, LedSlot(0)));
+        let first = pool.intern(blue).unwrap();
+        assert_eq!(pool.intern(blue), Some(first), "same effect, same entry");
+        let other = pool.intern(green).unwrap();
+        assert_ne!(first, other);
+        assert_eq!(pool.len(), 2);
+        assert_eq!(pool.get(first), Some(blue));
+        assert_eq!(pool.get(other), Some(green));
     }
 
     #[test]
-    fn dense_scene_storage_rejects_only_new_styles_past_the_pool() {
-        let mut styles = SceneStyles::<8, 80>::new();
-        for index in 0..SCENE_STYLE_CAP {
-            let shade = BuiltinEffect::solid(Rgb8::new(index as u8, 0, 0));
-            styles.set(0, LedSlot(index as u16), shade).unwrap();
+    fn a_full_pool_declines_only_new_effects() {
+        let mut pool = StylePool::new();
+        for shade in 0..SCENE_STYLE_CAP {
+            pool.intern(BuiltinEffect::solid(Rgb8::new(shade as u8, 0, 0))).unwrap();
         }
-        assert_eq!(styles.style_len(), SCENE_STYLE_CAP);
+        assert_eq!(pool.len(), SCENE_STYLE_CAP);
 
-        // A style already in the pool still lands, however full it is.
+        // Already held: still fine, however full.
         let held = BuiltinEffect::solid(Rgb8::new(0, 0, 0));
-        assert!(styles.set(1, LedSlot(0), held).is_ok());
+        assert!(pool.intern(held).is_some());
 
-        // A new one is declined, and declining leaves the table untouched.
-        let fresh = BuiltinEffect::solid(Rgb8::new(0, 1, 2));
-        let before = styles.clone();
-        assert!(matches!(
-            styles.set(2, LedSlot(0), fresh),
-            Err(StandardError::SceneFull { .. })
-        ));
-        assert_eq!(styles, before);
-
-        // Out-of-range addresses are declined the same way.
-        assert!(styles.set(8, LedSlot(0), held).is_err());
-        assert!(styles.set(0, LedSlot(80), held).is_err());
+        // New: declined, and declining mutates nothing.
+        let before = pool;
+        assert_eq!(pool.intern(BuiltinEffect::solid(Rgb8::new(0, 1, 2))), None);
+        assert_eq!(pool, before);
     }
 
-    /// A style is freed as soon as nothing points at it, found by scanning the
-    /// index rather than by keeping counts. A style still in use elsewhere must
-    /// survive its other references going away.
+    /// A style goes when nothing points at it, found by scanning rather than by
+    /// keeping counts -- and it must survive while another cell still holds it.
     #[test]
-    fn dropping_the_last_reference_frees_the_style() {
-        let mut styles = SceneStyles::<8, 80>::new();
+    fn a_style_outlives_all_but_its_last_reference() {
+        let mut table = SceneTable::<4>::new();
         let red = BuiltinEffect::solid(Rgb8::new(9, 0, 0));
-        styles.set(0, LedSlot(0), red).unwrap();
-        styles.set(0, LedSlot(1), red).unwrap();
-        assert_eq!((styles.len(), styles.style_len()), (2, 1));
+        let cell = |slot| SceneTableCell {
+            layer: 0,
+            slot: LedSlot(slot),
+            effect: red,
+        };
+        table.set(cell(0)).unwrap();
+        table.set(cell(1)).unwrap();
+        assert_eq!((table.len(), table.pool.len()), (2, 1));
 
-        // One of two references: the entry stays.
-        assert!(styles.unset(0, LedSlot(0)));
-        assert_eq!(styles.style_len(), 1, "still referenced by the other slot");
-        assert_eq!(styles.get(0, LedSlot(1)), Some(red));
+        assert!(table.unset(0, LedSlot(0)));
+        assert_eq!(table.pool.len(), 1, "the other cell still holds it");
 
-        // The last one: the entry goes.
-        assert!(styles.unset(0, LedSlot(1)));
-        assert!(!styles.unset(0, LedSlot(1)), "already unpainted");
-        assert_eq!((styles.len(), styles.style_len()), (0, 0));
-
-        styles.clear();
-        assert_eq!((styles.len(), styles.style_len()), (0, 0));
+        assert!(table.unset(0, LedSlot(1)));
+        assert_eq!((table.len(), table.pool.len()), (0, 0));
     }
 
-    /// Repainting one key at a time is what a configurator does, and it must
-    /// not slowly exhaust the pool. Waiting for an atomic replace to reset it
-    /// would strand an entry per repaint and run out after 64.
+    /// Repainting one key is what painting in a configurator does, and it must
+    /// not strand an entry each time: 64 repaints would exhaust the pool.
     #[test]
-    fn repainting_a_slot_does_not_strand_styles() {
-        let mut styles = SceneStyles::<8, 80>::new();
+    fn repainting_a_cell_does_not_strand_styles() {
+        let mut table = SceneTable::<4>::new();
         for shade in 0..(SCENE_STYLE_CAP as u8 * 3) {
-            let effect = BuiltinEffect::solid(Rgb8::new(shade, shade, shade));
-            styles
-                .set(0, LedSlot(0), effect)
-                .expect("overwriting one slot never needs a second entry");
-            assert_eq!(styles.style_len(), 1, "the previous shade was freed");
-            assert_eq!(styles.get(0, LedSlot(0)), Some(effect));
+            table
+                .set(SceneTableCell {
+                    layer: 0,
+                    slot: LedSlot(0),
+                    effect: BuiltinEffect::solid(Rgb8::new(shade, shade, shade)),
+                })
+                .expect("overwriting one cell never needs a second entry");
+            assert_eq!(table.pool.len(), 1, "the previous shade was freed");
         }
-        assert_eq!(styles.len(), 1);
+        assert_eq!(table.len(), 1);
     }
 
     #[test]
