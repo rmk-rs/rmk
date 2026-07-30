@@ -19,7 +19,9 @@ pub const CONDITIONAL_SCENE_CHUNK_SIZE: usize = 7;
 /// The engine pages conditional cells into a wire-sized `Vec`, so paging more
 /// per page than the wire holds turns every readback into a rejected request.
 /// Nothing tied the two together before, which is exactly how that happened.
-const _: () = assert!(
+// `core::assert!` explicitly: with defmt enabled the bare macro resolves to
+// defmt's, which is not const-evaluable.
+const _: () = core::assert!(
     CONDITIONAL_SCENE_CHUNK_SIZE == rmk_types::protocol::rynk::LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE,
     "engine conditional page size must equal the wire chunk size"
 );
