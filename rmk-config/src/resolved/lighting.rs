@@ -101,6 +101,7 @@ pub struct LightingBatteryCondition {
 pub struct LightingConditionSet {
     pub layer: Option<LightingLayerCondition>,
     pub battery: Option<LightingBatteryCondition>,
+    pub output_mode: Option<LightingOutputMode>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -631,7 +632,16 @@ fn resolve_conditional_scenes(
                 })
             })
             .transpose()?;
-        let conditions = LightingConditionSet { layer, battery };
+        let output_mode = scene.output_mode.map(|mode| match mode {
+            LightingOutputModeToml::AlwaysOn => LightingOutputMode::AlwaysOn,
+            LightingOutputModeToml::AlwaysOff => LightingOutputMode::AlwaysOff,
+            LightingOutputModeToml::PoweredOnly => LightingOutputMode::PoweredOnly,
+        });
+        let conditions = LightingConditionSet {
+            layer,
+            battery,
+            output_mode,
+        };
         for cell in &scene.cells {
             let slots = resolve_target_slots(&cell.target, &id_to_slot, emitters, zone_memberships, zone_ids)?;
             if slots.is_empty() {
@@ -852,12 +862,13 @@ hidden = ["(0,1)"]"#,
     }
 
     #[test]
-    fn resolves_conditional_layer_and_battery_scenes() {
+    fn resolves_conditional_layer_battery_and_output_mode_scenes() {
         let source = format!(
             r#"{BASE}
 [[lighting.conditional_scene]]
 layer = {{ layer = 1, active = true }}
 battery = {{ node = 0, min_level = 21, max_level = 40, charge = "discharging" }}
+output_mode = "powered_only"
 [[lighting.conditional_scene.cell]]
 target = {{ zone = 1 }}
 effect = {{ kind = "solid", color = [9, 8, 7] }}
@@ -876,6 +887,7 @@ effect = {{ kind = "solid", color = [9, 8, 7] }}
         assert_eq!(battery.min_level, Some(21));
         assert_eq!(battery.max_level, Some(40));
         assert_eq!(battery.charge, super::LightingChargeCondition::Discharging);
+        assert_eq!(conditions.output_mode, Some(LightingOutputMode::PoweredOnly));
     }
 
     #[test]

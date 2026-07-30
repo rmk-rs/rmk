@@ -349,11 +349,24 @@ fn expand_conditional_scene_cell(cell: &LightingConditionalSceneCell) -> TokenSt
         }
         None => quote! { ::core::option::Option::None },
     };
+    let output_mode = match cell.conditions.output_mode {
+        Some(LightingOutputMode::AlwaysOn) => {
+            quote! { ::core::option::Option::Some(::rmk::lighting::OutputMode::AlwaysOn) }
+        }
+        Some(LightingOutputMode::AlwaysOff) => {
+            quote! { ::core::option::Option::Some(::rmk::lighting::OutputMode::AlwaysOff) }
+        }
+        Some(LightingOutputMode::PoweredOnly) => {
+            quote! { ::core::option::Option::Some(::rmk::lighting::OutputMode::PoweredOnly) }
+        }
+        None => quote! { ::core::option::Option::None },
+    };
     quote! {
         ::rmk::lighting::ConditionalSceneCell {
             conditions: ::rmk::lighting::ConditionSet {
                 layer: #layer,
                 battery: #battery,
+                output_mode: #output_mode,
             },
             slot: ::rmk::lighting::LedSlot(#slot),
             effect: #effect,
