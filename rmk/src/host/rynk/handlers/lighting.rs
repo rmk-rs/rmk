@@ -1299,10 +1299,10 @@ mod tests {
 
     use embassy_futures::join::join;
     use rmk_types::action::KeyAction;
+    use rmk_types::protocol::rynk::command::Endpoint;
     use rmk_types::protocol::rynk::command::{
         BeginLightingOverlayReplace, CommitLightingOverlayReplace, GetCapabilities, GetLightingKeys, SetLightingState,
     };
-    use rmk_types::protocol::rynk::endpoint::Endpoint;
     use serde::Serialize;
     use serde::de::DeserializeOwned;
 
@@ -1460,7 +1460,15 @@ mod tests {
             .len();
         let req_len = RYNK_HEADER_SIZE + payload_len;
         let mut message = RynkMessage::from_decoded(&mut buffer[..], req_len);
-        service.dispatch(session, &mut message).await.unwrap();
+        // Same gate `run_session` builds, derived from the service under test so
+        // the lock tier is exercised exactly as it is in production.
+        let locker = crate::host::lock::HostLock::new(
+            service.lock_config.unlock_keys,
+            service.ctx.keymap,
+            service.lock_config.insecure,
+            crate::host::rynk::RYNK_UNLOCK_WINDOW,
+        );
+        service.dispatch(&locker, session, &mut message).await.unwrap();
         // The reply is COBS-framed in place; deframe it back to [cmd, seq, payload].
         let mut reply = message.frame().to_vec();
         let framed_len = reply.len();
@@ -1857,7 +1865,7 @@ mod tests {
                 descriptor(),
                 8,
             ));
-            let session = session(&keymap, &config);
+            let session = session();
 
             let lighting = capabilities(service.lighting.unwrap());
             assert!(!lighting.features.contains(LightingFeatureFlags::LAYER_SCENES));
@@ -1937,7 +1945,7 @@ mod tests {
                     .with_conditional_scenes(&CONDITIONAL_CELLS)
                     .with_controls(controls),
             );
-            let session = session(&keymap, &config);
+            let session = session();
 
             let core = LightingMailbox::<StandardCommand<2, 4>, StandardReply, StandardError, 1>::new();
             let mut adapter = super::super::super::lighting::StandardRynkLightingAdapter::<2, 1, 4>::new(

@@ -80,7 +80,7 @@ mod tests {
 
         match block_on(topics.next_event()) {
             TopicEvent::ModifierChange(actual) => assert_eq!(actual, modifiers),
-            other => panic!("expected ModifierChange, got {:?}", other.cmd()),
+            other => panic!("expected ModifierChange, got {other:?}"),
         }
     }
 }
