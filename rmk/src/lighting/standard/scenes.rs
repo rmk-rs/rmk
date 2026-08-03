@@ -2,7 +2,7 @@
 use super::*;
 use crate::lighting::Rgb8;
 use crate::lighting::compositor::{Contribution, LightingSource, RenderInput as SourceRenderInput};
-use crate::lighting::context::{LightingContext, LightingContextProvider};
+use crate::lighting::context::{LayerState, LightingContext, LightingContextProvider};
 use crate::lighting::effect::{BuiltinEffect, LightingEffect};
 use crate::lighting::source::LayerPolicy;
 use crate::lighting::topology::LedSlot;
@@ -165,13 +165,14 @@ const EMPTY_INTERNED_CELL: InternedSceneCell = InternedSceneCell {
 
 /// Fixed-capacity runtime scene table with layer-aware composition.
 ///
-/// Cells are unique per `(layer, slot)` and stored in insertion order; order
-/// is irrelevant to rendering because layer precedence comes from the policy
-/// and same-layer cells can never target the same slot.
+/// Cells are unique per `(layer, slot)` and grouped by layer. Order within a
+/// layer is irrelevant because same-layer cells can never target the same
+/// slot. `layer_offsets[layer]..layer_offsets[layer + 1]` is that layer's run.
 #[derive(Copy, Clone, Debug)]
 pub struct SceneTable<const CAP: usize> {
     cells: [InternedSceneCell; CAP],
     len: usize,
+    layer_offsets: [u16; LayerState::CAPACITY as usize + 1],
     pub(super) pool: StylePool,
     policy: LayerPolicy,
 }
@@ -181,6 +182,7 @@ impl<const CAP: usize> SceneTable<CAP> {
         Self {
             cells: [EMPTY_INTERNED_CELL; CAP],
             len: 0,
+            layer_offsets: [0; LayerState::CAPACITY as usize + 1],
             pool: StylePool::new(),
             policy: LayerPolicy::ActiveStack,
         }
@@ -231,8 +233,20 @@ impl<const CAP: usize> SceneTable<CAP> {
                 }
             }
             None => {
-                self.cells[self.len] = interned;
+                let layer = cell.layer as usize;
+                let insert_at = if layer < LayerState::CAPACITY as usize {
+                    self.layer_offsets[layer + 1] as usize
+                } else {
+                    self.cells[..self.len].partition_point(|held| held.layer <= cell.layer)
+                };
+                self.cells.copy_within(insert_at..self.len, insert_at + 1);
+                self.cells[insert_at] = interned;
                 self.len += 1;
+                if layer < LayerState::CAPACITY as usize {
+                    for offset in &mut self.layer_offsets[layer + 1..] {
+                        *offset += 1;
+                    }
+                }
             }
         }
         Ok(())
@@ -263,7 +277,12 @@ impl<const CAP: usize> SceneTable<CAP> {
         {
             let removed = self.cells[index].style;
             self.len -= 1;
-            self.cells[index] = self.cells[self.len];
+            self.cells.copy_within(index + 1..self.len + 1, index);
+            if (layer as usize) < LayerState::CAPACITY as usize {
+                for offset in &mut self.layer_offsets[layer as usize + 1..] {
+                    *offset -= 1;
+                }
+            }
             self.release(removed);
             true
         } else {
@@ -273,6 +292,7 @@ impl<const CAP: usize> SceneTable<CAP> {
 
     pub fn clear(&mut self) {
         self.len = 0;
+        self.layer_offsets.fill(0);
         self.pool.clear();
     }
 
@@ -285,14 +305,32 @@ impl<const CAP: usize> SceneTable<CAP> {
         chunk
     }
 
-    fn cell_for_layer(&self, layer: u8, wanted: &mut usize) -> Option<SceneTableCell> {
-        for cell in self.iter().filter(|cell| cell.layer == layer) {
-            if *wanted == 0 {
-                return Some(cell);
-            }
-            *wanted -= 1;
+    fn layer_bounds(&self, layer: u8) -> (usize, usize) {
+        let layer = layer as usize;
+        if layer < LayerState::CAPACITY as usize {
+            (
+                self.layer_offsets[layer] as usize,
+                self.layer_offsets[layer + 1] as usize,
+            )
+        } else {
+            let start = self.cells[..self.len].partition_point(|cell| cell.layer < layer as u8);
+            let end = self.cells[..self.len].partition_point(|cell| cell.layer <= layer as u8);
+            (start, end)
         }
-        None
+    }
+
+    fn cell_for_layer(&self, layer: u8, wanted: &mut usize) -> Option<SceneTableCell> {
+        let (start, end) = self.layer_bounds(layer);
+        if *wanted >= end - start {
+            *wanted -= end - start;
+            return None;
+        }
+        let held = self.cells[start + *wanted];
+        self.pool.get(held.style).map(|effect| SceneTableCell {
+            layer: held.layer,
+            slot: held.slot,
+            effect,
+        })
     }
 
     fn cell_at(&self, context: &LightingContext, mut wanted: usize) -> SceneTableCell {
@@ -304,7 +342,7 @@ impl<const CAP: usize> SceneTable<CAP> {
                 if let Some(cell) = self.cell_for_layer(default, &mut wanted) {
                     return cell;
                 }
-                for layer in 0..crate::lighting::context::LayerState::CAPACITY {
+                for layer in 0..LayerState::CAPACITY {
                     if layer != default
                         && layer != effective
                         && context.layers.is_active(layer)
@@ -325,17 +363,31 @@ impl<const CAP: usize> SceneTable<CAP> {
 
     fn included_len(&self, context: &LightingContext) -> usize {
         let effective = context.layers.effective;
-        self.cells[..self.len]
-            .iter()
-            .filter(|cell| match self.policy {
-                LayerPolicy::EffectiveOnly => cell.layer == effective,
-                LayerPolicy::ActiveStack => {
-                    cell.layer == context.layers.default
-                        || cell.layer == effective
-                        || context.layers.is_active(cell.layer)
+        match self.policy {
+            LayerPolicy::EffectiveOnly => {
+                let (start, end) = self.layer_bounds(effective);
+                end - start
+            }
+            LayerPolicy::ActiveStack => {
+                let default = context.layers.default;
+                let mut included = 0;
+                for layer in 0..LayerState::CAPACITY {
+                    if layer == default || layer == effective || context.layers.is_active(layer) {
+                        let layer = layer as usize;
+                        included += self.layer_offsets[layer + 1] as usize - self.layer_offsets[layer] as usize;
+                    }
                 }
-            })
-            .count()
+                if default >= LayerState::CAPACITY {
+                    let (start, end) = self.layer_bounds(default);
+                    included += end - start;
+                }
+                if effective >= LayerState::CAPACITY && effective != default {
+                    let (start, end) = self.layer_bounds(effective);
+                    included += end - start;
+                }
+                included
+            }
+        }
     }
 }
 

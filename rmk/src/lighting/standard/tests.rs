@@ -7,7 +7,7 @@ use crate::lighting::compositor::{
     Contribution, ExtensionDescriptor, ExtensionLayerState, ExtensionParamSpec, ExtensionState, LightingSource,
     LogicalFrame, RenderInput as SourceRenderInput,
 };
-use crate::lighting::effect::BuiltinEffect;
+use crate::lighting::effect::{BuiltinEffect, LightingEffect};
 use crate::lighting::service::{Invalidation, LightingEngine, RenderInput};
 use crate::lighting::source::{
     BatteryStatusProvider, ConditionSet, LayerScenes, LightingControls, OutputMode, OverlayError, SparseScene,
@@ -1165,6 +1165,159 @@ fn scene_pages_echo_revision_and_clamp() {
     assert!(tail.cells.as_slice().is_empty());
 }
 
+fn naive_scene_set(cells: &mut std::vec::Vec<SceneTableCell>, cell: SceneTableCell) {
+    if let Some(held) = cells
+        .iter_mut()
+        .find(|held| held.layer == cell.layer && held.slot == cell.slot)
+    {
+        *held = cell;
+    } else {
+        cells.push(cell);
+    }
+}
+
+fn naive_scene_render(
+    cells: &[SceneTableCell],
+    policy: LayerPolicy,
+    context: &LightingContext,
+    now_ms: u64,
+) -> std::vec::Vec<(LedSlot, Rgb8)> {
+    let mut rendered = std::vec::Vec::new();
+    let mut append_layer = |layer| {
+        rendered.extend(
+            cells
+                .iter()
+                .filter(|cell| cell.layer == layer)
+                .map(|cell| (cell.slot, cell.effect.sample(now_ms).color)),
+        );
+    };
+    let effective = context.layers.effective;
+    match policy {
+        LayerPolicy::EffectiveOnly => append_layer(effective),
+        LayerPolicy::ActiveStack => {
+            let default = context.layers.default;
+            append_layer(default);
+            for layer in 0..LayerState::CAPACITY {
+                if layer != default && layer != effective && context.layers.is_active(layer) {
+                    append_layer(layer);
+                }
+            }
+            if effective != default {
+                append_layer(effective);
+            }
+        }
+    }
+    rendered
+}
+
+fn scene_table_render<const CAP: usize>(
+    table: &mut SceneTable<CAP>,
+    context: &LightingContext,
+    now_ms: u64,
+) -> std::vec::Vec<(LedSlot, Rgb8)> {
+    let input = SourceRenderInput { now_ms, context };
+    let len = <SceneTable<CAP> as LightingSource<Rgb8, LightingContext>>::len(table, &input);
+    let mut rendered = std::vec::Vec::with_capacity(len);
+    for index in 0..len {
+        let slot = <SceneTable<CAP> as LightingSource<Rgb8, LightingContext>>::slot(table, index, &input);
+        let Contribution::Opaque(sample) =
+            <SceneTable<CAP> as LightingSource<Rgb8, LightingContext>>::contribution(table, index, &input)
+        else {
+            panic!("scene cells are always opaque");
+        };
+        rendered.push((slot, sample.color));
+    }
+    rendered
+}
+
+fn pseudo_random(seed: &mut u64) -> u64 {
+    *seed ^= *seed << 13;
+    *seed ^= *seed >> 7;
+    *seed ^= *seed << 17;
+    *seed
+}
+
+fn varied_effect(value: u8) -> BuiltinEffect {
+    let color = Rgb8::new(value.wrapping_mul(29), value.wrapping_mul(47), value.wrapping_mul(71));
+    match value % 3 {
+        0 => BuiltinEffect::solid(color),
+        1 => BuiltinEffect::Blink {
+            color,
+            period_ms: 80 + (value as u32 % 5) * 20,
+            phase_ms: value as u32 * 7,
+            duty: 35,
+        },
+        _ => BuiltinEffect::Breathe {
+            color,
+            period_ms: 120 + (value as u32 % 5) * 20,
+            phase_ms: value as u32 * 11,
+            step_ms: 10,
+        },
+    }
+}
+
+#[test]
+fn grouped_scene_lookup_matches_naive_scan_resolution() {
+    const CAP: usize = 256;
+    const LAYERS: [u8; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 32, 47, 63];
+    let mut seed = 0x4d59_5df4_d0f3_3173;
+
+    for table_index in 0..12 {
+        let mut table = SceneTable::<CAP>::new();
+        let mut naive = std::vec::Vec::new();
+        let dense_layer = LAYERS[table_index % LAYERS.len()];
+        for slot in 0..80 {
+            let cell = SceneTableCell {
+                layer: dense_layer,
+                slot: LedSlot(slot),
+                effect: varied_effect((slot as u8 + table_index as u8) % 18),
+            };
+            table.set(cell).unwrap();
+            naive_scene_set(&mut naive, cell);
+        }
+        for _ in 0..140 {
+            let layer = LAYERS[pseudo_random(&mut seed) as usize % LAYERS.len()];
+            let slot = (pseudo_random(&mut seed) % 112) as u16;
+            let effect = varied_effect((pseudo_random(&mut seed) % 18) as u8);
+            let cell = SceneTableCell {
+                layer,
+                slot: LedSlot(slot),
+                effect,
+            };
+            table.set(cell).unwrap();
+            naive_scene_set(&mut naive, cell);
+        }
+
+        for policy in [LayerPolicy::EffectiveOnly, LayerPolicy::ActiveStack] {
+            table.set_policy(policy);
+            for context_index in 0..10 {
+                let default = LAYERS[(table_index + context_index * 3) % LAYERS.len()];
+                let effective = if context_index % 3 == 0 {
+                    default
+                } else {
+                    LAYERS[(table_index * 5 + context_index * 7) % LAYERS.len()]
+                };
+                let mut active = (1_u64 << default) | (1_u64 << effective);
+                for layer in LAYERS {
+                    if pseudo_random(&mut seed) & 1 != 0 {
+                        active |= 1_u64 << layer;
+                    }
+                }
+                let context = LightingContext {
+                    layers: LayerState::new(effective, default, active),
+                    ..LightingContext::default()
+                };
+                let now_ms = pseudo_random(&mut seed) % 10_000;
+                assert_eq!(
+                    scene_table_render(&mut table, &context, now_ms),
+                    naive_scene_render(&naive, policy, &context, now_ms),
+                    "table {table_index}, context {context_index}, policy {policy:?}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn runtime_scene_overrides_static_layer_and_yields_to_overlay() {
     let mut engine = scene_engine();
@@ -1694,6 +1847,116 @@ fn repainting_a_cell_does_not_strand_styles() {
         assert_eq!(table.pool.len(), 1, "the previous shade was freed");
     }
     assert_eq!(table.len(), 1);
+}
+
+#[test]
+fn scene_mutations_preserve_grouped_runs_and_release_overwritten_styles() {
+    let mut table = SceneTable::<8>::new();
+    for cell in [
+        scene_cell(5, 0, RED),
+        scene_cell(1, 0, RED),
+        scene_cell(5, 1, GREEN),
+        scene_cell(1, 1, GREEN),
+        scene_cell(0, 0, BLUE),
+        scene_cell(1, 2, RED),
+    ] {
+        table.set(cell).unwrap();
+    }
+    assert_eq!(
+        table
+            .iter()
+            .map(|cell| (cell.layer, cell.slot))
+            .collect::<std::vec::Vec<_>>(),
+        [
+            (0, LedSlot(0)),
+            (1, LedSlot(0)),
+            (1, LedSlot(1)),
+            (1, LedSlot(2)),
+            (5, LedSlot(0)),
+            (5, LedSlot(1)),
+        ]
+    );
+
+    table.set(scene_cell(1, 1, BLUE)).unwrap();
+    assert_eq!(table.len(), 6, "setting an existing address updates in place");
+    assert_eq!(table.iter().nth(2), Some(scene_cell(1, 1, BLUE)));
+    assert!(table.unset(1, LedSlot(1)), "remove the middle of layer 1's run");
+    assert_eq!(
+        table
+            .iter()
+            .map(|cell| (cell.layer, cell.slot))
+            .collect::<std::vec::Vec<_>>(),
+        [
+            (0, LedSlot(0)),
+            (1, LedSlot(0)),
+            (1, LedSlot(2)),
+            (5, LedSlot(0)),
+            (5, LedSlot(1)),
+        ]
+    );
+
+    let mut shared = SceneTable::<2>::new();
+    shared.set(scene_cell(0, 0, RED)).unwrap();
+    shared.set(scene_cell(0, 1, RED)).unwrap();
+    shared.set(scene_cell(0, 0, GREEN)).unwrap();
+    assert_eq!(shared.pool.len(), 2, "the other cell retains the overwritten style");
+    shared.set(scene_cell(0, 1, GREEN)).unwrap();
+    assert_eq!(shared.pool.len(), 1, "the last overwrite releases the old style");
+}
+
+#[test]
+fn rejected_scene_mutations_leave_capacity_and_pool_state_unchanged() {
+    let mut at_capacity = SceneTable::<2>::new();
+    at_capacity.set(scene_cell(3, 0, RED)).unwrap();
+    at_capacity.set(scene_cell(1, 0, GREEN)).unwrap();
+    let before_capacity = at_capacity;
+    assert_eq!(
+        at_capacity.set(scene_cell(2, 0, BLUE)),
+        Err(StandardError::SceneFull { capacity: 2 })
+    );
+    assert_eq!(at_capacity, before_capacity);
+    assert_eq!(at_capacity.pool, before_capacity.pool);
+
+    let mut at_pool_capacity = SceneTable::<{ SCENE_STYLE_CAP + 1 }>::new();
+    for shade in 0..SCENE_STYLE_CAP {
+        at_pool_capacity
+            .set(scene_cell(
+                (shade % LayerState::CAPACITY as usize) as u8,
+                shade as u16,
+                Rgb8::new(shade as u8, 0, 0),
+            ))
+            .unwrap();
+    }
+    let before_pool = at_pool_capacity;
+    assert_eq!(
+        at_pool_capacity.set(scene_cell(0, SCENE_STYLE_CAP as u16, Rgb8::new(0, 1, 0))),
+        Err(StandardError::SceneFull {
+            capacity: SCENE_STYLE_CAP,
+        })
+    );
+    assert_eq!(at_pool_capacity, before_pool);
+    assert_eq!(at_pool_capacity.pool, before_pool.pool);
+}
+
+#[test]
+fn scene_pages_cover_the_layer_grouped_table_without_gaps() {
+    let mut table = SceneTable::<20>::new();
+    for index in 0..19 {
+        table
+            .set(scene_cell(
+                [5, 1, 32, 0][index % 4],
+                index as u16,
+                Rgb8::new(index as u8, 0, 0),
+            ))
+            .unwrap();
+    }
+    let expected = table.iter().collect::<std::vec::Vec<_>>();
+    let mut paged = std::vec::Vec::new();
+    for offset in (0..table.len()).step_by(SCENE_CHUNK_SIZE) {
+        paged.extend_from_slice(table.page(offset as u16).as_slice());
+    }
+    assert_eq!(paged, expected);
+    assert!(table.page(table.len() as u16).as_slice().is_empty());
 }
 
 #[test]

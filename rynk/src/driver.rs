@@ -36,7 +36,8 @@ use embassy_sync::signal::Signal;
 use embedded_io_async::{Error as _, ErrorKind, Read, Write};
 use rmk_types::protocol::rynk::command::Endpoint;
 use rmk_types::protocol::rynk::{
-    Cmd, Deframer, DeviceCapabilities, LightingError, RYNK_HEADER_SIZE, RynkError, RynkHeader, TopicEvent, encode_frame, max_wire_size,
+    Cmd, Deframer, DeviceCapabilities, LightingError, RYNK_HEADER_SIZE, RynkError, RynkHeader, TopicEvent,
+    encode_frame, max_wire_size,
 };
 use serde::Serialize;
 use thiserror::Error;

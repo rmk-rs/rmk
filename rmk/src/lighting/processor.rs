@@ -82,7 +82,7 @@ impl<Command, Reply, Error, const CAPACITY: usize> LightingMailbox<Command, Repl
     ///
     /// Boards use this after changing context outside the standard RMK
     /// layer/indicator snapshots (for example battery or sensor state). The
-    /// processor takes a fresh snapshot, rerenders, and notifies replicas.
+    /// processor takes a fresh snapshot and rerenders it.
     pub fn snapshot_changed(&self) {
         self.snapshot_changed.signal(());
     }
@@ -315,7 +315,6 @@ where
                         }
                         Either4::Fourth(Either3::Third(())) => {
                             self.service.request_render();
-                            publish_event(LightingChangedEvent::new());
                         }
                     }
                 }
@@ -342,7 +341,6 @@ where
                         }
                         Either3::Third(Either3::Third(())) => {
                             self.service.request_render();
-                            publish_event(LightingChangedEvent::new());
                         }
                     }
                 }
