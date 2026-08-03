@@ -70,6 +70,19 @@ pub trait LightingSource<C, Context> {
         false
     }
 
+    /// Optional second effect layered over [`Self::extension_state`]'s
+    /// primary effect. `None` means this source has no layering surface;
+    /// support with an empty overlay is `Some` with `overlay: None`.
+    fn extension_layer_state(&self) -> Option<ExtensionLayerState> {
+        None
+    }
+
+    /// Apply the optional second effect. A present effect indexes the same
+    /// descriptor list as the primary effect.
+    fn apply_extension_layer_state(&mut self, _state: ExtensionLayerState) -> bool {
+        false
+    }
+
     /// Live value of one per-effect parameter, addressed by the effect's
     /// index in [`ExtensionDescriptor::effects`] and the parameter's ordinal
     /// in that effect's [`ExtensionDescriptor::params`] row. `None` means the
@@ -131,6 +144,13 @@ pub struct ExtensionState {
     pub palette: u8,
     pub value: u8,
     pub speed: u8,
+}
+
+/// Orthogonal layering state for an extension source. Kept separate from
+/// [`ExtensionState`] so its established wire representation stays stable.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ExtensionLayerState {
+    pub overlay: Option<u8>,
 }
 
 /// User-level transform applied after composition but before changed

@@ -343,7 +343,9 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             // Filled by handle_command, where the LightingSource bound is
             // available on the Extension parameter.
             extension: None,
+            extension_layers: None,
             extension_params: None,
+            extension_overlay_params: None,
         })
     }
 
@@ -980,6 +982,7 @@ where
             StandardCommand::ExportReplica(slot) => {
                 let mut replica = self.replica_state(now_ms, snapshot)?;
                 replica.extension = self.extension.extension_state();
+                replica.extension_layers = self.extension.extension_layer_state();
                 replica.extension_params = replica.extension.and_then(|state| {
                     // A source with no descriptor, an active effect the
                     // descriptor does not know, or an effect without
@@ -1002,6 +1005,29 @@ where
                         values,
                     })
                 });
+                replica.extension_overlay_params =
+                    replica
+                        .extension_layers
+                        .and_then(|layers| layers.overlay)
+                        .and_then(|effect| {
+                            let specs = extension_param_specs::<Rgb8, Context, _>(&self.extension, effect).ok()?;
+                            let len = specs.len().min(EXTENSION_PARAM_CHUNK);
+                            if len == 0 {
+                                return None;
+                            }
+                            let mut values = [0u8; EXTENSION_PARAM_CHUNK];
+                            for (value, (index, spec)) in values.iter_mut().zip(specs[..len].iter().enumerate()) {
+                                *value = self
+                                    .extension
+                                    .extension_param(effect, index as u8)
+                                    .unwrap_or(spec.default);
+                            }
+                            Some(ExtensionReplicaParams {
+                                effect,
+                                len: len as u8,
+                                values,
+                            })
+                        });
                 slot.put(replica)?;
                 (Invalidation::None, false)
             }
@@ -1017,9 +1043,19 @@ where
                         check_extension_param::<Rgb8, Context, _>(&self.extension, params.effect, index as u8, value)?;
                     }
                 }
+                if let Some(params) = replica.extension_overlay_params {
+                    for (index, value) in params.values().iter().copied().enumerate() {
+                        check_extension_param::<Rgb8, Context, _>(&self.extension, params.effect, index as u8, value)?;
+                    }
+                }
                 match (replica.extension, self.extension.extension_state()) {
                     (None, None) => {}
                     (Some(extension), Some(_)) if self.extension.apply_extension_state(extension) => {}
+                    _ => return Err(StandardError::ExtensionUnsupported),
+                }
+                match (replica.extension_layers, self.extension.extension_layer_state()) {
+                    (None, None) => {}
+                    (Some(layers), Some(_)) if self.extension.apply_extension_layer_state(layers) => {}
                     _ => return Err(StandardError::ExtensionUnsupported),
                 }
                 // Parameters follow the selection so the addressed effect is
@@ -1027,6 +1063,16 @@ where
                 // host set uses; only the revision pin is skipped, matching
                 // how replica extension state is applied.
                 if let Some(params) = replica.extension_params {
+                    for (index, value) in params.values().iter().copied().enumerate() {
+                        apply_extension_param_checked::<Rgb8, Context, _>(
+                            &mut self.extension,
+                            params.effect,
+                            index as u8,
+                            value,
+                        )?;
+                    }
+                }
+                if let Some(params) = replica.extension_overlay_params {
                     for (index, value) in params.values().iter().copied().enumerate() {
                         apply_extension_param_checked::<Rgb8, Context, _>(
                             &mut self.extension,
@@ -1092,6 +1138,24 @@ where
             } => {
                 self.check_revision(expected_revision)?;
                 if !self.extension.apply_extension_state(state) {
+                    return Err(StandardError::ExtensionUnsupported);
+                }
+                (Invalidation::Render, true)
+            }
+            StandardCommand::ReadExtensionLayers => {
+                return Ok(CommandResult::unchanged(StandardReply::ExtensionLayers(
+                    ExtensionLayersPage {
+                        revision: self.revision,
+                        state: self.extension.extension_layer_state(),
+                    },
+                )));
+            }
+            StandardCommand::SetExtensionLayersIfRevision {
+                expected_revision,
+                state,
+            } => {
+                self.check_revision(expected_revision)?;
+                if !self.extension.apply_extension_layer_state(state) {
                     return Err(StandardError::ExtensionUnsupported);
                 }
                 (Invalidation::Render, true)

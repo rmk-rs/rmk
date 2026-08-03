@@ -6,13 +6,13 @@ use rmk_types::protocol::rynk::command::{
     AbortLightingRuntimeConditionalSceneReplace, BeginLightingRuntimeConditionalSceneReplace, ClearLightingOverlay,
     CommitLightingRuntimeConditionalSceneReplace, GetLightingCapabilities, GetLightingCompiledSceneStatus,
     GetLightingCompiledScenes, GetLightingConditionalSceneStatus, GetLightingConditionalScenes, GetLightingExtension,
-    GetLightingExtensionNames, GetLightingExtensionParams, GetLightingKeys, GetLightingLeds, GetLightingOutputMode,
-    GetLightingOutputs, GetLightingOverlay, GetLightingPhysicalKeys, GetLightingRoutes,
-    GetLightingRuntimeConditionalSceneStatus, GetLightingRuntimeConditionalScenes, GetLightingSceneStatus,
-    GetLightingScenes, GetLightingState, GetLightingZoneMemberships, GetLightingZones,
-    PutLightingRuntimeConditionalSceneChunk, SetLightingExtensionParam, SetLightingExtensionState,
-    SetLightingLayerPolicy, SetLightingOutputMode, SetLightingOverlay, SetLightingSceneCell, SetLightingState,
-    SetLightingWakeLayers, UnsetLightingOverlay, UnsetLightingSceneCell,
+    GetLightingExtensionLayers, GetLightingExtensionNames, GetLightingExtensionParams, GetLightingKeys,
+    GetLightingLeds, GetLightingOutputMode, GetLightingOutputs, GetLightingOverlay, GetLightingPhysicalKeys,
+    GetLightingRoutes, GetLightingRuntimeConditionalSceneStatus, GetLightingRuntimeConditionalScenes,
+    GetLightingSceneStatus, GetLightingScenes, GetLightingState, GetLightingZoneMemberships, GetLightingZones,
+    PutLightingRuntimeConditionalSceneChunk, SetLightingExtensionLayers, SetLightingExtensionParam,
+    SetLightingExtensionState, SetLightingLayerPolicy, SetLightingOutputMode, SetLightingOverlay, SetLightingSceneCell,
+    SetLightingState, SetLightingWakeLayers, UnsetLightingOverlay, UnsetLightingSceneCell,
 };
 use rmk_types::protocol::rynk::{
     AbortLightingOverlayReplaceRequest, AbortLightingRuntimeConditionalSceneReplaceRequest,
@@ -24,9 +24,9 @@ use rmk_types::protocol::rynk::{
     LightingCompiledSceneStatus, LightingCompiledSceneStatusResult, LightingCompiledScenesPageResult,
     LightingConditionalSceneCell, LightingConditionalSceneStatus, LightingConditionalSceneStatusResult,
     LightingConditionalScenesPage, LightingConditionalScenesPageResult, LightingEffectFlags, LightingError,
-    LightingExtensionNamesPageResult, LightingExtensionNamesRequest, LightingExtensionParamsPageResult,
-    LightingExtensionParamsRequest, LightingExtensionResult, LightingFeatureFlags, LightingKeysPage,
-    LightingKeysPageResult, LightingLed, LightingLedId, LightingLedsPage, LightingLedsPageResult,
+    LightingExtensionLayersResult, LightingExtensionNamesPageResult, LightingExtensionNamesRequest,
+    LightingExtensionParamsPageResult, LightingExtensionParamsRequest, LightingExtensionResult, LightingFeatureFlags,
+    LightingKeysPage, LightingKeysPageResult, LightingLed, LightingLedId, LightingLedsPage, LightingLedsPageResult,
     LightingMatrixPosition, LightingOutput, LightingOutputCapabilities, LightingOutputCoverage,
     LightingOutputModeStateResult, LightingOutputsPage, LightingOutputsPageResult, LightingOverlayCell,
     LightingOverlayPageRequest, LightingOverlayPageResult, LightingOverlayTransaction,
@@ -39,9 +39,10 @@ use rmk_types::protocol::rynk::{
     LightingStateResult, LightingUnitResult, LightingZone, LightingZoneId, LightingZoneMembershipsPage,
     LightingZoneMembershipsPageResult, LightingZonesPage, LightingZonesPageResult, PutLightingOverlayChunkRequest,
     PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest, RynkError, RynkMessage,
-    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest,
-    SetLightingOutputModeRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
-    SetLightingWakeLayersRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
+    SetLightingExtensionLayersRequest, SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
+    SetLightingLayerPolicyRequest, SetLightingOutputModeRequest, SetLightingOverlayRequest,
+    SetLightingSceneCellRequest, SetLightingStateRequest, SetLightingWakeLayersRequest, UnsetLightingOverlayRequest,
+    UnsetLightingSceneCellRequest,
 };
 
 use super::super::lighting::{
@@ -72,6 +73,14 @@ fn scene_controller<'a>(service: &RynkService<'a>) -> LightingResult<RynkLightin
 fn extension_controller<'a>(service: &RynkService<'a>) -> LightingResult<RynkLightingController<'a>> {
     let controller = controller(service)?;
     if !controller.extension_effects {
+        return Err(LightingError::Unsupported);
+    }
+    Ok(controller)
+}
+
+fn extension_layer_controller<'a>(service: &RynkService<'a>) -> LightingResult<RynkLightingController<'a>> {
+    let controller = extension_controller(service)?;
+    if !controller.extension_layering {
         return Err(LightingError::Unsupported);
     }
     Ok(controller)
@@ -737,6 +746,37 @@ impl Handle<SetLightingExtensionState> for RynkService<'_> {
     }
 }
 
+impl Handle<GetLightingExtensionLayers> for RynkService<'_> {
+    async fn handle(&self, _: ()) -> Result<LightingExtensionLayersResult, RynkError> {
+        let result = match extension_layer_controller(self) {
+            Ok(controller) => match controller.request(RynkLightingCommand::ReadExtensionLayers).await {
+                Ok(RynkLightingReadback::ExtensionLayers(layers)) => Ok(layers),
+                Ok(_) => Err(LightingError::InvalidRequest),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
+impl Handle<SetLightingExtensionLayers> for RynkService<'_> {
+    async fn handle(&self, req: SetLightingExtensionLayersRequest) -> Result<LightingStateResult, RynkError> {
+        let result = match extension_layer_controller(self) {
+            Ok(controller) => {
+                controller
+                    .request_state(RynkLightingCommand::SetExtensionLayers {
+                        expected_revision: req.expected_revision,
+                        overlay: req.overlay,
+                    })
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        Ok(result)
+    }
+}
+
 impl Handle<GetLightingExtensionParams> for RynkService<'_> {
     async fn handle(
         &self,
@@ -858,6 +898,9 @@ fn capabilities(binding: RynkLightingController<'_>) -> LightingCapabilities {
     features.0 |= LightingFeatureFlags::OUTPUT_MODE;
     if binding.extension_effects {
         features.0 |= LightingFeatureFlags::EXTENSION_EFFECTS;
+    }
+    if binding.extension_layering {
+        features.0 |= LightingFeatureFlags::EXTENSION_LAYERING;
     }
     LightingCapabilities {
         topology_revision: descriptor.topology_revision,
@@ -1299,9 +1342,9 @@ mod tests {
 
     use embassy_futures::join::join;
     use rmk_types::action::KeyAction;
-    use rmk_types::protocol::rynk::command::Endpoint;
     use rmk_types::protocol::rynk::command::{
-        BeginLightingOverlayReplace, CommitLightingOverlayReplace, GetCapabilities, GetLightingKeys, SetLightingState,
+        BeginLightingOverlayReplace, CommitLightingOverlayReplace, Endpoint, GetCapabilities, GetLightingKeys,
+        SetLightingState,
     };
     use serde::Serialize;
     use serde::de::DeserializeOwned;

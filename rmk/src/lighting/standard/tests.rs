@@ -4,8 +4,8 @@ use rmk_types::action::LightAction;
 
 use super::*;
 use crate::lighting::compositor::{
-    Contribution, ExtensionDescriptor, ExtensionParamSpec, ExtensionState, LightingSource, LogicalFrame,
-    RenderInput as SourceRenderInput,
+    Contribution, ExtensionDescriptor, ExtensionLayerState, ExtensionParamSpec, ExtensionState, LightingSource,
+    LogicalFrame, RenderInput as SourceRenderInput,
 };
 use crate::lighting::effect::BuiltinEffect;
 use crate::lighting::service::{Invalidation, LightingEngine, RenderInput};
@@ -41,6 +41,7 @@ static REPLICA_EFFECT_PARAMS: &[&[ExtensionParamSpec]] = &[&[
 #[derive(Copy, Clone)]
 struct ReplicaExtension {
     state: ExtensionState,
+    overlay: Option<u8>,
     accept: bool,
     params: [u8; 2],
 }
@@ -67,6 +68,22 @@ impl<Context> LightingSource<Rgb8, Context> for ReplicaExtension {
             return false;
         }
         self.state = state;
+        true
+    }
+
+    fn extension_layer_state(&self) -> Option<ExtensionLayerState> {
+        Some(ExtensionLayerState { overlay: self.overlay })
+    }
+
+    fn apply_extension_layer_state(&mut self, state: ExtensionLayerState) -> bool {
+        if !self.accept
+            || state
+                .overlay
+                .is_some_and(|effect| effect >= REPLICA_EFFECT_NAMES.len() as u8)
+        {
+            return false;
+        }
+        self.overlay = state.overlay;
         true
     }
 
@@ -144,6 +161,7 @@ fn replica_engine(accept: bool) -> StandardLightingEngine<'static, ReplicaExtens
                 value: 10,
                 speed: 20,
             },
+            overlay: Some(1),
             accept,
             params: [3, 128],
         },
@@ -276,7 +294,9 @@ fn replica_slot_rejects_overwrite_and_empty_take() {
         context: context(0),
         sample_time_ms: 9,
         extension: None,
+        extension_layers: None,
         extension_params: None,
+        extension_overlay_params: None,
     };
     slot.put(snapshot).unwrap();
     assert_eq!(slot.put(snapshot), Err(ReplicaSlotError::Busy));
@@ -309,7 +329,9 @@ fn replica_application_is_atomic_across_common_and_extension_state() {
         context: context(0),
         sample_time_ms: 50,
         extension: Some(next_extension),
+        extension_layers: Some(ExtensionLayerState { overlay: Some(0) }),
         extension_params: None,
+        extension_overlay_params: None,
     };
 
     let mut declining = replica_engine(false);
@@ -333,6 +355,48 @@ fn replica_application_is_atomic_across_common_and_extension_state() {
     assert_eq!(accepting.state().revision, 9);
     assert_eq!(accepting.state().output_brightness, 42);
     assert_eq!(accepting.extension().state, next_extension);
+    assert_eq!(accepting.extension().overlay, Some(0));
+}
+
+#[test]
+fn extension_layer_commands_round_trip_and_validate_the_shared_effect_list() {
+    let mut engine = replica_engine(true);
+    let read = engine
+        .handle_command(0, StandardCommand::ReadExtensionLayers, &context(0))
+        .unwrap();
+    assert_eq!(
+        read.reply,
+        StandardReply::ExtensionLayers(ExtensionLayersPage {
+            revision: 0,
+            state: Some(ExtensionLayerState { overlay: Some(1) }),
+        })
+    );
+
+    engine
+        .handle_command(
+            0,
+            StandardCommand::SetExtensionLayersIfRevision {
+                expected_revision: 0,
+                state: ExtensionLayerState { overlay: Some(0) },
+            },
+            &context(0),
+        )
+        .unwrap();
+    assert_eq!(engine.extension().overlay, Some(0));
+    assert_eq!(engine.state().revision, 1);
+
+    assert_eq!(
+        engine.handle_command(
+            0,
+            StandardCommand::SetExtensionLayersIfRevision {
+                expected_revision: 1,
+                state: ExtensionLayerState { overlay: Some(2) },
+            },
+            &context(0),
+        ),
+        Err(StandardError::ExtensionUnsupported)
+    );
+    assert_eq!(engine.extension().overlay, Some(0));
 }
 
 #[test]
@@ -482,7 +546,9 @@ fn invalid_replica_common_state_does_not_mutate_extension() {
             value: 30,
             speed: 40,
         }),
+        extension_layers: Some(ExtensionLayerState { overlay: Some(1) }),
         extension_params: None,
+        extension_overlay_params: None,
     };
     let mut engine = replica_engine(true);
     let before = engine.extension().state;

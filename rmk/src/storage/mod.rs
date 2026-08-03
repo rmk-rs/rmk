@@ -197,6 +197,8 @@ pub(crate) enum FlashOperationMessage {
     #[cfg(feature = "_ble")]
     // Read the persisted active BLE profile number; storage task replies via `ACTIVE_BLE_PROFILE_RESPONSE`.
     ReadActiveBleProfile,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionOverlay(LightingExtensionOverlayRecord),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -241,6 +243,8 @@ pub(crate) enum StorageKey {
     LightingRuntimeConditionalSceneShard(u8),
     #[cfg(all(feature = "lighting", feature = "rynk"))]
     LightingExtensionState,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionOverlay,
 }
 
 impl StorageKey {
@@ -334,6 +338,8 @@ pub(crate) enum StorageData {
     ),
     #[cfg(all(feature = "lighting", feature = "rynk"))]
     LightingExtensionState(LightingExtensionRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionOverlay(LightingExtensionOverlayRecord),
 }
 
 impl<'a> PostcardValue<'a> for StorageData {}
@@ -365,6 +371,25 @@ pub struct LightingExtensionRecord {
 #[cfg(all(feature = "lighting", feature = "rynk"))]
 impl LightingExtensionRecord {
     /// The parameter values that belong to [`Self::effect`].
+    pub fn params(&self) -> &[u8] {
+        &self.params[..(self.param_len as usize).min(LIGHTING_EXTENSION_PARAM_CHUNK)]
+    }
+}
+
+/// Persisted optional second effect and the parameter row it uses. This is a
+/// separate key so the established primary-extension record remains readable
+/// across firmware upgrades.
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct LightingExtensionOverlayRecord {
+    pub effect: Option<u8>,
+    pub param_len: u8,
+    pub params: [u8; LIGHTING_EXTENSION_PARAM_CHUNK],
+}
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+impl LightingExtensionOverlayRecord {
     pub fn params(&self) -> &[u8] {
         &self.params[..(self.param_len as usize).min(LIGHTING_EXTENSION_PARAM_CHUNK)]
     }
@@ -629,6 +654,14 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
     pub async fn read_lighting_extension_state(&mut self) -> Option<LightingExtensionRecord> {
         match self.fetch_data(StorageKey::LightingExtensionState).await {
             Some(StorageData::LightingExtensionState(record)) => Some(record),
+            _ => None,
+        }
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub async fn read_lighting_extension_overlay(&mut self) -> Option<LightingExtensionOverlayRecord> {
+        match self.fetch_data(StorageKey::LightingExtensionOverlay).await {
+            Some(StorageData::LightingExtensionOverlay(record)) => Some(record),
             _ => None,
         }
     }
@@ -1003,6 +1036,19 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                             self.store_data(
                                 StorageKey::LightingExtensionState,
                                 &StorageData::LightingExtensionState(record),
+                            )
+                            .await
+                        }
+                    }
+                }
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingExtensionOverlay(record) => {
+                    match self.fetch_data(StorageKey::LightingExtensionOverlay).await {
+                        Some(StorageData::LightingExtensionOverlay(saved)) if saved == record => Ok(()),
+                        _ => {
+                            self.store_data(
+                                StorageKey::LightingExtensionOverlay,
+                                &StorageData::LightingExtensionOverlay(record),
                             )
                             .await
                         }

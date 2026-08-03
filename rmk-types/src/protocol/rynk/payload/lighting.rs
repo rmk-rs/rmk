@@ -202,6 +202,9 @@ impl LightingFeatureFlags {
     pub const EXTENSION_EFFECTS: u16 = 1 << 11;
     /// Persistent, ordered conditional rules authored at runtime.
     pub const RUNTIME_CONDITIONAL_SCENES: u16 = 1 << 12;
+    /// A second effect from the extension's ordinary effect list can be
+    /// rendered over the primary effect.
+    pub const EXTENSION_LAYERING: u16 = 1 << 13;
 
     pub const fn contains(self, bits: u16) -> bool {
         self.0 & bits == bits
@@ -765,6 +768,22 @@ wire_type! {
     }
 }
 
+wire_type! {
+    /// Optional second effect layered over the primary extension selection.
+    /// The effect indexes the same list as `LightingExtensionState.effect`.
+    pub struct LightingExtensionLayers {
+        pub revision: u32,
+        pub overlay: Option<u8>,
+    }
+}
+
+wire_type! {
+    pub struct SetLightingExtensionLayersRequest {
+        pub expected_revision: u32,
+        pub overlay: Option<u8>,
+    }
+}
+
 /// One tunable parameter advertised by an extension effect: its static
 /// descriptor plus the source's live value. Descriptor and value travel in
 /// one row so a host can render a control from a single read.
@@ -1070,6 +1089,7 @@ pub type LightingConditionalSceneStatusResult = LightingResult<LightingCondition
 pub type LightingConditionalScenesPageResult = LightingResult<LightingConditionalScenesPage>;
 pub type LightingOutputModeStateResult = LightingResult<LightingOutputModeState>;
 pub type LightingExtensionResult = LightingResult<LightingExtension>;
+pub type LightingExtensionLayersResult = LightingResult<LightingExtensionLayers>;
 pub type LightingExtensionNamesPageResult = LightingResult<LightingExtensionNamesPage>;
 pub type LightingExtensionParamsPageResult = LightingResult<LightingExtensionParamsPage>;
 pub type LightingSceneTransactionResult = LightingResult<LightingSceneTransaction>;
@@ -1122,6 +1142,8 @@ const _: () = {
     assert_endpoint_fits!((), LightingExtensionResult);
     assert_endpoint_fits!(LightingExtensionNamesRequest, LightingExtensionNamesPageResult);
     assert_endpoint_fits!(SetLightingExtensionStateRequest, LightingStateResult);
+    assert_endpoint_fits!((), LightingExtensionLayersResult);
+    assert_endpoint_fits!(SetLightingExtensionLayersRequest, LightingStateResult);
     assert_endpoint_fits!(LightingExtensionParamsRequest, LightingExtensionParamsPageResult);
     assert_endpoint_fits!(SetLightingExtensionParamRequest, LightingStateResult);
     assert_endpoint_fits!(SetLightingOutputModeRequest, LightingOutputModeStateResult);
@@ -1351,6 +1373,18 @@ mod tests {
             palette: 2,
             value: 3,
             speed: 4,
+        });
+        round_trip(&LightingExtensionLayers {
+            revision: 5,
+            overlay: Some(6),
+        });
+        round_trip(&LightingExtensionLayers {
+            revision: 5,
+            overlay: None,
+        });
+        round_trip(&SetLightingExtensionLayersRequest {
+            expected_revision: 5,
+            overlay: Some(6),
         });
         round_trip(&LightingExtension {
             revision: u32::MAX,

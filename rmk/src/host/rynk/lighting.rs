@@ -18,8 +18,8 @@ use rmk_types::protocol::rynk::{
     LIGHTING_EXTENSION_NAME_CHUNK, LIGHTING_EXTENSION_NAME_SIZE, LIGHTING_EXTENSION_PARAM_CHUNK,
     LIGHTING_OVERLAY_CHUNK_SIZE, LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode, LightingBackgroundState,
     LightingCompiledScenesPage, LightingConditionalSceneCell as WireConditionalSceneCell,
-    LightingControls as WireLightingControls, LightingError, LightingExtension, LightingExtensionNameKind,
-    LightingExtensionNamesPage, LightingExtensionParam, LightingExtensionParamsPage,
+    LightingControls as WireLightingControls, LightingError, LightingExtension, LightingExtensionLayers,
+    LightingExtensionNameKind, LightingExtensionNamesPage, LightingExtensionParam, LightingExtensionParamsPage,
     LightingExtensionState as WireExtensionState, LightingLayerPolicy, LightingMutableState,
     LightingOutputMode as WireLightingOutputMode, LightingOutputModeIndicator as WireLightingOutputModeIndicator,
     LightingOutputModeState, LightingOverlayCell, LightingOverlayPage, LightingResult, LightingRgb8,
@@ -80,6 +80,7 @@ pub struct RynkLightingController<'a> {
     /// Whether the board wired a host-selectable extension source; gates the
     /// `EXTENSION_EFFECTS` capability bit and the extension endpoints.
     pub(super) extension_effects: bool,
+    pub(super) extension_layering: bool,
     mailbox: &'a RynkLightingMailbox,
 }
 
@@ -111,6 +112,7 @@ impl<'a> RynkLightingController<'a> {
                 output_mode_indicator: None,
             },
             extension_effects: false,
+            extension_layering: false,
             mailbox,
         }
     }
@@ -119,6 +121,12 @@ impl<'a> RynkLightingController<'a> {
     /// Boards whose extension band is not user-selectable skip this call.
     pub const fn with_extension_effects(mut self) -> Self {
         self.extension_effects = true;
+        self
+    }
+
+    /// Advertise an optional second effect from the extension's same list.
+    pub const fn with_extension_layering(mut self) -> Self {
+        self.extension_layering = true;
         self
     }
 
@@ -251,6 +259,7 @@ pub enum RynkLightingReadback {
     CompiledScenesPage(LightingCompiledScenesPage),
     SceneTransaction(LightingSceneTransaction),
     Extension(LightingExtension),
+    ExtensionLayers(LightingExtensionLayers),
     ExtensionNamesPage(LightingExtensionNamesPage),
     ExtensionParamsPage(LightingExtensionParamsPage),
     RuntimeConditionalScenesPage(LightingRuntimeConditionalScenesPage),
@@ -436,6 +445,11 @@ pub(super) enum RynkLightingCommand {
         expected_revision: u32,
         state: WireExtensionState,
     },
+    ReadExtensionLayers,
+    SetExtensionLayers {
+        expected_revision: u32,
+        overlay: Option<u8>,
+    },
     ReadExtensionParams {
         effect: u8,
         offset: u8,
@@ -618,7 +632,7 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
     #[cfg(feature = "storage")]
     async fn persist_extension(&self) {
         use crate::channel::FLASH_CHANNEL;
-        use crate::storage::{FlashOperationMessage, LightingExtensionRecord};
+        use crate::storage::{FlashOperationMessage, LightingExtensionOverlayRecord, LightingExtensionRecord};
 
         let Ok(page) = self.request_extension_page().await else {
             return;
@@ -653,6 +667,32 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                 param_len,
                 params,
             }))
+            .await;
+
+        let overlay = match self.request_core(StandardCommand::ReadExtensionLayers).await {
+            Ok(StandardReply::ExtensionLayers(page)) => page.state.and_then(|state| state.overlay),
+            _ => None,
+        };
+        let mut overlay_params = [0u8; LIGHTING_EXTENSION_PARAM_CHUNK];
+        let mut overlay_param_len = 0u8;
+        if let Some(effect) = overlay
+            && let Ok(StandardReply::ExtensionParams(page)) = self
+                .request_core(StandardCommand::ReadExtensionParams { effect, offset: 0 })
+                .await
+        {
+            for (slot, entry) in overlay_params.iter_mut().zip(page.items()) {
+                *slot = entry.value;
+                overlay_param_len += 1;
+            }
+        }
+        FLASH_CHANNEL
+            .send(FlashOperationMessage::LightingExtensionOverlay(
+                LightingExtensionOverlayRecord {
+                    effect: overlay,
+                    param_len: overlay_param_len,
+                    params: overlay_params,
+                },
+            ))
             .await;
     }
 
@@ -938,6 +978,31 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                             value: state.value,
                             speed: state.speed,
                         },
+                    })
+                    .await?;
+                return Ok(RynkLightingReadback::State(state_to_wire(state)));
+            }
+            RynkLightingCommand::ReadExtensionLayers => {
+                let page = match self.request_core(StandardCommand::ReadExtensionLayers).await? {
+                    StandardReply::ExtensionLayers(page) => page,
+                    _ => return Err(LightingError::InvalidRequest),
+                };
+                let Some(state) = page.state else {
+                    return Err(LightingError::Unsupported);
+                };
+                return Ok(RynkLightingReadback::ExtensionLayers(LightingExtensionLayers {
+                    revision: page.revision,
+                    overlay: state.overlay,
+                }));
+            }
+            RynkLightingCommand::SetExtensionLayers {
+                expected_revision,
+                overlay,
+            } => {
+                let state = self
+                    .extension_mutation(StandardCommand::SetExtensionLayersIfRevision {
+                        expected_revision,
+                        state: crate::lighting::compositor::ExtensionLayerState { overlay },
                     })
                     .await?;
                 return Ok(RynkLightingReadback::State(state_to_wire(state)));

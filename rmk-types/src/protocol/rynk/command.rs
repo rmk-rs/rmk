@@ -41,18 +41,19 @@ use crate::protocol::rynk::{
     CommitLightingOverlayReplaceRequest, CommitLightingRuntimeConditionalSceneReplaceRequest,
     CommitLightingSceneReplaceRequest, LightingCapabilitiesResult, LightingChanged, LightingCompiledSceneStatusResult,
     LightingCompiledScenesPageResult, LightingConditionalSceneStatusResult, LightingConditionalScenesPageResult,
-    LightingExtensionNamesPageResult, LightingExtensionNamesRequest, LightingExtensionParamsPageResult,
-    LightingExtensionParamsRequest, LightingExtensionResult, LightingKeysPageResult, LightingLedsPageResult,
-    LightingOutputModeStateResult, LightingOutputsPageResult, LightingOverlayPageRequest, LightingOverlayPageResult,
-    LightingOverlayTransactionResult, LightingPageRequest, LightingPhysicalKeysPageResult, LightingRoutesPageResult,
-    LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatusResult,
+    LightingExtensionLayersResult, LightingExtensionNamesPageResult, LightingExtensionNamesRequest,
+    LightingExtensionParamsPageResult, LightingExtensionParamsRequest, LightingExtensionResult, LightingKeysPageResult,
+    LightingLedsPageResult, LightingOutputModeStateResult, LightingOutputsPageResult, LightingOverlayPageRequest,
+    LightingOverlayPageResult, LightingOverlayTransactionResult, LightingPageRequest, LightingPhysicalKeysPageResult,
+    LightingRoutesPageResult, LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatusResult,
     LightingRuntimeConditionalSceneTransactionResult, LightingRuntimeConditionalScenesPageResult,
     LightingScenePageRequest, LightingSceneStatusResult, LightingSceneTransactionResult, LightingScenesPageResult,
     LightingStateResult, LightingUnitResult, LightingZoneMembershipsPageResult, LightingZonesPageResult,
     PutLightingOverlayChunkRequest, PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest,
-    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest,
-    SetLightingOutputModeRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
-    SetLightingWakeLayersRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
+    SetLightingExtensionLayersRequest, SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
+    SetLightingLayerPolicyRequest, SetLightingOutputModeRequest, SetLightingOverlayRequest,
+    SetLightingSceneCellRequest, SetLightingStateRequest, SetLightingWakeLayersRequest, UnsetLightingOverlayRequest,
+    UnsetLightingSceneCellRequest,
 };
 #[cfg(all(feature = "_ble", feature = "split"))]
 use crate::protocol::rynk::{SplitCentralLatencyPolicy, SplitCentralLatencyState};
@@ -489,6 +490,12 @@ endpoints! {
     /// dynamic so which layers wake lighting is not a firmware rebuild.
     #[cfg(feature = "lighting")]
     SetLightingWakeLayers = 0x092D: SetLightingWakeLayersRequest => LightingOutputModeStateResult;
+    /// Read the optional second effect layered over the primary extension.
+    #[cfg(feature = "lighting")]
+    GetLightingExtensionLayers = 0x092E: () => LightingExtensionLayersResult;
+    /// Replace the optional second effect when the state revision matches.
+    #[cfg(feature = "lighting")]
+    SetLightingExtensionLayers = 0x092F: SetLightingExtensionLayersRequest => LightingStateResult;
 }
 
 // Define topics: `Name = value: Payload;`

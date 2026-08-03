@@ -22,28 +22,29 @@ use rmk_types::led_indicator::LedIndicator;
 use rmk_types::modifier::ModifierCombination;
 use rmk_types::morse::Morse;
 use rmk_types::protocol::rynk::{
-    AbortLightingOverlayReplaceRequest, AbortLightingSceneReplaceRequest, BeginLightingOverlayReplaceRequest,
-    BeginLightingSceneReplaceRequest, BehaviorConfig, ClearLightingOverlayRequest, Cmd,
-    CommitLightingOverlayReplaceRequest, CommitLightingSceneReplaceRequest, DeviceCapabilities, DeviceInfo,
-    GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest, GetKeymapBulkRequest, GetKeymapBulkResponse,
-    GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse, KeyPosition, LightingCapabilities, LightingKeysPage,
-    LightingLedsPage, LightingOutputsPage, LightingOverlayTransaction, LightingPageRequest, LightingPhysicalKeysPage,
-    LightingResult, LightingRoutesPage, LightingState, LightingZoneMembershipsPage, LightingZonesPage, LockStatus,
-    MacroData, MatrixState, PeripheralStatus, ProtocolVersion, PutLightingOverlayChunkRequest, SetComboBulkRequest,
-    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest,
-    SetLightingOverlayRequest, SetLightingStateRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest,
-    StorageResetMode, UnsetLightingOverlayRequest, command, BuildInfo, LightingScenePageRequest, LightingSceneStatus,
-    LightingSceneTransaction, LightingScenesPage, PutLightingSceneChunkRequest, SetLightingLayerPolicyRequest,
-    SetLightingSceneCellRequest, UnsetLightingSceneCellRequest, LayerState, LightingCompiledSceneStatus,
-    LightingCompiledScenesPage, LightingOverlayPage, LightingOverlayPageRequest, SplitCentralLatencyPolicy,
-    SplitCentralLatencyState, LightingConditionalSceneStatus, LightingConditionalScenesPage, LightingOutputModeState,
-    LightingExtension, LightingExtensionNameKind, LightingExtensionNamesPage, LightingExtensionNamesRequest,
-    LightingExtensionParamsPage, LightingExtensionParamsRequest, SetLightingExtensionParamRequest,
-    SetLightingExtensionStateRequest, AbortLightingRuntimeConditionalSceneReplaceRequest,
-    BeginLightingRuntimeConditionalSceneReplaceRequest, CommitLightingRuntimeConditionalSceneReplaceRequest,
-    LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatus,
-    LightingRuntimeConditionalSceneTransaction, LightingRuntimeConditionalScenesPage,
-    PutLightingRuntimeConditionalSceneChunkRequest, SetLightingOutputModeRequest,
+    AbortLightingOverlayReplaceRequest, AbortLightingRuntimeConditionalSceneReplaceRequest,
+    AbortLightingSceneReplaceRequest, BeginLightingOverlayReplaceRequest,
+    BeginLightingRuntimeConditionalSceneReplaceRequest, BeginLightingSceneReplaceRequest, BehaviorConfig, BuildInfo,
+    ClearLightingOverlayRequest, Cmd, CommitLightingOverlayReplaceRequest,
+    CommitLightingRuntimeConditionalSceneReplaceRequest, CommitLightingSceneReplaceRequest, DeviceCapabilities,
+    DeviceInfo, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest, GetKeymapBulkRequest,
+    GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse, KeyPosition, LayerState,
+    LightingCapabilities, LightingCompiledSceneStatus, LightingCompiledScenesPage, LightingConditionalSceneStatus,
+    LightingConditionalScenesPage, LightingExtension, LightingExtensionLayers, LightingExtensionNameKind,
+    LightingExtensionNamesPage, LightingExtensionNamesRequest, LightingExtensionParamsPage,
+    LightingExtensionParamsRequest, LightingKeysPage, LightingLedsPage, LightingOutputModeState, LightingOutputsPage,
+    LightingOverlayPage, LightingOverlayPageRequest, LightingOverlayTransaction, LightingPageRequest,
+    LightingPhysicalKeysPage, LightingResult, LightingRoutesPage, LightingRuntimeConditionalScenePageRequest,
+    LightingRuntimeConditionalSceneStatus, LightingRuntimeConditionalSceneTransaction,
+    LightingRuntimeConditionalScenesPage, LightingScenePageRequest, LightingSceneStatus, LightingSceneTransaction,
+    LightingScenesPage, LightingState, LightingZoneMembershipsPage, LightingZonesPage, LockStatus, MacroData,
+    MatrixState, PeripheralStatus, ProtocolVersion, PutLightingOverlayChunkRequest,
+    PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest, SetComboBulkRequest, SetComboRequest,
+    SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetLightingExtensionLayersRequest,
+    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest,
+    SetLightingOutputModeRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
+    SetMacroRequest, SetMorseBulkRequest, SetMorseRequest, SplitCentralLatencyPolicy, SplitCentralLatencyState,
+    StorageResetMode, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest, command,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -644,6 +645,21 @@ impl Client {
         Self::flatten_lighting(self.request::<command::SetLightingExtensionState>(&request).await?)
     }
 
+    /// Read the optional second effect layered over the primary extension.
+    pub async fn get_lighting_extension_layers(&self) -> Result<LightingExtensionLayers, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingExtensionLayers)?;
+        Self::flatten_lighting(self.request::<command::GetLightingExtensionLayers>(&()).await?)
+    }
+
+    /// Replace the optional second effect when the state revision matches.
+    pub async fn set_lighting_extension_layers(
+        &self,
+        request: SetLightingExtensionLayersRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingExtensionLayers)?;
+        Self::flatten_lighting(self.request::<command::SetLightingExtensionLayers>(&request).await?)
+    }
+
     /// Read one page of an extension effect's tunable parameters. Unlike name
     /// pages these carry live values, so they are pinned to
     /// `LightingState.revision`.
@@ -1227,12 +1243,10 @@ impl Client {
         cells: &[rmk_types::protocol::rynk::LightingConditionalSceneCell],
     ) -> Result<LightingState, RynkHostError> {
         let transaction = self
-            .begin_lighting_runtime_conditional_scene_replace(
-                BeginLightingRuntimeConditionalSceneReplaceRequest {
-                    expected_revision,
-                    cell_count: cells.len() as u16,
-                },
-            )
+            .begin_lighting_runtime_conditional_scene_replace(BeginLightingRuntimeConditionalSceneReplaceRequest {
+                expected_revision,
+                cell_count: cells.len() as u16,
+            })
             .await?;
         let mut offset: u16 = 0;
         for chunk in cells.chunks(rmk_types::protocol::rynk::LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE) {
@@ -1256,11 +1270,9 @@ impl Client {
             }
             offset += chunk.len() as u16;
         }
-        self.commit_lighting_runtime_conditional_scene_replace(
-            CommitLightingRuntimeConditionalSceneReplaceRequest {
-                transaction_id: transaction.id,
-            },
-        )
+        self.commit_lighting_runtime_conditional_scene_replace(CommitLightingRuntimeConditionalSceneReplaceRequest {
+            transaction_id: transaction.id,
+        })
         .await
     }
 

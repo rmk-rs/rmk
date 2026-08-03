@@ -7,7 +7,7 @@ use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use super::*;
 use crate::RawMutex;
 use crate::lighting::compositor::{
-    ExtensionDescriptor, ExtensionParamSpec, ExtensionState, LightingSource, RenderError,
+    ExtensionDescriptor, ExtensionLayerState, ExtensionParamSpec, ExtensionState, LightingSource, RenderError,
 };
 use crate::lighting::context::LightingContext;
 use crate::lighting::source::{LayerPolicy, OutputMode, OverlayError};
@@ -87,6 +87,11 @@ pub enum StandardCommand<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
     SetExtensionIfRevision {
         expected_revision: u32,
         state: ExtensionState,
+    },
+    ReadExtensionLayers,
+    SetExtensionLayersIfRevision {
+        expected_revision: u32,
+        state: ExtensionLayerState,
     },
     /// One page of the addressed effect's parameter specs paired with the
     /// source's live values.
@@ -210,6 +215,12 @@ pub struct ExtensionPage {
     pub revision: u32,
     pub descriptor: Option<ExtensionDescriptor>,
     pub state: Option<ExtensionState>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ExtensionLayersPage {
+    pub revision: u32,
+    pub state: Option<ExtensionLayerState>,
 }
 
 /// Number of extension parameters carried by one [`ExtensionParamsPage`].
@@ -348,6 +359,7 @@ pub enum StandardReply {
     CompiledScenesPage(CompiledScenePage),
     SceneTransaction { id: u32, cell_count: u16 },
     Extension(ExtensionPage),
+    ExtensionLayers(ExtensionLayersPage),
     ExtensionParams(ExtensionParamsPage),
     RuntimeConditionalScenesPage(RuntimeConditionalScenePage),
     RuntimeConditionalSceneTransaction { id: u32, cell_count: u16 },
@@ -387,9 +399,13 @@ pub struct StandardReplicaState<const OVERLAY_CAP: usize, const SCENE_CAP: usize
     /// the authority's animated band. `None` when the authority has no
     /// selectable extension.
     pub extension: Option<ExtensionState>,
+    /// Optional second effect rendered over `extension`.
+    pub extension_layers: Option<ExtensionLayerState>,
     /// The active effect's live parameter values. `None` when the authority
     /// has no selectable extension or the active effect has no parameters.
     pub extension_params: Option<ExtensionReplicaParams>,
+    /// Overlay effect parameters when it has a distinct parameter row.
+    pub extension_overlay_params: Option<ExtensionReplicaParams>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

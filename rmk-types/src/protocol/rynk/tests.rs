@@ -1418,6 +1418,14 @@ fn lighting_wire_frames_locked() {
         expected_revision: state.revision,
         state: extension.state,
     };
+    let extension_layers = LightingExtensionLayers {
+        revision: state.revision,
+        overlay: Some(5),
+    };
+    let set_extension_layers = SetLightingExtensionLayersRequest {
+        expected_revision: state.revision,
+        overlay: Some(5),
+    };
     let extension_params_request = LightingExtensionParamsRequest { effect: 1, offset: 0 };
     let extension_params_page = LightingExtensionParamsPage {
         revision: state.revision,
@@ -2054,6 +2062,30 @@ fn lighting_wire_frames_locked() {
             "SetLightingExtensionState reply",
             encode_frame(
                 Cmd::SetLightingExtensionState,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "GetLightingExtensionLayers request",
+            encode_frame(Cmd::GetLightingExtensionLayers, SEQ, &())
+        ),
+        (
+            "GetLightingExtensionLayers reply",
+            encode_frame(
+                Cmd::GetLightingExtensionLayers,
+                SEQ,
+                &Ok::<LightingExtensionLayersResult, RynkError>(Ok(extension_layers))
+            )
+        ),
+        (
+            "SetLightingExtensionLayers request",
+            encode_frame(Cmd::SetLightingExtensionLayers, SEQ, &set_extension_layers)
+        ),
+        (
+            "SetLightingExtensionLayers reply",
+            encode_frame(
+                Cmd::SetLightingExtensionLayers,
                 SEQ,
                 &Ok::<LightingStateResult, RynkError>(Ok(state))
             )
