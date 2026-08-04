@@ -1246,8 +1246,11 @@ where
             effect: indicator.effect(self.output_mode),
         });
         // Captured before the destructuring below borrows the rest of `self`;
-        // the runtime conditional source needs it to evaluate output-mode rules.
+        // the runtime conditional source needs them to evaluate output-mode
+        // and effects rules. A source that reports no extension state cannot
+        // answer whether effects are on, so such rules stay unsatisfiable.
         let output_mode = self.output_mode;
+        let effects_enabled = self.extension.extension_state().map(|state| state.value != 0);
         let Self {
             compositor,
             background,
@@ -1290,6 +1293,7 @@ where
             table: runtime_conditional_scenes,
             batteries: *battery_status,
             output_mode,
+            effects_enabled,
         };
         transaction.apply(priority::STATUS, &mut runtime_conditional_source)?;
         if wake_active && let Some(indicator_cell) = indicator_cell.as_ref() {

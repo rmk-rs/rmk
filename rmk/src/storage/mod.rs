@@ -799,7 +799,11 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
             for cell in shard {
                 if cells.len() == len
                     || cells
-                        .push(LightingExtendedConditionalSceneCell { cell, connection: None })
+                        .push(LightingExtendedConditionalSceneCell {
+                            cell,
+                            connection: None,
+                            effects: None,
+                        })
                         .is_err()
                 {
                     break 'legacy_shards;
@@ -1496,6 +1500,7 @@ mod tests {
                     profile: Some(4),
                     ble_state: Some(rmk_types::ble::BleState::Advertising),
                 }),
+                effects: None,
             };
             let mut shard = heapless::Vec::<
                 LightingExtendedConditionalSceneCell,

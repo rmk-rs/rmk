@@ -1526,6 +1526,7 @@ fn lighting_wire_frames_locked() {
             profile: Some(3),
             ble_state: Some(BleState::Connected),
         }),
+        effects: Some(LightingEffectsCondition { enabled: true }),
     };
     let extended_runtime_conditional_page = LightingExtendedRuntimeConditionalScenesPage {
         revision: state.revision,

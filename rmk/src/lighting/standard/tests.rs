@@ -10,7 +10,8 @@ use crate::lighting::compositor::{
 use crate::lighting::effect::{BuiltinEffect, LightingEffect};
 use crate::lighting::service::{Invalidation, LightingEngine, RenderInput};
 use crate::lighting::source::{
-    BatteryStatusProvider, ConditionSet, LayerScenes, LightingControls, OutputMode, OverlayError, SparseScene,
+    BatteryStatusProvider, ConditionSet, EffectsCondition, LayerScenes, LightingControls, OutputMode, OverlayError,
+    SparseScene,
 };
 use crate::lighting::topology::LedSlot;
 use crate::lighting::{LayerPolicy, LayerScene, LayerState, LightingContext, Rgb8, SceneCell};
@@ -1693,6 +1694,7 @@ fn runtime_conditional_replace_preserves_order_and_output_mode_is_revision_check
                 }),
                 connection: None,
                 output_mode: None,
+                effects: None,
             },
             slot: LedSlot(1),
             effect: BuiltinEffect::Solid { color: RED },
@@ -1705,6 +1707,7 @@ fn runtime_conditional_replace_preserves_order_and_output_mode_is_revision_check
                 battery: None,
                 connection: None,
                 output_mode: None,
+                effects: None,
             },
             slot: LedSlot(1),
             effect: BuiltinEffect::Solid { color: GREEN },
@@ -1973,6 +1976,7 @@ fn conditional_rules_share_styles_without_losing_order_or_conditions() {
                 battery: None,
                 connection: None,
                 output_mode: Some(OutputMode::AlwaysOn),
+                effects: None,
             },
             slot: LedSlot(3),
             effect,
@@ -1983,6 +1987,7 @@ fn conditional_rules_share_styles_without_losing_order_or_conditions() {
                 battery: None,
                 connection: None,
                 output_mode: Some(OutputMode::PoweredOnly),
+                effects: None,
             },
             slot: LedSlot(3),
             effect,
@@ -2114,6 +2119,7 @@ fn output_mode_conditions_select_between_runtime_rules() {
             battery: None,
             connection: None,
             output_mode: Some(mode),
+            effects: None,
         },
         slot: LedSlot(0),
         effect: BuiltinEffect::Solid { color },
@@ -2175,6 +2181,88 @@ fn output_mode_conditions_select_between_runtime_rules() {
     assert_eq!(frame.as_slice()[0], RED);
 }
 
+/// The effects condition exists so a key can report whether the extension band
+/// is rendering — the state `RgbTog` flips. Zeroing the extension's value is
+/// what "off" means, so the two rules trade places with no edit to the table.
+#[test]
+fn effects_conditions_follow_the_extension_value() {
+    let rule = |enabled: bool, color: Rgb8| RuntimeConditionalSceneCell {
+        conditions: ConditionSet {
+            layer: None,
+            battery: None,
+            connection: None,
+            output_mode: None,
+            effects: Some(EffectsCondition { enabled }),
+        },
+        slot: LedSlot(0),
+        effect: BuiltinEffect::Solid { color },
+    };
+
+    type ConditionalEngine = StandardLightingEngine<'static, ReplicaExtension, EmptySource, 2, 2, 4>;
+    let mut engine: ConditionalEngine = StandardLightingEngine::new(
+        BackgroundState::default(),
+        LayerScenes {
+            scenes: &[],
+            policy: LayerPolicy::EffectiveOnly,
+        },
+        ReplicaExtension {
+            state: ExtensionState {
+                effect: 0,
+                palette: 0,
+                value: 200,
+                speed: 0,
+            },
+            overlay: None,
+            accept: true,
+            params: [0, 0],
+        },
+        EmptySource,
+    );
+    for cell in [rule(true, GREEN), rule(false, RED)] {
+        engine.install_runtime_conditional_scene_cell(cell).unwrap();
+    }
+
+    let snapshot = LightingContext {
+        layers: LayerState::new(0, 0, 1),
+        indicators: Default::default(),
+        powered: true,
+        connection: Default::default(),
+    };
+    let mut frame = LogicalFrame::new(Rgb8::BLACK);
+    let render = |engine: &mut ConditionalEngine, frame: &mut LogicalFrame<Rgb8, 2>| {
+        engine
+            .render(
+                RenderInput {
+                    now_ms: 0,
+                    snapshot: &snapshot,
+                },
+                frame,
+            )
+            .unwrap();
+    };
+
+    render(&mut engine, &mut frame);
+    assert_eq!(frame.as_slice()[0], GREEN);
+
+    engine
+        .handle_command(
+            0,
+            StandardCommand::SetExtensionIfRevision {
+                expected_revision: engine.state().revision,
+                state: ExtensionState {
+                    effect: 0,
+                    palette: 0,
+                    value: 0,
+                    speed: 0,
+                },
+            },
+            &snapshot,
+        )
+        .unwrap();
+    render(&mut engine, &mut frame);
+    assert_eq!(frame.as_slice()[0], RED);
+}
+
 #[test]
 fn runtime_conditional_cells_outrank_layer_scenes_and_compiled_conditional_rules() {
     use rmk_types::battery::BatteryStatus;
@@ -2198,6 +2286,7 @@ fn runtime_conditional_cells_outrank_layer_scenes_and_compiled_conditional_rules
             battery: None,
             connection: None,
             output_mode: None,
+            effects: None,
         },
         slot: LedSlot(0),
         effect: BuiltinEffect::Solid { color: GREEN },
@@ -2248,6 +2337,7 @@ fn runtime_conditional_cells_outrank_layer_scenes_and_compiled_conditional_rules
                 battery: None,
                 connection: None,
                 output_mode: None,
+                effects: None,
             },
             slot: LedSlot(0),
             effect: BuiltinEffect::Solid { color: BLUE },

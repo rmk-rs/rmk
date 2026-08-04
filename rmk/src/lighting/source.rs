@@ -1,10 +1,11 @@
+use rmk_types::ble::BleState;
+use rmk_types::connection::ConnectionType;
+
 use super::compositor::{Contribution, LightingSource, RenderInput};
 use super::context::{LightingContext, LightingContextProvider};
 use super::effect::{BuiltinEffect, EffectSample, LightingEffect};
 use super::topology::LedSlot;
 use crate::types::battery::{BatteryStatus, ChargeState};
-use rmk_types::ble::BleState;
-use rmk_types::connection::ConnectionType;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct SceneCell<E> {
@@ -193,6 +194,17 @@ pub struct ConnectionCondition {
     pub ble_state: Option<BleState>,
 }
 
+/// Satisfied when the extension band's enabled state equals `enabled`. An
+/// extension is enabled when its [`ExtensionState::value`] is non-zero, which
+/// is what `RgbTog` flips, so this is how a key can indicate whether effects
+/// are currently rendering.
+///
+/// [`ExtensionState::value`]: crate::lighting::ExtensionState::value
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct EffectsCondition {
+    pub enabled: bool,
+}
+
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct ConditionSet {
     pub layer: Option<LayerCondition>,
@@ -202,6 +214,10 @@ pub struct ConditionSet {
     /// cannot observe the policy treat it as unsatisfiable rather than true,
     /// so a rule gated on it never fires where it cannot be evaluated.
     pub output_mode: Option<OutputMode>,
+    /// Satisfied when the extension band's enabled state matches. Sources
+    /// without a view of the extension treat it as unsatisfiable, on the same
+    /// grounds as `output_mode`.
+    pub effects: Option<EffectsCondition>,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -273,6 +289,7 @@ impl ConditionSet {
         context: &Context,
         batteries: &Batteries,
         output_mode: Option<OutputMode>,
+        effects_enabled: Option<bool>,
     ) -> bool
     where
         Context: LightingContextProvider,
@@ -280,6 +297,11 @@ impl ConditionSet {
     {
         if let Some(wanted) = self.output_mode
             && output_mode != Some(wanted)
+        {
+            return false;
+        }
+        if let Some(wanted) = self.effects
+            && effects_enabled != Some(wanted.enabled)
         {
             return false;
         }
@@ -367,7 +389,7 @@ impl<'a, E, Batteries: ?Sized> ConditionalScenes<'a, E, Batteries> {
         for cell in self
             .cells
             .iter()
-            .filter(|cell| cell.conditions.matches(context, self.batteries, None))
+            .filter(|cell| cell.conditions.matches(context, self.batteries, None, None))
         {
             if wanted == 0 {
                 return cell;
@@ -387,7 +409,7 @@ where
     fn len(&self, input: &RenderInput<'_, Context>) -> usize {
         self.cells
             .iter()
-            .filter(|cell| cell.conditions.matches(input.context, self.batteries, None))
+            .filter(|cell| cell.conditions.matches(input.context, self.batteries, None, None))
             .count()
     }
 
@@ -672,11 +694,12 @@ fn earliest(left: Option<u64>, right: Option<u64>) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use rmk_types::ble::{BleState, BleStatus};
+    use rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
+
     use super::super::{BuiltinEffect, Compositor, LayerState, LogicalFrame, Rgb8};
     use super::*;
     use crate::types::battery::{BatteryStatus, ChargeState};
-    use rmk_types::ble::{BleState, BleStatus};
-    use rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
 
     const RED: Rgb8 = Rgb8::new(10, 0, 0);
     const GREEN: Rgb8 = Rgb8::new(0, 10, 0);
@@ -712,9 +735,9 @@ mod tests {
             ..ConditionSet::default()
         };
 
-        assert!(conditions.matches(&context, &NoBatteries, None));
+        assert!(conditions.matches(&context, &NoBatteries, None, None));
         context.connection.preferred = ConnectionType::Usb;
-        assert!(!conditions.matches(&context, &NoBatteries, None));
+        assert!(!conditions.matches(&context, &NoBatteries, None, None));
 
         let usb = ConditionSet {
             connection: Some(ConnectionCondition {
@@ -724,13 +747,36 @@ mod tests {
             }),
             ..ConditionSet::default()
         };
-        assert!(usb.matches(&context, &NoBatteries, None));
+        assert!(usb.matches(&context, &NoBatteries, None, None));
 
         context.connection.ble.profile = 4;
-        assert!(!usb.matches(&context, &NoBatteries, None));
+        assert!(!usb.matches(&context, &NoBatteries, None, None));
         context.connection.ble.profile = 3;
         context.connection.ble.state = BleState::Advertising;
-        assert!(!usb.matches(&context, &NoBatteries, None));
+        assert!(!usb.matches(&context, &NoBatteries, None, None));
+    }
+
+    #[test]
+    fn effects_condition_needs_a_source_that_can_answer() {
+        let context = LightingContext::default();
+        let on = ConditionSet {
+            effects: Some(EffectsCondition { enabled: true }),
+            ..ConditionSet::default()
+        };
+        let off = ConditionSet {
+            effects: Some(EffectsCondition { enabled: false }),
+            ..ConditionSet::default()
+        };
+
+        assert!(on.matches(&context, &NoBatteries, None, Some(true)));
+        assert!(!on.matches(&context, &NoBatteries, None, Some(false)));
+        assert!(off.matches(&context, &NoBatteries, None, Some(false)));
+        assert!(!off.matches(&context, &NoBatteries, None, Some(true)));
+
+        // A source with no view of the extension leaves both unsatisfiable,
+        // rather than letting one of them fire wherever it cannot be judged.
+        assert!(!on.matches(&context, &NoBatteries, None, None));
+        assert!(!off.matches(&context, &NoBatteries, None, None));
     }
 
     #[test]
@@ -759,8 +805,8 @@ mod tests {
             ..ConditionSet::default()
         };
 
-        assert!(none_active.matches(&context, &NoBatteries, None));
-        assert!(empty.matches(&context, &NoBatteries, None));
+        assert!(none_active.matches(&context, &NoBatteries, None, None));
+        assert!(empty.matches(&context, &NoBatteries, None, None));
     }
 
     #[test]
@@ -886,6 +932,7 @@ mod tests {
                     }),
                     connection: None,
                     output_mode: None,
+                    effects: None,
                 },
                 slot: LedSlot(0),
                 effect: BuiltinEffect::solid(GREEN),
@@ -901,6 +948,7 @@ mod tests {
                     }),
                     connection: None,
                     output_mode: None,
+                    effects: None,
                 },
                 slot: LedSlot(1),
                 effect: BuiltinEffect::solid(BLUE),
@@ -917,6 +965,7 @@ mod tests {
                     }),
                     connection: None,
                     output_mode: None,
+                    effects: None,
                 },
                 slot: LedSlot(0),
                 effect: BuiltinEffect::solid(RED),

@@ -1411,6 +1411,7 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
         self.runtime_conditional_scene_cell_from_extended_wire(WireExtendedConditionalSceneCell {
             cell,
             connection: None,
+            effects: None,
         })
     }
 
@@ -1427,6 +1428,9 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
             })?;
         let mut conditions = condition_set_from_wire(cell.cell.conditions);
         conditions.connection = cell.connection.map(connection_condition_from_wire);
+        conditions.effects = cell.effects.map(|effects| crate::lighting::EffectsCondition {
+            enabled: effects.enabled,
+        });
         Ok(RuntimeConditionalSceneCell {
             conditions,
             slot,
@@ -1453,6 +1457,12 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                 effect: effect_to_wire(cell.effect),
             },
             connection: cell.conditions.connection.map(connection_condition_to_wire),
+            effects: cell
+                .conditions
+                .effects
+                .map(|effects| rmk_types::protocol::rynk::LightingEffectsCondition {
+                    enabled: effects.enabled,
+                }),
         })
     }
 }
@@ -1506,6 +1516,9 @@ pub fn install_lighting_runtime_conditional_scenes<
         };
         let mut conditions = condition_set_from_wire(cell.cell.conditions);
         conditions.connection = cell.connection.map(connection_condition_from_wire);
+        conditions.effects = cell.effects.map(|effects| crate::lighting::EffectsCondition {
+            enabled: effects.enabled,
+        });
         let _ = engine.install_runtime_conditional_scene_cell(RuntimeConditionalSceneCell {
             conditions,
             slot,
@@ -1694,6 +1707,7 @@ fn condition_set_from_wire(
             },
         }),
         connection: None,
+        effects: None,
         output_mode: conditions.output_mode.map(|mode| match mode {
             rmk_types::protocol::rynk::LightingOutputMode::AlwaysOn => crate::lighting::OutputMode::AlwaysOn,
             rmk_types::protocol::rynk::LightingOutputMode::AlwaysOff => crate::lighting::OutputMode::AlwaysOff,

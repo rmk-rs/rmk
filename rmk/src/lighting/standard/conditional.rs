@@ -21,6 +21,7 @@ pub(super) const EMPTY_CONDITIONAL_SCENE_CELL: RuntimeConditionalSceneCell = Run
         battery: None,
         connection: None,
         output_mode: None,
+        effects: None,
     },
     slot: LedSlot(0),
     effect: BuiltinEffect::Solid { color: Rgb8::BLACK },
@@ -42,6 +43,7 @@ const EMPTY_INTERNED_CONDITIONAL_SCENE_CELL: InternedRuntimeConditionalSceneCell
             battery: None,
             connection: None,
             output_mode: None,
+            effects: None,
         },
         slot: LedSlot(0),
         style: 0,
@@ -184,6 +186,9 @@ pub(super) struct RuntimeConditionalSource<'a, Batteries: ?Sized, const CAP: usi
     /// The engine owns the policy, so unlike the board's compiled source this
     /// one can evaluate an output-mode condition.
     pub(super) output_mode: OutputMode,
+    /// Whether the extension band is rendering, for the same reason: the
+    /// engine holds the extension source, so it can answer for it.
+    pub(super) effects_enabled: Option<bool>,
 }
 
 impl<Context, Batteries, const CAP: usize> LightingSource<Rgb8, Context>
@@ -196,8 +201,12 @@ where
         self.table
             .iter()
             .filter(|cell| {
-                cell.conditions
-                    .matches(input.context, self.batteries, Some(self.output_mode))
+                cell.conditions.matches(
+                    input.context,
+                    self.batteries,
+                    Some(self.output_mode),
+                    self.effects_enabled,
+                )
             })
             .count()
     }
@@ -206,8 +215,12 @@ where
         self.table
             .iter()
             .filter(|cell| {
-                cell.conditions
-                    .matches(input.context, self.batteries, Some(self.output_mode))
+                cell.conditions.matches(
+                    input.context,
+                    self.batteries,
+                    Some(self.output_mode),
+                    self.effects_enabled,
+                )
             })
             .nth(index)
             .expect("LightingSource index must be below len")
@@ -219,8 +232,12 @@ where
             .table
             .iter()
             .filter(|cell| {
-                cell.conditions
-                    .matches(input.context, self.batteries, Some(self.output_mode))
+                cell.conditions.matches(
+                    input.context,
+                    self.batteries,
+                    Some(self.output_mode),
+                    self.effects_enabled,
+                )
             })
             .nth(index)
             .expect("LightingSource index must be below len");

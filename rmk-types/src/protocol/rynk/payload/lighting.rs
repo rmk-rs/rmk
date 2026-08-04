@@ -21,8 +21,10 @@ pub const LIGHTING_OVERLAY_CHUNK_SIZE: usize = 8;
 pub const LIGHTING_SCENE_CHUNK_SIZE: usize = 8;
 /// Number of immutable conditional cells in one readback page.
 pub const LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 7;
-/// Number of connection-aware conditional cells in one extended page/chunk.
-pub const LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 6;
+/// Number of connection- and effects-aware conditional cells in one extended
+/// page/chunk. Lower than the legacy chunk because each cell carries the two
+/// added predicates and the page still has to fit `LIGHTING_PAYLOAD_SIZE`.
+pub const LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 5;
 /// Maximum UTF-8 byte length of a zone name.
 pub const LIGHTING_ZONE_NAME_SIZE: usize = 24;
 /// Maximum UTF-8 byte length of one extension effect or palette name.
@@ -212,6 +214,12 @@ impl LightingFeatureFlags {
     /// Runtime conditional rules can match transport and BLE connection state
     /// through the extended conditional-scene endpoints.
     pub const RUNTIME_CONNECTION_CONDITIONS: u16 = 1 << 14;
+    /// The extended conditional-scene cell also carries an effects predicate.
+    /// This bit describes the cell's encoding, not just an added predicate:
+    /// firmware advertising only `RUNTIME_CONNECTION_CONDITIONS` speaks the
+    /// earlier extended cell, so a host that cannot see this bit must use the
+    /// legacy endpoints rather than risk a misparse.
+    pub const RUNTIME_EFFECTS_CONDITIONS: u16 = 1 << 15;
 
     pub const fn contains(self, bits: u16) -> bool {
         self.0 & bits == bits
@@ -679,11 +687,20 @@ wire_type! {
 }
 
 wire_type! {
+    /// Gate on whether the extension band is rendering. An extension is
+    /// enabled while its value is non-zero, so this tracks `RgbTog`.
+    pub struct LightingEffectsCondition {
+        pub enabled: bool,
+    }
+}
+
+wire_type! {
     /// Additive runtime conditional cell used by the extended endpoints. The
     /// nested legacy cell keeps its established postcard field order intact.
     pub struct LightingExtendedConditionalSceneCell {
         pub cell: LightingConditionalSceneCell,
         pub connection: Option<LightingConnectionCondition>,
+        pub effects: Option<LightingEffectsCondition>,
     }
 }
 
@@ -1482,6 +1499,7 @@ mod tests {
                 profile: Some(3),
                 ble_state: Some(BleState::Connected),
             }),
+            effects: Some(LightingEffectsCondition { enabled: true }),
         };
         round_trip(&cell);
 

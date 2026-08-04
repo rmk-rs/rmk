@@ -747,9 +747,11 @@ impl Client {
         )
     }
 
-    /// Read connection-aware runtime conditional cells. Callers should use
-    /// this only when lighting capabilities advertise
-    /// `RUNTIME_CONNECTION_CONDITIONS`.
+    /// Read connection- and effects-aware runtime conditional cells. The
+    /// extended cell's encoding is described by
+    /// `RUNTIME_EFFECTS_CONDITIONS`, so callers that cannot see that bit
+    /// should use the legacy endpoints rather than risk a misparse against
+    /// firmware speaking the earlier extended cell.
     pub async fn get_lighting_extended_runtime_conditional_scene_status(
         &self,
     ) -> Result<LightingRuntimeConditionalSceneStatus, RynkHostError> {

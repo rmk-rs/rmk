@@ -368,6 +368,7 @@ fn expand_conditional_scene_cell(cell: &LightingConditionalSceneCell) -> TokenSt
                 battery: #battery,
                 output_mode: #output_mode,
                 connection: ::core::option::Option::None,
+                effects: ::core::option::Option::None,
             },
             slot: ::rmk::lighting::LedSlot(#slot),
             effect: #effect,
