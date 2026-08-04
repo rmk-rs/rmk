@@ -1432,6 +1432,7 @@ mod tests {
                 max_level: Some(40),
                 charge: ChargeCondition::Discharging,
             }),
+            connection: None,
             output_mode: None,
         },
         slot: crate::lighting::LedSlot(0),

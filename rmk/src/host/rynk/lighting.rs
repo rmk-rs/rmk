@@ -1593,6 +1593,7 @@ fn condition_set_from_wire(
                 LightingChargeCondition::Unknown => ChargeCondition::Unknown,
             },
         }),
+        connection: None,
         output_mode: conditions.output_mode.map(|mode| match mode {
             rmk_types::protocol::rynk::LightingOutputMode::AlwaysOn => crate::lighting::OutputMode::AlwaysOn,
             rmk_types::protocol::rynk::LightingOutputMode::AlwaysOff => crate::lighting::OutputMode::AlwaysOff,

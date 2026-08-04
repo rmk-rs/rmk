@@ -3,6 +3,8 @@ use super::context::{LightingContext, LightingContextProvider};
 use super::effect::{BuiltinEffect, EffectSample, LightingEffect};
 use super::topology::LedSlot;
 use crate::types::battery::{BatteryStatus, ChargeState};
+use rmk_types::ble::BleState;
+use rmk_types::connection::ConnectionType;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct SceneCell<E> {
@@ -177,10 +179,25 @@ pub struct BatteryCondition {
     pub charge: ChargeCondition,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ActiveTransport {
+    Usb,
+    Ble,
+    NoneActive,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct ConnectionCondition {
+    pub transport: Option<ActiveTransport>,
+    pub profile: Option<u8>,
+    pub ble_state: Option<BleState>,
+}
+
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct ConditionSet {
     pub layer: Option<LayerCondition>,
     pub battery: Option<BatteryCondition>,
+    pub connection: Option<ConnectionCondition>,
     /// Satisfied when the live output-mode policy equals this. Sources that
     /// cannot observe the policy treat it as unsatisfiable rather than true,
     /// so a rule gated on it never fires where it cannot be evaluated.
@@ -270,6 +287,26 @@ impl ConditionSet {
             && context.lighting_context().layers.is_active(condition.layer) != condition.active
         {
             return false;
+        }
+        if let Some(condition) = self.connection {
+            let connection = context.lighting_context().connection;
+            if let Some(wanted) = condition.transport {
+                let active = match connection.decide_active() {
+                    Some(ConnectionType::Usb) => ActiveTransport::Usb,
+                    Some(ConnectionType::Ble) => ActiveTransport::Ble,
+                    None => ActiveTransport::NoneActive,
+                };
+                if active != wanted {
+                    return false;
+                }
+            }
+            if condition
+                .profile
+                .is_some_and(|profile| connection.ble.profile != profile)
+                || condition.ble_state.is_some_and(|state| connection.ble.state != state)
+            {
+                return false;
+            }
         }
         let Some(condition) = self.battery else {
             return true;
@@ -638,10 +675,93 @@ mod tests {
     use super::super::{BuiltinEffect, Compositor, LayerState, LogicalFrame, Rgb8};
     use super::*;
     use crate::types::battery::{BatteryStatus, ChargeState};
+    use rmk_types::ble::{BleState, BleStatus};
+    use rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
 
     const RED: Rgb8 = Rgb8::new(10, 0, 0);
     const GREEN: Rgb8 = Rgb8::new(0, 10, 0);
     const BLUE: Rgb8 = Rgb8::new(0, 0, 10);
+
+    struct NoBatteries;
+
+    impl BatteryStatusProvider for NoBatteries {
+        fn battery_status(&self, _: u8) -> BatteryStatus {
+            BatteryStatus::Unavailable
+        }
+    }
+
+    #[test]
+    fn connection_conditions_conjoin_transport_profile_and_ble_state() {
+        let mut context = LightingContext {
+            connection: ConnectionStatus {
+                usb: UsbState::Configured,
+                ble: BleStatus {
+                    profile: 3,
+                    state: BleState::Connected,
+                },
+                preferred: ConnectionType::Ble,
+            },
+            ..LightingContext::default()
+        };
+        let conditions = ConditionSet {
+            connection: Some(ConnectionCondition {
+                transport: Some(ActiveTransport::Ble),
+                profile: Some(3),
+                ble_state: Some(BleState::Connected),
+            }),
+            ..ConditionSet::default()
+        };
+
+        assert!(conditions.matches(&context, &NoBatteries, None));
+        context.connection.preferred = ConnectionType::Usb;
+        assert!(!conditions.matches(&context, &NoBatteries, None));
+
+        let usb = ConditionSet {
+            connection: Some(ConnectionCondition {
+                transport: Some(ActiveTransport::Usb),
+                profile: Some(3),
+                ble_state: Some(BleState::Connected),
+            }),
+            ..ConditionSet::default()
+        };
+        assert!(usb.matches(&context, &NoBatteries, None));
+
+        context.connection.ble.profile = 4;
+        assert!(!usb.matches(&context, &NoBatteries, None));
+        context.connection.ble.profile = 3;
+        context.connection.ble.state = BleState::Advertising;
+        assert!(!usb.matches(&context, &NoBatteries, None));
+    }
+
+    #[test]
+    fn connection_condition_matches_none_active_and_empty_condition() {
+        let context = LightingContext {
+            connection: ConnectionStatus {
+                usb: UsbState::Enabled,
+                ble: BleStatus {
+                    profile: 2,
+                    state: BleState::Advertising,
+                },
+                preferred: ConnectionType::Usb,
+            },
+            ..LightingContext::default()
+        };
+        let none_active = ConditionSet {
+            connection: Some(ConnectionCondition {
+                transport: Some(ActiveTransport::NoneActive),
+                profile: Some(2),
+                ble_state: Some(BleState::Advertising),
+            }),
+            ..ConditionSet::default()
+        };
+        let empty = ConditionSet {
+            connection: Some(ConnectionCondition::default()),
+            ..ConditionSet::default()
+        };
+
+        assert!(none_active.matches(&context, &NoBatteries, None));
+        assert!(empty.matches(&context, &NoBatteries, None));
+    }
 
     #[test]
     fn layer_source_has_sparse_active_stack_fallthrough() {
@@ -673,6 +793,7 @@ mod tests {
             layers: LayerState::new(3, 0, 0b1101),
             indicators: Default::default(),
             powered: false,
+            connection: Default::default(),
         };
         let compositor = Compositor::<Rgb8, 2>::new(Rgb8::BLACK);
         let mut frame = LogicalFrame::new(Rgb8::BLACK);
@@ -763,6 +884,7 @@ mod tests {
                         max_level: None,
                         charge: ChargeCondition::Any,
                     }),
+                    connection: None,
                     output_mode: None,
                 },
                 slot: LedSlot(0),
@@ -777,6 +899,7 @@ mod tests {
                         max_level: None,
                         charge: ChargeCondition::Any,
                     }),
+                    connection: None,
                     output_mode: None,
                 },
                 slot: LedSlot(1),
@@ -792,6 +915,7 @@ mod tests {
                         max_level: Some(40),
                         charge: ChargeCondition::Discharging,
                     }),
+                    connection: None,
                     output_mode: None,
                 },
                 slot: LedSlot(0),
@@ -804,6 +928,7 @@ mod tests {
             layers: LayerState::new(2, 0, 0b101),
             indicators: Default::default(),
             powered: false,
+            connection: Default::default(),
         };
         let compositor = Compositor::<Rgb8, 2>::new(Rgb8::BLACK);
         let mut frame = LogicalFrame::new(Rgb8::BLACK);

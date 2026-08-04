@@ -1,3 +1,5 @@
+use rmk_types::connection::ConnectionStatus;
+
 /// Bounded snapshot of RMK's layer state.
 ///
 /// The complete active set is retained because the effective layer alone is
@@ -58,11 +60,13 @@ pub struct LightingContext {
     pub indicators: IndicatorState,
     /// USB/VBUS power is present. This remains true while USB is suspended.
     pub powered: bool,
+    /// Authoritative transport, BLE profile, and BLE lifecycle snapshot.
+    pub connection: ConnectionStatus,
 }
 
 /// Access to RMK's standard lighting state from a board-extended snapshot.
 ///
-/// A board may add battery, connection, or sensor fields to its snapshot and
+/// A board may add battery or sensor fields to its snapshot and
 /// still reuse built-in layer and indicator sources by implementing this
 /// trait. The compositor itself remains generic over the complete context.
 pub trait LightingContextProvider {

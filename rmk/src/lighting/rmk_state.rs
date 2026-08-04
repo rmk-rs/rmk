@@ -48,10 +48,12 @@ impl SnapshotProvider for KeymapLightingState<'_, '_> {
                 active |= 1_u64 << layer;
             }
         }
+        let connection = crate::state::current_connection_status();
         LightingContext {
             layers: LayerState::new(effective, default, active),
             indicators: indicator_state(),
-            powered: crate::state::current_usb_state().is_powered(),
+            powered: connection.usb.is_powered(),
+            connection,
         }
     }
 }

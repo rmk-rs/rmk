@@ -174,6 +174,7 @@ fn context(layer: u8) -> LightingContext {
         layers: LayerState::new(layer, 0, 1 | (1 << layer)),
         indicators: Default::default(),
         powered: false,
+        connection: Default::default(),
     }
 }
 
@@ -1690,6 +1691,7 @@ fn runtime_conditional_replace_preserves_order_and_output_mode_is_revision_check
                     max_level: Some(75),
                     charge: ChargeCondition::Discharging,
                 }),
+                connection: None,
                 output_mode: None,
             },
             slot: LedSlot(1),
@@ -1701,6 +1703,7 @@ fn runtime_conditional_replace_preserves_order_and_output_mode_is_revision_check
             conditions: ConditionSet {
                 layer: Some(LayerCondition { layer: 0, active: true }),
                 battery: None,
+                connection: None,
                 output_mode: None,
             },
             slot: LedSlot(1),
@@ -1968,6 +1971,7 @@ fn conditional_rules_share_styles_without_losing_order_or_conditions() {
             conditions: ConditionSet {
                 layer: Some(crate::lighting::LayerCondition { layer: 2, active: true }),
                 battery: None,
+                connection: None,
                 output_mode: Some(OutputMode::AlwaysOn),
             },
             slot: LedSlot(3),
@@ -1977,6 +1981,7 @@ fn conditional_rules_share_styles_without_losing_order_or_conditions() {
             conditions: ConditionSet {
                 layer: Some(crate::lighting::LayerCondition { layer: 2, active: true }),
                 battery: None,
+                connection: None,
                 output_mode: Some(OutputMode::PoweredOnly),
             },
             slot: LedSlot(3),
@@ -2107,6 +2112,7 @@ fn output_mode_conditions_select_between_runtime_rules() {
         conditions: ConditionSet {
             layer: None,
             battery: None,
+            connection: None,
             output_mode: Some(mode),
         },
         slot: LedSlot(0),
@@ -2133,6 +2139,7 @@ fn output_mode_conditions_select_between_runtime_rules() {
         layers: LayerState::new(0, 0, 1),
         indicators: Default::default(),
         powered: true,
+        connection: Default::default(),
     };
     let mut frame = LogicalFrame::new(Rgb8::BLACK);
     let render = |engine: &mut ConditionalEngine, frame: &mut LogicalFrame<Rgb8, 2>| {
@@ -2189,6 +2196,7 @@ fn runtime_conditional_cells_outrank_layer_scenes_and_compiled_conditional_rules
         conditions: ConditionSet {
             layer: Some(LayerCondition { layer: 1, active: true }),
             battery: None,
+            connection: None,
             output_mode: None,
         },
         slot: LedSlot(0),
@@ -2238,6 +2246,7 @@ fn runtime_conditional_cells_outrank_layer_scenes_and_compiled_conditional_rules
             conditions: ConditionSet {
                 layer: Some(LayerCondition { layer: 1, active: true }),
                 battery: None,
+                connection: None,
                 output_mode: None,
             },
             slot: LedSlot(0),

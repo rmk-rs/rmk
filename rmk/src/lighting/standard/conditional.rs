@@ -19,6 +19,7 @@ pub(super) const EMPTY_CONDITIONAL_SCENE_CELL: RuntimeConditionalSceneCell = Run
     conditions: ConditionSet {
         layer: None,
         battery: None,
+        connection: None,
         output_mode: None,
     },
     slot: LedSlot(0),
@@ -39,6 +40,7 @@ const EMPTY_INTERNED_CONDITIONAL_SCENE_CELL: InternedRuntimeConditionalSceneCell
         conditions: ConditionSet {
             layer: None,
             battery: None,
+            connection: None,
             output_mode: None,
         },
         slot: LedSlot(0),
