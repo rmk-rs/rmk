@@ -63,6 +63,24 @@ pub(crate) fn set_sleeping(sleeping: bool) {
 pub(crate) static CONNECTION_STATUS: Mutex<RawMutex, Cell<ConnectionStatus>> =
     Mutex::new(Cell::new(ConnectionStatus::new()));
 
+/// Bitmap of BLE profile slots holding a stored bond, bit N = slot N.
+/// Maintained by `ProfileManager`; read by lighting so rules can show
+/// paired-versus-empty slots. Freshness rides on ordinary render triggers
+/// (bond changes coincide with connection or layer activity).
+#[cfg(feature = "_ble")]
+static BONDED_SLOTS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// Which BLE profile slots hold a stored bond, as a bitmap (bit N = slot N).
+#[cfg(feature = "_ble")]
+pub fn bonded_slots() -> u8 {
+    BONDED_SLOTS.load(core::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(feature = "_ble")]
+pub(crate) fn set_bonded_slots(mask: u8) {
+    BONDED_SLOTS.store(mask, core::sync::atomic::Ordering::Release);
+}
+
 pub(crate) fn active_transport() -> Option<ConnectionType> {
     CONNECTION_STATUS.lock(|c| c.get().decide_active())
 }
