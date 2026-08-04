@@ -112,6 +112,7 @@ events = [
     # lighting/processor.rs: LightingProcessor subscribes to authoritative
     # keyboard-state invalidations on every lighting-enabled board.
     { name = "layer_change" },
+    { name = "connection_status_change" },
     { name = "led_indicator" },
     { name = "sleep_state" },
 ]
