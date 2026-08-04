@@ -609,6 +609,13 @@ impl Handle<PutLightingExtendedRuntimeConditionalSceneChunk> for RynkService<'_>
             {
                 return Ok(Err(LightingError::InvalidRequest));
             }
+            #[cfg(feature = "_ble")]
+            if let Some(connection) = cell.connection
+                && let Some(profile) = connection.profile
+                && (profile as usize) >= crate::NUM_BLE_PROFILE
+            {
+                return Ok(Err(LightingError::InvalidRequest));
+            }
         }
         Ok(match runtime_conditional_scene_controller(self) {
             Ok(controller) => match controller
@@ -2043,6 +2050,60 @@ mod tests {
             )
             .await;
             assert_eq!(response.unwrap(), Ok(cleared));
+        });
+    }
+
+    #[cfg(feature = "_ble")]
+    #[test]
+    fn extended_chunk_rejects_out_of_range_connection_profile() {
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 3> = PositionalConfig::default();
+            let mut data: KeymapData<1, 3, 1, 0> = KeymapData::new([[[KeyAction::No; 3]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut config = RmkConfig::default();
+            config.lock_config.insecure = true;
+            let mailbox = RynkLightingMailbox::new();
+            let service = RynkService::new(&keymap, &config).with_lighting(RynkLightingController::new(
+                &mailbox,
+                descriptor(),
+                8,
+            ));
+            let session = session();
+            let cell = rmk_types::protocol::rynk::LightingExtendedConditionalSceneCell {
+                cell: LightingConditionalSceneCell {
+                    conditions: rmk_types::protocol::rynk::LightingConditionSet {
+                        layer: None,
+                        battery: None,
+                        output_mode: None,
+                    },
+                    led_id: LightingLedId(42),
+                    effect: rmk_types::protocol::rynk::LightingEffect::Solid {
+                        color: rmk_types::protocol::rynk::LightingRgb8 { r: 3, g: 4, b: 5 },
+                    },
+                },
+                connection: Some(rmk_types::protocol::rynk::LightingConnectionCondition {
+                    transport: None,
+                    profile: Some(crate::NUM_BLE_PROFILE as u8),
+                    ble_state: None,
+                }),
+            };
+            let mut cells = Vec::new();
+            cells.push(cell).unwrap();
+            // Cell validation precedes transaction lookup, so the bogus
+            // transaction id proves rejection came from the profile check.
+            let response = call::<PutLightingExtendedRuntimeConditionalSceneChunk>(
+                &service,
+                &session,
+                &PutLightingExtendedRuntimeConditionalSceneChunkRequest {
+                    transaction_id: 999,
+                    offset: 0,
+                    cells,
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(response, Err(LightingError::InvalidRequest));
         });
     }
 

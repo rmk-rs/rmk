@@ -713,6 +713,37 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
         Some(record.policy)
     }
 
+    /// Persist the V2 runtime conditional table length, and empty the legacy
+    /// table alongside it so a firmware downgrade sees no rules rather than
+    /// stale pre-upgrade cells that were edited or deleted under V2.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    async fn store_lighting_runtime_conditional_table(&mut self, len: u16) -> Result<(), SSError<F::Error>> {
+        match self
+            .fetch_data(StorageKey::LightingRuntimeConditionalSceneTableV2)
+            .await
+        {
+            Some(StorageData::LightingRuntimeConditionalSceneTableV2(saved)) if saved == len => (),
+            _ => {
+                self.store_data(
+                    StorageKey::LightingRuntimeConditionalSceneTableV2,
+                    &StorageData::LightingRuntimeConditionalSceneTableV2(len),
+                )
+                .await?
+            }
+        }
+        if let Some(StorageData::LightingRuntimeConditionalSceneTable(saved)) =
+            self.fetch_data(StorageKey::LightingRuntimeConditionalSceneTable).await
+            && saved != 0
+        {
+            self.store_data(
+                StorageKey::LightingRuntimeConditionalSceneTable,
+                &StorageData::LightingRuntimeConditionalSceneTable(0),
+            )
+            .await?
+        }
+        Ok(())
+    }
+
     /// Read the persisted ordered runtime conditional table at startup.
     #[cfg(all(feature = "lighting", feature = "rynk"))]
     pub async fn read_lighting_runtime_conditional_scenes<const CAP: usize>(
@@ -1127,19 +1158,7 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                 }
                 #[cfg(all(feature = "lighting", feature = "rynk"))]
                 FlashOperationMessage::LightingRuntimeConditionalSceneTable { len } => {
-                    match self
-                        .fetch_data(StorageKey::LightingRuntimeConditionalSceneTableV2)
-                        .await
-                    {
-                        Some(StorageData::LightingRuntimeConditionalSceneTableV2(saved)) if saved == len => Ok(()),
-                        _ => {
-                            self.store_data(
-                                StorageKey::LightingRuntimeConditionalSceneTableV2,
-                                &StorageData::LightingRuntimeConditionalSceneTableV2(len),
-                            )
-                            .await
-                        }
-                    }
+                    self.store_lighting_runtime_conditional_table(len).await
                 }
                 #[cfg(all(feature = "lighting", feature = "rynk"))]
                 FlashOperationMessage::LightingRuntimeConditionalSceneShard { index, cells } => {
@@ -1408,6 +1427,45 @@ mod tests {
             assert_eq!(loaded.len(), 1);
             assert_eq!(loaded[0].cell, legacy);
             assert_eq!(loaded[0].connection, None);
+        });
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    #[test]
+    fn v2_table_write_empties_the_legacy_table() {
+        block_on(async {
+            type Flash = TestFlash<16_384, 4_096, 1>;
+
+            let storage_range = (16_384 - 2 * 4_096) as u32..16_384u32;
+            let mut map =
+                MapStorage::<StorageKey, _, _>::new(Flash::new(), MapConfig::new(storage_range), Cache::new_uncached());
+            let mut buffer = [0u8; get_buffer_size()];
+            map.store_item(
+                &mut buffer,
+                &StorageKey::LightingRuntimeConditionalSceneTable,
+                &StorageData::LightingRuntimeConditionalSceneTable(3),
+            )
+            .await
+            .unwrap();
+
+            let mut storage = Storage::<Flash, 0, 0, 0, 0> { flash: map, buffer };
+            storage.store_lighting_runtime_conditional_table(1).await.unwrap();
+
+            assert!(matches!(
+                storage
+                    .fetch_data(StorageKey::LightingRuntimeConditionalSceneTableV2)
+                    .await,
+                Some(StorageData::LightingRuntimeConditionalSceneTableV2(1))
+            ));
+            assert!(
+                matches!(
+                    storage
+                        .fetch_data(StorageKey::LightingRuntimeConditionalSceneTable)
+                        .await,
+                    Some(StorageData::LightingRuntimeConditionalSceneTable(0))
+                ),
+                "a downgraded firmware must see an empty legacy table"
+            );
         });
     }
 

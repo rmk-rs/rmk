@@ -471,7 +471,9 @@ endpoints! {
     GetLightingRuntimeConditionalSceneStatus = 0x0925: () => LightingRuntimeConditionalSceneStatusResult;
     /// Runtime conditional pages are pinned to `LightingState.revision`.
     /// Connection predicates are omitted; use the extended read command when
-    /// `RUNTIME_CONNECTION_CONDITIONS` is advertised.
+    /// `RUNTIME_CONNECTION_CONDITIONS` is advertised. A read-modify-write
+    /// cycle performed entirely through the legacy commands therefore drops
+    /// every stored connection predicate.
     #[cfg(feature = "lighting")]
     GetLightingRuntimeConditionalScenes = 0x0926: LightingRuntimeConditionalScenePageRequest => LightingRuntimeConditionalScenesPageResult;
     #[cfg(feature = "lighting")]
