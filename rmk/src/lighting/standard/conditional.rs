@@ -138,6 +138,14 @@ impl<const CAP: usize> RuntimeConditionalSceneTable<CAP> {
         Ok(())
     }
 
+    /// Mutable access to the most recently pushed rule's conditions, for
+    /// stream decoders that amend a cell after its base record arrives.
+    pub fn last_conditions_mut(&mut self) -> Option<&mut ConditionSet> {
+        self.len
+            .checked_sub(1)
+            .map(move |index| &mut self.cells[index].conditions)
+    }
+
     pub fn clear(&mut self) {
         self.len = 0;
         self.pool.clear();
