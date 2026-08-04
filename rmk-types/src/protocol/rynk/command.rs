@@ -41,19 +41,20 @@ use crate::protocol::rynk::{
     CommitLightingOverlayReplaceRequest, CommitLightingRuntimeConditionalSceneReplaceRequest,
     CommitLightingSceneReplaceRequest, LightingCapabilitiesResult, LightingChanged, LightingCompiledSceneStatusResult,
     LightingCompiledScenesPageResult, LightingConditionalSceneStatusResult, LightingConditionalScenesPageResult,
-    LightingExtensionLayersResult, LightingExtensionNamesPageResult, LightingExtensionNamesRequest,
-    LightingExtensionParamsPageResult, LightingExtensionParamsRequest, LightingExtensionResult, LightingKeysPageResult,
-    LightingLedsPageResult, LightingOutputModeStateResult, LightingOutputsPageResult, LightingOverlayPageRequest,
-    LightingOverlayPageResult, LightingOverlayTransactionResult, LightingPageRequest, LightingPhysicalKeysPageResult,
-    LightingRoutesPageResult, LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatusResult,
+    LightingExtendedRuntimeConditionalScenesPageResult, LightingExtensionLayersResult,
+    LightingExtensionNamesPageResult, LightingExtensionNamesRequest, LightingExtensionParamsPageResult,
+    LightingExtensionParamsRequest, LightingExtensionResult, LightingKeysPageResult, LightingLedsPageResult,
+    LightingOutputModeStateResult, LightingOutputsPageResult, LightingOverlayPageRequest, LightingOverlayPageResult,
+    LightingOverlayTransactionResult, LightingPageRequest, LightingPhysicalKeysPageResult, LightingRoutesPageResult,
+    LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatusResult,
     LightingRuntimeConditionalSceneTransactionResult, LightingRuntimeConditionalScenesPageResult,
     LightingScenePageRequest, LightingSceneStatusResult, LightingSceneTransactionResult, LightingScenesPageResult,
     LightingStateResult, LightingUnitResult, LightingZoneMembershipsPageResult, LightingZonesPageResult,
-    PutLightingOverlayChunkRequest, PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest,
-    SetLightingExtensionLayersRequest, SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
-    SetLightingLayerPolicyRequest, SetLightingOutputModeRequest, SetLightingOverlayRequest,
-    SetLightingSceneCellRequest, SetLightingStateRequest, SetLightingWakeLayersRequest, UnsetLightingOverlayRequest,
-    UnsetLightingSceneCellRequest,
+    PutLightingExtendedRuntimeConditionalSceneChunkRequest, PutLightingOverlayChunkRequest,
+    PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest, SetLightingExtensionLayersRequest,
+    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest,
+    SetLightingOutputModeRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
+    SetLightingWakeLayersRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
 };
 #[cfg(all(feature = "_ble", feature = "split"))]
 use crate::protocol::rynk::{SplitCentralLatencyPolicy, SplitCentralLatencyState};
@@ -469,11 +470,14 @@ endpoints! {
     #[cfg(feature = "lighting")]
     GetLightingRuntimeConditionalSceneStatus = 0x0925: () => LightingRuntimeConditionalSceneStatusResult;
     /// Runtime conditional pages are pinned to `LightingState.revision`.
+    /// Connection predicates are omitted; use the extended read command when
+    /// `RUNTIME_CONNECTION_CONDITIONS` is advertised.
     #[cfg(feature = "lighting")]
     GetLightingRuntimeConditionalScenes = 0x0926: LightingRuntimeConditionalScenePageRequest => LightingRuntimeConditionalScenesPageResult;
     #[cfg(feature = "lighting")]
     BeginLightingRuntimeConditionalSceneReplace = 0x0927: BeginLightingRuntimeConditionalSceneReplaceRequest => LightingRuntimeConditionalSceneTransactionResult;
     #[cfg(feature = "lighting")]
+    /// Cells written through this legacy endpoint have no connection predicate.
     PutLightingRuntimeConditionalSceneChunk = 0x0928: PutLightingRuntimeConditionalSceneChunkRequest => LightingUnitResult;
     #[cfg(feature = "lighting")]
     CommitLightingRuntimeConditionalSceneReplace = 0x0929: CommitLightingRuntimeConditionalSceneReplaceRequest => LightingStateResult;
@@ -496,6 +500,24 @@ endpoints! {
     /// Replace the optional second effect when the state revision matches.
     #[cfg(feature = "lighting")]
     SetLightingExtensionLayers = 0x092F: SetLightingExtensionLayersRequest => LightingStateResult;
+    /// Discover connection-aware runtime conditional limits and occupancy.
+    #[cfg(feature = "lighting")]
+    GetLightingExtendedRuntimeConditionalSceneStatus = 0x0930: () => LightingRuntimeConditionalSceneStatusResult;
+    /// Read connection-aware runtime conditional cells under a pinned state revision.
+    #[cfg(feature = "lighting")]
+    GetLightingExtendedRuntimeConditionalScenes = 0x0931: LightingRuntimeConditionalScenePageRequest => LightingExtendedRuntimeConditionalScenesPageResult;
+    /// Begin an atomic replacement using extended conditional cells.
+    #[cfg(feature = "lighting")]
+    BeginLightingExtendedRuntimeConditionalSceneReplace = 0x0932: BeginLightingRuntimeConditionalSceneReplaceRequest => LightingRuntimeConditionalSceneTransactionResult;
+    /// Stage connection-aware cells for an extended replacement.
+    #[cfg(feature = "lighting")]
+    PutLightingExtendedRuntimeConditionalSceneChunk = 0x0933: PutLightingExtendedRuntimeConditionalSceneChunkRequest => LightingUnitResult;
+    /// Publish a complete extended conditional-table replacement.
+    #[cfg(feature = "lighting")]
+    CommitLightingExtendedRuntimeConditionalSceneReplace = 0x0934: CommitLightingRuntimeConditionalSceneReplaceRequest => LightingStateResult;
+    /// Discard an extended conditional-table replacement.
+    #[cfg(feature = "lighting")]
+    AbortLightingExtendedRuntimeConditionalSceneReplace = 0x0935: AbortLightingRuntimeConditionalSceneReplaceRequest => LightingUnitResult;
 }
 
 // Define topics: `Name = value: Payload;`

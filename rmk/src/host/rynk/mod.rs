@@ -191,7 +191,11 @@ impl<'a> RynkService<'a> {
             | Cmd::BeginLightingRuntimeConditionalSceneReplace
             | Cmd::PutLightingRuntimeConditionalSceneChunk
             | Cmd::CommitLightingRuntimeConditionalSceneReplace
-            | Cmd::AbortLightingRuntimeConditionalSceneReplace => self.lock_config.write_requires_unlock,
+            | Cmd::AbortLightingRuntimeConditionalSceneReplace
+            | Cmd::BeginLightingExtendedRuntimeConditionalSceneReplace
+            | Cmd::PutLightingExtendedRuntimeConditionalSceneChunk
+            | Cmd::CommitLightingExtendedRuntimeConditionalSceneReplace
+            | Cmd::AbortLightingExtendedRuntimeConditionalSceneReplace => self.lock_config.write_requires_unlock,
             _ => false,
         }
     }
@@ -370,6 +374,30 @@ impl<'a> RynkService<'a> {
             #[cfg(feature = "lighting")]
             Cmd::AbortLightingRuntimeConditionalSceneReplace => {
                 serve::<command::AbortLightingRuntimeConditionalSceneReplace, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingExtendedRuntimeConditionalSceneStatus => {
+                serve::<command::GetLightingExtendedRuntimeConditionalSceneStatus, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingExtendedRuntimeConditionalScenes => {
+                serve::<command::GetLightingExtendedRuntimeConditionalScenes, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::BeginLightingExtendedRuntimeConditionalSceneReplace => {
+                serve::<command::BeginLightingExtendedRuntimeConditionalSceneReplace, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::PutLightingExtendedRuntimeConditionalSceneChunk => {
+                serve::<command::PutLightingExtendedRuntimeConditionalSceneChunk, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::CommitLightingExtendedRuntimeConditionalSceneReplace => {
+                serve::<command::CommitLightingExtendedRuntimeConditionalSceneReplace, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::AbortLightingExtendedRuntimeConditionalSceneReplace => {
+                serve::<command::AbortLightingExtendedRuntimeConditionalSceneReplace, _>(self, msg).await
             }
             #[cfg(feature = "lighting")]
             Cmd::SetLightingSceneCell => serve::<command::SetLightingSceneCell, _>(self, msg).await,

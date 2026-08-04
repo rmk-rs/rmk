@@ -15,10 +15,12 @@ use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use heapless::{String, Vec};
 use rmk_types::protocol::rynk::{
-    LIGHTING_EXTENSION_NAME_CHUNK, LIGHTING_EXTENSION_NAME_SIZE, LIGHTING_EXTENSION_PARAM_CHUNK,
-    LIGHTING_OVERLAY_CHUNK_SIZE, LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode, LightingBackgroundState,
-    LightingCompiledScenesPage, LightingConditionalSceneCell as WireConditionalSceneCell,
-    LightingControls as WireLightingControls, LightingError, LightingExtension, LightingExtensionLayers,
+    LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE, LIGHTING_EXTENSION_NAME_CHUNK, LIGHTING_EXTENSION_NAME_SIZE,
+    LIGHTING_EXTENSION_PARAM_CHUNK, LIGHTING_OVERLAY_CHUNK_SIZE, LIGHTING_SCENE_CHUNK_SIZE, LightingBackgroundMode,
+    LightingBackgroundState, LightingCompiledScenesPage, LightingConditionalSceneCell as WireConditionalSceneCell,
+    LightingControls as WireLightingControls, LightingError,
+    LightingExtendedConditionalSceneCell as WireExtendedConditionalSceneCell,
+    LightingExtendedRuntimeConditionalScenesPage, LightingExtension, LightingExtensionLayers,
     LightingExtensionNameKind, LightingExtensionNamesPage, LightingExtensionParam, LightingExtensionParamsPage,
     LightingExtensionState as WireExtensionState, LightingLayerPolicy, LightingMutableState,
     LightingOutputMode as WireLightingOutputMode, LightingOutputModeIndicator as WireLightingOutputModeIndicator,
@@ -263,6 +265,7 @@ pub enum RynkLightingReadback {
     ExtensionNamesPage(LightingExtensionNamesPage),
     ExtensionParamsPage(LightingExtensionParamsPage),
     RuntimeConditionalScenesPage(LightingRuntimeConditionalScenesPage),
+    ExtendedRuntimeConditionalScenesPage(LightingExtendedRuntimeConditionalScenesPage),
     RuntimeConditionalSceneTransaction(LightingRuntimeConditionalSceneTransaction),
     Unit,
 }
@@ -465,6 +468,10 @@ pub(super) enum RynkLightingCommand {
         expected_revision: u32,
         offset: u16,
     },
+    ReadExtendedRuntimeConditionalScenes {
+        expected_revision: u32,
+        offset: u16,
+    },
     BeginRuntimeConditionalSceneReplace {
         expected_revision: u32,
         cell_count: u16,
@@ -473,6 +480,14 @@ pub(super) enum RynkLightingCommand {
         transaction_id: u32,
         offset: u16,
         cells: Vec<WireConditionalSceneCell, { rmk_types::protocol::rynk::LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE }>,
+    },
+    PutExtendedRuntimeConditionalSceneChunk {
+        transaction_id: u32,
+        offset: u16,
+        cells: Vec<
+            WireExtendedConditionalSceneCell,
+            { rmk_types::protocol::rynk::LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE },
+        >,
     },
     CommitRuntimeConditionalSceneReplace {
         transaction_id: u32,
@@ -768,13 +783,14 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
             else {
                 return;
             };
-            let cells = page.cells.as_slice();
+            let page_cells = page.cells.as_slice();
+            let cells = &page_cells[..page_cells.len().min(LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE)];
             if cells.is_empty() {
                 break;
             }
             let mut wire_cells = Vec::new();
             for cell in cells {
-                let Some(wire) = self.runtime_conditional_scene_cell_to_wire(*cell) else {
+                let Some(wire) = self.runtime_conditional_scene_cell_to_extended_wire(*cell) else {
                     return;
                 };
                 let _ = wire_cells.push(wire);
@@ -1090,6 +1106,45 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                     },
                 ));
             }
+            RynkLightingCommand::ReadExtendedRuntimeConditionalScenes {
+                expected_revision,
+                offset,
+            } => {
+                let page = match self
+                    .request_core(StandardCommand::ReadRuntimeConditionalScenes { offset })
+                    .await?
+                {
+                    StandardReply::RuntimeConditionalScenesPage(page) => page,
+                    _ => return Err(LightingError::InvalidRequest),
+                };
+                if page.revision != expected_revision {
+                    return Err(LightingError::StateRevisionConflict {
+                        expected: expected_revision,
+                        current: page.revision,
+                    });
+                }
+                let mut items = Vec::new();
+                for cell in page
+                    .cells
+                    .as_slice()
+                    .iter()
+                    .take(LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE)
+                {
+                    items
+                        .push(
+                            self.runtime_conditional_scene_cell_to_extended_wire(*cell)
+                                .ok_or(LightingError::InvalidRequest)?,
+                        )
+                        .map_err(|_| LightingError::InvalidRequest)?;
+                }
+                return Ok(RynkLightingReadback::ExtendedRuntimeConditionalScenesPage(
+                    LightingExtendedRuntimeConditionalScenesPage {
+                        revision: page.revision,
+                        total_count: page.total,
+                        items,
+                    },
+                ));
+            }
             RynkLightingCommand::BeginRuntimeConditionalSceneReplace {
                 expected_revision,
                 cell_count,
@@ -1118,6 +1173,25 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                 for cell in &cells {
                     chunk
                         .push(self.runtime_conditional_scene_cell_from_wire(*cell)?)
+                        .map_err(|error| map_standard_error(error, OVERLAY_CAPACITY))?;
+                }
+                self.request_core_state(StandardCommand::PutRuntimeConditionalSceneChunk {
+                    transaction_id,
+                    offset,
+                    cells: chunk,
+                })
+                .await?;
+                return Ok(RynkLightingReadback::Unit);
+            }
+            RynkLightingCommand::PutExtendedRuntimeConditionalSceneChunk {
+                transaction_id,
+                offset,
+                cells,
+            } => {
+                let mut chunk = RuntimeConditionalSceneChunk::new();
+                for cell in &cells {
+                    chunk
+                        .push(self.runtime_conditional_scene_cell_from_extended_wire(*cell)?)
                         .map_err(|error| map_standard_error(error, OVERLAY_CAPACITY))?;
                 }
                 self.request_core_state(StandardCommand::PutRuntimeConditionalSceneChunk {
@@ -1334,15 +1408,29 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
         &self,
         cell: WireConditionalSceneCell,
     ) -> LightingResult<RuntimeConditionalSceneCell> {
+        self.runtime_conditional_scene_cell_from_extended_wire(WireExtendedConditionalSceneCell {
+            cell,
+            connection: None,
+        })
+    }
+
+    fn runtime_conditional_scene_cell_from_extended_wire(
+        &self,
+        cell: WireExtendedConditionalSceneCell,
+    ) -> LightingResult<RuntimeConditionalSceneCell> {
         cell.validate()?;
         let slot = self
             .topology
-            .slot(LedId(cell.led_id.0))
-            .ok_or(LightingError::UnknownLed { led_id: cell.led_id })?;
+            .slot(LedId(cell.cell.led_id.0))
+            .ok_or(LightingError::UnknownLed {
+                led_id: cell.cell.led_id,
+            })?;
+        let mut conditions = condition_set_from_wire(cell.cell.conditions);
+        conditions.connection = cell.connection.map(connection_condition_from_wire);
         Ok(RuntimeConditionalSceneCell {
-            conditions: condition_set_from_wire(cell.conditions),
+            conditions,
             slot,
-            effect: effect_from_wire(cell.effect),
+            effect: effect_from_wire(cell.cell.effect),
         })
     }
 
@@ -1350,11 +1438,21 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
         &self,
         cell: RuntimeConditionalSceneCell,
     ) -> Option<WireConditionalSceneCell> {
+        Some(self.runtime_conditional_scene_cell_to_extended_wire(cell)?.cell)
+    }
+
+    fn runtime_conditional_scene_cell_to_extended_wire(
+        &self,
+        cell: RuntimeConditionalSceneCell,
+    ) -> Option<WireExtendedConditionalSceneCell> {
         let led = self.topology.led(cell.slot)?;
-        Some(WireConditionalSceneCell {
-            conditions: condition_set_to_wire(cell.conditions),
-            led_id: rmk_types::protocol::rynk::LightingLedId(led.id.0),
-            effect: effect_to_wire(cell.effect),
+        Some(WireExtendedConditionalSceneCell {
+            cell: WireConditionalSceneCell {
+                conditions: condition_set_to_wire(cell.conditions),
+                led_id: rmk_types::protocol::rynk::LightingLedId(led.id.0),
+                effect: effect_to_wire(cell.effect),
+            },
+            connection: cell.conditions.connection.map(connection_condition_to_wire),
         })
     }
 }
@@ -1397,19 +1495,21 @@ pub fn install_lighting_runtime_conditional_scenes<
 >(
     engine: &mut StandardLightingEngine<'_, Extension, Status, N, OVERLAY_CAP, SCENE_CAP>,
     topology: &LightingTopology<'_>,
-    cells: &[WireConditionalSceneCell],
+    cells: &[WireExtendedConditionalSceneCell],
 ) {
     for cell in cells {
         if cell.validate().is_err() {
             continue;
         }
-        let Some(slot) = topology.slot(LedId(cell.led_id.0)) else {
+        let Some(slot) = topology.slot(LedId(cell.cell.led_id.0)) else {
             continue;
         };
+        let mut conditions = condition_set_from_wire(cell.cell.conditions);
+        conditions.connection = cell.connection.map(connection_condition_from_wire);
         let _ = engine.install_runtime_conditional_scene_cell(RuntimeConditionalSceneCell {
-            conditions: condition_set_from_wire(cell.conditions),
+            conditions,
             slot,
-            effect: effect_from_wire(cell.effect),
+            effect: effect_from_wire(cell.cell.effect),
         });
     }
 }
@@ -1599,6 +1699,38 @@ fn condition_set_from_wire(
             rmk_types::protocol::rynk::LightingOutputMode::AlwaysOff => crate::lighting::OutputMode::AlwaysOff,
             rmk_types::protocol::rynk::LightingOutputMode::PoweredOnly => crate::lighting::OutputMode::PoweredOnly,
         }),
+    }
+}
+
+fn connection_condition_to_wire(
+    condition: crate::lighting::ConnectionCondition,
+) -> rmk_types::protocol::rynk::LightingConnectionCondition {
+    use rmk_types::protocol::rynk::{LightingActiveTransport, LightingConnectionCondition};
+
+    LightingConnectionCondition {
+        transport: condition.transport.map(|transport| match transport {
+            crate::lighting::ActiveTransport::Usb => LightingActiveTransport::Usb,
+            crate::lighting::ActiveTransport::Ble => LightingActiveTransport::Ble,
+            crate::lighting::ActiveTransport::NoneActive => LightingActiveTransport::NoneActive,
+        }),
+        profile: condition.profile,
+        ble_state: condition.ble_state,
+    }
+}
+
+fn connection_condition_from_wire(
+    condition: rmk_types::protocol::rynk::LightingConnectionCondition,
+) -> crate::lighting::ConnectionCondition {
+    use rmk_types::protocol::rynk::LightingActiveTransport;
+
+    crate::lighting::ConnectionCondition {
+        transport: condition.transport.map(|transport| match transport {
+            LightingActiveTransport::Usb => crate::lighting::ActiveTransport::Usb,
+            LightingActiveTransport::Ble => crate::lighting::ActiveTransport::Ble,
+            LightingActiveTransport::NoneActive => crate::lighting::ActiveTransport::NoneActive,
+        }),
+        profile: condition.profile,
+        ble_state: condition.ble_state,
     }
 }
 

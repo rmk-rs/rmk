@@ -9,6 +9,8 @@ use heapless::{String, Vec};
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 
+use crate::ble::BleState;
+
 /// Maximum postcard payload admitted by this first lighting ICD.
 pub const LIGHTING_PAYLOAD_SIZE: usize = 256;
 /// Number of metadata records in one topology page.
@@ -19,6 +21,8 @@ pub const LIGHTING_OVERLAY_CHUNK_SIZE: usize = 8;
 pub const LIGHTING_SCENE_CHUNK_SIZE: usize = 8;
 /// Number of immutable conditional cells in one readback page.
 pub const LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 7;
+/// Number of connection-aware conditional cells in one extended page/chunk.
+pub const LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 6;
 /// Maximum UTF-8 byte length of a zone name.
 pub const LIGHTING_ZONE_NAME_SIZE: usize = 24;
 /// Maximum UTF-8 byte length of one extension effect or palette name.
@@ -205,6 +209,9 @@ impl LightingFeatureFlags {
     /// A second effect from the extension's ordinary effect list can be
     /// rendered over the primary effect.
     pub const EXTENSION_LAYERING: u16 = 1 << 13;
+    /// Runtime conditional rules can match transport and BLE connection state
+    /// through the extended conditional-scene endpoints.
+    pub const RUNTIME_CONNECTION_CONDITIONS: u16 = 1 << 14;
 
     pub const fn contains(self, bits: u16) -> bool {
         self.0 & bits == bits
@@ -653,6 +660,40 @@ impl LightingConditionalSceneCell {
 }
 
 wire_type! {
+    /// Active transport selected by `ConnectionStatus::decide_active`.
+    pub enum LightingActiveTransport {
+        Usb,
+        Ble,
+        NoneActive,
+    }
+}
+
+wire_type! {
+    /// Optional connection predicates. Present fields form a conjunction; an
+    /// empty condition matches every connection state.
+    pub struct LightingConnectionCondition {
+        pub transport: Option<LightingActiveTransport>,
+        pub profile: Option<u8>,
+        pub ble_state: Option<BleState>,
+    }
+}
+
+wire_type! {
+    /// Additive runtime conditional cell used by the extended endpoints. The
+    /// nested legacy cell keeps its established postcard field order intact.
+    pub struct LightingExtendedConditionalSceneCell {
+        pub cell: LightingConditionalSceneCell,
+        pub connection: Option<LightingConnectionCondition>,
+    }
+}
+
+impl LightingExtendedConditionalSceneCell {
+    pub fn validate(&self) -> LightingResult<()> {
+        self.cell.validate()
+    }
+}
+
+wire_type! {
     /// Key/layer controls that gate the configured lighting presentation.
     pub struct LightingControls {
         pub output_toggle_user_action: Option<u8>,
@@ -906,6 +947,26 @@ impl MaxSize for LightingRuntimeConditionalScenesPage {
         + crate::heapless_vec_max_size::<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>();
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingExtendedRuntimeConditionalScenesPage {
+    pub revision: u32,
+    pub total_count: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingExtendedConditionalSceneCell[]"))]
+    pub items: Vec<LightingExtendedConditionalSceneCell, LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for LightingExtendedRuntimeConditionalScenesPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<
+            LightingExtendedConditionalSceneCell,
+            LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE,
+        >();
+}
+
 wire_type! {
     pub struct SetLightingOutputModeRequest {
         pub expected_revision: u32,
@@ -951,6 +1012,26 @@ impl MaxSize for PutLightingRuntimeConditionalSceneChunkRequest {
     const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
         + u16::POSTCARD_MAX_SIZE
         + crate::heapless_vec_max_size::<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>();
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct PutLightingExtendedRuntimeConditionalSceneChunkRequest {
+    pub transaction_id: u32,
+    pub offset: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingExtendedConditionalSceneCell[]"))]
+    pub cells: Vec<LightingExtendedConditionalSceneCell, LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for PutLightingExtendedRuntimeConditionalSceneChunkRequest {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<
+            LightingExtendedConditionalSceneCell,
+            LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE,
+        >();
 }
 
 wire_type! {
@@ -1095,6 +1176,8 @@ pub type LightingExtensionParamsPageResult = LightingResult<LightingExtensionPar
 pub type LightingSceneTransactionResult = LightingResult<LightingSceneTransaction>;
 pub type LightingRuntimeConditionalSceneStatusResult = LightingResult<LightingRuntimeConditionalSceneStatus>;
 pub type LightingRuntimeConditionalScenesPageResult = LightingResult<LightingRuntimeConditionalScenesPage>;
+pub type LightingExtendedRuntimeConditionalScenesPageResult =
+    LightingResult<LightingExtendedRuntimeConditionalScenesPage>;
 pub type LightingRuntimeConditionalSceneTransactionResult = LightingResult<LightingRuntimeConditionalSceneTransaction>;
 pub type LightingUnitResult = LightingResult<()>;
 
@@ -1157,6 +1240,14 @@ const _: () = {
         LightingRuntimeConditionalSceneTransactionResult
     );
     assert_endpoint_fits!(PutLightingRuntimeConditionalSceneChunkRequest, LightingUnitResult);
+    assert_endpoint_fits!(
+        PutLightingExtendedRuntimeConditionalSceneChunkRequest,
+        LightingUnitResult
+    );
+    assert_endpoint_fits!(
+        LightingRuntimeConditionalScenePageRequest,
+        LightingExtendedRuntimeConditionalScenesPageResult
+    );
     assert_endpoint_fits!(CommitLightingRuntimeConditionalSceneReplaceRequest, LightingStateResult);
     assert_endpoint_fits!(AbortLightingRuntimeConditionalSceneReplaceRequest, LightingUnitResult);
     assert_endpoint_fits!(SetLightingSceneCellRequest, LightingStateResult);
@@ -1364,6 +1455,57 @@ mod tests {
         round_trip(&page);
         assert_max_size_bound(&page);
         assert!(LightingConditionalScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+    }
+
+    #[test]
+    fn extended_conditional_scene_types_round_trip_at_capacity() {
+        let base = LightingConditionalSceneCell {
+            conditions: LightingConditionSet {
+                layer: Some(LightingLayerCondition { layer: 2, active: true }),
+                battery: Some(LightingBatteryCondition {
+                    node: LightingNodeId(1),
+                    min_level: Some(20),
+                    max_level: Some(80),
+                    charge: LightingChargeCondition::Discharging,
+                }),
+                output_mode: Some(LightingOutputMode::PoweredOnly),
+            },
+            led_id: LightingLedId(42),
+            effect: LightingEffect::Solid {
+                color: LightingRgb8 { r: 7, g: 8, b: 9 },
+            },
+        };
+        let cell = LightingExtendedConditionalSceneCell {
+            cell: base,
+            connection: Some(LightingConnectionCondition {
+                transport: Some(LightingActiveTransport::Ble),
+                profile: Some(3),
+                ble_state: Some(BleState::Connected),
+            }),
+        };
+        round_trip(&cell);
+
+        let mut cells = Vec::new();
+        for _ in 0..LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE {
+            cells.push(cell).unwrap();
+        }
+        let page = LightingExtendedRuntimeConditionalScenesPage {
+            revision: u32::MAX,
+            total_count: u16::MAX,
+            items: cells.clone(),
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingExtendedRuntimeConditionalScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+
+        let request = PutLightingExtendedRuntimeConditionalSceneChunkRequest {
+            transaction_id: u32::MAX,
+            offset: u16::MAX,
+            cells,
+        };
+        round_trip(&request);
+        assert_max_size_bound(&request);
+        assert!(PutLightingExtendedRuntimeConditionalSceneChunkRequest::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
     }
 
     #[test]
