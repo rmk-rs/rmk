@@ -54,7 +54,20 @@ impl SnapshotProvider for KeymapLightingState<'_, '_> {
             indicators: indicator_state(),
             powered: connection.usb.is_powered(),
             connection,
+            bonded_slots: bonded_slots(),
         }
+    }
+}
+
+/// Bonded-slot bitmap, or zero on builds with no BLE stack to bond with.
+fn bonded_slots() -> u8 {
+    #[cfg(feature = "_ble")]
+    {
+        crate::state::bonded_slots()
+    }
+    #[cfg(not(feature = "_ble"))]
+    {
+        0
     }
 }
 

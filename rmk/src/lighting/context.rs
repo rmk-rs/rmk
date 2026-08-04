@@ -62,6 +62,13 @@ pub struct LightingContext {
     pub powered: bool,
     /// Authoritative transport, BLE profile, and BLE lifecycle snapshot.
     pub connection: ConnectionStatus,
+    /// BLE profile slots holding a stored bond, as a bitmap (bit N = slot N).
+    ///
+    /// `connection` only describes the *active* profile, so on its own it can
+    /// never say whether some other slot is paired. This makes every slot's
+    /// paired-versus-empty state observable at once, which is what lets a
+    /// board light one indicator per slot key. Zero without `_ble`.
+    pub bonded_slots: u8,
 }
 
 /// Access to RMK's standard lighting state from a board-extended snapshot.

@@ -21,9 +21,9 @@ pub const LIGHTING_OVERLAY_CHUNK_SIZE: usize = 8;
 pub const LIGHTING_SCENE_CHUNK_SIZE: usize = 8;
 /// Number of immutable conditional cells in one readback page.
 pub const LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 7;
-/// Number of connection- and effects-aware conditional cells in one extended
-/// page/chunk. Lower than the legacy chunk because each cell carries the two
-/// added predicates and the page still has to fit `LIGHTING_PAYLOAD_SIZE`.
+/// Number of extended conditional cells in one page/chunk. Lower than the
+/// legacy chunk because each cell carries the connection, bonded-slot, and
+/// effects predicates and the page still has to fit `LIGHTING_PAYLOAD_SIZE`.
 pub const LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 5;
 /// Maximum UTF-8 byte length of a zone name.
 pub const LIGHTING_ZONE_NAME_SIZE: usize = 24;
@@ -677,12 +677,22 @@ wire_type! {
 }
 
 wire_type! {
+    /// Gate on one slot holding (or not holding) a stored bond, regardless of
+    /// which profile is active.
+    pub struct LightingBondedSlotCondition {
+        pub slot: u8,
+        pub bonded: bool,
+    }
+}
+
+wire_type! {
     /// Optional connection predicates. Present fields form a conjunction; an
     /// empty condition matches every connection state.
     pub struct LightingConnectionCondition {
         pub transport: Option<LightingActiveTransport>,
         pub profile: Option<u8>,
         pub ble_state: Option<BleState>,
+        pub bonded: Option<LightingBondedSlotCondition>,
     }
 }
 

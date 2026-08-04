@@ -1499,6 +1499,7 @@ mod tests {
                     transport: Some(rmk_types::protocol::rynk::LightingActiveTransport::Ble),
                     profile: Some(4),
                     ble_state: Some(rmk_types::ble::BleState::Advertising),
+                    bonded: None,
                 }),
                 effects: None,
             };

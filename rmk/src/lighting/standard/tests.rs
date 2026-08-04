@@ -176,6 +176,7 @@ fn context(layer: u8) -> LightingContext {
         indicators: Default::default(),
         powered: false,
         connection: Default::default(),
+        bonded_slots: 0,
     }
 }
 
@@ -2146,6 +2147,7 @@ fn output_mode_conditions_select_between_runtime_rules() {
         indicators: Default::default(),
         powered: true,
         connection: Default::default(),
+        bonded_slots: 0,
     };
     let mut frame = LogicalFrame::new(Rgb8::BLACK);
     let render = |engine: &mut ConditionalEngine, frame: &mut LogicalFrame<Rgb8, 2>| {
@@ -2227,6 +2229,7 @@ fn effects_conditions_follow_the_extension_value() {
         indicators: Default::default(),
         powered: true,
         connection: Default::default(),
+        bonded_slots: 0,
     };
     let mut frame = LogicalFrame::new(Rgb8::BLACK);
     let render = |engine: &mut ConditionalEngine, frame: &mut LogicalFrame<Rgb8, 2>| {

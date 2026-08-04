@@ -192,6 +192,16 @@ pub struct ConnectionCondition {
     pub transport: Option<ActiveTransport>,
     pub profile: Option<u8>,
     pub ble_state: Option<BleState>,
+    /// Gate on a specific slot holding (or not holding) a stored bond,
+    /// independent of which profile is active. This is what lets one rule per
+    /// slot key say "paired" or "empty" for every slot at once.
+    pub bonded: Option<BondedSlotCondition>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct BondedSlotCondition {
+    pub slot: u8,
+    pub bonded: bool,
 }
 
 /// Satisfied when the extension band's enabled state equals `enabled`. An
@@ -328,6 +338,12 @@ impl ConditionSet {
                 || condition.ble_state.is_some_and(|state| connection.ble.state != state)
             {
                 return false;
+            }
+            if let Some(wanted) = condition.bonded {
+                let bonded = (context.lighting_context().bonded_slots >> wanted.slot) & 1 == 1;
+                if bonded != wanted.bonded {
+                    return false;
+                }
             }
         }
         let Some(condition) = self.battery else {
@@ -731,6 +747,7 @@ mod tests {
                 transport: Some(ActiveTransport::Ble),
                 profile: Some(3),
                 ble_state: Some(BleState::Connected),
+                bonded: None,
             }),
             ..ConditionSet::default()
         };
@@ -744,6 +761,7 @@ mod tests {
                 transport: Some(ActiveTransport::Usb),
                 profile: Some(3),
                 ble_state: Some(BleState::Connected),
+                bonded: None,
             }),
             ..ConditionSet::default()
         };
@@ -780,6 +798,39 @@ mod tests {
     }
 
     #[test]
+    fn bonded_slot_condition_reads_the_bitmap_regardless_of_active_profile() {
+        let mut context = LightingContext {
+            bonded_slots: 0b101,
+            ..LightingContext::default()
+        };
+        let paired = |slot| ConditionSet {
+            connection: Some(ConnectionCondition {
+                bonded: Some(BondedSlotCondition { slot, bonded: true }),
+                ..ConnectionCondition::default()
+            }),
+            ..ConditionSet::default()
+        };
+        let empty = |slot| ConditionSet {
+            connection: Some(ConnectionCondition {
+                bonded: Some(BondedSlotCondition { slot, bonded: false }),
+                ..ConnectionCondition::default()
+            }),
+            ..ConditionSet::default()
+        };
+
+        assert!(paired(0).matches(&context, &NoBatteries, None, None));
+        assert!(empty(1).matches(&context, &NoBatteries, None, None));
+        assert!(paired(2).matches(&context, &NoBatteries, None, None));
+        assert!(!paired(1).matches(&context, &NoBatteries, None, None));
+        assert!(!empty(0).matches(&context, &NoBatteries, None, None));
+
+        // The active profile plays no part: switching it changes nothing.
+        context.connection.ble.profile = 1;
+        assert!(paired(0).matches(&context, &NoBatteries, None, None));
+        assert!(empty(1).matches(&context, &NoBatteries, None, None));
+    }
+
+    #[test]
     fn connection_condition_matches_none_active_and_empty_condition() {
         let context = LightingContext {
             connection: ConnectionStatus {
@@ -797,6 +848,7 @@ mod tests {
                 transport: Some(ActiveTransport::NoneActive),
                 profile: Some(2),
                 ble_state: Some(BleState::Advertising),
+                bonded: None,
             }),
             ..ConditionSet::default()
         };
@@ -840,6 +892,7 @@ mod tests {
             indicators: Default::default(),
             powered: false,
             connection: Default::default(),
+            bonded_slots: 0,
         };
         let compositor = Compositor::<Rgb8, 2>::new(Rgb8::BLACK);
         let mut frame = LogicalFrame::new(Rgb8::BLACK);
@@ -978,6 +1031,7 @@ mod tests {
             indicators: Default::default(),
             powered: false,
             connection: Default::default(),
+            bonded_slots: 0,
         };
         let compositor = Compositor::<Rgb8, 2>::new(Rgb8::BLACK);
         let mut frame = LogicalFrame::new(Rgb8::BLACK);

@@ -1719,7 +1719,9 @@ fn condition_set_from_wire(
 fn connection_condition_to_wire(
     condition: crate::lighting::ConnectionCondition,
 ) -> rmk_types::protocol::rynk::LightingConnectionCondition {
-    use rmk_types::protocol::rynk::{LightingActiveTransport, LightingConnectionCondition};
+    use rmk_types::protocol::rynk::{
+        LightingActiveTransport, LightingBondedSlotCondition, LightingConnectionCondition,
+    };
 
     LightingConnectionCondition {
         transport: condition.transport.map(|transport| match transport {
@@ -1729,6 +1731,10 @@ fn connection_condition_to_wire(
         }),
         profile: condition.profile,
         ble_state: condition.ble_state,
+        bonded: condition.bonded.map(|bonded| LightingBondedSlotCondition {
+            slot: bonded.slot,
+            bonded: bonded.bonded,
+        }),
     }
 }
 
@@ -1745,6 +1751,10 @@ fn connection_condition_from_wire(
         }),
         profile: condition.profile,
         ble_state: condition.ble_state,
+        bonded: condition.bonded.map(|bonded| crate::lighting::BondedSlotCondition {
+            slot: bonded.slot,
+            bonded: bonded.bonded,
+        }),
     }
 }
 

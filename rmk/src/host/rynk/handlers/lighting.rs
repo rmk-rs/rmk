@@ -616,6 +616,13 @@ impl Handle<PutLightingExtendedRuntimeConditionalSceneChunk> for RynkService<'_>
             {
                 return Ok(Err(LightingError::InvalidRequest));
             }
+            #[cfg(feature = "_ble")]
+            if let Some(connection) = cell.connection
+                && let Some(bonded) = connection.bonded
+                && (bonded.slot as usize) >= crate::NUM_BLE_PROFILE
+            {
+                return Ok(Err(LightingError::InvalidRequest));
+            }
         }
         Ok(match runtime_conditional_scene_controller(self) {
             Ok(controller) => match controller
@@ -2088,6 +2095,7 @@ mod tests {
                     transport: None,
                     profile: Some(crate::NUM_BLE_PROFILE as u8),
                     ble_state: None,
+                    bonded: None,
                 }),
                 effects: None,
             };
@@ -2659,6 +2667,7 @@ mod tests {
                     transport: Some(rmk_types::protocol::rynk::LightingActiveTransport::Ble),
                     profile: Some(3),
                     ble_state: Some(rmk_types::ble::BleState::Connected),
+                    bonded: None,
                 };
                 let extended_cell = rmk_types::protocol::rynk::LightingExtendedConditionalSceneCell {
                     cell: conditional_cell,
