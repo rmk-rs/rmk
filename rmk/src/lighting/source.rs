@@ -196,6 +196,9 @@ pub struct ConnectionCondition {
     /// independent of which profile is active. This is what lets one rule per
     /// slot key say "paired" or "empty" for every slot at once.
     pub bonded: Option<BondedSlotCondition>,
+    /// Gate on USB being plugged and routable, whether or not it carries
+    /// output — the difference between a USB key shown "ready" and "active".
+    pub usb_connected: Option<bool>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -344,6 +347,12 @@ impl ConditionSet {
                 if bonded != wanted.bonded {
                     return false;
                 }
+            }
+            if condition
+                .usb_connected
+                .is_some_and(|wanted| connection.usb_ready() != wanted)
+            {
+                return false;
             }
         }
         let Some(condition) = self.battery else {
@@ -748,6 +757,7 @@ mod tests {
                 profile: Some(3),
                 ble_state: Some(BleState::Connected),
                 bonded: None,
+                usb_connected: None,
             }),
             ..ConditionSet::default()
         };
@@ -762,6 +772,7 @@ mod tests {
                 profile: Some(3),
                 ble_state: Some(BleState::Connected),
                 bonded: None,
+                usb_connected: None,
             }),
             ..ConditionSet::default()
         };
@@ -831,6 +842,28 @@ mod tests {
     }
 
     #[test]
+    fn usb_connected_condition_tracks_readiness_not_active_transport() {
+        let mut context = LightingContext::default();
+        let plugged = |wanted| ConditionSet {
+            connection: Some(ConnectionCondition {
+                usb_connected: Some(wanted),
+                ..ConnectionCondition::default()
+            }),
+            ..ConditionSet::default()
+        };
+
+        assert!(plugged(false).matches(&context, &NoBatteries, None, None));
+        assert!(!plugged(true).matches(&context, &NoBatteries, None, None));
+
+        // Ready but not the active transport: still "connected".
+        context.connection.usb = UsbState::Configured;
+        context.connection.ble.state = BleState::Connected;
+        context.connection.preferred = ConnectionType::Ble;
+        assert!(plugged(true).matches(&context, &NoBatteries, None, None));
+        assert!(!plugged(false).matches(&context, &NoBatteries, None, None));
+    }
+
+    #[test]
     fn connection_condition_matches_none_active_and_empty_condition() {
         let context = LightingContext {
             connection: ConnectionStatus {
@@ -849,6 +882,7 @@ mod tests {
                 profile: Some(2),
                 ble_state: Some(BleState::Advertising),
                 bonded: None,
+                usb_connected: None,
             }),
             ..ConditionSet::default()
         };

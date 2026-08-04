@@ -72,7 +72,9 @@ impl Default for ConnectionStatus {
 }
 
 impl ConnectionStatus {
-    fn usb_ready(&self) -> bool {
+    /// Whether USB is plugged and routable (configured or suspended),
+    /// independent of whether it is the active transport.
+    pub fn usb_ready(&self) -> bool {
         matches!(self.usb, UsbState::Configured | UsbState::Suspended)
     }
 

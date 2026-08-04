@@ -2096,6 +2096,7 @@ mod tests {
                     profile: Some(crate::NUM_BLE_PROFILE as u8),
                     ble_state: None,
                     bonded: None,
+                    usb_connected: None,
                 }),
                 effects: None,
             };
@@ -2668,6 +2669,7 @@ mod tests {
                     profile: Some(3),
                     ble_state: Some(rmk_types::ble::BleState::Connected),
                     bonded: None,
+                    usb_connected: None,
                 };
                 let extended_cell = rmk_types::protocol::rynk::LightingExtendedConditionalSceneCell {
                     cell: conditional_cell,

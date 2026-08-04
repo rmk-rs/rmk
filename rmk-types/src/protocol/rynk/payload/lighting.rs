@@ -693,6 +693,9 @@ wire_type! {
         pub profile: Option<u8>,
         pub ble_state: Option<BleState>,
         pub bonded: Option<LightingBondedSlotCondition>,
+        /// Gate on USB being plugged and routable, whether or not it is the
+        /// active transport.
+        pub usb_connected: Option<bool>,
     }
 }
 

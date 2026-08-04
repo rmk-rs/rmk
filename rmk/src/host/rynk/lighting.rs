@@ -1735,6 +1735,7 @@ fn connection_condition_to_wire(
             slot: bonded.slot,
             bonded: bonded.bonded,
         }),
+        usb_connected: condition.usb_connected,
     }
 }
 
@@ -1755,6 +1756,7 @@ fn connection_condition_from_wire(
             slot: bonded.slot,
             bonded: bonded.bonded,
         }),
+        usb_connected: condition.usb_connected,
     }
 }
 
