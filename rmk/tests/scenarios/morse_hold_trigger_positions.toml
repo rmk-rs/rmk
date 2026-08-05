@@ -65,3 +65,33 @@ steps = [
   { release = [1, 1] },
 ]
 expect = [["A"], [], ["B"], []]
+
+# With `hold_trigger_on_release`, an excluded key produces the tap when it is *released*
+# rather than when it is pressed. This case is the invariance control: a next key that is
+# only tapped settles the tap-hold as a tap either way, so the trace matches
+# `unlisted_position_settles_as_tap`. It is what the deferral must not break.
+[[test]]
+name = "on_release_tapped_key_settles_as_tap_unchanged"
+behavior.morse = { profiles = { p1 = { hold_trigger_on_release = true } } }
+steps = [
+  { press = [3, 7] },  # Press MT(B, LShift, p1)
+  { press = [1, 10] },  # Press Y -- excluded, so the tap waits for its release
+  { release = [1, 10] },
+  { release = [3, 7] },
+]
+expect = [["B"], ["B", "Y"], ["B"], []]
+
+# The behavior the deferral exists for: a next key that is *held* leaves the hold reachable,
+# so the tap-hold still resolves as a modifier. Without `hold_trigger_on_release` the press
+# of the excluded key would have settled it as a tap.
+[[test]]
+name = "on_release_excluded_key_held_leaves_the_hold_reachable"
+behavior.morse = { profiles = { p1 = { hold_trigger_on_release = true } } }
+steps = [
+  { press = [3, 7] },  # Press MT(B, LShift, p1)
+  { press = [1, 10] },  # Press Y and keep holding it
+  { delay = 300 },
+  { release = [3, 7] },
+  { release = [1, 10] },
+]
+expect = [["LShift"], ["LShift", "Y"], ["Y"], []]
