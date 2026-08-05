@@ -737,6 +737,17 @@ impl<'a> Keyboard<'a> {
                             continue;
                         }
 
+                        // A key outside the profile's hold trigger positions can never trigger
+                        // the held key's hold, so the mode's own hold rules are skipped for it.
+                        if matches!(held_key.state, KeyState::Pressed(_))
+                            && Self::hold_trigger_allows(self.keymap, &held_key.action, event.pos) == Some(false)
+                        {
+                            debug!("Hold trigger positions exclude the pressed key, resolving as tap");
+                            let _ = decisions.push((held_key.event.pos, HeldKeyDecision::UnilateralTap));
+                            decision_for_current_key = KeyBehaviorDecision::CleanBuffer;
+                            continue;
+                        }
+
                         // Check morse key mode
                         match mode {
                             MorseMode::PermissiveHold => {

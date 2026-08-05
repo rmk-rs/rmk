@@ -98,6 +98,7 @@ pub struct MorseProfile {
     pub hold_timeout_ms: Option<u64>,
     pub gap_timeout_ms: Option<u64>,
     pub quick_tap_timeout_ms: Option<u64>,
+    pub hold_trigger_key_positions: Vec<[u8; 2]>,
 }
 
 pub struct MorseKey {
@@ -190,6 +191,7 @@ impl crate::KeyboardTomlConfig {
                 hold_timeout_ms: Some(m.hold_timeout.as_ref().map(|t| t.0).unwrap_or(250)),
                 gap_timeout_ms: Some(m.gap_timeout.as_ref().map(|t| t.0).unwrap_or(250)),
                 quick_tap_timeout_ms: m.quick_tap_timeout.as_ref().map(|t| t.0),
+                hold_trigger_key_positions: m.hold_trigger_key_positions.clone().unwrap_or_default(),
             };
 
             let morses = m
@@ -287,6 +289,7 @@ fn resolve_morse_profile(p: &crate::MorseProfile) -> MorseProfile {
         hold_timeout_ms: p.hold_timeout.as_ref().map(|t| t.0),
         gap_timeout_ms: p.gap_timeout.as_ref().map(|t| t.0),
         quick_tap_timeout_ms: p.quick_tap_timeout.as_ref().map(|t| t.0),
+        hold_trigger_key_positions: p.hold_trigger_key_positions.clone().unwrap_or_default(),
     }
 }
 
@@ -338,6 +341,87 @@ hold_timeout = "200ms"
         assert_eq!(morse.profiles["flow_on"].enable_flow_tap, Some(true));
         assert_eq!(morse.profiles["flow_off"].enable_flow_tap, Some(false));
         assert_eq!(morse.profiles["inherit"].enable_flow_tap, None);
+    }
+
+    #[test]
+    fn named_hold_trigger_regions_expand_and_deduplicate() {
+        let toml = r#"
+[layout]
+rows = 2
+cols = 3
+map = """
+(0,0,L) (0,1,L) (0,2,R)
+(1,0,L) (1,1,L) (1,2,R)
+"""
+
+[layout.regions]
+right = [[0, 2], [1, 2]]
+
+[keymap]
+layers = 1
+
+[[keymap.layer]]
+keys = "A B C D E F"
+
+[behavior.morse]
+hold_trigger_key_positions = [[0, 1]]
+hold_trigger_regions = ["right"]
+
+[behavior.morse.profiles.hrm]
+hold_trigger_key_positions = [[0, 2]]
+hold_trigger_regions = ["right"]
+"#;
+
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("rmk-config-regions-{}-{}.toml", std::process::id(), unique));
+        fs::write(&path, toml).unwrap();
+        let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+        let _ = fs::remove_file(&path);
+
+        let morse = config.behavior().unwrap().morse.unwrap();
+        assert_eq!(
+            morse.default_profile.hold_trigger_key_positions,
+            vec![[0, 1], [0, 2], [1, 2]]
+        );
+        assert_eq!(morse.profiles["hrm"].hold_trigger_key_positions, vec![[0, 2], [1, 2]]);
+    }
+
+    #[test]
+    fn unknown_hold_trigger_region_is_an_error() {
+        let toml = r#"
+[layout]
+rows = 1
+cols = 1
+map = "(0,0)"
+
+[keymap]
+layers = 1
+
+[[keymap.layer]]
+keys = "A"
+
+[behavior.morse.profiles.hrm]
+hold_trigger_regions = ["missing"]
+"#;
+
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "rmk-config-unknown-region-{}-{}.toml",
+            std::process::id(),
+            unique
+        ));
+        fs::write(&path, toml).unwrap();
+        let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+        let _ = fs::remove_file(&path);
+
+        let err = match config.behavior() {
+            Ok(_) => panic!("expected unknown-region error"),
+            Err(err) => err,
+        };
+        assert!(
+            err.contains("unknown layout region 'missing'"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

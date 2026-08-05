@@ -236,6 +236,23 @@ The `profile` of a morse key contains all tunable configurations of this morse k
 
 A profile contains the following fields:
 
+- `hold_trigger_key_positions`: A list of `[row, col]` key positions allowed to trigger this profile's hold. When set, pressing any *other* key while the tap-hold decision is pending settles it as a tap. Same as ZMK's `hold-trigger-key-positions`, and a generalization of `unilateral_tap` from a hand split to an arbitrary set. Unset by default, which places no positional restriction.
+  - Reusable position sets may be declared under `[layout.regions]` and referenced by name with `hold_trigger_regions`. Named regions and direct positions are combined, and duplicate coordinates are ignored.
+  - The restriction only governs which keys may trigger the hold early. Holding the key to `hold_timeout` with nothing else pressed still reaches the hold.
+  - Positions are looked up by profile index, so this applies to profile-carrying tap-hold keys (`MT`/`LT`/`TH` with a profile name). A morse/tap-dance key carries its profile inline with no index to key the list by, so it is not restricted.
+  - Total capacity across all profiles comes from `[rmk] hold_trigger_key_position_max_num` (3 bytes per entry, default 16), which is raised automatically to fit `keyboard.toml`.
+
+```toml
+[layout.regions]
+left_alpha = [[0, 0], [0, 1], [1, 0], [1, 1]]
+right_alpha = [[0, 6], [0, 7], [1, 6], [1, 7]]
+thumbs = [[4, 3], [4, 4], [4, 5], [4, 6]]
+
+[behavior.morse.profiles.left_hrm]
+hold_on_other_press = true
+hold_trigger_regions = ["right_alpha", "thumbs"]
+```
+
 - `unilateral_tap`: (Experimental) Enables unilateral tap mode. When enabled, tap action will be triggered when a key from "same" hand is pressed. In current experimental version, the "same" hand is calculated using the `<hand>`, which can be given in `layout.map`. This option is recommended to set to true when `enable_flow_tap` is set to true. In `normal_mode` the tap resolves when the same-hand key is pressed; in `permissive_hold` mode, when it is released. `hold_on_other_press` mode ignores this option, because the hold fires on the other key's press first.
 
 - The morse mode, which can be set by enabling one of these:

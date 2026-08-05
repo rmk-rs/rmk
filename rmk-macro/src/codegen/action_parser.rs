@@ -538,6 +538,7 @@ mod tests {
             hold_timeout_ms: Some(250),
             gap_timeout_ms: Some(250),
             quick_tap_timeout_ms: None,
+            hold_trigger_key_positions: Vec::new(),
         }
     }
 
