@@ -292,7 +292,8 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                             // split read loop (the application resyncs on
                             // reconnect and must tolerate loss).
                             SplitMessage::Application(data) => {
-                                if crate::split_app::SPLIT_APP_RX.try_send(data).is_err() {
+                                let queued = crate::split_app::SPLIT_APP_RX.try_send(data);
+                                if queued.is_err() {
                                     warn!("split app message dropped (inbox full)");
                                 }
                             }
