@@ -1525,6 +1525,8 @@ fn lighting_wire_frames_locked() {
             transport: Some(LightingActiveTransport::Ble),
             profile: Some(3),
             ble_state: Some(BleState::Connected),
+            bonded: Some(LightingBondedSlotCondition { slot: 2, bonded: true }),
+            usb_connected: Some(true),
         }),
         effects: Some(LightingEffectsCondition { enabled: true }),
     };
