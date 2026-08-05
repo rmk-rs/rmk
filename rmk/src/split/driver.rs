@@ -210,23 +210,11 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
         #[cfg(feature = "display")]
         let mut sleep_sub = crate::event::SleepStateEvent::subscriber();
 
-        // Expose the split-link state to the application. This
-        // manager runs exactly while the peripheral session is up; the
-        // `false → true` edge is the application's resync trigger.
-        //
-        // The link-down edge MUST be sent from a drop guard: on connection
-        // loss the outer `select3` in `split/ble/central.rs` resolves via its
-        // connection-monitor arm and this future is *cancelled*, so any
-        // `send(false)` written on an error path here would never run.
-        struct LinkDownGuard;
-        impl Drop for LinkDownGuard {
-            fn drop(&mut self) {
-                crate::split_app::SPLIT_APP_LINK.sender().send(false);
-            }
-        }
-        let _link_guard = LinkDownGuard;
-        let app_link = crate::split_app::SPLIT_APP_LINK.sender();
-        app_link.send(true);
+        // This manager runs exactly while the peripheral session is up. On
+        // connection loss the `select3` in `split/ble/central.rs` cancels this
+        // future, so the guard's `Drop` is what sends the link-down edge.
+        let mut app_link = crate::split_app::LinkGuard::new();
+        app_link.mark_up();
 
         // Send the current state once on startup so the peripheral matches us
         // even when no transition has happened since the central booted.
@@ -237,7 +225,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
             .await
             .is_err()
         {
-            return; // guard sends the link-down edge
+            return;
         }
 
         #[cfg(feature = "dfu_split")]
@@ -269,9 +257,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
                     with_feature("display"): e = wpm_sub.next_event().fuse() => SplitMessage::Wpm(e.0),
                     with_feature("display"): e = modifier_sub.next_event().fuse() => SplitMessage::Modifier(e.modifier.into_bits()),
                     with_feature("display"): e = sleep_sub.next_event().fuse() => SplitMessage::SleepState(e.0),
-                    // Application messages, deliberately the
-                    // last (lowest-priority) outgoing arm; the read arm of the
-                    // outer select still beats all outgoing traffic.
+                    // Deliberately the last (lowest-priority) outgoing arm.
                     m = crate::split_app::SPLIT_APP_TX.receive().fuse() => SplitMessage::Application(m),
                 }
             };
@@ -302,7 +288,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
                 #[cfg(not(feature = "dfu_split"))]
                 Either::Second(msg) => {
                     if self.send(&msg).await.is_err() {
-                        return; // guard sends the link-down edge
+                        return;
                     }
                 }
             }
@@ -331,14 +317,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
             },
             // Non-key events are drop-on-full to keep the split read loop responsive.
             SplitMessage::Pointing(e) => publish_event(e),
-            // Forward peripheral → central application
-            // payloads into the (symmetric) inbox; drop-on-full so a slow
-            // consumer can never stall the split read loop.
-            SplitMessage::Application(data) => {
-                if crate::split_app::SPLIT_APP_RX.try_send(data).is_err() {
-                    warn!("split app message dropped (inbox full)");
-                }
-            }
+            SplitMessage::Application(data) => crate::split_app::deliver_received(data),
             #[cfg(feature = "_ble")]
             SplitMessage::BatteryStatus(state) => set_peripheral_battery(self.id, state.0),
             #[cfg(feature = "dfu_split")]

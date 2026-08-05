@@ -103,10 +103,9 @@ pub(crate) enum SplitMessage {
     #[cfg(feature = "dfu_split")]
     FirmwareUpdateConfirm,
 
-    /// opaque bounded application payload, central →
-    /// peripheral (see `crate::split_app`). Kept as the LAST variant so
-    /// the postcard discriminants of all existing messages stay stable across
-    /// halves flashed at different revisions.
+    /// Opaque application payload, either direction (see `crate::split_app`).
+    /// Kept as the last variant so the postcard discriminants of existing
+    /// messages stay stable across halves flashed at different revisions.
     Application(crate::split_app::SplitAppData),
 }
 
