@@ -205,7 +205,7 @@ impl<'a> RynkService<'a> {
     async fn dispatch(
         &self,
         locker: &HostLock<'_>,
-        session: &RynkSession,
+        #[cfg_attr(not(feature = "lighting"), allow(unused_variables))] session: &RynkSession,
         msg: &mut RynkMessage<'_>,
     ) -> Result<(), RynkError> {
         let cmd = msg.header().cmd;
