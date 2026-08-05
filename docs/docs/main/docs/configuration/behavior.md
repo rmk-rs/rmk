@@ -240,6 +240,7 @@ A profile contains the following fields:
   - Reusable position sets may be declared under `[layout.regions]` and referenced by name with `hold_trigger_regions`. Named regions and direct positions are combined, and duplicate coordinates are ignored.
   - The restriction only governs which keys may trigger the hold early. Holding the key to `hold_timeout` with nothing else pressed still reaches the hold.
   - Positions are looked up by profile index, so this applies to profile-carrying tap-hold keys (`MT`/`LT`/`TH` with a profile name). A morse/tap-dance key carries its profile inline with no index to key the list by, so it is not restricted.
+  - `hold_trigger_on_release`: When `true`, a key outside the list produces the tap when it is *released* rather than when it is pressed. Same as ZMK's `hold-trigger-on-release`. A next key that is only tapped still settles the tap-hold as a tap, while a next key that is held leaves the hold reachable -- which is what lets same-hand modifiers combine. Defaults to `false`.
   - Total capacity across all profiles comes from `[rmk] hold_trigger_key_position_max_num` (3 bytes per entry, default 16), which is raised automatically to fit `keyboard.toml`.
 
 ```toml

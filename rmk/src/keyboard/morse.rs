@@ -419,6 +419,21 @@ impl<'a> Keyboard<'a> {
         keymap.hold_trigger_allows(*idx, pos.row, pos.col)
     }
 
+    /// Whether a key outside `hold_trigger_key_positions` settles this tap-hold as a tap when
+    /// it is released rather than when it is pressed. Same as ZMK's `hold-trigger-on-release`.
+    pub fn is_hold_trigger_on_release(keymap: &KeyMap, key_action: &KeyAction) -> bool {
+        if let KeyAction::TapHold(_, _, idx) = key_action
+            && let Some(enabled) = keymap.morse_profile(*idx).hold_trigger_on_release()
+        {
+            return enabled;
+        }
+
+        keymap
+            .morse_default_profile()
+            .hold_trigger_on_release()
+            .unwrap_or(false)
+    }
+
     pub fn is_flow_tap_enabled(keymap: &KeyMap, key_action: &KeyAction) -> bool {
         let per_key = match key_action {
             KeyAction::TapHold(_, _, idx) => keymap.morse_profile(*idx).enable_flow_tap(),

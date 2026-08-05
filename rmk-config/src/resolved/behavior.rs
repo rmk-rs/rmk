@@ -99,6 +99,7 @@ pub struct MorseProfile {
     pub gap_timeout_ms: Option<u64>,
     pub quick_tap_timeout_ms: Option<u64>,
     pub hold_trigger_key_positions: Vec<[u8; 2]>,
+    pub hold_trigger_on_release: Option<bool>,
 }
 
 pub struct MorseKey {
@@ -192,6 +193,7 @@ impl crate::KeyboardTomlConfig {
                 gap_timeout_ms: Some(m.gap_timeout.as_ref().map(|t| t.0).unwrap_or(250)),
                 quick_tap_timeout_ms: m.quick_tap_timeout.as_ref().map(|t| t.0),
                 hold_trigger_key_positions: m.hold_trigger_key_positions.clone().unwrap_or_default(),
+                hold_trigger_on_release: m.hold_trigger_on_release,
             };
 
             let morses = m
@@ -290,6 +292,7 @@ fn resolve_morse_profile(p: &crate::MorseProfile) -> MorseProfile {
         gap_timeout_ms: p.gap_timeout.as_ref().map(|t| t.0),
         quick_tap_timeout_ms: p.quick_tap_timeout.as_ref().map(|t| t.0),
         hold_trigger_key_positions: p.hold_trigger_key_positions.clone().unwrap_or_default(),
+        hold_trigger_on_release: p.hold_trigger_on_release,
     }
 }
 

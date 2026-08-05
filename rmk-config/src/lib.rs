@@ -895,9 +895,12 @@ pub(crate) struct MorseProfile {
     /// Key positions allowed to trigger the hold, as `[row, col]` pairs. When set, any other
     /// key resolves this tap-hold as a tap. Same as ZMK's `hold-trigger-key-positions`.
     pub hold_trigger_key_positions: Option<Vec<[u8; 2]>>,
-
     /// Named `[layout.regions]` whose positions are added to `hold_trigger_key_positions`.
     pub hold_trigger_regions: Option<Vec<String>>,
+
+    /// A key outside `hold_trigger_key_positions` settles this tap-hold as a tap when it is
+    /// released rather than when it is pressed
+    pub hold_trigger_on_release: Option<bool>,
 }
 
 /// Configurations for tri layer
@@ -1019,6 +1022,10 @@ pub(crate) struct MorsesConfig {
 
     /// Named `[layout.regions]` whose positions are added to `hold_trigger_key_positions`.
     pub hold_trigger_regions: Option<Vec<String>>,
+
+    /// A key outside `hold_trigger_key_positions` settles the tap-hold as a tap when it is
+    /// released rather than when it is pressed
+    pub hold_trigger_on_release: Option<bool>,
 
     /// these can be used to overrides the defaults given above
     pub profiles: Option<HashMap<String, MorseProfile>>,
