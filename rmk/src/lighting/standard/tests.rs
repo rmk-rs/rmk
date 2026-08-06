@@ -920,6 +920,109 @@ fn disabling_background_does_not_disable_layer_or_status_sources() {
 }
 
 #[test]
+fn read_frame_reports_the_presented_frame_and_its_provenance() {
+    let mut engine = engine();
+    let snapshot = context(1);
+
+    // Nothing presented yet: the page is the fill color with no provenance.
+    let StandardReply::FramePage(page) = engine
+        .handle_command(0, StandardCommand::ReadFrame { offset: 0 }, &snapshot)
+        .unwrap()
+        .reply
+    else {
+        panic!("ReadFrame answers with a frame page");
+    };
+    assert_eq!(page.revision, None);
+    assert_eq!((page.total, page.start), (2, 0));
+    assert_eq!(page.cells(), &[Rgb8::BLACK, Rgb8::BLACK]);
+    assert_eq!(engine.state().presented, None);
+
+    let mut frame = LogicalFrame::new(Rgb8::BLACK);
+    engine
+        .render(
+            RenderInput {
+                now_ms: 0,
+                snapshot: &snapshot,
+            },
+            &mut frame,
+        )
+        .unwrap();
+    let rendered_revision = engine.state().revision;
+
+    // A render the output never acknowledged is not on the LEDs yet.
+    let StandardReply::FramePage(page) = engine
+        .handle_command(0, StandardCommand::ReadFrame { offset: 0 }, &snapshot)
+        .unwrap()
+        .reply
+    else {
+        panic!("ReadFrame answers with a frame page");
+    };
+    assert_eq!(page.revision, None);
+    assert_eq!(page.cells(), &[Rgb8::BLACK, Rgb8::BLACK]);
+
+    <Engine as LightingEngine<LightingContext>>::on_presented(&mut engine, &frame);
+    let StandardReply::FramePage(page) = engine
+        .handle_command(0, StandardCommand::ReadFrame { offset: 0 }, &snapshot)
+        .unwrap()
+        .reply
+    else {
+        panic!("ReadFrame answers with a frame page");
+    };
+    assert_eq!(page.revision, Some(rendered_revision));
+    assert_eq!(page.cells(), frame.as_slice());
+    assert_eq!(
+        engine.state().presented,
+        Some(PresentedFrame {
+            revision: rendered_revision,
+            context: snapshot,
+        }),
+    );
+
+    // Offsets past the frame are empty rather than an error, so a host can
+    // page to exhaustion without knowing the chunk size.
+    let StandardReply::FramePage(page) = engine
+        .handle_command(0, StandardCommand::ReadFrame { offset: 9 }, &snapshot)
+        .unwrap()
+        .reply
+    else {
+        panic!("ReadFrame answers with a frame page");
+    };
+    assert_eq!((page.start, page.len), (2, 0));
+    assert!(page.cells().is_empty());
+}
+
+/// Brightness is an `OutputTransform`, so the committed frame is what the
+/// driver was handed. Dimming the output must therefore change the readback.
+#[test]
+fn presented_frame_readback_carries_the_brightness_transform() {
+    let mut engine = engine();
+    let snapshot = context(1);
+    engine
+        .handle_command(0, StandardCommand::SetOutputBrightness(128), &snapshot)
+        .unwrap();
+    let mut frame = LogicalFrame::new(Rgb8::BLACK);
+    engine
+        .render(
+            RenderInput {
+                now_ms: 0,
+                snapshot: &snapshot,
+            },
+            &mut frame,
+        )
+        .unwrap();
+    <Engine as LightingEngine<LightingContext>>::on_presented(&mut engine, &frame);
+
+    let StandardReply::FramePage(page) = engine
+        .handle_command(0, StandardCommand::ReadFrame { offset: 0 }, &snapshot)
+        .unwrap()
+        .reply
+    else {
+        panic!("ReadFrame answers with a frame page");
+    };
+    assert_eq!(page.cells(), &[Rgb8::new(100, 0, 0), Rgb8::new(5, 5, 5)]);
+}
+
+#[test]
 fn standard_engine_composes_background_layer_and_expiring_overlay() {
     let mut engine = engine();
     let snapshot = context(1);

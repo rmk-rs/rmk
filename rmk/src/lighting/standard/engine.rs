@@ -6,7 +6,7 @@ use rmk_types::action::LightAction;
 use super::*;
 use crate::lighting::Rgb8;
 use crate::lighting::compositor::{Compositor, LightingSource, LogicalFrame};
-use crate::lighting::context::LightingContextProvider;
+use crate::lighting::context::{LightingContext, LightingContextProvider};
 use crate::lighting::effect::BuiltinEffect;
 use crate::lighting::output::BrightnessTransform;
 use crate::lighting::service::{CommandResult, Invalidation, LightingEngine, RenderInput, RenderOutcome};
@@ -91,6 +91,12 @@ pub struct StandardLightingEngine<
     wake_active: bool,
     effective_output_enabled: bool,
     output_brightness: u8,
+    /// Provenance of the frame currently on the LEDs.
+    presented: Option<PresentedFrame>,
+    /// Provenance of the most recent render, promoted to `presented` once the
+    /// output acknowledges the write. A render that never reaches the driver
+    /// therefore never claims to be on the LEDs.
+    rendered: PresentedFrame,
 }
 
 impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const SCENE_CAP: usize>
@@ -128,6 +134,11 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             wake_active: false,
             effective_output_enabled: true,
             output_brightness: u8::MAX,
+            presented: None,
+            rendered: PresentedFrame {
+                revision: 0,
+                context: LightingContext::default(),
+            },
         }
     }
 
@@ -177,6 +188,7 @@ impl<'scenes, Extension, Status, const N: usize, const OVERLAY_CAP: usize, const
             scene_len: self.scenes.len(),
             scene_policy: self.scenes.policy(),
             runtime_conditional_scene_len: self.runtime_conditional_scenes.len(),
+            presented: self.presented,
         }
     }
 
@@ -734,6 +746,19 @@ where
                     },
                 ));
             }
+            StandardCommand::ReadFrame { offset } => {
+                let start = (offset as usize).min(N);
+                let end = (start + FRAME_CHUNK_SIZE).min(N);
+                let mut cells = [Rgb8::BLACK; FRAME_CHUNK_SIZE];
+                cells[..end - start].copy_from_slice(&self.compositor.committed().as_slice()[start..end]);
+                return Ok(CommandResult::unchanged(StandardReply::FramePage(FramePage {
+                    revision: self.presented.map(|presented| presented.revision),
+                    total: N.min(u16::MAX as usize) as u16,
+                    start: start as u16,
+                    len: (end - start) as u8,
+                    cells,
+                })));
+            }
             StandardCommand::ReadScenes { offset } => {
                 return Ok(CommandResult::unchanged(StandardReply::ScenesPage(ScenePage {
                     revision: self.revision,
@@ -1193,6 +1218,7 @@ where
             }
             StandardCommand::ReadState => (Invalidation::None, false),
             StandardCommand::ReadOverlay { .. }
+            | StandardCommand::ReadFrame { .. }
             | StandardCommand::ReadScenes { .. }
             | StandardCommand::ReadCompiledScenes { .. }
             | StandardCommand::ReadRuntimeConditionalScenes { .. }
@@ -1241,6 +1267,10 @@ where
             self.effective_output_enabled = effective_output_enabled;
             state_changed = true;
         }
+        self.rendered = PresentedFrame {
+            revision: self.revision,
+            context: *context,
+        };
         let indicator_cell = self.controls.output_mode_indicator.map(|indicator| SceneCell {
             slot: indicator.slot,
             effect: indicator.effect(self.output_mode),
@@ -1277,6 +1307,8 @@ where
             runtime_conditional_scene_expired_transaction: _,
             runtime_conditional_scene_committed_transaction: _,
             revision: _,
+            presented: _,
+            rendered: _,
         } = self;
         let mut transaction = compositor.begin(effect_now_ms, input.snapshot, Rgb8::BLACK, frame);
         transaction.apply(priority::BACKGROUND, background)?;
@@ -1321,6 +1353,7 @@ where
 
     fn on_presented(&mut self, frame: &Self::Frame) {
         self.compositor.commit(frame);
+        self.presented = Some(self.rendered);
     }
 }
 

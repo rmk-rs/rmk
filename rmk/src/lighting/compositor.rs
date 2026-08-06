@@ -253,6 +253,14 @@ impl<C: Copy + Eq, const N: usize> Compositor<C, N> {
     pub fn has_committed(&self) -> bool {
         self.has_committed
     }
+
+    /// The last frame the output accepted — post-[`OutputTransform`], because
+    /// [`RenderTransaction::finish_with`] writes the transformed colors back
+    /// into the frame before it is presented and committed. It is therefore
+    /// what the driver was handed, not the pre-brightness composition.
+    pub const fn committed(&self) -> &LogicalFrame<C, N> {
+        &self.committed
+    }
 }
 
 pub struct RenderTransaction<'a, 'context, C, Context, const N: usize> {

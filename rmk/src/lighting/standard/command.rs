@@ -6,6 +6,7 @@ use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 #[allow(unused_imports)]
 use super::*;
 use crate::RawMutex;
+use crate::lighting::Rgb8;
 use crate::lighting::compositor::{
     ExtensionDescriptor, ExtensionLayerState, ExtensionParamSpec, ExtensionState, LightingSource, RenderError,
 };
@@ -109,6 +110,11 @@ pub enum StandardCommand<const OVERLAY_CAP: usize, const SCENE_CAP: usize = 0> {
     ReadOverlay {
         offset: u16,
     },
+    /// One page of the last frame the output presented. Paged because a whole
+    /// frame is `N` RGB triples, far past any single reply's size budget.
+    ReadFrame {
+        offset: u16,
+    },
     SetSceneCellIfRevision {
         expected_revision: u32,
         cell: SceneTableCell,
@@ -189,6 +195,53 @@ pub struct StandardState {
     pub scene_len: usize,
     pub scene_policy: LayerPolicy,
     pub runtime_conditional_scene_len: usize,
+    /// What the LEDs are currently showing. `None` until the output accepts
+    /// its first frame.
+    pub presented: Option<PresentedFrame>,
+}
+
+/// Provenance of one frame the output presented: the engine revision it was
+/// rendered at and the lighting context it was rendered from.
+///
+/// Recorded at render time and promoted when the output acknowledges the
+/// write, so it describes what the LEDs show rather than what the engine now
+/// holds. On a split renderer replica the context is the *replicated* one, so
+/// comparing it against the authority's is how a stale replica becomes
+/// visible instead of merely suspected.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct PresentedFrame {
+    pub revision: u32,
+    pub context: LightingContext,
+}
+
+/// Frame cells carried by one [`FramePage`]. Kept equal to the wire chunk
+/// size so protocol adapters forward pages without re-batching.
+pub const FRAME_CHUNK_SIZE: usize = 24;
+
+/// One page of the last presented frame's logical slots.
+///
+/// Slot order is the compositor's, which is meaningful only against a
+/// validated topology; routing readback maps each slot to its node, output,
+/// and physical index.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct FramePage {
+    /// Engine revision the presented frame was rendered at. `None` before the
+    /// output has presented anything, when `cells` is still the fill color.
+    pub revision: Option<u32>,
+    /// Slots in the engine's logical frame.
+    pub total: u16,
+    /// Index of `cells[0]` within that frame.
+    pub start: u16,
+    /// Populated entries of `cells`; the rest are padding.
+    pub len: u8,
+    pub cells: [Rgb8; FRAME_CHUNK_SIZE],
+}
+
+impl FramePage {
+    /// The populated cells, in slot order from [`Self::start`].
+    pub fn cells(&self) -> &[Rgb8] {
+        &self.cells[..(self.len as usize).min(FRAME_CHUNK_SIZE)]
+    }
 }
 
 /// One page of transient overlay cells with remaining TTLs.
@@ -355,6 +408,7 @@ pub struct RuntimeConditionalScenePage {
 pub enum StandardReply {
     State(StandardState),
     OverlayPage(OverlayPage),
+    FramePage(FramePage),
     ScenesPage(ScenePage),
     CompiledScenesPage(CompiledScenePage),
     SceneTransaction { id: u32, cell_count: u16 },
