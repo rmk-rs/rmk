@@ -25,6 +25,13 @@ pub const LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 7;
 /// legacy chunk because each cell carries the connection, bonded-slot, and
 /// effects predicates and the page still has to fit `LIGHTING_PAYLOAD_SIZE`.
 pub const LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 5;
+/// Number of RGB cells in one presented-frame page.
+///
+/// Deliberately far below what [`LIGHTING_PAYLOAD_SIZE`] would allow: a page
+/// for a remote split node has to be assembled from application packets on
+/// the split link, whose per-message ceiling and shallow, lossy queues make a
+/// large page a large number of chances to lose one.
+pub const LIGHTING_FRAME_CHUNK_SIZE: usize = 24;
 /// Maximum UTF-8 byte length of a zone name.
 pub const LIGHTING_ZONE_NAME_SIZE: usize = 24;
 /// Maximum UTF-8 byte length of one extension effect or palette name.
@@ -1157,6 +1164,137 @@ wire_type! {
 }
 
 wire_type! {
+    /// Request one page of a lighting node's last presented frame.
+    ///
+    /// `offset` is the first logical frame slot wanted, matching every other
+    /// lighting page request; the reply echoes it as
+    /// [`LightingFramePage::start`]. Frames are not revision-pinned: a stale
+    /// page is the observation being made, not an error, and pinning would
+    /// make the frame unreadable exactly while it is changing.
+    pub struct LightingFrameRequest {
+        pub node: LightingNodeId,
+        pub offset: u16,
+    }
+}
+
+/// One page of the colors a lighting node last presented to its output.
+///
+/// Cells are the post-brightness logical frame: RMK applies output
+/// brightness as a frame transform before the frame is written and
+/// committed, so these are the values the driver received. Any further
+/// scaling a board's driver performs on the way to the wire is below this
+/// layer and is not reflected here.
+///
+/// Cell order is compositor slot order, meaningful only against a validated
+/// topology; `GetLightingRoutes` maps each LED to its node, output, and
+/// physical index.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingFramePage {
+    pub node: LightingNodeId,
+    /// Engine revision the frame was captured at. `None` when the node has
+    /// not presented a frame yet, when the cells are still its fill color.
+    pub revision: Option<u32>,
+    /// Slots in this node's logical frame.
+    pub total_leds: u16,
+    /// Index of `cells[0]` within that frame.
+    pub start: u16,
+    /// How long ago the capture happened. Always `0` for the node serving the
+    /// request; for a remote node it is the round-trip staleness of the
+    /// answer, which is what makes a frozen half distinguishable from a
+    /// correct one.
+    pub age_ms: u32,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingRgb8[]"))]
+    pub cells: Vec<LightingRgb8, LIGHTING_FRAME_CHUNK_SIZE>,
+}
+
+impl MaxSize for LightingFramePage {
+    const POSTCARD_MAX_SIZE: usize = LightingNodeId::POSTCARD_MAX_SIZE
+        + <Option<u32> as MaxSize>::POSTCARD_MAX_SIZE
+        + 2 * u16::POSTCARD_MAX_SIZE
+        + u32::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingRgb8, LIGHTING_FRAME_CHUNK_SIZE>();
+}
+
+wire_type! {
+    /// The lighting authority's own state, as the central half sees it.
+    pub struct LightingCentralReplicaState {
+        /// Live engine revision — what the authority would replicate now.
+        pub revision: u32,
+        /// Engine revision of the last frame the central presented. `None`
+        /// before its output has accepted one.
+        pub presented_revision: Option<u32>,
+        /// Layer state the central's last presented frame was rendered from.
+        /// Zeroed before that first frame.
+        pub effective_layer: u8,
+        pub default_layer: u8,
+        pub active_bits: u64,
+        /// Live USB/VBUS power as the engine sees it.
+        pub powered: bool,
+    }
+}
+
+wire_type! {
+    /// Central-side replication machine, supplied by the board.
+    ///
+    /// This is the half of the handshake the protocol cannot infer: whether a
+    /// snapshot is outstanding, which revision was last acknowledged, and
+    /// whether the application link is up at all.
+    pub struct LightingReplicationMachine {
+        /// Last revision the peripheral acknowledged. `None` when it has
+        /// never acknowledged one since boot.
+        pub last_acked_revision: Option<u32>,
+        /// A snapshot is in flight and its acknowledgement is still pending.
+        pub awaiting_ack: bool,
+        /// Bumped whenever the central restarts replication, so a host can
+        /// tell a resend apart from a stuck retry.
+        pub generation: u8,
+        pub link_up: bool,
+    }
+}
+
+wire_type! {
+    /// Last state heard from a peripheral renderer.
+    ///
+    /// Deliberately stale-tolerant: the board answers from whatever it last
+    /// received rather than blocking on a round trip, and `age_ms` says how
+    /// old that is. A large age is itself the diagnosis.
+    pub struct LightingPeripheralReplicaState {
+        pub node: LightingNodeId,
+        /// Central revision whose snapshot the peripheral last applied.
+        /// `None` when it has applied none.
+        pub applied_revision: Option<u32>,
+        /// The peripheral engine's own revision, which advances locally as
+        /// well and so is not comparable to `applied_revision`.
+        pub engine_revision: u32,
+        /// Layer state the peripheral is rendering from — the replicated
+        /// context, which is where staleness shows up first.
+        pub effective_layer: u8,
+        pub default_layer: u8,
+        pub active_bits: u64,
+        pub powered: bool,
+        pub wake_active: bool,
+        pub effective_output_enabled: bool,
+        pub age_ms: u32,
+    }
+}
+
+wire_type! {
+    /// Both sides of the lighting replication handshake in one read.
+    pub struct LightingReplicaStatus {
+        pub central: LightingCentralReplicaState,
+        /// `None` when the board wired no replication machine, as an
+        /// unsplit build does.
+        pub replication: Option<LightingReplicationMachine>,
+        /// `None` when the board has heard nothing from the peripheral since
+        /// boot, which is distinct from having heard something stale.
+        pub peripheral: Option<LightingPeripheralReplicaState>,
+    }
+}
+
+wire_type! {
     /// Lighting-domain rejection carried inside Rynk's outer protocol result.
     pub enum LightingError {
         Unsupported,
@@ -1176,6 +1314,16 @@ wire_type! {
         UnknownLayer { layer: u8 },
         SceneFull { capacity: u16 },
         ConditionalSceneFull { capacity: u16 },
+        // Appended for the observability endpoints; only they can produce
+        // these, so older hosts never decode them.
+        /// No lighting node with this id exists in the device's routing.
+        UnknownNode { node: LightingNodeId },
+        /// The node exists but could not answer: the application link is
+        /// down, the reply timed out, or the board wired no source for it.
+        /// Distinct from `Unsupported`, which means the firmware never
+        /// answers this node — retrying is pointless there and reasonable
+        /// here.
+        NodeUnavailable { node: LightingNodeId },
     }
 }
 
@@ -1209,6 +1357,8 @@ pub type LightingRuntimeConditionalScenesPageResult = LightingResult<LightingRun
 pub type LightingExtendedRuntimeConditionalScenesPageResult =
     LightingResult<LightingExtendedRuntimeConditionalScenesPage>;
 pub type LightingRuntimeConditionalSceneTransactionResult = LightingResult<LightingRuntimeConditionalSceneTransaction>;
+pub type LightingFramePageResult = LightingResult<LightingFramePage>;
+pub type LightingReplicaStatusResult = LightingResult<LightingReplicaStatus>;
 pub type LightingUnitResult = LightingResult<()>;
 
 wire_type! {
@@ -1287,6 +1437,8 @@ const _: () = {
     assert_endpoint_fits!(PutLightingSceneChunkRequest, LightingUnitResult);
     assert_endpoint_fits!(CommitLightingSceneReplaceRequest, LightingStateResult);
     assert_endpoint_fits!(AbortLightingSceneReplaceRequest, LightingUnitResult);
+    assert_endpoint_fits!(LightingFrameRequest, LightingFramePageResult);
+    assert_endpoint_fits!((), LightingReplicaStatusResult);
 };
 
 #[cfg(test)]
@@ -1445,6 +1597,97 @@ mod tests {
         round_trip(&compiled_page);
         assert_max_size_bound(&compiled_page);
         assert!(LightingCompiledScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+    }
+
+    #[test]
+    fn frame_page_round_trips_at_capacity() {
+        let mut cells = Vec::new();
+        for index in 0..LIGHTING_FRAME_CHUNK_SIZE as u8 {
+            cells
+                .push(LightingRgb8 {
+                    r: index,
+                    g: u8::MAX - index,
+                    b: u8::MAX,
+                })
+                .unwrap();
+        }
+        let page = LightingFramePage {
+            node: LightingNodeId(u8::MAX),
+            revision: Some(u32::MAX),
+            total_leds: u16::MAX,
+            start: u16::MAX,
+            age_ms: u32::MAX,
+            cells,
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingFramePage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+
+        // The unpresented and empty-tail cases hosts hit while paging.
+        round_trip(&LightingFramePage {
+            revision: None,
+            cells: Vec::new(),
+            ..page
+        });
+        round_trip(&LightingFrameRequest {
+            node: LightingNodeId(1),
+            offset: u16::MAX,
+        });
+    }
+
+    #[test]
+    fn replica_status_round_trips_present_and_absent_sides() {
+        let full = LightingReplicaStatus {
+            central: LightingCentralReplicaState {
+                revision: u32::MAX,
+                presented_revision: Some(u32::MAX - 1),
+                effective_layer: 3,
+                default_layer: 1,
+                active_bits: u64::MAX,
+                powered: true,
+            },
+            replication: Some(LightingReplicationMachine {
+                last_acked_revision: Some(u32::MAX - 2),
+                awaiting_ack: true,
+                generation: u8::MAX,
+                link_up: true,
+            }),
+            peripheral: Some(LightingPeripheralReplicaState {
+                node: LightingNodeId(1),
+                applied_revision: Some(u32::MAX - 3),
+                engine_revision: u32::MAX - 4,
+                effective_layer: 2,
+                default_layer: 0,
+                active_bits: 1 << 63,
+                powered: false,
+                wake_active: true,
+                effective_output_enabled: false,
+                age_ms: u32::MAX,
+            }),
+        };
+        round_trip(&full);
+        assert_max_size_bound(&full);
+        assert!(LightingReplicaStatus::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+
+        // Never-heard-from is encoded as absence, not as a zero snapshot.
+        round_trip(&LightingReplicaStatus {
+            replication: None,
+            peripheral: None,
+            central: LightingCentralReplicaState {
+                presented_revision: None,
+                ..full.central
+            },
+        });
+    }
+
+    #[test]
+    fn node_errors_round_trip() {
+        round_trip(&LightingError::UnknownNode {
+            node: LightingNodeId(u8::MAX),
+        });
+        round_trip(&LightingError::NodeUnavailable {
+            node: LightingNodeId(1),
+        });
     }
 
     #[test]

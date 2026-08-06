@@ -50,6 +50,9 @@ GetLightingExtensionNames reply                               04 22 09 01 01 09 
 GetLightingExtensionNames request                             06 22 09 01 01 08 00
 GetLightingExtensionParams reply                              04 2b 09 01 01 10 09 02 01 07 44 65 6e 73 69 74 79 01 08 03 05 00
 GetLightingExtensionParams request                            05 2b 09 01 01 01 00
+GetLightingFrame reply                                        04 36 09 01 01 0b 01 01 09 50 18 25 01 01 02 03 00
+GetLightingFrame reply Err(NodeUnavailable)                   04 36 09 01 04 01 10 01 00
+GetLightingFrame request                                      06 36 09 01 01 18 00
 GetLightingKeys reply                                         04 11 09 01 01 06 01 01 01 01 02 00
 GetLightingKeys request                                       05 11 09 01 01 01 00
 GetLightingLeds reply                                         04 05 09 01 01 11 01 01 01 2a 01 01 02 01 ff 01 80 04 80 01 03 01 00
@@ -62,6 +65,8 @@ GetLightingOverlay reply                                      04 1b 09 01 01 11 
 GetLightingOverlay request                                    05 1b 09 01 09 01 00
 GetLightingPhysicalKeys reply                                 04 04 09 01 01 12 01 01 01 01 02 ff 01 80 04 80 01 80 02 80 03 db 0b 00
 GetLightingPhysicalKeys request                               05 04 09 01 01 01 00
+GetLightingReplicaStatus reply                                04 37 09 01 01 16 09 01 08 02 01 06 01 01 01 07 01 04 01 01 01 01 06 05 01 01 02 02 01 03 fa 01 00
+GetLightingReplicaStatus request                              04 37 09 01 00
 GetLightingRoutes reply                                       04 09 09 01 01 08 01 01 01 2a 01 02 07 00
 GetLightingRoutes request                                     05 09 09 01 01 01 00
 GetLightingRuntimeConditionalSceneStatus reply                04 25 09 01 01 05 09 40 01 07 00

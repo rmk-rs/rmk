@@ -43,9 +43,10 @@ use crate::protocol::rynk::{
     LightingCompiledScenesPageResult, LightingConditionalSceneStatusResult, LightingConditionalScenesPageResult,
     LightingExtendedRuntimeConditionalScenesPageResult, LightingExtensionLayersResult,
     LightingExtensionNamesPageResult, LightingExtensionNamesRequest, LightingExtensionParamsPageResult,
-    LightingExtensionParamsRequest, LightingExtensionResult, LightingKeysPageResult, LightingLedsPageResult,
-    LightingOutputModeStateResult, LightingOutputsPageResult, LightingOverlayPageRequest, LightingOverlayPageResult,
-    LightingOverlayTransactionResult, LightingPageRequest, LightingPhysicalKeysPageResult, LightingRoutesPageResult,
+    LightingExtensionParamsRequest, LightingExtensionResult, LightingFramePageResult, LightingFrameRequest,
+    LightingKeysPageResult, LightingLedsPageResult, LightingOutputModeStateResult, LightingOutputsPageResult,
+    LightingOverlayPageRequest, LightingOverlayPageResult, LightingOverlayTransactionResult, LightingPageRequest,
+    LightingPhysicalKeysPageResult, LightingReplicaStatusResult, LightingRoutesPageResult,
     LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatusResult,
     LightingRuntimeConditionalSceneTransactionResult, LightingRuntimeConditionalScenesPageResult,
     LightingScenePageRequest, LightingSceneStatusResult, LightingSceneTransactionResult, LightingScenesPageResult,
@@ -520,6 +521,15 @@ endpoints! {
     /// Discard an extended conditional-table replacement.
     #[cfg(feature = "lighting")]
     AbortLightingExtendedRuntimeConditionalSceneReplace = 0x0935: AbortLightingRuntimeConditionalSceneReplaceRequest => LightingUnitResult;
+    /// Read back what one lighting node last presented to its LEDs, paged.
+    /// `LightingFeatureFlags` has no bits left, so support is discovered by
+    /// probing: firmware without it answers `UnknownCmd`.
+    #[cfg(feature = "lighting")]
+    GetLightingFrame = 0x0936: LightingFrameRequest => LightingFramePageResult;
+    /// Read both sides of the split lighting replication handshake. Probed
+    /// like `GetLightingFrame`.
+    #[cfg(feature = "lighting")]
+    GetLightingReplicaStatus = 0x0937: () => LightingReplicaStatusResult;
 }
 
 // Define topics: `Name = value: Payload;`

@@ -1540,6 +1540,46 @@ fn lighting_wire_frames_locked() {
         offset: 0,
         cells: one(extended_conditional_cell),
     };
+    let frame_request = LightingFrameRequest {
+        node: LightingNodeId(1),
+        offset: 24,
+    };
+    let frame_page = LightingFramePage {
+        node: frame_request.node,
+        revision: Some(state.revision),
+        total_leds: 80,
+        start: frame_request.offset,
+        age_ms: 37,
+        cells: one(LightingRgb8 { r: 1, g: 2, b: 3 }),
+    };
+    let replica_status = LightingReplicaStatus {
+        central: LightingCentralReplicaState {
+            revision: state.revision,
+            presented_revision: Some(state.revision - 1),
+            effective_layer: 2,
+            default_layer: 1,
+            active_bits: 0b110,
+            powered: true,
+        },
+        replication: Some(LightingReplicationMachine {
+            last_acked_revision: Some(state.revision - 2),
+            awaiting_ack: true,
+            generation: 4,
+            link_up: true,
+        }),
+        peripheral: Some(LightingPeripheralReplicaState {
+            node: frame_request.node,
+            applied_revision: Some(state.revision - 3),
+            engine_revision: 5,
+            effective_layer: 1,
+            default_layer: 1,
+            active_bits: 0b10,
+            powered: false,
+            wake_active: true,
+            effective_output_enabled: false,
+            age_ms: 250,
+        }),
+    };
 
     let entries: alloc::vec::Vec<(&str, alloc::vec::Vec<u8>)> = alloc::vec![
         (
@@ -2232,6 +2272,40 @@ fn lighting_wire_frames_locked() {
                 Cmd::SetLightingExtensionParam,
                 SEQ,
                 &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "GetLightingFrame request",
+            encode_frame(Cmd::GetLightingFrame, SEQ, &frame_request)
+        ),
+        (
+            "GetLightingFrame reply",
+            encode_frame(
+                Cmd::GetLightingFrame,
+                SEQ,
+                &Ok::<LightingFramePageResult, RynkError>(Ok(frame_page))
+            )
+        ),
+        (
+            "GetLightingFrame reply Err(NodeUnavailable)",
+            encode_frame(
+                Cmd::GetLightingFrame,
+                SEQ,
+                &Ok::<LightingFramePageResult, RynkError>(Err(LightingError::NodeUnavailable {
+                    node: frame_request.node
+                }))
+            )
+        ),
+        (
+            "GetLightingReplicaStatus request",
+            encode_frame(Cmd::GetLightingReplicaStatus, SEQ, &())
+        ),
+        (
+            "GetLightingReplicaStatus reply",
+            encode_frame(
+                Cmd::GetLightingReplicaStatus,
+                SEQ,
+                &Ok::<LightingReplicaStatusResult, RynkError>(Ok(replica_status))
             )
         ),
         (
