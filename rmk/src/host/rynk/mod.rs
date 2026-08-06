@@ -13,9 +13,10 @@ use embassy_futures::select::{Either, select};
 use embedded_io_async::{Read, Write};
 #[cfg(feature = "lighting")]
 pub use lighting::{
-    RYNK_LIGHTING_TRANSACTION_CAPACITY, RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox,
-    RynkLightingReadback, StandardRynkLightingAdapter, install_lighting_runtime_conditional_scenes,
-    install_lighting_scenes,
+    LightingReplicationStatus, PeripheralReplicaStatus, RYNK_LIGHTING_TRANSACTION_CAPACITY, RemoteFrame,
+    RemoteFramePort, RemoteFrameRequest, ReplicationMachineState, RynkLightingController, RynkLightingDescriptor,
+    RynkLightingMailbox, RynkLightingReadback, StandardRynkLightingAdapter,
+    install_lighting_runtime_conditional_scenes, install_lighting_scenes,
 };
 use postcard::experimental::max_size::MaxSize;
 use rmk_types::constants::RYNK_BUFFER_SIZE;
@@ -150,6 +151,10 @@ impl<'a> RynkService<'a> {
     fn requires_unlock(&self, cmd: Cmd) -> bool {
         match cmd {
             Cmd::BootloaderJump | Cmd::PeripheralBootloaderJump => self.lock_config.bootloader_requires_unlock,
+            // Reading raw LED colors can expose reactive per-key effects, and
+            // therefore keystrokes, exactly like the matrix snapshot does.
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingFrame => true,
             Cmd::StorageReset | Cmd::GetMatrixState => true,
             // Deleting a bond opens a re-pair hijack window; BLE-only command.
             #[cfg(feature = "_ble")]
@@ -383,6 +388,10 @@ impl<'a> RynkService<'a> {
             Cmd::GetLightingExtendedRuntimeConditionalScenes => {
                 serve::<command::GetLightingExtendedRuntimeConditionalScenes, _>(self, msg).await
             }
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingFrame => serve::<command::GetLightingFrame, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingReplicaStatus => serve::<command::GetLightingReplicaStatus, _>(self, msg).await,
             #[cfg(feature = "lighting")]
             Cmd::BeginLightingExtendedRuntimeConditionalSceneReplace => {
                 serve::<command::BeginLightingExtendedRuntimeConditionalSceneReplace, _>(self, msg).await

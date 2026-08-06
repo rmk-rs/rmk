@@ -26,6 +26,11 @@ const _: () = core::assert!(
     "engine conditional page size must equal the wire chunk size"
 );
 
+const _: () = core::assert!(
+    command::FRAME_CHUNK_SIZE == rmk_types::protocol::rynk::LIGHTING_FRAME_CHUNK_SIZE,
+    "engine frame page size must equal the wire chunk size"
+);
+
 /// A staged scene replacement expires after this much command inactivity.
 pub const SCENE_TRANSACTION_TIMEOUT_MS: u64 = 5_000;
 

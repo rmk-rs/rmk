@@ -32,10 +32,11 @@ use rmk_types::protocol::rynk::{
 use crate::RawMutex;
 use crate::core_traits::Runnable;
 use crate::lighting::{
-    BackgroundMode, BackgroundState, BuiltinEffect, ConditionalSceneCell, LayerPolicy, LedId, LightingControls,
-    LightingMailbox, LightingRouting, LightingTopology, OVERLAY_CHUNK_SIZE, OutputMode, OverlayBatch, OverlayCell,
-    OverlayError, Rgb8, RuntimeConditionalSceneCell, RuntimeConditionalSceneChunk, SceneChunk, SceneTableCell,
-    StandardCommand, StandardError, StandardLightingEngine, StandardMutableState, StandardReply, StandardState,
+    BackgroundMode, BackgroundState, BuiltinEffect, ConditionalSceneCell, FramePage, LayerPolicy, LayerState, LedId,
+    LightingControls, LightingMailbox, LightingNodeId, LightingRouting, LightingTopology, OVERLAY_CHUNK_SIZE,
+    OutputMode, OverlayBatch, OverlayCell, OverlayError, Rgb8, RuntimeConditionalSceneCell,
+    RuntimeConditionalSceneChunk, SceneChunk, SceneTableCell, StandardCommand, StandardError, StandardLightingEngine,
+    StandardMutableState, StandardReply, StandardState,
 };
 
 const _: () = core::assert!(
@@ -60,6 +61,154 @@ pub const RYNK_LIGHTING_TRANSACTION_CAPACITY: usize = 64;
 
 const RYNK_LIGHTING_COMMAND_CAPACITY: usize = 4;
 
+/// How long a remote-frame fetch waits before reporting the node unavailable.
+///
+/// Matched to the split lighting layer's own acknowledgement timeout: a
+/// round trip that has not landed by then is lost, not slow, and a host
+/// polling frames must not stall behind a half that is gone.
+const REMOTE_FRAME_TIMEOUT_MS: u64 = 500;
+
+/// One node's presented-frame page plus how stale it is.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct RemoteFrame {
+    /// The page as the remote node's engine reported it. `page.start` must
+    /// echo the request's offset; `page.total` is the remote frame's length,
+    /// which need not match the local one.
+    pub page: FramePage,
+    /// Milliseconds between the remote capture and this answer.
+    pub age_ms: u32,
+}
+
+/// One outstanding fetch on a [`RemoteFramePort`].
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct RemoteFrameRequest {
+    /// Correlation token. Answer with exactly this id: an answer to a fetch
+    /// that already timed out is then discarded rather than mistaken for the
+    /// answer to the next one.
+    pub id: u32,
+    pub node: LightingNodeId,
+    /// First logical frame slot wanted. Answering with fewer than
+    /// [`crate::lighting::FRAME_CHUNK_SIZE`] cells is fine; answering with a
+    /// different `start` is not.
+    pub offset: u16,
+}
+
+struct RemoteFrameResponse {
+    id: u32,
+    frame: Option<RemoteFrame>,
+}
+
+/// Board-provided source for another lighting node's presented frame.
+///
+/// RMK owns no split transport for frames, so the port is a rendezvous: the
+/// Rynk handler parks on it, a board task takes the request, performs
+/// whatever round trip its link needs, and answers. It is shaped like
+/// [`RynkLightingMailbox`] for the same reasons — it lives in a `static`, so
+/// an ordinary embassy task holds `&'static Self` with no allocation, and no
+/// generic parameter reaches [`super::RynkService`].
+pub struct RemoteFramePort {
+    request: Signal<RawMutex, RemoteFrameRequest>,
+    response: Signal<RawMutex, RemoteFrameResponse>,
+    caller: Mutex<RawMutex, ()>,
+    next_id: BlockingMutex<RawMutex, Cell<u32>>,
+}
+
+impl RemoteFramePort {
+    pub const fn new() -> Self {
+        Self {
+            request: Signal::new(),
+            response: Signal::new(),
+            caller: Mutex::new(()),
+            next_id: BlockingMutex::new(Cell::new(0)),
+        }
+    }
+
+    /// Board side: wait for the next fetch. Cancel-safe.
+    pub async fn receive(&self) -> RemoteFrameRequest {
+        self.request.wait().await
+    }
+
+    /// Board side: answer the fetch identified by `id`. `None` reports that
+    /// the node could not answer — link down, no reply, or a malformed one —
+    /// and surfaces to the host as `NodeUnavailable`. Answering late is safe;
+    /// the correlation token makes the stale answer inert.
+    pub fn reply(&self, id: u32, frame: Option<RemoteFrame>) {
+        self.response.signal(RemoteFrameResponse { id, frame });
+    }
+
+    /// Protocol side: fetch one page, or `None` on failure or timeout.
+    async fn fetch(&self, node: LightingNodeId, offset: u16) -> Option<RemoteFrame> {
+        let _caller = self.caller.lock().await;
+        let id = self.next_id.lock(|next| {
+            let id = next.get();
+            next.set(id.wrapping_add(1));
+            id
+        });
+        self.request.signal(RemoteFrameRequest { id, node, offset });
+        embassy_time::with_timeout(embassy_time::Duration::from_millis(REMOTE_FRAME_TIMEOUT_MS), async {
+            loop {
+                let response = self.response.wait().await;
+                if response.id == id {
+                    return response.frame;
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+}
+
+impl Default for RemoteFramePort {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Central-side state of the split lighting replication machine.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReplicationMachineState {
+    /// Last revision a peripheral acknowledged, or `None` since boot.
+    pub last_acked_revision: Option<u32>,
+    /// A snapshot is in flight and unacknowledged.
+    pub awaiting_ack: bool,
+    /// Bumped whenever replication restarts, so a host can tell a resend
+    /// apart from a retry that is stuck.
+    pub generation: u8,
+    pub link_up: bool,
+}
+
+/// The last renderer state a peripheral reported.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct PeripheralReplicaStatus {
+    /// Central revision whose snapshot the peripheral last applied.
+    pub applied_revision: Option<u32>,
+    /// The peripheral engine's own revision, which also advances locally.
+    pub engine_revision: u32,
+    /// Layer state the peripheral is rendering from — the replicated
+    /// context, so a divergence from the central's is the stale-replica
+    /// symptom made visible.
+    pub layers: LayerState,
+    pub powered: bool,
+    pub wake_active: bool,
+    pub effective_output_enabled: bool,
+    /// Age of this report at the time it is read.
+    pub age_ms: u32,
+}
+
+/// Board-provided view of the split lighting replication handshake.
+///
+/// Synchronous on purpose: the board keeps this in a `static` its split
+/// tasks update, and reads answer from the last thing heard rather than
+/// blocking on the link. A read that blocked could not distinguish a slow
+/// link from a dead one, which is the distinction being debugged.
+pub trait LightingReplicationStatus {
+    fn central(&self) -> ReplicationMachineState;
+
+    /// The last status heard from `node`, or `None` if none ever arrived.
+    fn peripheral(&self, node: LightingNodeId) -> Option<PeripheralReplicaStatus>;
+}
+
 #[derive(Clone, Copy)]
 pub struct RynkLightingDescriptor<'a> {
     pub topology_revision: u32,
@@ -83,6 +232,10 @@ pub struct RynkLightingController<'a> {
     /// `EXTENSION_EFFECTS` capability bit and the extension endpoints.
     pub(super) extension_effects: bool,
     pub(super) extension_layering: bool,
+    /// Which routing node this half renders locally.
+    pub(super) local_node: LightingNodeId,
+    pub(super) remote_frames: Option<&'a RemoteFramePort>,
+    pub(super) replication: Option<&'a dyn LightingReplicationStatus>,
     mailbox: &'a RynkLightingMailbox,
 }
 
@@ -115,8 +268,66 @@ impl<'a> RynkLightingController<'a> {
             },
             extension_effects: false,
             extension_layering: false,
+            local_node: LightingNodeId(0),
+            remote_frames: None,
+            replication: None,
             mailbox,
         }
+    }
+
+    /// Name the routing node this half renders. Frame reads for it are served
+    /// from the local engine; every other known node goes through
+    /// [`Self::with_remote_frames`]. Defaults to node `0`.
+    pub const fn with_local_node(mut self, node: LightingNodeId) -> Self {
+        self.local_node = node;
+        self
+    }
+
+    /// Wire a board source for other nodes' presented frames. Without it,
+    /// reading a remote node's frame answers `Unsupported`.
+    pub const fn with_remote_frames(mut self, port: &'a RemoteFramePort) -> Self {
+        self.remote_frames = Some(port);
+        self
+    }
+
+    /// Wire the board's view of the replication handshake. Without it, the
+    /// replica-status read still reports the central's own engine, and the
+    /// machine and peripheral halves are absent rather than fabricated.
+    pub const fn with_replication_status(mut self, status: &'a dyn LightingReplicationStatus) -> Self {
+        self.replication = Some(status);
+        self
+    }
+
+    /// Fetch one page of `node`'s presented frame, resolving local versus
+    /// remote. `age_ms` is `0` for the local node, which has no round trip.
+    pub(super) async fn frame_page(&self, node: LightingNodeId, offset: u16) -> LightingResult<(FramePage, u32)> {
+        if node == self.local_node {
+            return match self.request(RynkLightingCommand::ReadFrame { offset }).await? {
+                RynkLightingReadback::FramePage(page) => Ok((page, 0)),
+                _ => Err(LightingError::InvalidRequest),
+            };
+        }
+        let wire_node = rmk_types::protocol::rynk::LightingNodeId(node.0);
+        if !self.descriptor.routing.outputs.iter().any(|output| output.node == node) {
+            return Err(LightingError::UnknownNode { node: wire_node });
+        }
+        let port = self.remote_frames.ok_or(LightingError::Unsupported)?;
+        let remote = port
+            .fetch(node, offset)
+            .await
+            .ok_or(LightingError::NodeUnavailable { node: wire_node })?;
+        Ok((remote.page, remote.age_ms))
+    }
+
+    /// The first routing node that is not this half — the peripheral whose
+    /// replica status the handshake read reports.
+    pub(super) fn peripheral_node(&self) -> Option<LightingNodeId> {
+        self.descriptor
+            .routing
+            .outputs
+            .iter()
+            .map(|output| output.node)
+            .find(|node| *node != self.local_node)
     }
 
     /// Advertise the engine's host-selectable animated extension source.
@@ -244,6 +455,9 @@ pub enum RynkLightingReadback {
     State(LightingState),
     OutputMode(StandardState),
     OverlayPage(LightingOverlayPage),
+    /// The engine's page of the frame it last presented, forwarded
+    /// unconverted so remote and local pages share one shape.
+    FramePage(FramePage),
     SceneStatus {
         revision: u32,
         scene_len: u16,
@@ -428,6 +642,9 @@ pub(super) enum RynkLightingCommand {
     },
     ReadOverlay {
         expected_revision: u32,
+        offset: u16,
+    },
+    ReadFrame {
         offset: u16,
     },
     ReadSceneStatus,
@@ -869,6 +1086,15 @@ impl<'a, const OVERLAY_CAPACITY: usize, const CORE_COMMAND_CAPACITY: usize, cons
                     total_count: page.total,
                     items,
                 }));
+            }
+            RynkLightingCommand::ReadFrame { offset } => {
+                // Unpinned: a frame read observes whatever is on the LEDs,
+                // and rejecting a stale one would hide the very divergence
+                // this endpoint exists to show.
+                return match self.request_core(StandardCommand::ReadFrame { offset }).await? {
+                    StandardReply::FramePage(page) => Ok(RynkLightingReadback::FramePage(page)),
+                    _ => Err(LightingError::InvalidRequest),
+                };
             }
             RynkLightingCommand::ReadSceneStatus => {
                 let state = self.request_core_state(StandardCommand::ReadState).await?;
@@ -1835,7 +2061,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::lighting::{LedMetadata, MatrixSize, ZoneSpan};
+    use crate::lighting::{FRAME_CHUNK_SIZE, LedMetadata, MatrixSize, ZoneSpan};
     use crate::physical_layout::PhysicalLayout;
     use crate::test_support::test_block_on as block_on;
 
@@ -1917,6 +2143,147 @@ mod tests {
             mailbox.reply(current.id, Ok(RynkLightingReadback::State(state(2))));
         }));
         assert_eq!(reply, Ok(RynkLightingReadback::State(state(2))));
+    }
+
+    static TEST_OUTPUTS: [crate::lighting::OutputMetadata; 2] = [
+        crate::lighting::OutputMetadata {
+            node: LightingNodeId(0),
+            id: crate::lighting::OutputId(0),
+            pixel_count: 1,
+            capabilities: crate::lighting::OutputCapabilities::RGB,
+            coverage: crate::lighting::OutputCoverage::Complete,
+        },
+        crate::lighting::OutputMetadata {
+            node: LightingNodeId(1),
+            id: crate::lighting::OutputId(0),
+            pixel_count: 1,
+            capabilities: crate::lighting::OutputCapabilities::RGB,
+            coverage: crate::lighting::OutputCoverage::Complete,
+        },
+    ];
+
+    fn controller<'a>(mailbox: &'a RynkLightingMailbox) -> RynkLightingController<'a> {
+        RynkLightingController::new(
+            mailbox,
+            RynkLightingDescriptor {
+                topology_revision: 1,
+                topology: topology(),
+                routing: LightingRouting {
+                    outputs: &TEST_OUTPUTS,
+                    routes: &[],
+                },
+            },
+            2,
+        )
+    }
+
+    fn frame_page(start: u16, red: u8) -> FramePage {
+        let mut cells = [Rgb8::BLACK; FRAME_CHUNK_SIZE];
+        cells[0] = Rgb8::new(red, 0, 0);
+        FramePage {
+            revision: Some(7),
+            total: 2,
+            start,
+            len: 1,
+            cells,
+        }
+    }
+
+    #[test]
+    fn local_frame_reads_come_from_the_engine_with_no_age() {
+        let mailbox = RynkLightingMailbox::new();
+        let controller = controller(&mailbox);
+        let (result, ()) = block_on(join(controller.frame_page(LightingNodeId(0), 24), async {
+            let request = mailbox.receive().await;
+            assert!(matches!(request.command, RynkLightingCommand::ReadFrame { offset: 24 }));
+            mailbox.reply(request.id, Ok(RynkLightingReadback::FramePage(frame_page(24, 5))));
+        }));
+        assert_eq!(result, Ok((frame_page(24, 5), 0)));
+    }
+
+    #[test]
+    fn remote_frame_reads_separate_unknown_unwired_and_unreachable_nodes() {
+        let mailbox = RynkLightingMailbox::new();
+        let bare = controller(&mailbox);
+
+        // A node with no output in routing does not exist at all.
+        assert_eq!(
+            block_on(bare.frame_page(LightingNodeId(9), 0)),
+            Err(LightingError::UnknownNode {
+                node: rmk_types::protocol::rynk::LightingNodeId(9)
+            }),
+        );
+        // A real node the board wired no source for is never answerable.
+        assert_eq!(
+            block_on(bare.frame_page(LightingNodeId(1), 0)),
+            Err(LightingError::Unsupported),
+        );
+
+        // A wired node that does not answer is unavailable, not unsupported:
+        // the distinction is whether retrying is worth anything.
+        let port = RemoteFramePort::new();
+        let wired = controller(&mailbox).with_remote_frames(&port);
+        let (result, ()) = block_on(join(wired.frame_page(LightingNodeId(1), 0), async {
+            let request = port.receive().await;
+            port.reply(request.id, None);
+        }));
+        assert_eq!(
+            result,
+            Err(LightingError::NodeUnavailable {
+                node: rmk_types::protocol::rynk::LightingNodeId(1)
+            }),
+        );
+
+        let (result, ()) = block_on(join(wired.frame_page(LightingNodeId(1), 24), async {
+            let request = port.receive().await;
+            assert_eq!((request.node, request.offset), (LightingNodeId(1), 24));
+            port.reply(
+                request.id,
+                Some(RemoteFrame {
+                    page: frame_page(24, 9),
+                    age_ms: 42,
+                }),
+            );
+        }));
+        assert_eq!(result, Ok((frame_page(24, 9), 42)));
+    }
+
+    #[test]
+    fn a_silent_remote_node_times_out_and_its_late_answer_is_inert() {
+        let port = RemoteFramePort::new();
+        // Nobody answers: the fetch must not park forever behind a dead half.
+        let (fetched, id) = block_on(join(port.fetch(LightingNodeId(1), 0), async {
+            port.receive().await.id
+        }));
+        assert_eq!(fetched, None);
+
+        // The abandoned answer arrives after the fact. The next fetch carries
+        // a fresh token, so it waits for its own answer instead of taking it.
+        port.reply(
+            id,
+            Some(RemoteFrame {
+                page: frame_page(0, 1),
+                age_ms: 0,
+            }),
+        );
+        let (fetched, ()) = block_on(join(port.fetch(LightingNodeId(1), 0), async {
+            let request = port.receive().await;
+            assert_ne!(request.id, id);
+            port.reply(
+                request.id,
+                Some(RemoteFrame {
+                    page: frame_page(0, 2),
+                    age_ms: 3,
+                }),
+            );
+        }));
+        assert_eq!(
+            fetched,
+            Some(RemoteFrame {
+                page: frame_page(0, 2),
+                age_ms: 3
+            }),
+        );
     }
 
     #[test]

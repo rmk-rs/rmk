@@ -10,8 +10,8 @@ use rmk_types::protocol::rynk::command::{
     GetLightingCompiledScenes, GetLightingConditionalSceneStatus, GetLightingConditionalScenes,
     GetLightingExtendedRuntimeConditionalSceneStatus, GetLightingExtendedRuntimeConditionalScenes,
     GetLightingExtension, GetLightingExtensionLayers, GetLightingExtensionNames, GetLightingExtensionParams,
-    GetLightingKeys, GetLightingLeds, GetLightingOutputMode, GetLightingOutputs, GetLightingOverlay,
-    GetLightingPhysicalKeys, GetLightingRoutes, GetLightingRuntimeConditionalSceneStatus,
+    GetLightingFrame, GetLightingKeys, GetLightingLeds, GetLightingOutputMode, GetLightingOutputs, GetLightingOverlay,
+    GetLightingPhysicalKeys, GetLightingReplicaStatus, GetLightingRoutes, GetLightingRuntimeConditionalSceneStatus,
     GetLightingRuntimeConditionalScenes, GetLightingSceneStatus, GetLightingScenes, GetLightingState,
     GetLightingZoneMemberships, GetLightingZones, PutLightingExtendedRuntimeConditionalSceneChunk,
     PutLightingRuntimeConditionalSceneChunk, SetLightingExtensionLayers, SetLightingExtensionParam,
@@ -25,25 +25,26 @@ use rmk_types::protocol::rynk::{
     CommitLightingOverlayReplaceRequest, CommitLightingRuntimeConditionalSceneReplaceRequest,
     CommitLightingSceneReplaceRequest, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE,
     LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE, LIGHTING_PAGE_SIZE, LIGHTING_SCENE_CHUNK_SIZE,
-    LIGHTING_ZONE_NAME_SIZE, LightingCapabilities, LightingCapabilitiesResult, LightingCompiledSceneStatus,
-    LightingCompiledSceneStatusResult, LightingCompiledScenesPageResult, LightingConditionalSceneCell,
-    LightingConditionalSceneStatus, LightingConditionalSceneStatusResult, LightingConditionalScenesPage,
-    LightingConditionalScenesPageResult, LightingEffectFlags, LightingError,
+    LIGHTING_ZONE_NAME_SIZE, LightingCapabilities, LightingCapabilitiesResult, LightingCentralReplicaState,
+    LightingCompiledSceneStatus, LightingCompiledSceneStatusResult, LightingCompiledScenesPageResult,
+    LightingConditionalSceneCell, LightingConditionalSceneStatus, LightingConditionalSceneStatusResult,
+    LightingConditionalScenesPage, LightingConditionalScenesPageResult, LightingEffectFlags, LightingError,
     LightingExtendedRuntimeConditionalScenesPageResult, LightingExtensionLayersResult,
     LightingExtensionNamesPageResult, LightingExtensionNamesRequest, LightingExtensionParamsPageResult,
-    LightingExtensionParamsRequest, LightingExtensionResult, LightingFeatureFlags, LightingKeysPage,
-    LightingKeysPageResult, LightingLed, LightingLedId, LightingLedsPage, LightingLedsPageResult,
-    LightingMatrixPosition, LightingOutput, LightingOutputCapabilities, LightingOutputCoverage,
-    LightingOutputModeStateResult, LightingOutputsPage, LightingOutputsPageResult, LightingOverlayCell,
-    LightingOverlayPageRequest, LightingOverlayPageResult, LightingOverlayTransaction,
-    LightingOverlayTransactionResult, LightingPageRequest, LightingPhysicalKey, LightingPhysicalKeysPage,
-    LightingPhysicalKeysPageResult, LightingPoint3, LightingResult, LightingRoute, LightingRoutesPage,
-    LightingRoutesPageResult, LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatus,
-    LightingRuntimeConditionalSceneStatusResult, LightingRuntimeConditionalSceneTransactionResult,
-    LightingRuntimeConditionalScenesPageResult, LightingScenePageRequest, LightingSceneStatus,
-    LightingSceneStatusResult, LightingSceneTransactionResult, LightingScenesPageResult, LightingState,
-    LightingStateResult, LightingUnitResult, LightingZone, LightingZoneId, LightingZoneMembershipsPage,
-    LightingZoneMembershipsPageResult, LightingZonesPage, LightingZonesPageResult,
+    LightingExtensionParamsRequest, LightingExtensionResult, LightingFeatureFlags, LightingFramePage,
+    LightingFramePageResult, LightingFrameRequest, LightingKeysPage, LightingKeysPageResult, LightingLed,
+    LightingLedId, LightingLedsPage, LightingLedsPageResult, LightingMatrixPosition, LightingNodeId, LightingOutput,
+    LightingOutputCapabilities, LightingOutputCoverage, LightingOutputModeStateResult, LightingOutputsPage,
+    LightingOutputsPageResult, LightingOverlayCell, LightingOverlayPageRequest, LightingOverlayPageResult,
+    LightingOverlayTransaction, LightingOverlayTransactionResult, LightingPageRequest, LightingPeripheralReplicaState,
+    LightingPhysicalKey, LightingPhysicalKeysPage, LightingPhysicalKeysPageResult, LightingPoint3,
+    LightingReplicaStatus, LightingReplicaStatusResult, LightingReplicationMachine, LightingResult, LightingRgb8,
+    LightingRoute, LightingRoutesPage, LightingRoutesPageResult, LightingRuntimeConditionalScenePageRequest,
+    LightingRuntimeConditionalSceneStatus, LightingRuntimeConditionalSceneStatusResult,
+    LightingRuntimeConditionalSceneTransactionResult, LightingRuntimeConditionalScenesPageResult,
+    LightingScenePageRequest, LightingSceneStatus, LightingSceneStatusResult, LightingSceneTransactionResult,
+    LightingScenesPageResult, LightingState, LightingStateResult, LightingUnitResult, LightingZone, LightingZoneId,
+    LightingZoneMembershipsPage, LightingZoneMembershipsPageResult, LightingZonesPage, LightingZonesPageResult,
     PutLightingExtendedRuntimeConditionalSceneChunkRequest, PutLightingOverlayChunkRequest,
     PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest, RynkError, RynkMessage,
     SetLightingExtensionLayersRequest, SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
@@ -993,6 +994,103 @@ impl Handle<SetLightingExtensionParam> for RynkService<'_> {
         };
         Ok(result)
     }
+}
+
+impl Handle<GetLightingFrame> for RynkService<'_> {
+    async fn handle(&self, req: LightingFrameRequest) -> Result<LightingFramePageResult, RynkError> {
+        Ok(match controller(self) {
+            Ok(controller) => frame_page(controller, req).await,
+            Err(error) => Err(error),
+        })
+    }
+}
+
+async fn frame_page(
+    controller: RynkLightingController<'_>,
+    req: LightingFrameRequest,
+) -> LightingResult<LightingFramePage> {
+    let (page, age_ms) = controller
+        .frame_page(crate::lighting::LightingNodeId(req.node.0), req.offset)
+        .await?;
+    let mut cells = Vec::new();
+    for cell in page.cells() {
+        cells
+            .push(LightingRgb8 {
+                r: cell.r,
+                g: cell.g,
+                b: cell.b,
+            })
+            .expect("engine and wire frame pages hold the same number of cells");
+    }
+    Ok(LightingFramePage {
+        node: req.node,
+        revision: page.revision,
+        total_leds: page.total,
+        start: page.start,
+        age_ms,
+        cells,
+    })
+}
+
+impl Handle<GetLightingReplicaStatus> for RynkService<'_> {
+    async fn handle(&self, _: ()) -> Result<LightingReplicaStatusResult, RynkError> {
+        Ok(match controller(self) {
+            Ok(controller) => replica_status(controller).await,
+            Err(error) => Err(error),
+        })
+    }
+}
+
+async fn replica_status(controller: RynkLightingController<'_>) -> LightingResult<LightingReplicaStatus> {
+    // `ReadOutputMode` is the mailbox's full `StandardState` readback; the
+    // name records its first caller, not its contents.
+    let state = match controller.request(RynkLightingCommand::ReadOutputMode).await? {
+        RynkLightingReadback::OutputMode(state) => state,
+        _ => return Err(LightingError::InvalidRequest),
+    };
+    let presented = state.presented;
+    let central = LightingCentralReplicaState {
+        revision: state.revision,
+        presented_revision: presented.map(|presented| presented.revision),
+        effective_layer: presented.map_or(0, |presented| presented.context.layers.effective),
+        default_layer: presented.map_or(0, |presented| presented.context.layers.default),
+        active_bits: presented.map_or(0, |presented| presented.context.layers.active_bits()),
+        powered: state.powered,
+    };
+
+    let Some(status) = controller.replication else {
+        return Ok(LightingReplicaStatus {
+            central,
+            replication: None,
+            peripheral: None,
+        });
+    };
+    let machine = status.central();
+    let peripheral = controller.peripheral_node().and_then(|node| {
+        let peripheral = status.peripheral(node)?;
+        Some(LightingPeripheralReplicaState {
+            node: LightingNodeId(node.0),
+            applied_revision: peripheral.applied_revision,
+            engine_revision: peripheral.engine_revision,
+            effective_layer: peripheral.layers.effective,
+            default_layer: peripheral.layers.default,
+            active_bits: peripheral.layers.active_bits(),
+            powered: peripheral.powered,
+            wake_active: peripheral.wake_active,
+            effective_output_enabled: peripheral.effective_output_enabled,
+            age_ms: peripheral.age_ms,
+        })
+    });
+    Ok(LightingReplicaStatus {
+        central,
+        replication: Some(LightingReplicationMachine {
+            last_acked_revision: machine.last_acked_revision,
+            awaiting_ack: machine.awaiting_ack,
+            generation: machine.generation,
+            link_up: machine.link_up,
+        }),
+        peripheral,
+    })
 }
 
 impl Handle<GetLightingKeys> for RynkService<'_> {

@@ -12,9 +12,15 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::pipe::Pipe;
 use rmk::config::{BehaviorConfig, PositionalConfig, RmkConfig};
 use rmk::event::publish_event;
-use rmk::host::{HostService as RynkService, RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox};
+use rmk::host::{
+    HostService as RynkService, LightingReplicationStatus, PeripheralReplicaStatus, RemoteFrame, RemoteFramePort,
+    ReplicationMachineState, RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox,
+};
 use rmk::keymap::{KeyMap, KeymapData};
-use rmk::lighting::{LedId, LedMetadata, LightingRouting, LightingTopology, MatrixSize, ZoneSpan};
+use rmk::lighting::{
+    LedId, LedMetadata, LightingRouting, LightingTopology, MatrixSize, OutputCapabilities, OutputCoverage, OutputId,
+    OutputMetadata, ZoneSpan,
+};
 use rmk::physical_layout::{Coordinate, KeyPosition, KeySize, PhysicalKey, PhysicalLayout, Point3, Rotation};
 use rmk::test_support::test_block_on;
 use rmk::types::action::KeyAction;
@@ -452,5 +458,232 @@ fn extension_endpoints_are_unsupported_until_a_board_advertises_them() {
             .await
             .expect("outer unsupported envelope");
         assert_eq!(unsupported, Err(LightingError::Unsupported));
+    });
+}
+
+/// The right half's frame and the replication handshake reach a host over the
+/// same loopback, so a stale replica is observable rather than inferred.
+///
+/// Node 1 has no engine here — the split round trip is the board's, and RMK
+/// only owns the rendezvous — so a fake responder stands in for it.
+struct FakeReplication;
+
+impl LightingReplicationStatus for FakeReplication {
+    fn central(&self) -> ReplicationMachineState {
+        ReplicationMachineState {
+            last_acked_revision: Some(4),
+            awaiting_ack: true,
+            generation: 2,
+            link_up: true,
+        }
+    }
+
+    fn peripheral(&self, node: rmk::lighting::LightingNodeId) -> Option<PeripheralReplicaStatus> {
+        (node == rmk::lighting::LightingNodeId(1)).then_some(PeripheralReplicaStatus {
+            applied_revision: Some(4),
+            engine_revision: 11,
+            layers: rmk::lighting::LayerState::new(3, 1, 0b1010),
+            powered: false,
+            wake_active: true,
+            effective_output_enabled: false,
+            age_ms: 250,
+        })
+    }
+}
+
+static REPLICATION: FakeReplication = FakeReplication;
+static REMOTE_FRAMES: RemoteFramePort = RemoteFramePort::new();
+static OBSERVABILITY_OUTPUTS: [OutputMetadata; 2] = [
+    OutputMetadata {
+        node: rmk::lighting::LightingNodeId(0),
+        id: OutputId(0),
+        pixel_count: 1,
+        capabilities: OutputCapabilities::RGB,
+        coverage: OutputCoverage::Complete,
+    },
+    OutputMetadata {
+        node: rmk::lighting::LightingNodeId(1),
+        id: OutputId(0),
+        pixel_count: 1,
+        capabilities: OutputCapabilities::RGB,
+        coverage: OutputCoverage::Complete,
+    },
+];
+
+#[test]
+fn lighting_observability_endpoints_cross_the_full_loopback() {
+    use rmk::host::StandardRynkLightingAdapter;
+    use rmk::lighting::service::RenderInput;
+    use rmk::lighting::{
+        BackgroundState, EmptySource, FRAME_CHUNK_SIZE, FramePage, LayerPolicy, LayerScenes, LightingContext,
+        LightingEngine, LightingMailbox, LogicalFrame, Rgb8, StandardCommand, StandardError, StandardLightingEngine,
+        StandardReply,
+    };
+    use rmk_types::protocol::rynk::{
+        LightingFramePageResult, LightingFrameRequest, LightingNodeId, LightingReplicaStatusResult, LightingRgb8,
+    };
+
+    let descriptor = RynkLightingDescriptor {
+        routing: LightingRouting {
+            outputs: &OBSERVABILITY_OUTPUTS,
+            routes: &[],
+        },
+        ..descriptor()
+    };
+    let mailbox: &'static RynkLightingMailbox = Box::leak(Box::new(RynkLightingMailbox::new()));
+    let service = service_with(
+        RynkLightingController::new(mailbox, descriptor, 8)
+            .with_remote_frames(&REMOTE_FRAMES)
+            .with_replication_status(&REPLICATION),
+    );
+
+    let core = LightingMailbox::<StandardCommand<2>, StandardReply, StandardError, 1>::new();
+    let mut adapter = StandardRynkLightingAdapter::<2, 1>::new(mailbox, &core, descriptor.topology);
+    let mut engine: StandardLightingEngine<'static, EmptySource, EmptySource, 1, 2, 0> = StandardLightingEngine::new(
+        BackgroundState {
+            value: 40,
+            ..BackgroundState::default()
+        },
+        LayerScenes {
+            scenes: &[],
+            policy: LayerPolicy::EffectiveOnly,
+        },
+        EmptySource,
+        EmptySource,
+    );
+
+    // Present one frame up front: the endpoint reports what the output
+    // accepted, so without this there is nothing on the LEDs to report.
+    let context = LightingContext::default();
+    let mut frame = LogicalFrame::new(Rgb8::BLACK);
+    engine
+        .render(
+            RenderInput {
+                now_ms: 0,
+                snapshot: &context,
+            },
+            &mut frame,
+        )
+        .expect("render the initial frame");
+    <StandardLightingEngine<'static, EmptySource, EmptySource, 1, 2, 0> as LightingEngine<LightingContext>>::
+        on_presented(&mut engine, &frame);
+
+    let background = async {
+        let adapter_loop = async {
+            loop {
+                adapter.process_next().await;
+            }
+        };
+        let engine_loop = async {
+            loop {
+                let (id, command) = core.receive_request().await;
+                let result = engine.handle_command(0, command, &context).map(|outcome| outcome.reply);
+                core.publish_reply(id, result);
+            }
+        };
+        // Stand-in for the board's split round trip to the right half.
+        let remote_loop = async {
+            loop {
+                let request = REMOTE_FRAMES.receive().await;
+                let mut cells = [Rgb8::BLACK; FRAME_CHUNK_SIZE];
+                cells[0] = Rgb8::new(1, 2, 3);
+                REMOTE_FRAMES.reply(
+                    request.id,
+                    Some(RemoteFrame {
+                        page: FramePage {
+                            revision: Some(11),
+                            total: 1,
+                            start: request.offset,
+                            len: 1,
+                            cells,
+                        },
+                        age_ms: 250,
+                    }),
+                );
+            }
+        };
+        select(select(adapter_loop, engine_loop), remote_loop).await;
+    };
+
+    loopback(&service, background, async |host| {
+        let local = host
+            .request::<_, LightingFramePageResult>(
+                Cmd::GetLightingFrame,
+                0x7B,
+                &LightingFrameRequest {
+                    node: LightingNodeId(0),
+                    offset: 0,
+                },
+            )
+            .await
+            .expect("outer local frame envelope")
+            .expect("local frame page");
+        assert_eq!(local.node, LightingNodeId(0));
+        assert_eq!(local.revision, Some(0));
+        assert_eq!((local.total_leds, local.start), (1, 0));
+        assert_eq!(local.age_ms, 0, "the local half has no round trip to age");
+        assert_eq!(local.cells.as_slice(), &[LightingRgb8 { r: 40, g: 40, b: 40 }]);
+
+        let remote = host
+            .request::<_, LightingFramePageResult>(
+                Cmd::GetLightingFrame,
+                0x7C,
+                &LightingFrameRequest {
+                    node: LightingNodeId(1),
+                    offset: 0,
+                },
+            )
+            .await
+            .expect("outer remote frame envelope")
+            .expect("remote frame page");
+        assert_eq!(remote.node, LightingNodeId(1));
+        assert_eq!(remote.revision, Some(11));
+        assert_eq!(remote.age_ms, 250);
+        assert_eq!(remote.cells.as_slice(), &[LightingRgb8 { r: 1, g: 2, b: 3 }]);
+
+        // A node the board never routed is rejected without a round trip.
+        let unknown = host
+            .request::<_, LightingFramePageResult>(
+                Cmd::GetLightingFrame,
+                0x7D,
+                &LightingFrameRequest {
+                    node: LightingNodeId(7),
+                    offset: 0,
+                },
+            )
+            .await
+            .expect("outer unknown-node envelope");
+        assert_eq!(
+            unknown,
+            Err(LightingError::UnknownNode {
+                node: LightingNodeId(7)
+            })
+        );
+
+        let status = host
+            .request::<(), LightingReplicaStatusResult>(Cmd::GetLightingReplicaStatus, 0x6F, &())
+            .await
+            .expect("outer replica-status envelope")
+            .expect("replica status");
+        assert_eq!(status.central.revision, 0);
+        assert_eq!(status.central.presented_revision, Some(0));
+        let replication = status.replication.expect("the board wired a replication machine");
+        assert_eq!(replication.last_acked_revision, Some(4));
+        assert!(replication.awaiting_ack && replication.link_up);
+        assert_eq!(replication.generation, 2);
+        let peripheral = status.peripheral.expect("the board heard from the peripheral");
+        assert_eq!(peripheral.node, LightingNodeId(1));
+        assert_eq!(peripheral.applied_revision, Some(4));
+        assert_eq!(peripheral.engine_revision, 11);
+        assert_eq!(
+            (
+                peripheral.effective_layer,
+                peripheral.default_layer,
+                peripheral.active_bits
+            ),
+            (3, 1, 0b1010),
+        );
+        assert!(peripheral.wake_active && !peripheral.effective_output_enabled);
+        assert_eq!(peripheral.age_ms, 250);
     });
 }
