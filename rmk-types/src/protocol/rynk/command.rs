@@ -337,6 +337,8 @@ endpoints! {
     GetSleepState = 0x0806: () => bool;
     /// Latest HID LED bitmap, sourced from the `LedIndicatorChange` topic snapshot.
     GetLedIndicator = 0x0807: () => LedIndicator;
+
+    // 0x09xx is reserved for a relay to answer for itself; nothing needs it yet.
 }
 
 // Define topics: `Name = value: Payload;`

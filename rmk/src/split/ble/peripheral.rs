@@ -250,7 +250,7 @@ fn get_peri_advertiser<'a, C: Controller>(
                         ],
                     ]),
                     AdStructure::ManufacturerSpecificData {
-                        company_identifier: 0xe118,
+                        company_identifier: rmk_types::ble::RMK_ADV_COMPANY_ID,
                         payload: &[id as u8],
                     },
                 ],
