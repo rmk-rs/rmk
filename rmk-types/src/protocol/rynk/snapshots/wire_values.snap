@@ -3,7 +3,7 @@
 # Each entry is the postcard byte encoding of one wire-type exemplar. A diff
 # here means a type's payload encoding changed (field reorder, variant
 # renumber, …). If intentional, bump ProtocolVersion::CURRENT and regenerate:
-#   UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features rynk wire_values
+#   UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features host wire_values
 # Format: <label>  <hex bytes>
 
 Action::DefaultLayer(5)                   08 05
@@ -56,6 +56,7 @@ KeyCode::Consumer(VolumeIncrement)        01 12
 KeyCode::Hid(A)                           00 04
 KeyCode::SystemControl(Sleep)             02 02
 KeyPosition{layer:0,row:5,col:13}         00 05 0d
+LayoutChunk{300,[0x0a,0x0b,0x0c]}         ac 02 03 0a 0b 0c
 LedIndicator(Num|Scroll)                  05
 LockStatus{true,false,2,[(1,2),(3,4)]}    01 00 02 02 01 02 03 04
 MacroData{[0x01,0x02,0x03]}               03 01 02 03
@@ -68,6 +69,7 @@ ProtocolVersion::CURRENT                  00 01
 ProtocolVersion{1,0}                      01 00
 Result<(),RynkError>::Err(StorageFault)   01 02
 Result<(),RynkError>::Ok                  00
+RynkError::Busy                           08
 RynkError::Internal                       03
 RynkError::Invalid                        05
 RynkError::Locked                         07
