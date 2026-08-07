@@ -4,76 +4,89 @@
 # payload, COBS-encoded with a trailing 0x00 delimiter — one per protocol message; the
 # label names the decoded payload (`()` = empty). A diff means the header, a CMD number,
 # or a message frame changed. If intentional, bump ProtocolVersion::CURRENT and regenerate:
-#   UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features rynk wire_frames
+#   UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features host wire_frames
 # Format: <label>  <hex bytes>
 
-BootloaderJump reply Ok(())                                             02 04 02 01 01 00
-BootloaderJump request ()                                               02 04 02 01 00
-ConnectionChange topic ConnectionStatus{Configured,{1,Adv},Ble}         03 03 80 03 02 01 02 01 00
-GetBehaviorConfig reply Ok(BehaviorConfig{50,500,200,20})               04 01 06 01 07 32 f4 03 c8 01 14 00
-GetBehaviorConfig request ()                                            04 01 06 01 00
-GetCapabilities reply Ok(DeviceCapabilities{1..16})                     02 02 02 01 0c 01 02 03 04 05 06 07 08 09 0a 01 03 01 0b 07 0c 0d 0e 0f 10 01 00
-GetCapabilities request ()                                              02 02 02 01 00
-GetCombo reply Ok(Combo{[Single(A)],Morse(1),L2})                       04 01 03 01 04 01 02 01 06 04 05 01 01 02 00
-GetCombo request 3                                                      05 01 03 01 03 00
-GetConnectionStatus reply Ok(ConnectionStatus{Configured,{1,Adv},Ble})  04 02 07 01 03 02 01 02 01 00
-GetConnectionStatus request ()                                          04 02 07 01 00
-GetConnectionType reply Ok(Ble)                                         04 01 07 01 02 01 00
-GetConnectionType request ()                                            04 01 07 01 00
-GetCurrentLayer reply Ok(1)                                             04 01 08 01 02 01 00
-GetCurrentLayer request ()                                              04 01 08 01 00
-GetDefaultLayer reply Ok(2)                                             04 03 01 01 02 02 00
-GetDefaultLayer request ()                                              04 03 01 01 00
-GetDeviceInfo reply Ok(DeviceInfo{1.2.3,4,5,RMK,..})                    02 0a 02 01 21 01 02 03 04 05 03 52 4d 4b 0c 52 4d 4b 20 4b 65 79 62 6f 61 72 64 09 72 79 6e 6b 3a 30 30 30 31 00
-GetDeviceInfo request ()                                                02 0a 02 01 00
-GetEncoderAction reply Ok(EncoderAction{Morse(3),No})                   04 05 01 01 03 05 03 01 00
-GetEncoderAction request GetEncoderRequest{1,2}                         06 05 01 01 01 02 00
-GetFork reply Ok(Fork{Single(A),No,Morse(2)})                           04 01 05 01 03 02 01 02 04 06 05 02 01 02 01 01 01 03 02 01 00
-GetFork request 2                                                       05 01 05 01 02 00
-GetKeyAction reply Ok(Morse(7))                                         04 01 01 01 03 05 07 00
-GetKeyAction request KeyPosition{0,5,13}                                04 01 01 01 03 05 0d 00
-GetLedIndicator reply Ok(LedIndicator(Num|Scroll))                      04 07 08 01 02 05 00
-GetLedIndicator request ()                                              04 07 08 01 00
-GetLockStatus reply Ok(LockStatus{true,false,2,[(1,2),(3,4)]})          02 06 02 01 02 01 07 02 02 01 02 03 04 00
-GetLockStatus request ()                                                02 06 02 01 00
-GetMacro reply Ok(MacroData{[0x01,0x02,0x03]})                          04 01 02 01 05 03 01 02 03 00
-GetMacro request GetMacroRequest{256}                                   06 01 02 01 80 02 00
-GetMatrixState reply Ok(MatrixState{[0x05,0x00,0x20]})                  04 02 08 01 03 03 05 02 20 00
-GetMatrixState request ()                                               04 02 08 01 00
-GetMorse reply Ok(Morse{TAP->Key(A)})                                   04 01 04 01 01 04 01 02 01 02 04 00
-GetMorse request 0                                                      04 01 04 01 01 00
-GetSleepState reply Ok(true)                                            04 06 08 01 02 01 00
-GetSleepState request ()                                                04 06 08 01 00
-GetVersion reply Ok(CURRENT)                                            02 01 02 01 01 02 01 00
-GetVersion request ()                                                   02 01 02 01 00
-GetWpm reply Ok(42)                                                     04 05 08 01 02 2a 00
-GetWpm request ()                                                       04 05 08 01 00
-LayerChange topic 3                                                     03 01 80 02 03 00
-LedIndicatorChange topic LedIndicator(Num|Scroll)                       03 05 80 02 05 00
-Lock reply Ok(())                                                       02 08 02 01 01 00
-Lock request ()                                                         02 08 02 01 00
-Reboot reply Ok(())                                                     02 03 02 01 01 00
-Reboot request ()                                                       02 03 02 01 00
-SetBehaviorConfig reply Ok(())                                          04 02 06 01 01 00
-SetBehaviorConfig request BehaviorConfig{50,500,200,20}                 0a 02 06 01 32 f4 03 c8 01 14 00
-SetCombo reply Ok(())                                                   04 02 03 01 01 00
-SetCombo request SetComboRequest{3,combo}                               08 02 03 01 03 01 02 01 06 04 05 01 01 02 00
-SetDefaultLayer reply Ok(())                                            04 04 01 01 01 00
-SetDefaultLayer request 2                                               05 04 01 01 02 00
-SetEncoderAction reply Ok(())                                           04 06 01 01 01 00
-SetEncoderAction request SetEncoderRequest{1,2,{Morse(3),No}}           08 06 01 01 01 02 05 03 01 00
-SetFork reply Ok(())                                                    04 02 05 01 01 00
-SetFork request SetForkRequest{2,fork}                                  07 02 05 01 02 02 01 02 04 06 05 02 01 02 01 01 01 03 02 01 00
-SetKeyAction reply Err(Invalid)                                         06 02 01 01 01 05 00
-SetKeyAction reply Ok(())                                               04 02 01 01 01 00
-SetKeyAction request SetKeyRequest{{0,5,13},Morse(7)}                   04 02 01 01 05 05 0d 05 07 00
-SetMacro reply Ok(())                                                   04 02 02 01 01 00
-SetMacro request SetMacroRequest{2,[0x01,0x02,0x03]}                    09 02 02 01 02 03 01 02 03 00
-SetMorse reply Ok(())                                                   04 02 04 01 01 00
-SetMorse request SetMorseRequest{0,morse}                               04 02 04 01 01 04 01 02 01 02 04 00
-SleepState topic true                                                   03 04 80 02 01 00
-StorageReset reply Ok(())                                               02 05 02 01 01 00
-StorageReset request StorageResetMode::Full                             02 05 02 01 01 00
-UnlockPoll reply Ok(LockStatus{true,false,2,[(1,2),(3,4)]})             02 07 02 01 02 01 07 02 02 01 02 03 04 00
-UnlockPoll request ()                                                   02 07 02 01 00
-WpmUpdate topic 42                                                      03 02 80 02 2a 00
+BatteryStatusChange topic Available{Discharging,85}                             03 06 80 05 01 01 01 55 00
+BootloaderJump reply Ok(())                                                     02 04 02 01 01 00
+BootloaderJump request ()                                                       02 04 02 01 00
+ClearBleProfile reply Ok(())                                                    04 05 07 01 01 00
+ClearBleProfile request 1                                                       05 05 07 01 01 00
+ConnectionChange topic ConnectionStatus{Configured,{1,Adv},Ble}                 03 03 80 03 02 01 02 01 00
+GetBatteryStatus reply Ok(Available{Discharging,85})                            04 03 08 01 05 01 01 01 55 00
+GetBatteryStatus request ()                                                     04 03 08 01 00
+GetBehaviorConfig reply Ok(BehaviorConfig{50,500,200,20})                       04 01 06 01 07 32 f4 03 c8 01 14 00
+GetBehaviorConfig request ()                                                    04 01 06 01 00
+GetBleStatus reply Ok(BleStatus{1,Advertising})                                 04 03 07 01 02 01 01 00
+GetBleStatus request ()                                                         04 03 07 01 00
+GetCapabilities reply Ok(DeviceCapabilities{1..16})                             02 02 02 01 0c 01 02 03 04 05 06 07 08 09 0a 01 03 01 0b 07 0c 0d 0e 0f 10 01 00
+GetCapabilities request ()                                                      02 02 02 01 00
+GetCombo reply Ok(Combo{[Single(A)],Morse(1),L2})                               04 01 03 01 04 01 02 01 06 04 05 01 01 02 00
+GetCombo request 3                                                              05 01 03 01 03 00
+GetConnectionStatus reply Ok(ConnectionStatus{Configured,{1,Adv},Ble})          04 02 07 01 03 02 01 02 01 00
+GetConnectionStatus request ()                                                  04 02 07 01 00
+GetConnectionType reply Ok(Ble)                                                 04 01 07 01 02 01 00
+GetConnectionType request ()                                                    04 01 07 01 00
+GetCurrentLayer reply Ok(1)                                                     04 01 08 01 02 01 00
+GetCurrentLayer request ()                                                      04 01 08 01 00
+GetDefaultLayer reply Ok(2)                                                     04 03 01 01 02 02 00
+GetDefaultLayer request ()                                                      04 03 01 01 00
+GetDeviceInfo reply Ok(DeviceInfo{1.2.3,4,5,RMK,..})                            02 0a 02 01 21 01 02 03 04 05 03 52 4d 4b 0c 52 4d 4b 20 4b 65 79 62 6f 61 72 64 09 72 79 6e 6b 3a 30 30 30 31 00
+GetDeviceInfo request ()                                                        02 0a 02 01 00
+GetEncoderAction reply Ok(EncoderAction{Morse(3),No})                           04 05 01 01 03 05 03 01 00
+GetEncoderAction request GetEncoderRequest{1,2}                                 06 05 01 01 01 02 00
+GetFork reply Ok(Fork{Single(A),No,Morse(2)})                                   04 01 05 01 03 02 01 02 04 06 05 02 01 02 01 01 01 03 02 01 00
+GetFork request 2                                                               05 01 05 01 02 00
+GetKeyAction reply Ok(Morse(7))                                                 04 01 01 01 03 05 07 00
+GetKeyAction request KeyPosition{0,5,13}                                        04 01 01 01 03 05 0d 00
+GetLayout reply Ok(LayoutChunk{300,[0x0a,0x0b,0x0c]})                           02 09 02 01 07 ac 02 03 0a 0b 0c 00
+GetLayout request 256                                                           02 09 04 01 80 02 00
+GetLedIndicator reply Ok(LedIndicator(Num|Scroll))                              04 07 08 01 02 05 00
+GetLedIndicator request ()                                                      04 07 08 01 00
+GetLockStatus reply Ok(LockStatus{true,false,2,[(1,2),(3,4)]})                  02 06 02 01 02 01 07 02 02 01 02 03 04 00
+GetLockStatus request ()                                                        02 06 02 01 00
+GetMacro reply Ok(MacroData{[0x01,0x02,0x03]})                                  04 01 02 01 05 03 01 02 03 00
+GetMacro request GetMacroRequest{256}                                           06 01 02 01 80 02 00
+GetMatrixState reply Ok(MatrixState{[0x05,0x00,0x20]})                          04 02 08 01 03 03 05 02 20 00
+GetMatrixState request ()                                                       04 02 08 01 00
+GetMorse reply Ok(Morse{TAP->Key(A)})                                           04 01 04 01 01 04 01 02 01 02 04 00
+GetMorse request 0                                                              04 01 04 01 01 00
+GetPeripheralStatus reply Ok(PeripheralStatus{true,Available{Discharging,85}})  04 04 08 01 06 01 01 01 01 55 00
+GetPeripheralStatus request 1                                                   05 04 08 01 01 00
+GetSleepState reply Ok(true)                                                    04 06 08 01 02 01 00
+GetSleepState request ()                                                        04 06 08 01 00
+GetVersion reply Ok(CURRENT)                                                    02 01 02 01 01 02 01 00
+GetVersion request ()                                                           02 01 02 01 00
+GetWpm reply Ok(42)                                                             04 05 08 01 02 2a 00
+GetWpm request ()                                                               04 05 08 01 00
+LayerChange topic 3                                                             03 01 80 02 03 00
+LedIndicatorChange topic LedIndicator(Num|Scroll)                               03 05 80 02 05 00
+Lock reply Ok(())                                                               02 08 02 01 01 00
+Lock request ()                                                                 02 08 02 01 00
+Reboot reply Ok(())                                                             02 03 02 01 01 00
+Reboot request ()                                                               02 03 02 01 00
+SetBehaviorConfig reply Ok(())                                                  04 02 06 01 01 00
+SetBehaviorConfig request BehaviorConfig{50,500,200,20}                         0a 02 06 01 32 f4 03 c8 01 14 00
+SetCombo reply Ok(())                                                           04 02 03 01 01 00
+SetCombo request SetComboRequest{3,combo}                                       08 02 03 01 03 01 02 01 06 04 05 01 01 02 00
+SetDefaultLayer reply Ok(())                                                    04 04 01 01 01 00
+SetDefaultLayer request 2                                                       05 04 01 01 02 00
+SetEncoderAction reply Ok(())                                                   04 06 01 01 01 00
+SetEncoderAction request SetEncoderRequest{1,2,{Morse(3),No}}                   08 06 01 01 01 02 05 03 01 00
+SetFork reply Ok(())                                                            04 02 05 01 01 00
+SetFork request SetForkRequest{2,fork}                                          07 02 05 01 02 02 01 02 04 06 05 02 01 02 01 01 01 03 02 01 00
+SetKeyAction reply Err(Invalid)                                                 06 02 01 01 01 05 00
+SetKeyAction reply Ok(())                                                       04 02 01 01 01 00
+SetKeyAction request SetKeyRequest{{0,5,13},Morse(7)}                           04 02 01 01 05 05 0d 05 07 00
+SetMacro reply Ok(())                                                           04 02 02 01 01 00
+SetMacro request SetMacroRequest{2,[0x01,0x02,0x03]}                            09 02 02 01 02 03 01 02 03 00
+SetMorse reply Ok(())                                                           04 02 04 01 01 00
+SetMorse request SetMorseRequest{0,morse}                                       04 02 04 01 01 04 01 02 01 02 04 00
+SleepState topic true                                                           03 04 80 02 01 00
+StorageReset reply Ok(())                                                       02 05 02 01 01 00
+StorageReset request StorageResetMode::Full                                     02 05 02 01 01 00
+SwitchBleProfile reply Ok(())                                                   04 04 07 01 01 00
+SwitchBleProfile request 1                                                      05 04 07 01 01 00
+UnlockPoll reply Ok(LockStatus{true,false,2,[(1,2),(3,4)]})                     02 07 02 01 02 01 07 02 02 01 02 03 04 00
+UnlockPoll request ()                                                           02 07 02 01 00
+WpmUpdate topic 42                                                              03 02 80 02 2a 00
