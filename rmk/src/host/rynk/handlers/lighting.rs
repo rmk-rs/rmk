@@ -38,13 +38,14 @@ use rmk_types::protocol::rynk::{
     LightingOutputsPageResult, LightingOverlayCell, LightingOverlayPageRequest, LightingOverlayPageResult,
     LightingOverlayTransaction, LightingOverlayTransactionResult, LightingPageRequest, LightingPeripheralReplicaState,
     LightingPhysicalKey, LightingPhysicalKeysPage, LightingPhysicalKeysPageResult, LightingPoint3,
-    LightingReplicaStatus, LightingReplicaStatusResult, LightingReplicationMachine, LightingResult, LightingRgb8,
-    LightingRoute, LightingRoutesPage, LightingRoutesPageResult, LightingRuntimeConditionalScenePageRequest,
-    LightingRuntimeConditionalSceneStatus, LightingRuntimeConditionalSceneStatusResult,
-    LightingRuntimeConditionalSceneTransactionResult, LightingRuntimeConditionalScenesPageResult,
-    LightingScenePageRequest, LightingSceneStatus, LightingSceneStatusResult, LightingSceneTransactionResult,
-    LightingScenesPageResult, LightingState, LightingStateResult, LightingUnitResult, LightingZone, LightingZoneId,
-    LightingZoneMembershipsPage, LightingZoneMembershipsPageResult, LightingZonesPage, LightingZonesPageResult,
+    LightingReplicaDigests, LightingReplicaStatus, LightingReplicaStatusResult, LightingReplicationHealth,
+    LightingReplicationMachine, LightingResult, LightingRgb8, LightingRoute, LightingRoutesPage,
+    LightingRoutesPageResult, LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatus,
+    LightingRuntimeConditionalSceneStatusResult, LightingRuntimeConditionalSceneTransactionResult,
+    LightingRuntimeConditionalScenesPageResult, LightingScenePageRequest, LightingSceneStatus,
+    LightingSceneStatusResult, LightingSceneTransactionResult, LightingScenesPageResult, LightingState,
+    LightingStateResult, LightingUnitResult, LightingZone, LightingZoneId, LightingZoneMembershipsPage,
+    LightingZoneMembershipsPageResult, LightingZonesPage, LightingZonesPageResult,
     PutLightingExtendedRuntimeConditionalSceneChunkRequest, PutLightingOverlayChunkRequest,
     PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest, RynkError, RynkMessage,
     SetLightingExtensionLayersRequest, SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
@@ -54,7 +55,8 @@ use rmk_types::protocol::rynk::{
 };
 
 use super::super::lighting::{
-    RYNK_LIGHTING_TRANSACTION_CAPACITY, RynkLightingCommand, RynkLightingController, RynkLightingReadback,
+    RYNK_LIGHTING_TRANSACTION_CAPACITY, ReplicaDigests, ReplicationHealth, RynkLightingCommand, RynkLightingController,
+    RynkLightingReadback,
 };
 use super::super::{RynkService, RynkSession};
 use super::Handle;
@@ -1056,6 +1058,8 @@ async fn replica_status(controller: RynkLightingController<'_>) -> LightingResul
         default_layer: presented.map_or(0, |presented| presented.context.layers.default),
         active_bits: presented.map_or(0, |presented| presented.context.layers.active_bits()),
         powered: state.powered,
+        wake_active: state.wake_active,
+        effective_output_enabled: state.output_enabled,
     };
 
     let Some(status) = controller.replication else {
@@ -1065,6 +1069,7 @@ async fn replica_status(controller: RynkLightingController<'_>) -> LightingResul
             peripheral: None,
         });
     };
+    status.request_refresh();
     let machine = status.central();
     let peripheral = controller.peripheral_node().and_then(|node| {
         let peripheral = status.peripheral(node)?;
@@ -1079,6 +1084,7 @@ async fn replica_status(controller: RynkLightingController<'_>) -> LightingResul
             wake_active: peripheral.wake_active,
             effective_output_enabled: peripheral.effective_output_enabled,
             age_ms: peripheral.age_ms,
+            digests: peripheral.digests.map(replica_digests_to_wire),
         })
     });
     Ok(LightingReplicaStatus {
@@ -1088,9 +1094,32 @@ async fn replica_status(controller: RynkLightingController<'_>) -> LightingResul
             awaiting_ack: machine.awaiting_ack,
             generation: machine.generation,
             link_up: machine.link_up,
+            durable_dirty: machine.durable_dirty,
+            context_dirty: machine.context_dirty,
+            health: match machine.health {
+                ReplicationHealth::Healthy => LightingReplicationHealth::Healthy,
+                ReplicationHealth::Resynchronizing => LightingReplicationHealth::Resynchronizing,
+                ReplicationHealth::Stale => LightingReplicationHealth::Stale,
+                ReplicationHealth::Diverged => LightingReplicationHealth::Diverged,
+                ReplicationHealth::Halted => LightingReplicationHealth::Halted,
+            },
+            expected_digests: machine.expected_digests.map(replica_digests_to_wire),
+            last_attested_age_ms: machine.last_attested_age_ms,
+            mismatch_count: machine.mismatch_count,
         }),
         peripheral,
     })
+}
+
+fn replica_digests_to_wire(digests: ReplicaDigests) -> LightingReplicaDigests {
+    LightingReplicaDigests {
+        schema: digests.schema,
+        revision: digests.revision,
+        settings: digests.settings,
+        overlay: digests.overlay,
+        scenes: digests.scenes,
+        conditional_scenes: digests.conditional_scenes,
+    }
 }
 
 impl Handle<GetLightingKeys> for RynkService<'_> {

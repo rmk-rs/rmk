@@ -14,9 +14,9 @@ use embedded_io_async::{Read, Write};
 #[cfg(feature = "lighting")]
 pub use lighting::{
     LightingReplicationStatus, PeripheralReplicaStatus, RYNK_LIGHTING_TRANSACTION_CAPACITY, RemoteFrame,
-    RemoteFramePort, RemoteFrameRequest, ReplicationMachineState, RynkLightingController, RynkLightingDescriptor,
-    RynkLightingMailbox, RynkLightingReadback, StandardRynkLightingAdapter,
-    install_lighting_runtime_conditional_scenes, install_lighting_scenes,
+    RemoteFramePort, RemoteFrameRequest, ReplicaDigests, ReplicationHealth, ReplicationMachineState,
+    RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox, RynkLightingReadback,
+    StandardRynkLightingAdapter, install_lighting_runtime_conditional_scenes, install_lighting_scenes,
 };
 use postcard::experimental::max_size::MaxSize;
 use rmk_types::constants::RYNK_BUFFER_SIZE;

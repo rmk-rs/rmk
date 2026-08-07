@@ -63,10 +63,10 @@ const RYNK_LIGHTING_COMMAND_CAPACITY: usize = 4;
 
 /// How long a remote-frame fetch waits before reporting the node unavailable.
 ///
-/// Matched to the split lighting layer's own acknowledgement timeout: a
-/// round trip that has not landed by then is lost, not slow, and a host
-/// polling frames must not stall behind a half that is gone.
-const REMOTE_FRAME_TIMEOUT_MS: u64 = 500;
+/// Boards may need several bounded split-packet round trips to assemble a
+/// page. Keep this outer deadline long enough for that recovery while still
+/// bounding a host request when the remote half is gone.
+const REMOTE_FRAME_TIMEOUT_MS: u64 = 1_000;
 
 /// One node's presented-frame page plus how stale it is.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -165,6 +165,28 @@ impl Default for RemoteFramePort {
     }
 }
 
+/// Canonical digests of one durable replica projection.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ReplicaDigests {
+    pub schema: u8,
+    pub revision: u32,
+    pub settings: u32,
+    pub overlay: u32,
+    pub scenes: u32,
+    pub conditional_scenes: u32,
+}
+
+/// Recovery state reported by the board's replication machine.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum ReplicationHealth {
+    #[default]
+    Healthy,
+    Resynchronizing,
+    Stale,
+    Diverged,
+    Halted,
+}
+
 /// Central-side state of the split lighting replication machine.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct ReplicationMachineState {
@@ -176,6 +198,12 @@ pub struct ReplicationMachineState {
     /// apart from a retry that is stuck.
     pub generation: u8,
     pub link_up: bool,
+    pub durable_dirty: bool,
+    pub context_dirty: bool,
+    pub health: ReplicationHealth,
+    pub expected_digests: Option<ReplicaDigests>,
+    pub last_attested_age_ms: Option<u32>,
+    pub mismatch_count: u8,
 }
 
 /// The last renderer state a peripheral reported.
@@ -194,6 +222,9 @@ pub struct PeripheralReplicaStatus {
     pub effective_output_enabled: bool,
     /// Age of this report at the time it is read.
     pub age_ms: u32,
+    /// Digests recomputed from the applied durable state. `None` means the
+    /// peer has not supplied attestation data.
+    pub digests: Option<ReplicaDigests>,
 }
 
 /// Board-provided view of the split lighting replication handshake.
@@ -203,6 +234,11 @@ pub struct PeripheralReplicaStatus {
 /// blocking on the link. A read that blocked could not distinguish a slow
 /// link from a dead one, which is the distinction being debugged.
 pub trait LightingReplicationStatus {
+    /// Ask the board to refresh its cached peripheral view without blocking
+    /// this protocol read. Implementations should coalesce requests; a host
+    /// that needs the freshest value can reread after one bounded round trip.
+    fn request_refresh(&self) {}
+
     fn central(&self) -> ReplicationMachineState;
 
     /// The last status heard from `node`, or `None` if none ever arrived.

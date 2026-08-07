@@ -1218,6 +1218,42 @@ impl MaxSize for LightingFramePage {
         + crate::heapless_vec_max_size::<LightingRgb8, LIGHTING_FRAME_CHUNK_SIZE>();
 }
 
+/// Canonical digest schema implemented by the first lighting replica
+/// attestation protocol.
+pub const LIGHTING_REPLICA_DIGEST_SCHEMA_V1: u8 = 1;
+
+wire_type! {
+    /// FNV-1a-32 digests of the durable right-half projection at `revision`.
+    ///
+    /// Expiring-overlay lifetime and fast context such as layers, batteries,
+    /// connection state, and powered/wake state are deliberately excluded.
+    /// They are covered by sequence/revision freshness and direct status
+    /// comparison instead.
+    pub struct LightingReplicaDigests {
+        pub schema: u8,
+        pub revision: u32,
+        pub settings: u32,
+        pub overlay: u32,
+        pub scenes: u32,
+        pub conditional_scenes: u32,
+    }
+}
+
+wire_type! {
+    /// Board-reported state of the replication recovery machine.
+    ///
+    /// Hosts still derive `UNAVAILABLE` from link/report presence and
+    /// `UNATTESTED` from absent digest sets; neither is a recovery-machine
+    /// state in its own right.
+    pub enum LightingReplicationHealth {
+        Healthy,
+        Resynchronizing,
+        Stale,
+        Diverged,
+        Halted,
+    }
+}
+
 wire_type! {
     /// The lighting authority's own state, as the central half sees it.
     pub struct LightingCentralReplicaState {
@@ -1233,6 +1269,10 @@ wire_type! {
         pub active_bits: u64,
         /// Live USB/VBUS power as the engine sees it.
         pub powered: bool,
+        /// Whether a configured wake layer currently overrides output policy.
+        pub wake_active: bool,
+        /// Final live output decision after mode, power, and wake inputs.
+        pub effective_output_enabled: bool,
     }
 }
 
@@ -1252,6 +1292,21 @@ wire_type! {
         /// tell a resend apart from a stuck retry.
         pub generation: u8,
         pub link_up: bool,
+        /// Durable state changed but no full snapshot carrying it has yet
+        /// been acknowledged.
+        pub durable_dirty: bool,
+        /// Fast context changed but no matching update has yet been
+        /// acknowledged.
+        pub context_dirty: bool,
+        pub health: LightingReplicationHealth,
+        /// Digest set the central expects the peripheral to hold. `None`
+        /// means the board or peer does not support attestation yet.
+        pub expected_digests: Option<LightingReplicaDigests>,
+        /// Age of the last successful digest comparison. `None` means no
+        /// attestation has succeeded since boot.
+        pub last_attested_age_ms: Option<u32>,
+        /// Consecutive mismatches observed after a recovery snapshot.
+        pub mismatch_count: u8,
     }
 }
 
@@ -1278,6 +1333,9 @@ wire_type! {
         pub wake_active: bool,
         pub effective_output_enabled: bool,
         pub age_ms: u32,
+        /// Digest set recomputed from the state this renderer applied.
+        /// `None` distinguishes an older/unattested peer from a zero digest.
+        pub digests: Option<LightingReplicaDigests>,
     }
 }
 
@@ -1637,6 +1695,14 @@ mod tests {
 
     #[test]
     fn replica_status_round_trips_present_and_absent_sides() {
+        let digests = LightingReplicaDigests {
+            schema: LIGHTING_REPLICA_DIGEST_SCHEMA_V1,
+            revision: u32::MAX - 2,
+            settings: 1,
+            overlay: 2,
+            scenes: 3,
+            conditional_scenes: 4,
+        };
         let full = LightingReplicaStatus {
             central: LightingCentralReplicaState {
                 revision: u32::MAX,
@@ -1645,12 +1711,20 @@ mod tests {
                 default_layer: 1,
                 active_bits: u64::MAX,
                 powered: true,
+                wake_active: true,
+                effective_output_enabled: false,
             },
             replication: Some(LightingReplicationMachine {
                 last_acked_revision: Some(u32::MAX - 2),
                 awaiting_ack: true,
                 generation: u8::MAX,
                 link_up: true,
+                durable_dirty: true,
+                context_dirty: false,
+                health: LightingReplicationHealth::Resynchronizing,
+                expected_digests: Some(digests),
+                last_attested_age_ms: Some(u32::MAX),
+                mismatch_count: 1,
             }),
             peripheral: Some(LightingPeripheralReplicaState {
                 node: LightingNodeId(1),
@@ -1663,6 +1737,10 @@ mod tests {
                 wake_active: true,
                 effective_output_enabled: false,
                 age_ms: u32::MAX,
+                digests: Some(LightingReplicaDigests {
+                    revision: u32::MAX - 3,
+                    ..digests
+                }),
             }),
         };
         round_trip(&full);

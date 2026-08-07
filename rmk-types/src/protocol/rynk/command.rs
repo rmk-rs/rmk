@@ -527,7 +527,9 @@ endpoints! {
     #[cfg(feature = "lighting")]
     GetLightingFrame = 0x0936: LightingFrameRequest => LightingFramePageResult;
     /// Read both sides of the split lighting replication handshake. Probed
-    /// like `GetLightingFrame`.
+    /// like `GetLightingFrame`. Boards may use a read to trigger a coalesced
+    /// background refresh; reread after one bounded link round trip when a
+    /// fresh peripheral report is required.
     #[cfg(feature = "lighting")]
     GetLightingReplicaStatus = 0x0937: () => LightingReplicaStatusResult;
 }

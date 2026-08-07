@@ -32,20 +32,21 @@ use rmk_types::protocol::rynk::{
     LightingCapabilities, LightingCompiledSceneStatus, LightingCompiledScenesPage, LightingConditionalSceneStatus,
     LightingConditionalScenesPage, LightingExtendedRuntimeConditionalScenesPage, LightingExtension,
     LightingExtensionLayers, LightingExtensionNameKind, LightingExtensionNamesPage, LightingExtensionNamesRequest,
-    LightingExtensionParamsPage, LightingExtensionParamsRequest, LightingKeysPage, LightingLedsPage,
-    LightingOutputModeState, LightingOutputsPage, LightingOverlayPage, LightingOverlayPageRequest,
-    LightingOverlayTransaction, LightingPageRequest, LightingPhysicalKeysPage, LightingResult, LightingRoutesPage,
-    LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatus,
-    LightingRuntimeConditionalSceneTransaction, LightingRuntimeConditionalScenesPage, LightingScenePageRequest,
-    LightingSceneStatus, LightingSceneTransaction, LightingScenesPage, LightingState, LightingZoneMembershipsPage,
-    LightingZonesPage, LockStatus, MacroData, MatrixState, PeripheralStatus, ProtocolVersion,
-    PutLightingExtendedRuntimeConditionalSceneChunkRequest, PutLightingOverlayChunkRequest,
-    PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest, SetComboBulkRequest, SetComboRequest,
-    SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetLightingExtensionLayersRequest,
-    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest,
-    SetLightingOutputModeRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
-    SetMacroRequest, SetMorseBulkRequest, SetMorseRequest, SplitCentralLatencyPolicy, SplitCentralLatencyState,
-    StorageResetMode, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest, command,
+    LightingExtensionParamsPage, LightingExtensionParamsRequest, LightingFramePage, LightingFrameRequest,
+    LightingKeysPage, LightingLedsPage, LightingOutputModeState, LightingOutputsPage, LightingOverlayPage,
+    LightingOverlayPageRequest, LightingOverlayTransaction, LightingPageRequest, LightingPhysicalKeysPage,
+    LightingReplicaStatus, LightingResult, LightingRoutesPage, LightingRuntimeConditionalScenePageRequest,
+    LightingRuntimeConditionalSceneStatus, LightingRuntimeConditionalSceneTransaction,
+    LightingRuntimeConditionalScenesPage, LightingScenePageRequest, LightingSceneStatus, LightingSceneTransaction,
+    LightingScenesPage, LightingState, LightingZoneMembershipsPage, LightingZonesPage, LockStatus, MacroData,
+    MatrixState, PeripheralStatus, ProtocolVersion, PutLightingExtendedRuntimeConditionalSceneChunkRequest,
+    PutLightingOverlayChunkRequest, PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest,
+    SetComboBulkRequest, SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest,
+    SetLightingExtensionLayersRequest, SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
+    SetLightingLayerPolicyRequest, SetLightingOutputModeRequest, SetLightingOverlayRequest,
+    SetLightingSceneCellRequest, SetLightingStateRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest,
+    SplitCentralLatencyPolicy, SplitCentralLatencyState, StorageResetMode, UnsetLightingOverlayRequest,
+    UnsetLightingSceneCellRequest, command,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -438,6 +439,18 @@ impl Client {
     pub async fn get_lighting_output_mode(&self) -> Result<LightingOutputModeState, RynkHostError> {
         self.require_lighting(Cmd::GetLightingOutputMode)?;
         Self::flatten_lighting(self.request::<command::GetLightingOutputMode>(&()).await?)
+    }
+
+    /// Read one page of the frame a lighting output most recently accepted.
+    pub async fn get_lighting_frame(&self, request: LightingFrameRequest) -> Result<LightingFramePage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingFrame)?;
+        Self::flatten_lighting(self.request::<command::GetLightingFrame>(&request).await?)
+    }
+
+    /// Read the board's cached view of split lighting replication.
+    pub async fn get_lighting_replica_status(&self) -> Result<LightingReplicaStatus, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingReplicaStatus)?;
+        Self::flatten_lighting(self.request::<command::GetLightingReplicaStatus>(&()).await?)
     }
 
     pub async fn set_lighting_output_mode(

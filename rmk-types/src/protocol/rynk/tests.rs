@@ -1560,12 +1560,27 @@ fn lighting_wire_frames_locked() {
             default_layer: 1,
             active_bits: 0b110,
             powered: true,
+            wake_active: false,
+            effective_output_enabled: true,
         },
         replication: Some(LightingReplicationMachine {
             last_acked_revision: Some(state.revision - 2),
             awaiting_ack: true,
             generation: 4,
             link_up: true,
+            durable_dirty: true,
+            context_dirty: false,
+            health: LightingReplicationHealth::Resynchronizing,
+            expected_digests: Some(LightingReplicaDigests {
+                schema: LIGHTING_REPLICA_DIGEST_SCHEMA_V1,
+                revision: state.revision - 2,
+                settings: 11,
+                overlay: 12,
+                scenes: 13,
+                conditional_scenes: 14,
+            }),
+            last_attested_age_ms: Some(125),
+            mismatch_count: 1,
         }),
         peripheral: Some(LightingPeripheralReplicaState {
             node: frame_request.node,
@@ -1578,6 +1593,14 @@ fn lighting_wire_frames_locked() {
             wake_active: true,
             effective_output_enabled: false,
             age_ms: 250,
+            digests: Some(LightingReplicaDigests {
+                schema: LIGHTING_REPLICA_DIGEST_SCHEMA_V1,
+                revision: state.revision - 3,
+                settings: 21,
+                overlay: 22,
+                scenes: 23,
+                conditional_scenes: 24,
+            }),
         }),
     };
 

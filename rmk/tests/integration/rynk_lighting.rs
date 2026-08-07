@@ -14,7 +14,8 @@ use rmk::config::{BehaviorConfig, PositionalConfig, RmkConfig};
 use rmk::event::publish_event;
 use rmk::host::{
     HostService as RynkService, LightingReplicationStatus, PeripheralReplicaStatus, RemoteFrame, RemoteFramePort,
-    ReplicationMachineState, RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox,
+    ReplicaDigests, ReplicationHealth, ReplicationMachineState, RynkLightingController, RynkLightingDescriptor,
+    RynkLightingMailbox,
 };
 use rmk::keymap::{KeyMap, KeymapData};
 use rmk::lighting::{
@@ -468,13 +469,34 @@ fn extension_endpoints_are_unsupported_until_a_board_advertises_them() {
 /// only owns the rendezvous — so a fake responder stands in for it.
 struct FakeReplication;
 
+static REPLICATION_REFRESHES: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+const FAKE_DIGESTS: ReplicaDigests = ReplicaDigests {
+    schema: 1,
+    revision: 4,
+    settings: 11,
+    overlay: 12,
+    scenes: 13,
+    conditional_scenes: 14,
+};
+
 impl LightingReplicationStatus for FakeReplication {
+    fn request_refresh(&self) {
+        REPLICATION_REFRESHES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
+
     fn central(&self) -> ReplicationMachineState {
         ReplicationMachineState {
             last_acked_revision: Some(4),
             awaiting_ack: true,
             generation: 2,
             link_up: true,
+            durable_dirty: true,
+            context_dirty: false,
+            health: ReplicationHealth::Resynchronizing,
+            expected_digests: Some(FAKE_DIGESTS),
+            last_attested_age_ms: Some(125),
+            mismatch_count: 1,
         }
     }
 
@@ -487,6 +509,7 @@ impl LightingReplicationStatus for FakeReplication {
             wake_active: true,
             effective_output_enabled: false,
             age_ms: 250,
+            digests: Some(FAKE_DIGESTS),
         })
     }
 }
@@ -520,9 +543,11 @@ fn lighting_observability_endpoints_cross_the_full_loopback() {
         StandardReply,
     };
     use rmk_types::protocol::rynk::{
-        LightingFramePageResult, LightingFrameRequest, LightingNodeId, LightingReplicaStatusResult, LightingRgb8,
+        LightingFramePageResult, LightingFrameRequest, LightingNodeId, LightingReplicaStatusResult,
+        LightingReplicationHealth, LightingRgb8,
     };
 
+    REPLICATION_REFRESHES.store(0, core::sync::atomic::Ordering::Relaxed);
     let descriptor = RynkLightingDescriptor {
         routing: LightingRouting {
             outputs: &OBSERVABILITY_OUTPUTS,
@@ -665,12 +690,21 @@ fn lighting_observability_endpoints_cross_the_full_loopback() {
             .await
             .expect("outer replica-status envelope")
             .expect("replica status");
+        assert_eq!(REPLICATION_REFRESHES.load(core::sync::atomic::Ordering::Relaxed), 1,);
         assert_eq!(status.central.revision, 0);
         assert_eq!(status.central.presented_revision, Some(0));
+        assert!(!status.central.wake_active);
+        assert!(status.central.effective_output_enabled);
         let replication = status.replication.expect("the board wired a replication machine");
         assert_eq!(replication.last_acked_revision, Some(4));
         assert!(replication.awaiting_ack && replication.link_up);
         assert_eq!(replication.generation, 2);
+        assert!(replication.durable_dirty && !replication.context_dirty);
+        assert_eq!(replication.health, LightingReplicationHealth::Resynchronizing);
+        assert_eq!(replication.last_attested_age_ms, Some(125));
+        assert_eq!(replication.mismatch_count, 1);
+        let expected = replication.expected_digests.expect("central digest set");
+        assert_eq!((expected.settings, expected.overlay), (11, 12));
         let peripheral = status.peripheral.expect("the board heard from the peripheral");
         assert_eq!(peripheral.node, LightingNodeId(1));
         assert_eq!(peripheral.applied_revision, Some(4));
@@ -685,5 +719,6 @@ fn lighting_observability_endpoints_cross_the_full_loopback() {
         );
         assert!(peripheral.wake_active && !peripheral.effective_output_enabled);
         assert_eq!(peripheral.age_ms, 250);
+        assert_eq!(peripheral.digests.expect("peripheral digest set").revision, 4);
     });
 }

@@ -65,7 +65,7 @@ GetLightingOverlay reply                                      04 1b 09 01 01 11 
 GetLightingOverlay request                                    05 1b 09 01 09 01 00
 GetLightingPhysicalKeys reply                                 04 04 09 01 01 12 01 01 01 01 02 ff 01 80 04 80 01 80 02 80 03 db 0b 00
 GetLightingPhysicalKeys request                               05 04 09 01 01 01 00
-GetLightingReplicaStatus reply                                04 37 09 01 01 16 09 01 08 02 01 06 01 01 01 07 01 04 01 01 01 01 06 05 01 01 02 02 01 03 fa 01 00
+GetLightingReplicaStatus reply                                04 37 09 01 01 08 09 01 08 02 01 06 01 09 01 01 01 07 01 04 01 01 14 01 01 01 07 0b 0c 0d 0e 01 7d 01 01 01 01 06 05 01 01 02 02 01 0a fa 01 01 01 06 15 16 17 18 00
 GetLightingReplicaStatus request                              04 37 09 01 00
 GetLightingRoutes reply                                       04 09 09 01 01 08 01 01 01 2a 01 02 07 00
 GetLightingRoutes request                                     05 09 09 01 01 01 00
