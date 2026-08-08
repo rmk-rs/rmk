@@ -3,6 +3,8 @@
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(feature = "host"))]
+use crate::constants::HOLD_TRIGGER_KEY_POSITION_MAX_NUM;
 use crate::morse::Morse;
 #[cfg(not(feature = "host"))]
 use crate::protocol::rynk::payload::bulk_capacity::MAX_BULK_ITEMS;
@@ -12,6 +14,57 @@ use crate::protocol::rynk::payload::bulk_capacity::MAX_BULK_ITEMS;
 type BulkMorses = heapless::Vec<Morse, MAX_BULK_ITEMS>;
 #[cfg(feature = "host")]
 type BulkMorses = alloc::vec::Vec<Morse>;
+
+/// One key position allowed to trigger a tap-hold profile's hold action.
+///
+/// `profile == u8::MAX` addresses the keyboard-wide default profile. Every
+/// other value is a runtime morse-profile slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct MorseHoldTriggerPosition {
+    pub profile: u8,
+    pub row: u8,
+    pub col: u8,
+}
+
+// Firmware uses the keyboard's compiled capacity; host clients accept the
+// capacity advertised by whichever keyboard they connected to.
+#[cfg(not(feature = "host"))]
+pub type MorseHoldTriggerPositions = heapless::Vec<MorseHoldTriggerPosition, HOLD_TRIGGER_KEY_POSITION_MAX_NUM>;
+#[cfg(feature = "host")]
+pub type MorseHoldTriggerPositions = alloc::vec::Vec<MorseHoldTriggerPosition>;
+
+/// Current runtime hold-trigger table and the firmware's compiled capacity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct MorseHoldTriggerPositionState {
+    pub capacity: u8,
+    #[cfg_attr(feature = "wasm", tsify(type = "MorseHoldTriggerPosition[]"))]
+    pub positions: MorseHoldTriggerPositions,
+}
+
+#[cfg(not(feature = "host"))]
+impl MaxSize for MorseHoldTriggerPositionState {
+    const POSTCARD_MAX_SIZE: usize = u8::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<MorseHoldTriggerPosition, HOLD_TRIGGER_KEY_POSITION_MAX_NUM>();
+}
+
+/// Atomic replacement payload for the runtime hold-trigger table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct SetMorseHoldTriggerPositionsRequest {
+    #[cfg_attr(feature = "wasm", tsify(type = "MorseHoldTriggerPosition[]"))]
+    pub positions: MorseHoldTriggerPositions,
+}
+
+#[cfg(not(feature = "host"))]
+impl MaxSize for SetMorseHoldTriggerPositionsRequest {
+    const POSTCARD_MAX_SIZE: usize =
+        crate::heapless_vec_max_size::<MorseHoldTriggerPosition, HOLD_TRIGGER_KEY_POSITION_MAX_NUM>();
+}
 
 /// Request payload for `SetMorse`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
@@ -156,6 +209,50 @@ mod tests {
             let resp = GetMorseBulkResponse { configs };
             round_trip(&resp);
             assert_max_size_bound(&resp);
+        }
+    }
+
+    // Firmware-only: the host side intentionally uses an unbounded Vec and
+    // therefore has no meaningful compile-time MaxSize implementation.
+    #[cfg(not(feature = "host"))]
+    mod hold_trigger_positions {
+        use heapless::Vec;
+
+        use super::super::*;
+        use crate::constants::HOLD_TRIGGER_KEY_POSITION_MAX_NUM;
+        use crate::protocol::rynk::tests::{assert_max_size_bound, round_trip};
+
+        fn full_positions() -> MorseHoldTriggerPositions {
+            let mut positions: MorseHoldTriggerPositions = Vec::new();
+            for index in 0..HOLD_TRIGGER_KEY_POSITION_MAX_NUM {
+                positions
+                    .push(MorseHoldTriggerPosition {
+                        profile: if index == 0 { u8::MAX } else { (index - 1) as u8 },
+                        row: (index % 6) as u8,
+                        col: (index % 14) as u8,
+                    })
+                    .unwrap();
+            }
+            positions
+        }
+
+        #[test]
+        fn round_trip_hold_trigger_position_state_max_capacity() {
+            let state = MorseHoldTriggerPositionState {
+                capacity: HOLD_TRIGGER_KEY_POSITION_MAX_NUM as u8,
+                positions: full_positions(),
+            };
+            round_trip(&state);
+            assert_max_size_bound(&state);
+        }
+
+        #[test]
+        fn round_trip_set_hold_trigger_positions_max_capacity() {
+            let request = SetMorseHoldTriggerPositionsRequest {
+                positions: full_positions(),
+            };
+            round_trip(&request);
+            assert_max_size_bound(&request);
         }
     }
 }

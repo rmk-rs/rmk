@@ -12,7 +12,8 @@ use {
 
 use crate::MACRO_SPACE_SIZE;
 use crate::config::{
-    BehaviorConfig, HOLD_TRIGGER_DEFAULT_PROFILE, Hand, MouseKeyConfig, OneShotModifiersConfig, PositionalConfig,
+    BehaviorConfig, HOLD_TRIGGER_DEFAULT_PROFILE, Hand, HoldTriggerPositions, MouseKeyConfig, OneShotModifiersConfig,
+    PositionalConfig,
 };
 use crate::event::{KeyboardEvent, KeyboardEventPos, LayerChangeEvent, publish_event};
 use crate::input_device::rotary_encoder::Direction;
@@ -685,6 +686,14 @@ impl<'a> KeyMap<'a> {
 
     pub(crate) fn set_morse_prior_idle_time(&self, time: Duration) {
         self.inner.borrow_mut().behavior.morse.prior_idle_time = time;
+    }
+
+    pub(crate) fn morse_hold_trigger_positions(&self) -> HoldTriggerPositions {
+        self.inner.borrow().behavior.morse.hold_trigger_positions.clone()
+    }
+
+    pub(crate) fn set_morse_hold_trigger_positions(&self, positions: HoldTriggerPositions) {
+        self.inner.borrow_mut().behavior.morse.hold_trigger_positions = positions;
     }
 
     pub(crate) fn get_morse(&self, idx: usize) -> Option<Morse> {
