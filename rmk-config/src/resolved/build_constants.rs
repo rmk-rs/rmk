@@ -52,7 +52,9 @@ pub struct BuildConstants {
     pub vial_channel_size: usize,
     pub flash_channel_size: usize,
     pub split_peripherals_num: usize,
+    pub central_battery_user_description: String,
     pub split_battery_peripheral_ids: Vec<usize>,
+    pub split_battery_peripheral_user_descriptions: Vec<String>,
     pub ble_profiles_num: usize,
     pub split_central_sleep_timeout_seconds: u32,
     pub protocol_macro_chunk_size: usize,
@@ -103,6 +105,22 @@ impl crate::KeyboardTomlConfig {
         } else {
             Vec::new()
         };
+        let central_battery_user_description = self
+            .split
+            .as_ref()
+            .and_then(|split| split.central.battery_user_description.clone())
+            .or_else(|| self.ble.as_ref().and_then(|ble| ble.battery_user_description.clone()))
+            .unwrap_or_else(|| "Central".to_string());
+        let split_battery_peripheral_user_descriptions = split_battery_peripheral_ids
+            .iter()
+            .map(|id| {
+                self.split
+                    .as_ref()
+                    .and_then(|split| split.peripheral.get(*id))
+                    .and_then(|peripheral| peripheral.battery_user_description.clone())
+                    .unwrap_or_else(|| format!("Peripheral {id}"))
+            })
+            .collect();
         if active_features.contains(&"_ble") {
             validate_split_battery_gatt_capacity(split_battery_peripheral_ids.len(), active_features)?;
         }
@@ -218,7 +236,9 @@ impl crate::KeyboardTomlConfig {
             vial_channel_size: rmk.vial_channel_size,
             flash_channel_size: rmk.flash_channel_size,
             split_peripherals_num,
+            central_battery_user_description,
             split_battery_peripheral_ids,
+            split_battery_peripheral_user_descriptions,
             ble_profiles_num: rmk.ble_profiles_num,
             split_central_sleep_timeout_seconds: rmk.split_central_sleep_timeout_seconds,
             protocol_macro_chunk_size: rmk.protocol_macro_chunk_size,
@@ -373,6 +393,45 @@ mod tests {
         let constants = config.build_constants(&["split", "_ble"]).unwrap();
 
         assert_eq!(constants.split_battery_peripheral_ids, [0]);
+        assert_eq!(constants.central_battery_user_description, "Central");
+        assert_eq!(constants.split_battery_peripheral_user_descriptions, ["Peripheral 0"]);
+    }
+
+    #[test]
+    fn resolves_custom_battery_user_descriptions() {
+        let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
+        config.ble = Some(BleConfig {
+            enabled: true,
+            battery_user_description: Some("Fallback Central".to_string()),
+            ..Default::default()
+        });
+        config.split = Some(SplitConfig {
+            central: SplitBoardConfig {
+                battery_user_description: Some("Left".to_string()),
+                ..Default::default()
+            },
+            peripheral: vec![
+                SplitBoardConfig {
+                    battery_adc_pin: Some("P0_02".to_string()),
+                    battery_user_description: Some("Right".to_string()),
+                    ..Default::default()
+                },
+                SplitBoardConfig {
+                    battery_adc_pin: Some("P0_04".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        config.auto_calculate_parameters();
+
+        let constants = config.build_constants(&["split", "_ble"]).unwrap();
+
+        assert_eq!(constants.central_battery_user_description, "Left");
+        assert_eq!(
+            constants.split_battery_peripheral_user_descriptions,
+            ["Right", "Peripheral 1"]
+        );
     }
 
     #[test]

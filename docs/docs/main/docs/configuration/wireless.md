@@ -18,6 +18,8 @@ There are several more configs for reading battery level and charging state; the
 [ble]
 # Whether to enable BLE feature
 enabled = true
+# Optional Battery Level name exposed through GATT. Defaults to "Central".
+battery_user_description = "Main"
 # nRF52 SAADC pin for reading battery level, you can use a pin number or "vddh"
 battery_adc_pin = "vddh"
 # The voltage divider setting for saadc. This setting should be ignored when using "vddh" as the adc pin.
@@ -73,11 +75,13 @@ For split keyboards, you can configure battery ADC separately for the central an
 ```toml
 [split.central]
 battery_adc_pin = "P0_01"
+battery_user_description = "Left"
 adc_divider_measured = 2000
 adc_divider_total = 2806
 
 [[split.peripheral]]
 battery_adc_pin = "P0_02"
+battery_user_description = "Right"
 adc_divider_measured = 2000
 adc_divider_total = 2806
 ```
@@ -95,5 +99,7 @@ When peripherals are configured to sample their batteries (see above), their lev
 - each `[[split.peripheral]]` that defines `battery_adc_pin`.
 
 Each peripheral's Battery Service uses its peripheral ID to set the description field in the Characteristic Presentation Format descriptor. Peripheral IDs `0`, `1`, and `2` use the Bluetooth SIG ordinal values `first`, `second`, and `third`, respectively. No host-side configuration is required; any host that already reads the central's Battery Level characteristic can discover the additional instances the same way.
+
+Battery Level characteristics also expose a Characteristic User Description descriptor. The defaults are `Central` for the central and `Peripheral 0`, `Peripheral 1`, and so on for peripherals. Set `battery_user_description` under `[ble]`, `[split.central]`, or an individual `[[split.peripheral]]` to provide a custom name. `[split.central].battery_user_description` overrides `[ble].battery_user_description` for the central.
 
 The maximum number of battery-enabled peripherals is 15 without a host configurator, 14 with Vial, and 13 with Rynk.

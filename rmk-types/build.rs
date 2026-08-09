@@ -67,12 +67,20 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         bc.split_peripherals_num
     ));
     lines.push(format!(
+        "pub const CENTRAL_BATTERY_USER_DESCRIPTION: &str = {:?};",
+        bc.central_battery_user_description
+    ));
+    lines.push(format!(
         "pub const SPLIT_BATTERY_PERIPHERALS_NUM: usize = {};",
         bc.split_battery_peripheral_ids.len()
     ));
     lines.push(format!(
         "pub const SPLIT_BATTERY_PERIPHERAL_IDS: [usize; SPLIT_BATTERY_PERIPHERALS_NUM] = {:?};",
         bc.split_battery_peripheral_ids
+    ));
+    lines.push(format!(
+        "pub const SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS: [&str; SPLIT_BATTERY_PERIPHERALS_NUM] = {:?};",
+        bc.split_battery_peripheral_user_descriptions
     ));
     lines.push(format!("pub const NUM_BLE_PROFILE: usize = {};", bc.ble_profiles_num));
     lines.push(format!(

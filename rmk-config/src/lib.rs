@@ -656,6 +656,8 @@ pub(crate) struct DfuTomlConfig {
 pub struct BleConfig {
     pub enabled: bool,
     pub battery_adc_pin: Option<String>,
+    /// User-facing description for the Battery Level characteristic.
+    pub battery_user_description: Option<String>,
     pub charge_state: Option<PinConfig>,
     pub charge_led: Option<PinConfig>,
     pub adc_divider_measured: Option<u32>,
@@ -1004,6 +1006,8 @@ pub struct SplitBoardConfig {
     pub display: Option<DisplayConfig>,
     /// Battery ADC pin for this split board
     pub battery_adc_pin: Option<String>,
+    /// User-facing description for this board's Battery Level characteristic
+    pub battery_user_description: Option<String>,
     /// ADC divider measured value for battery
     pub adc_divider_measured: Option<u32>,
     /// ADC divider total value for battery

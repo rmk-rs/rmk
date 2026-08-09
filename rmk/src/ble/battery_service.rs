@@ -46,6 +46,11 @@ pub(crate) struct BatteryService {
         read,
         value = MAIN_BATTERY_PRESENTATION_FORMAT
     )]
+    #[descriptor(
+        uuid = descriptors::CHARACTERISTIC_USER_DESCRIPTION,
+        read,
+        value = crate::CENTRAL_BATTERY_USER_DESCRIPTION
+    )]
     #[descriptor(uuid = descriptors::VALID_RANGE, read, value = [0, 100])]
     #[characteristic(uuid = characteristic::BATTERY_LEVEL, read, notify)]
     pub(crate) level: u8,
@@ -62,12 +67,13 @@ pub(crate) type ConfiguredPeripheralBatteryServices =
 
 #[cfg(feature = "split")]
 impl<const N: usize> PeripheralBatteryServices<N> {
-    pub(crate) const ATTRIBUTE_COUNT: usize = 6 * N;
+    pub(crate) const ATTRIBUTE_COUNT: usize = 7 * N;
     pub(crate) const CCCD_COUNT: usize = N;
 
     fn new_with_ids<M: embassy_sync::blocking_mutex::raw::RawMutex, const MAX: usize>(
         table: &mut AttributeTable<'_, M, MAX>,
         peripheral_ids: [usize; N],
+        user_descriptions: [&'static str; N],
     ) -> Self {
         let permissions = AttPermissions {
             read: PermissionLevel::Allowed,
@@ -86,6 +92,11 @@ impl<const N: usize> PeripheralBatteryServices<N> {
                 permissions,
                 peripheral_battery_presentation_format(peripheral_ids[slot]),
             );
+            level.add_descriptor_ro(
+                descriptors::CHARACTERISTIC_USER_DESCRIPTION,
+                PermissionLevel::Allowed,
+                user_descriptions[slot],
+            );
             level.add_descriptor_small(descriptors::VALID_RANGE, permissions, [0u8, 100]);
             level.build()
         });
@@ -99,7 +110,11 @@ impl ConfiguredPeripheralBatteryServices {
     pub(crate) fn new<M: embassy_sync::blocking_mutex::raw::RawMutex, const MAX: usize>(
         table: &mut AttributeTable<'_, M, MAX>,
     ) -> Self {
-        Self::new_with_ids(table, crate::SPLIT_BATTERY_PERIPHERAL_IDS)
+        Self::new_with_ids(
+            table,
+            crate::SPLIT_BATTERY_PERIPHERAL_IDS,
+            crate::SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS,
+        )
     }
 }
 
@@ -354,26 +369,26 @@ mod tests {
         peripheral_battery_presentation_format,
     };
 
-    fn presentation_format<M: RawMutex, const N: usize>(
+    fn descriptor_value<M: RawMutex, const N: usize>(
         table: &AttributeTable<'_, M, N>,
         characteristic: Characteristic<u8>,
-    ) -> [u8; 7] {
+        uuid: trouble_host::prelude::Uuid,
+    ) -> heapless::Vec<u8, 32> {
         for handle in characteristic.handle + 1..=characteristic.end_handle {
-            if table.uuid(handle) == Some(trouble_host::prelude::descriptors::CHARACTERISTIC_PRESENTATION_FORMAT.into())
-            {
-                let mut value = [0; 7];
-                assert_eq!(table.read(handle, 0, &mut value).unwrap(), value.len());
-                return value;
+            if table.uuid(handle) == Some(uuid) {
+                let mut value = [0; 32];
+                let len = table.read(handle, 0, &mut value).unwrap();
+                return heapless::Vec::from_slice(&value[..len]).unwrap();
             }
         }
-        panic!("Battery Level presentation format descriptor not found");
+        panic!("Battery Level descriptor not found");
     }
 
     #[test]
     fn peripheral_battery_services_use_ids_as_unique_descriptions() {
-        let mut table: AttributeTable<'_, NoopRawMutex, 18> = AttributeTable::new();
+        let mut table: AttributeTable<'_, NoopRawMutex, 21> = AttributeTable::new();
         let main = BatteryService::new(&mut table);
-        let peripherals = PeripheralBatteryServices::new_with_ids(&mut table, [0, 2]);
+        let peripherals = PeripheralBatteryServices::new_with_ids(&mut table, [0, 2], ["Left", "Right"]);
 
         assert_eq!(table.len(), 21);
         assert_eq!(main.level.uuid, characteristic::BATTERY_LEVEL.into());
@@ -388,16 +403,58 @@ mod tests {
         }
 
         assert_eq!(
-            presentation_format(&table, main.level),
-            MAIN_BATTERY_PRESENTATION_FORMAT
+            descriptor_value(
+                &table,
+                main.level,
+                trouble_host::prelude::descriptors::CHARACTERISTIC_PRESENTATION_FORMAT.into()
+            ),
+            MAIN_BATTERY_PRESENTATION_FORMAT.as_slice()
         );
         assert_eq!(
-            presentation_format(&table, peripherals.levels[0]),
-            [0x04, 0x00, 0xAD, 0x27, 0x01, 0x01, 0x00]
+            descriptor_value(
+                &table,
+                peripherals.levels[0],
+                trouble_host::prelude::descriptors::CHARACTERISTIC_PRESENTATION_FORMAT.into()
+            ),
+            [0x04, 0x00, 0xAD, 0x27, 0x01, 0x01, 0x00].as_slice()
         );
         assert_eq!(
-            presentation_format(&table, peripherals.levels[1]),
-            [0x04, 0x00, 0xAD, 0x27, 0x01, 0x03, 0x00]
+            descriptor_value(
+                &table,
+                peripherals.levels[1],
+                trouble_host::prelude::descriptors::CHARACTERISTIC_PRESENTATION_FORMAT.into()
+            ),
+            [0x04, 0x00, 0xAD, 0x27, 0x01, 0x03, 0x00].as_slice()
+        );
+        for level in core::iter::once(&main.level).chain(peripherals.levels.iter()) {
+            assert_eq!(
+                descriptor_value(&table, *level, trouble_host::prelude::descriptors::VALID_RANGE.into()),
+                [0, 100].as_slice()
+            );
+        }
+        assert_eq!(
+            descriptor_value(
+                &table,
+                main.level,
+                trouble_host::prelude::descriptors::CHARACTERISTIC_USER_DESCRIPTION.into()
+            ),
+            crate::CENTRAL_BATTERY_USER_DESCRIPTION.as_bytes()
+        );
+        assert_eq!(
+            descriptor_value(
+                &table,
+                peripherals.levels[0],
+                trouble_host::prelude::descriptors::CHARACTERISTIC_USER_DESCRIPTION.into()
+            ),
+            b"Left".as_slice()
+        );
+        assert_eq!(
+            descriptor_value(
+                &table,
+                peripherals.levels[1],
+                trouble_host::prelude::descriptors::CHARACTERISTIC_USER_DESCRIPTION.into()
+            ),
+            b"Right".as_slice()
         );
         assert_ne!(peripherals.levels[0].handle, peripherals.levels[1].handle);
     }
