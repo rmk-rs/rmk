@@ -4,7 +4,7 @@
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use embassy_futures::select::{Either, select, select3};
-use embassy_time::{Duration, Timer, with_timeout};
+use embassy_time::{Duration, Instant, Timer, with_deadline, with_timeout};
 use rmk_types::protocol::rynk::{RYNK_BLE_CHUNK_SIZE, RYNK_INPUT_CHAR_UUID, RYNK_OUTPUT_CHAR_UUID, RYNK_SERVICE_UUID};
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{MediaKeyboardReport, MouseReport, SystemControlReport};
@@ -90,7 +90,7 @@ async fn run_link<'b, 's: 'b, C>(
     // The client task pumps notifications; everything else runs beside it and
     // wins the select when the session ends.
     let session = async {
-        if let Err(e) = connected_session(stack, &conn, &client, pairing).await {
+        if let Err(e) = connected_session(stack, &conn, &client).await {
             info!("[dongle] session setup failed: {:?}", e);
         }
     };
@@ -144,16 +144,26 @@ where
             ..scan_config(DONGLE_SCAN_WINDOW)
         },
     };
-    // A keyboard that is away burns this whole timeout before a window opens.
-    match with_timeout(Duration::from_secs(15), central.connect(&config)).await {
-        Ok(Ok(conn)) => Some(conn),
-        Ok(Err(e)) => {
-            #[cfg(feature = "defmt")]
-            let e = defmt::Debug2Format(&e);
-            debug!("[dongle] connect error: {:?}", e);
-            None
+    // A keyboard that is away burns this whole deadline before a window opens.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match with_deadline(deadline, central.connect(&config)).await {
+            Ok(Ok(conn)) => return Some(conn),
+            Ok(Err(e)) => {
+                #[cfg(feature = "defmt")]
+                let e = defmt::Debug2Format(&e);
+                debug!("[dongle] connect error: {:?}", e);
+                // A pairing window leaves the scanner enabled: dropping the
+                // `ScanSession` only signals the cancel, and the controller
+                // refuses an initiator until the runner has issued the stop.
+                // Retry until it has, rather than guess how long that takes.
+                if Instant::now() >= deadline {
+                    return None;
+                }
+                Timer::after_millis(20).await;
+            }
+            Err(_) => return None,
         }
-        Err(_) => None,
     }
 }
 
@@ -183,6 +193,12 @@ enum SecureError {
 /// Pair (fresh keyboard) or encrypt (bonded keyboard), then wait for the link
 /// to report it is secure.
 async fn secure(conn: &Connection<'_, DefaultPacketPool>, pairing: bool) -> Result<(), SecureError> {
+    // Both sides must be bondable or neither is handed bond information, and the
+    // keyboard would re-pair on every reconnect. Must precede `request_security`.
+    if let Err(e) = conn.set_bondable(true) {
+        warn!("[dongle] set_bondable error: {:?}", e);
+        return Err(SecureError::Failed);
+    }
     if let Err(e) = conn.request_security() {
         warn!("[dongle] request_security error: {:?}", e);
         return Err(SecureError::Failed);
@@ -224,12 +240,11 @@ struct KeyboardChars {
     rynk_output: Characteristic<[u8]>,
 }
 
-/// Discover → subscribe → commit the bond → relay.
+/// Discover → subscribe → sync the bond → relay.
 async fn connected_session<C>(
     stack: &Stack<'_, C, DefaultPacketPool>,
     conn: &Connection<'_, DefaultPacketPool>,
     client: &Client<'_, C>,
-    pairing: bool,
 ) -> Result<(), SessionError>
 where
     C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
@@ -257,13 +272,15 @@ where
     }
     let mut listener = client.listen_all().map_err(|_| SessionError::Discovery)?;
 
-    if pairing {
-        // The bond was stored by the Encrypted/PairingComplete event; fetch the
-        // stack's copy, replacing whatever this dongle was bonded to before.
-        let identity = conn.peer_identity();
-        let bond = stack
-            .with_bond_information(|bonds| bonds.iter().find(|b| b.identity == identity).cloned())
-            .ok_or(SessionError::Handshake)?;
+    // The stack holds the key this link actually runs on. Mirror it to flash
+    // whenever the two differ: on a fresh pairing, and equally when a keyboard
+    // that dropped its side re-paired over a reconnect, which would otherwise
+    // leave flash holding a key no keyboard will ever accept again.
+    let identity = conn.peer_identity();
+    let bond = stack
+        .with_bond_information(|bonds| bonds.iter().find(|b| b.identity == identity).cloned())
+        .ok_or(SessionError::Handshake)?;
+    if super::read_peer(|p| p.bond.as_ref() != Some(&bond)) {
         let replaced = super::update_peer(|p| p.bond.replace(bond.clone()));
         if let Some(old) = replaced.filter(|b| b.identity != identity) {
             info!("[dongle] replacing the bond with {:?}", identity.addr);

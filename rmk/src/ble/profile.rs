@@ -20,12 +20,12 @@ pub(crate) static UPDATED_CCCD_TABLE: Signal<crate::RawMutex, heapless::Vec<u8, 
 /// The dedicated dongle bond slot: the slot number after the normal profiles,
 /// so pairing a dongle never touches a host bond. Selected only via the
 /// `SwitchToDongle` key, never by profile cycling.
-#[cfg(feature = "rynk")]
+#[cfg(feature = "dongle")]
 pub(crate) const DONGLE_PROFILE: u8 = NUM_BLE_PROFILE as u8;
 
 /// Bond slots kept by the profile manager: the host profiles, plus the
-/// dedicated dongle slot on `rynk` builds.
-pub(crate) const BOND_SLOTS: usize = NUM_BLE_PROFILE + cfg!(feature = "rynk") as usize;
+/// dedicated dongle slot on `dongle` builds.
+pub(crate) const BOND_SLOTS: usize = NUM_BLE_PROFILE + cfg!(feature = "dongle") as usize;
 
 /// BLE profile info
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -317,8 +317,10 @@ where
                             self.switch_profile(profile).await;
                         }
                         BleProfileAction::Next => {
-                            let mut profile = current_profile() + 1;
-                            profile %= NUM_BLE_PROFILE as u8;
+                            // Cycling stays within the host profiles. The dongle slot sits past
+                            // the last one, so wrap there too instead of landing on profile 1.
+                            let next = current_profile() + 1;
+                            let profile = if next >= NUM_BLE_PROFILE as u8 { 0 } else { next };
 
                             self.switch_profile(profile).await;
                         }

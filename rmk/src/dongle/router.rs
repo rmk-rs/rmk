@@ -31,6 +31,11 @@ pub(crate) static LINK_DOWN: Signal<RawMutex, ()> = Signal::new();
 /// a few MTUs of slack so a briefly stalled host doesn't drop bytes.
 pub(crate) static ROUTER_RX: Pipe<RawMutex, 1024> = Pipe::new();
 
+/// Frames the relay answers for itself, queued for the one task that owns the
+/// host transport so the two directions never write to it at once.
+type ReplyFrame = heapless::Vec<u8, 16>;
+static REPLY_TX: Channel<RawMutex, ReplyFrame, 2> = Channel::new();
+
 static SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Called by the link task for every `input_data` notify: forward the raw bytes
@@ -56,83 +61,96 @@ impl DongleRouter {
     pub async fn run_session<R: Read, T: Write>(&self, rx: &mut R, tx: &mut T) {
         ROUTER_RX.clear();
         ROUTER_TX.clear();
+        REPLY_TX.clear();
         SESSION_ACTIVE.store(true, Ordering::Relaxed);
-        self.session(rx, tx).await;
+        // The directions run concurrently, not turn by turn: a host frame can
+        // wait milliseconds for the link task to take it, and the keyboard's
+        // notifies have to keep draining meanwhile or `ROUTER_RX` overflows and
+        // the response it is carrying loses bytes. Either side ending ends the
+        // session.
+        select(to_keyboard(rx), to_host(tx)).await;
         SESSION_ACTIVE.store(false, Ordering::Relaxed);
     }
+}
 
-    async fn session<R: Read, T: Write>(&self, rx: &mut R, tx: &mut T) {
-        // Host→dongle frames; sized like the keyboard's own session buffer, so
-        // anything a keyboard could parse fits here too.
-        let mut host_buf = [0u8; RYNK_BUFFER_SIZE];
-        let mut host_len = 0;
-        let mut host_discard = false;
-        // Keyboard→host bytes, forwarded a whole frame at a time so a link that
-        // dies mid-frame doesn't hand the host a truncated one to resync past.
-        let mut kb_buf = [0u8; RYNK_BUFFER_SIZE];
-        let mut kb_len = 0;
+/// Host→keyboard: deframe what the host sends and hand whole frames over.
+async fn to_keyboard<R: Read>(rx: &mut R) {
+    // Sized like the keyboard's own session buffer, so anything a keyboard
+    // could parse fits here too.
+    let mut buf = [0u8; RYNK_BUFFER_SIZE];
+    let mut len = 0;
+    let mut discard = false;
 
-        loop {
-            match select(
-                rx.read(&mut host_buf[host_len..]),
-                ROUTER_RX.read(&mut kb_buf[kb_len..]),
-            )
-            .await
-            {
-                Either::First(Ok(0)) | Either::First(Err(_)) => return,
-                Either::First(Ok(n)) => {
-                    host_len += n;
-                    let mut start = 0;
-                    while let Some(pos) = host_buf[start..host_len].iter().position(|&b| b == 0) {
-                        let end = start + pos + 1;
-                        if host_discard {
-                            host_discard = false; // the oversized frame's delimiter: resync
-                        } else if end - start > 1 && !forward_frame(&host_buf[start..end], tx).await {
-                            return;
-                        }
-                        start = end;
-                    }
-                    host_buf.copy_within(start..host_len, 0);
-                    host_len -= start;
-                    if host_len == host_buf.len() {
-                        // No delimiter in a full buffer: drop and drain to the next one.
-                        warn!("[dongle] oversized host frame dropped");
-                        host_len = 0;
-                        host_discard = true;
-                    }
-                }
-                Either::Second(n) => {
-                    kb_len += n;
-                    let mut start = 0;
-                    while let Some(pos) = kb_buf[start..kb_len].iter().position(|&b| b == 0) {
-                        let end = start + pos + 1;
-                        if end - start > 1 && tx.write_all(&kb_buf[start..end]).await.is_err() {
-                            return;
-                        }
-                        start = end;
-                    }
-                    kb_buf.copy_within(start..kb_len, 0);
-                    kb_len -= start;
-                    if kb_len == kb_buf.len() {
-                        warn!("[dongle] oversized keyboard frame dropped");
-                        kb_len = 0;
-                    }
-                }
+    loop {
+        let n = match rx.read(&mut buf[len..]).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => n,
+        };
+        len += n;
+        let mut start = 0;
+        while let Some(pos) = buf[start..len].iter().position(|&b| b == 0) {
+            let end = start + pos + 1;
+            if discard {
+                discard = false; // the oversized frame's delimiter: resync
+            } else if end - start > 1 {
+                forward_frame(&buf[start..end]).await;
             }
+            start = end;
+        }
+        buf.copy_within(start..len, 0);
+        len -= start;
+        if len == buf.len() {
+            // No delimiter in a full buffer: drop and drain to the next one.
+            warn!("[dongle] oversized host frame dropped");
+            len = 0;
+            discard = true;
         }
     }
 }
 
-/// Hand one whole encoded frame (delimiter included) to the keyboard, or answer
-/// it if there is no keyboard to hand it to. Returns `false` when the host
-/// transport died.
-async fn forward_frame<T: Write>(frame: &[u8], tx: &mut T) -> bool {
+/// Keyboard→host: whole frames only, so a link that dies mid-frame doesn't hand
+/// the host a truncated one to resync past. Sole owner of the host transport.
+async fn to_host<T: Write>(tx: &mut T) {
+    let mut buf = [0u8; RYNK_BUFFER_SIZE];
+    let mut len = 0;
+
+    loop {
+        let n = match select(ROUTER_RX.read(&mut buf[len..]), REPLY_TX.receive()).await {
+            Either::First(n) => n,
+            Either::Second(reply) => {
+                if tx.write_all(&reply).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+        };
+        len += n;
+        let mut start = 0;
+        while let Some(pos) = buf[start..len].iter().position(|&b| b == 0) {
+            let end = start + pos + 1;
+            if end - start > 1 && tx.write_all(&buf[start..end]).await.is_err() {
+                return;
+            }
+            start = end;
+        }
+        buf.copy_within(start..len, 0);
+        len -= start;
+        if len == buf.len() {
+            warn!("[dongle] oversized keyboard frame dropped");
+            len = 0;
+        }
+    }
+}
+
+/// Hand one whole encoded frame (delimiter included) to the keyboard, or queue
+/// an answer for it if there is no keyboard to hand it to.
+async fn forward_frame(frame: &[u8]) {
     // LINK_DOWN is polled first so it wins the tie when the link dies mid-wait.
     if super::read_peer(|p| p.connected)
         && let Ok(copy) = RouterFrame::from_slice(frame)
         && let Either::Second(()) = select(LINK_DOWN.wait(), ROUTER_TX.send(copy)).await
     {
-        return true;
+        return;
     }
 
     // Queueing it would strand it — nothing drains the queue while the keyboard
@@ -141,15 +159,15 @@ async fn forward_frame<T: Write>(frame: &[u8], tx: &mut T) -> bool {
     // its own, so answer on the request's own header.
     let Some(header) = RynkHeader::peek(&frame[..frame.len() - 1]) else {
         warn!("[dongle] undecodable host frame dropped");
-        return true;
+        return;
     };
     let mut buf = [0u8; 16];
     match encode_frame(&mut buf, header, &Err::<(), RynkError>(RynkError::NotReady)) {
-        Ok(n) => tx.write_all(&buf[..n]).await.is_ok(),
-        Err(e) => {
-            warn!("[dongle] reply encode failed: {:?}", e);
-            true
-        }
+        Ok(n) => match ReplyFrame::from_slice(&buf[..n]) {
+            Ok(reply) => REPLY_TX.send(reply).await,
+            Err(_) => warn!("[dongle] reply larger than a reply frame"),
+        },
+        Err(e) => warn!("[dongle] reply encode failed: {:?}", e),
     }
 }
 
@@ -270,19 +288,17 @@ mod tests {
         ROUTER_TX.try_send(RouterFrame::new()).unwrap();
 
         let request = frame(Cmd::GetVersion, 11, &());
-        let mut tx = VecWrite { captured: Vec::new() };
-        block_on(join(
-            async { assert!(forward_frame(&request, &mut tx).await, "host transport stays up") },
-            async {
-                yield_now().await;
-                // The link drops with the forward still waiting.
-                super::super::update_peer(|p| p.connected = false);
-                LINK_DOWN.signal(());
-                ROUTER_TX.clear();
-            },
-        ));
+        REPLY_TX.clear();
+        block_on(join(forward_frame(&request), async {
+            yield_now().await;
+            // The link drops with the forward still waiting.
+            super::super::update_peer(|p| p.connected = false);
+            LINK_DOWN.signal(());
+            ROUTER_TX.clear();
+        }));
 
-        let resp = decode_frames(&tx.captured);
+        let queued = REPLY_TX.try_receive().expect("the host is answered, not left waiting");
+        let resp = decode_frames(&queued);
         assert_eq!(resp.len(), 1, "the host is answered rather than left waiting");
         assert_eq!(resp[0].1, 11, "seq echo");
         assert_eq!(
@@ -298,7 +314,9 @@ mod tests {
     #[test]
     fn an_absent_keyboard_answers_not_ready_on_the_host_s_header() {
         super::super::update_peer(|p| p.connected = false);
-        let resp = decode_frames(&run(VecDeque::from([frame(Cmd::GetVersion, 9, &())]), 0));
+        // Idle reads let the host-transport task drain the queued answer before
+        // EOF ends the session.
+        let resp = decode_frames(&run(VecDeque::from([frame(Cmd::GetVersion, 9, &())]), 2));
 
         assert_eq!(resp.len(), 1);
         assert_eq!(resp[0].0, Cmd::GetVersion.raw(), "cmd echo");

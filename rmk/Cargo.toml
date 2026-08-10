@@ -135,19 +135,16 @@ host_lock = []
 
 ## Enable Rynk protocol support (RMK-native protocol, mutually exclusive with vial).
 ## Includes `host_lock` so the lock gate always has matrix-state tracking.
-## On BLE builds this also carries the keyboard side of the dongle: the
-## dedicated dongle bond slot, the `SwitchToDongle` key, and dongle-seeking
-## advertising.
 rynk = ["host", "host_lock", "rmk-types/rynk"]
 
-## Dongle (relay device) firmware: compiles `rmk::dongle`. Orthogonal to
-## `rynk`/`vial` — one crate can build keyboard and dongle binaries side by
-## side; a binary becomes a dongle by attaching `DongleRouter` via
-## `UsbTransport::with_dongle_router`. Requires a BLE chip feature and USB.
+## Enable dongle support. Both sides of a dongle setup enable it: the keyboard
+## gets a bond slot of its own for the dongle plus the `SwitchToDongle` key, the
+## dongle binary gets `rmk::dongle`.
 dongle = [
     "storage",
-    # The frame types and buffer size come from `rynk`; `dongle` only marks the
-    # build so the pairing-window constant is generated.
+    # Both sides speak Rynk on the wire — the keyboard serves it, the dongle
+    # relays it — and the dongle binary has no `rynk` of its own to pull the
+    # frame types in.
     "rmk-types/rynk",
     "rmk-types/dongle",
     "trouble-host?/connection-event-queue-size-2",

@@ -55,7 +55,7 @@ RMK_FEATURESETS=(
     "rynk,_ble,storage"
     "dongle,_ble,storage"
     "dongle,rynk,split,_ble,storage"
-    "dongle,vial,_ble,storage"
+    "dongle,rynk,_ble,storage"
 )
 
 # Behavioral coverage only; RMK_FEATURESETS remains the compile/clippy matrix.

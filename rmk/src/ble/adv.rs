@@ -31,44 +31,36 @@ pub(crate) enum Adv<'a> {
 impl Adv<'_> {
     /// Encode into `buf`, which the returned advertisement borrows.
     fn build<'b>(&self, buf: &'b mut [u8; 31]) -> Result<Advertisement<'b>, Error> {
-        match *self {
+        let adv_data: &[AdStructure] = match *self {
             Self::Directed(peer) => return Ok(Advertisement::ConnectableNonscannableDirected { peer }),
-            Self::Host { name } => {
-                AdStructure::encode_slice(
-                    &[
-                        AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
-                        AdStructure::CompleteServiceUuids16(&[
-                            BATTERY.to_le_bytes(),
-                            HUMAN_INTERFACE_DEVICE.to_le_bytes(),
-                        ]),
-                        AdStructure::CompleteLocalName(name.as_bytes()),
-                        AdStructure::Unknown {
-                            ty: 0x19, // Appearance, which trouble-host has no variant for
-                            data: &KEYBOARD.to_le_bytes(),
-                        },
-                    ],
-                    &mut buf[..],
-                )?;
-            }
-            // Name the kind to another RMK device and nothing else, undiscoverable:
-            // only RMK should act on these, and no host should list them.
-            Self::SplitPeripheral { .. } | Self::DongleSeeking => {
-                let payload: &[u8] = match *self {
-                    Self::SplitPeripheral { id } => &[SPLIT_PERIPHERAL, id],
-                    _ => &[DONGLE_SEEKING],
-                };
-                AdStructure::encode_slice(
-                    &[
-                        AdStructure::Flags(BR_EDR_NOT_SUPPORTED),
-                        AdStructure::ManufacturerSpecificData {
-                            company_identifier: RMK_ADV_COMPANY_ID,
-                            payload,
-                        },
-                    ],
-                    &mut buf[..],
-                )?;
-            }
-        }
+            Self::Host { name } => &[
+                AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
+                AdStructure::CompleteServiceUuids16(&[BATTERY.to_le_bytes(), HUMAN_INTERFACE_DEVICE.to_le_bytes()]),
+                AdStructure::CompleteLocalName(name.as_bytes()),
+                AdStructure::Unknown {
+                    ty: 0x19, // Appearance, which trouble-host has no variant for
+                    data: &KEYBOARD.to_le_bytes(),
+                },
+            ],
+            // The two kinds below name themselves to another RMK device and nothing
+            // else, undiscoverable: only RMK should act on these, and no host should
+            // list them.
+            Self::SplitPeripheral { id } => &[
+                AdStructure::Flags(BR_EDR_NOT_SUPPORTED),
+                AdStructure::ManufacturerSpecificData {
+                    company_identifier: RMK_ADV_COMPANY_ID,
+                    payload: &[SPLIT_PERIPHERAL, id],
+                },
+            ],
+            Self::DongleSeeking => &[
+                AdStructure::Flags(BR_EDR_NOT_SUPPORTED),
+                AdStructure::ManufacturerSpecificData {
+                    company_identifier: RMK_ADV_COMPANY_ID,
+                    payload: &[DONGLE_SEEKING],
+                },
+            ],
+        };
+        AdStructure::encode_slice(adv_data, &mut buf[..])?;
         Ok(Advertisement::ConnectableScannableUndirected {
             adv_data: &buf[..],
             scan_data: &[],

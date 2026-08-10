@@ -14,6 +14,7 @@ rmk = { path = "../../../../rmk", default-features = false, features = [
     "defmt",
     "storage",
     "rynk",
+    "dongle",
     "split",
     "nrf52833_ble",
 ] }

@@ -1,6 +1,6 @@
 use core::fmt::Debug;
 
-#[cfg(all(feature = "_ble", any(feature = "split", feature = "rynk")))]
+#[cfg(all(feature = "_ble", any(feature = "split", feature = "dongle")))]
 use embassy_futures::select::{Either, select};
 use embassy_futures::yield_now;
 #[cfg(feature = "_ble")]
@@ -1679,7 +1679,7 @@ impl<'a> Keyboard<'a> {
                 // seeking, which is how a keyboard moves to a different dongle. A
                 // release within 5s lands in `unprocessed_events` and switches to the
                 // dongle profile as a short press.
-                #[cfg(feature = "rynk")]
+                #[cfg(feature = "dongle")]
                 if id == NUM_BLE_PROFILE as u8 + 5 {
                     use crate::ble::profile::DONGLE_PROFILE;
                     match select(
@@ -1754,7 +1754,7 @@ impl<'a> Keyboard<'a> {
                 // Short press of the dongle key: switch to the dongle slot. Also runs
                 // after a 5s hold, where it is a no-op (the hold already put the
                 // keyboard on the dongle profile or was an in-place authorization).
-                #[cfg(feature = "rynk")]
+                #[cfg(feature = "dongle")]
                 if id == NUM_BLE_PROFILE as u8 + 5 {
                     info!("Switch to dongle profile");
                     BLE_PROFILE_CHANNEL

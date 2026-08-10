@@ -57,7 +57,7 @@ const L2CAP_CHANNELS_MAX: usize = CONNECTIONS_MAX * 4; // Signal + att + smp + h
 /// `SwitchToDongle` key does: with a bond the keyboard reconnects to its
 /// dongle, without one it starts the seeking broadcast. For firmware that has
 /// no dedicated dongle key (custom input devices, test rigs).
-#[cfg(feature = "rynk")]
+#[cfg(feature = "dongle")]
 pub async fn switch_to_dongle_profile() {
     crate::channel::BLE_PROFILE_CHANNEL
         .send(crate::ble::profile::BleProfileAction::Switch(profile::DONGLE_PROFILE))
@@ -275,7 +275,7 @@ where
         loop {
             // On the dongle slot, advertise directed to the bonded dongle or
             // as a seeking broadcast; on the normal profiles, plain HID.
-            #[cfg(feature = "rynk")]
+            #[cfg(feature = "dongle")]
             let adv = if crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE {
                 match profile_manager.active_bond_info() {
                     Some(info) => Adv::Directed(info.info.identity.addr),
@@ -284,7 +284,7 @@ where
             } else {
                 Adv::Host { name: product_name }
             };
-            #[cfg(not(feature = "rynk"))]
+            #[cfg(not(feature = "dongle"))]
             let adv = Adv::Host { name: product_name };
 
             // Wait for 10ms to ensure the USB is checked
@@ -698,7 +698,7 @@ pub(crate) async fn set_conn_params<
     // On the dongle slot the dongle (our own central) owns the link
     // parameters; the Apple-tuned requests below would push supervision back
     // to 10 s and slow down reconnect after a dongle power-cycle.
-    #[cfg(feature = "rynk")]
+    #[cfg(feature = "dongle")]
     if crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE {
         core::future::pending::<()>().await;
     }

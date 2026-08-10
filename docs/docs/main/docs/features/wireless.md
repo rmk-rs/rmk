@@ -54,6 +54,7 @@ Vial user keycodes can be configured to operate wireless profiles. Suppose that 
 - `User(N+2)`: clear current profile bond info
 - `User(N+3)`: switch default output between USB/BLE
 - `User(N+4)`: clear the stored split peer bond — hold the key for 5 seconds (BLE split keyboards only)
+- `User(N+5)`: switch to the dongle bond slot, a slot of its own that profile cycling never reaches. Hold the key for 5 seconds to clear that bond and go looking for another dongle. Keyboards built with the `dongle` feature only.
 
 Vial also provides a way to customize the displayed keycode, see `customKeycodes` in [this example](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/vial.json). If `customKeycodes` are configured, the `User0` ~ `User(N+3)` will be displayed as `BT0`, ..., `Switch Output`.
 

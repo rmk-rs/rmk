@@ -6,7 +6,7 @@ to the host by a USB dongle. Three firmwares, one per board:
 | Crate | Board | Role |
 | --- | --- | --- |
 | [`dongle/`](dongle/) | nRF54LM20A | USB dongle: relays its bonded keyboard (HID + Rynk) |
-| [`central/`](central/) | nRF52833 | Split central: the keyboard itself (`rynk` + `split`) |
+| [`central/`](central/) | nRF52833 | Split central: the keyboard itself (`rynk` + `dongle` + `split`) |
 | [`peripheral/`](peripheral/) | nRF54L15 | Split peripheral: the other half |
 
 Each crate builds independently (`cargo build --release` inside it) and flashes

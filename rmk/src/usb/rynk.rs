@@ -5,12 +5,7 @@ use embassy_usb::{Builder, msos};
 use embedded_io_async::{ErrorType, Read, Write};
 use rmk_types::protocol::rynk::{RYNK_USB_INTERFACE_CLASS, RYNK_USB_INTERFACE_PROTOCOL, RYNK_USB_INTERFACE_SUBCLASS};
 
-/// One framed session over the Rynk byte stream. Served by the keyboard's
-/// `RynkService` and the dongle's `DongleRouter`; a binary attaches one of
-/// them to [`crate::usb::UsbTransport`], so both can coexist in one build.
-pub(crate) trait RynkUsbService {
-    async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W);
-}
+use super::RynkUsbService;
 
 #[cfg(feature = "rynk")]
 impl RynkUsbService for crate::host::rynk::RynkService<'_> {
