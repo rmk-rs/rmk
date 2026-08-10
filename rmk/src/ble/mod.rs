@@ -43,11 +43,23 @@ pub mod passkey;
 pub(crate) mod profile;
 pub(crate) mod sleep;
 
-/// Max number of connections of a keyboard's BLE stack.
+/// Max number of connections of a keyboard's BLE stack; a dongle sizes its
+/// own — see [`crate::dongle::Dongle`].
 const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + 1;
 
 /// Max number of L2CAP channels
 const L2CAP_CHANNELS_MAX: usize = CONNECTIONS_MAX * 4; // Signal + att + smp + hid
+
+/// Switch to the dongle bond slot, exactly as a short press of the
+/// `SwitchToDongle` key does: with a bond the keyboard reconnects to its
+/// dongle, without one it starts the seeking broadcast. For firmware that has
+/// no dedicated dongle key (custom input devices, test rigs).
+#[cfg(feature = "rynk")]
+pub async fn switch_to_dongle_profile() {
+    crate::channel::BLE_PROFILE_CHANNEL
+        .send(crate::ble::profile::BleProfileAction::Switch(profile::DONGLE_PROFILE))
+        .await;
+}
 
 /// BLE transport. Owns the whole BLE stack.
 ///
@@ -258,8 +270,21 @@ where
 
     let connection_loop = async {
         loop {
+            // On the dongle slot, advertise directed to the bonded dongle or
+            // as a seeking broadcast; on the normal profiles, plain HID.
+            #[cfg(feature = "rynk")]
+            let dongle_adv = if crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE {
+                Some(match profile_manager.active_bond_info() {
+                    Some(info) => DongleAdv::Directed(info.info.identity.addr),
+                    None => DongleAdv::Seeking,
+                })
+            } else {
+                None
+            };
+            #[cfg(not(feature = "rynk"))]
+            let dongle_adv = None;
             match select(
-                advertise(product_name, &mut peripheral, server),
+                advertise(product_name, &mut peripheral, server, dongle_adv),
                 profile_manager.update_profile(),
             )
             .await
@@ -642,39 +667,89 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
     Ok(())
 }
 
+/// How the keyboard advertises while on the dongle slot; `None` selects the
+/// normal discoverable HID advertisement. Computed by the connection loop,
+/// which owns the profile manager. Unused (but inhabited) without `rynk`.
+enum DongleAdv {
+    /// Bonded: reconnect via a directed advertisement to the dongle's address.
+    Directed(Address),
+    /// No bond: non-discoverable seeking broadcast a pairing-window dongle matches.
+    Seeking,
+}
+
 /// Create an advertiser to use to connect to a BLE Central, and wait for it to connect.
 async fn advertise<'a, 'b, C: Controller>(
     name: &'a str,
     peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
     server: &'b Server<'_>,
+    dongle: Option<DongleAdv>,
 ) -> Result<GattConnection<'a, 'b, DefaultPacketPool>, BleHostError<C::Error>> {
     // Wait for 10ms to ensure the USB is checked
     embassy_time::Timer::after_millis(10).await;
+    let dongle_link = dongle.is_some();
     let mut advertiser_data = [0; 31];
-    AdStructure::encode_slice(
-        &[
-            AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
-            AdStructure::CompleteServiceUuids16(&[BATTERY.to_le_bytes(), HUMAN_INTERFACE_DEVICE.to_le_bytes()]),
-            AdStructure::CompleteLocalName(name.as_bytes()),
-            AdStructure::Unknown {
-                ty: 0x19, // Appearance
-                data: &KEYBOARD.to_le_bytes(),
-            },
-        ],
-        &mut advertiser_data[..],
-    )?;
-    let advertisement = Advertisement::ConnectableScannableUndirected {
-        adv_data: &advertiser_data[..],
-        scan_data: &[],
+    let advertisement = 'adv: {
+        match dongle {
+            Some(DongleAdv::Directed(peer)) => break 'adv Advertisement::ConnectableNonscannableDirected { peer },
+            #[cfg(feature = "rynk")]
+            Some(DongleAdv::Seeking) => {
+                use rmk_types::ble::{DONGLE_SEEKING_ADV_KIND, RMK_ADV_COMPANY_ID};
+                use rmk_types::protocol::rynk::ProtocolVersion;
+                AdStructure::encode_slice(
+                    &[
+                        // Not discoverable: never shows up in a host's add-device list.
+                        AdStructure::Flags(BR_EDR_NOT_SUPPORTED),
+                        AdStructure::ManufacturerSpecificData {
+                            company_identifier: RMK_ADV_COMPANY_ID,
+                            payload: &[DONGLE_SEEKING_ADV_KIND, ProtocolVersion::CURRENT.major],
+                        },
+                    ],
+                    &mut advertiser_data[..],
+                )?;
+                break 'adv Advertisement::ConnectableScannableUndirected {
+                    adv_data: &advertiser_data[..],
+                    scan_data: &[],
+                };
+            }
+            _ => {}
+        }
+        AdStructure::encode_slice(
+            &[
+                AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
+                AdStructure::CompleteServiceUuids16(&[BATTERY.to_le_bytes(), HUMAN_INTERFACE_DEVICE.to_le_bytes()]),
+                AdStructure::CompleteLocalName(name.as_bytes()),
+                AdStructure::Unknown {
+                    ty: 0x19, // Appearance
+                    data: &KEYBOARD.to_le_bytes(),
+                },
+            ],
+            &mut advertiser_data[..],
+        )?;
+        Advertisement::ConnectableScannableUndirected {
+            adv_data: &advertiser_data[..],
+            scan_data: &[],
+        }
     };
 
-    let advertise_config = AdvertisementParameters {
-        primary_phy: PhyKind::Le2M,
-        secondary_phy: PhyKind::Le2M,
-        tx_power: TxPower::Plus8dBm,
-        interval_min: Duration::from_millis(200),
-        interval_max: Duration::from_millis(200),
-        ..Default::default()
+    // Dongle advertising is legacy 1M (split-peripheral precedent): the
+    // dongle's initiator scans/connects on the primary channel, and a 2M
+    // extended advertisement fails link sync (0x3E) with it.
+    let advertise_config = if dongle_link {
+        AdvertisementParameters {
+            tx_power: TxPower::Plus8dBm,
+            interval_min: Duration::from_millis(50),
+            interval_max: Duration::from_millis(50),
+            ..Default::default()
+        }
+    } else {
+        AdvertisementParameters {
+            primary_phy: PhyKind::Le2M,
+            secondary_phy: PhyKind::Le2M,
+            tx_power: TxPower::Plus8dBm,
+            interval_min: Duration::from_millis(200),
+            interval_max: Duration::from_millis(200),
+            ..Default::default()
+        }
     };
 
     info!("[adv] advertising");
@@ -704,6 +779,14 @@ pub(crate) async fn set_conn_params<
     stack: &Stack<'_, C, P>,
     conn: &GattConnection<'a, 'b, P>,
 ) {
+    // On the dongle slot the dongle (our own central) owns the link
+    // parameters; the Apple-tuned requests below would push supervision back
+    // to 10 s and slow down reconnect after a dongle power-cycle.
+    #[cfg(feature = "rynk")]
+    if crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE {
+        core::future::pending::<()>().await;
+    }
+
     // Wait for 5 seconds before setting connection parameters to avoid connection drop
     embassy_time::Timer::after_secs(5).await;
 
@@ -825,7 +908,7 @@ async fn run_ble_keyboard<
     #[cfg(not(feature = "host"))]
     let host_task = core::future::pending::<()>();
 
-    let inner = embassy_futures::join::join3(writer_task, led_task, host_task);
+    let inner = join3(writer_task, led_task, host_task);
     select(communication_task, inner).await;
 }
 

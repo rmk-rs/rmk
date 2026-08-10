@@ -17,6 +17,16 @@ use crate::state::{current_profile, set_ble_profile};
 pub(crate) static UPDATED_PROFILE: Signal<crate::RawMutex, ProfileInfo> = Signal::new();
 pub(crate) static UPDATED_CCCD_TABLE: Signal<crate::RawMutex, heapless::Vec<u8, CCCD_TABLE_SIZE>> = Signal::new();
 
+/// The dedicated dongle bond slot: the slot number after the normal profiles,
+/// so pairing a dongle never touches a host bond. Selected only via the
+/// `SwitchToDongle` key, never by profile cycling.
+#[cfg(feature = "rynk")]
+pub(crate) const DONGLE_PROFILE: u8 = NUM_BLE_PROFILE as u8;
+
+/// Bond slots kept by the profile manager: the host profiles, plus the
+/// dedicated dongle slot on `rynk` builds.
+pub(crate) const BOND_SLOTS: usize = NUM_BLE_PROFILE + cfg!(feature = "rynk") as usize;
+
 /// BLE profile info
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -95,7 +105,7 @@ where
     's: 'b,
 {
     /// List of bonded devices
-    bonded_devices: heapless::Vec<ProfileInfo, NUM_BLE_PROFILE>,
+    bonded_devices: heapless::Vec<ProfileInfo, BOND_SLOTS>,
     /// BLE stack
     stack: &'b Stack<'s, C, P>,
 }
@@ -119,7 +129,7 @@ where
         use crate::storage::{read_active_ble_profile, read_bond_info};
 
         self.bonded_devices.clear();
-        for slot_num in 0..NUM_BLE_PROFILE {
+        for slot_num in 0..BOND_SLOTS {
             if let Some(info) = read_bond_info(slot_num as u8).await
                 && !info.removed
                 && let Err(e) = self.bonded_devices.push(info)
@@ -151,7 +161,7 @@ where
 
     /// Update bonding information in the stack according to the current active profile
     pub(crate) fn update_stack_bonds(&self) {
-        let identities: heapless::Vec<Identity, NUM_BLE_PROFILE> = self
+        let identities: heapless::Vec<Identity, BOND_SLOTS> = self
             .stack
             .with_bond_information(|bonds| bonds.iter().map(|b| b.identity).collect());
         for identity in identities {

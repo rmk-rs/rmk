@@ -135,6 +135,9 @@ host_lock = []
 
 ## Enable Rynk protocol support (RMK-native protocol, mutually exclusive with vial).
 ## Includes `host_lock` so the lock gate always has matrix-state tracking.
+## On BLE builds this also carries the keyboard side of the dongle: the
+## dedicated dongle bond slot, the `SwitchToDongle` key, and dongle-seeking
+## advertising.
 rynk = ["host", "host_lock", "rmk-types/rynk"]
 
 ## Enable the storage. The storage is optional to save memory
