@@ -140,6 +140,22 @@ host_lock = []
 ## advertising.
 rynk = ["host", "host_lock", "rmk-types/rynk"]
 
+## Dongle (relay device) firmware: compiles `rmk::dongle`. Orthogonal to
+## `rynk`/`vial` — one crate can build keyboard and dongle binaries side by
+## side; a binary becomes a dongle by attaching `DongleRouter` via
+## `UsbTransport::with_dongle_router`. Requires a BLE chip feature and USB.
+dongle = [
+    "storage",
+    # The frame types and buffer size come from `rynk`; `dongle` only marks the
+    # build so the pairing-window constant is generated.
+    "rmk-types/rynk",
+    "rmk-types/dongle",
+    "trouble-host?/connection-event-queue-size-2",
+    "trouble-host?/l2cap-rx-queue-size-16",
+    "trouble-host?/l2cap-tx-queue-size-16",
+    "trouble-host?/gatt-client-notification-queue-size-8",
+]
+
 ## Enable the storage. The storage is optional to save memory
 storage = [
     "dep:embedded-storage",

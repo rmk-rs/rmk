@@ -2,14 +2,14 @@ use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use embassy_futures::join::join3;
 use embassy_futures::select::{Either, Either3, select, select3};
-use embassy_time::{Duration, Timer, with_timeout};
+use embassy_sync::signal::Signal;
+use embassy_time::{Duration, Timer};
 use rmk_types::ble::BleState;
 use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
-use trouble_host::prelude::appearance::human_interface_device::KEYBOARD;
-use trouble_host::prelude::service::{BATTERY, HUMAN_INTERFACE_DEVICE};
 use trouble_host::prelude::*;
 
+use crate::ble::adv::{Adv, advertise};
 use crate::ble::battery_service::BleBatteryServer;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
@@ -31,6 +31,7 @@ use crate::split::PeripheralMatrixConfig;
 use crate::split::ble::central::run_ble_peripheral_manager;
 use crate::state::set_ble_state;
 
+pub(crate) mod adv;
 pub(crate) mod battery_service;
 pub(crate) mod ble_server;
 pub(crate) mod device_info;
@@ -41,6 +42,8 @@ pub(crate) mod led;
 pub(crate) mod nrf;
 pub mod passkey;
 pub(crate) mod profile;
+#[cfg(any(feature = "split", feature = "dongle"))]
+pub(crate) mod scan;
 pub(crate) mod sleep;
 
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
@@ -273,23 +276,33 @@ where
             // On the dongle slot, advertise directed to the bonded dongle or
             // as a seeking broadcast; on the normal profiles, plain HID.
             #[cfg(feature = "rynk")]
-            let dongle_adv = if crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE {
-                Some(match profile_manager.active_bond_info() {
-                    Some(info) => DongleAdv::Directed(info.info.identity.addr),
-                    None => DongleAdv::Seeking,
-                })
+            let adv = if crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE {
+                match profile_manager.active_bond_info() {
+                    Some(info) => Adv::Directed(info.info.identity.addr),
+                    None => Adv::DongleSeeking,
+                }
             } else {
-                None
+                Adv::Host { name: product_name }
             };
             #[cfg(not(feature = "rynk"))]
-            let dongle_adv = None;
+            let adv = Adv::Host { name: product_name };
+
+            // Wait for 10ms to ensure the USB is checked
+            Timer::after_millis(10).await;
+            info!("[adv] advertising");
+            set_ble_state(BleState::Advertising);
+
             match select(
-                advertise(product_name, &mut peripheral, server, dongle_adv),
+                advertise(&mut peripheral, &server.server, adv, Duration::from_secs(300)),
                 profile_manager.update_profile(),
             )
             .await
             {
                 Either::First(Ok(conn)) => {
+                    info!("[adv] connection established");
+                    if let Err(e) = conn.raw().set_bondable(true) {
+                        error!("Set bondable error: {:?}", e);
+                    }
                     // Do NOT emit BleState::Connected here. gatt_events_task emits
                     // Connected when it sees GattConnectionEvent::Encrypted.
                     let active_bond_info = profile_manager.active_bond_info();
@@ -298,12 +311,7 @@ where
                         && !bond.info.identity.match_identity(&conn.raw().peer_identity())
                     {
                         warn!("[ble] connected peer doesn't match the active profile, disconnecting");
-                        conn.raw().disconnect();
-                        loop {
-                            if let GattConnectionEvent::Disconnected { .. } = conn.next().await {
-                                break;
-                            }
-                        }
+                        disconnect(&conn).await;
                         continue;
                     }
                     if let Either::Second(_) = select(
@@ -321,14 +329,7 @@ where
                     .await
                     {
                         // When the profile changes, manually disconnect from the current host
-                        if conn.raw().is_connected() {
-                            conn.raw().disconnect();
-                            loop {
-                                if let GattConnectionEvent::Disconnected { .. } = conn.next().await {
-                                    break;
-                                }
-                            }
-                        }
+                        disconnect(&conn).await;
                     }
                 }
                 Either::First(Err(BleHostError::BleHost(Error::Timeout))) => {
@@ -365,12 +366,7 @@ where
     };
 
     #[cfg(feature = "split")]
-    let event_handler = {
-        // Latched before the runner starts so peripheral scanning can proceed
-        // as soon as `join3` polls it.
-        crate::split::ble::central::STACK_STARTED.signal(true);
-        crate::split::ble::central::ScanHandler {}
-    };
+    let event_handler = crate::split::ble::central::ScanHandler;
     #[cfg(not(feature = "split"))]
     let event_handler = NoopHandler;
 
@@ -392,15 +388,29 @@ pub(crate) struct NoopHandler;
 
 impl EventHandler for NoopHandler {}
 
+/// Latched by [`ble_task`] on its first poll, so the roles that drive the same
+/// stack know the runner is about to pump it.
+static STACK_STARTED: Signal<crate::RawMutex, ()> = Signal::new();
+
+/// Wait until [`ble_task`] is up, plus a grace period. Polled because the
+/// one-shot latch has multiple waiters.
+pub(crate) async fn wait_for_stack_started() {
+    while !STACK_STARTED.signaled() {
+        Timer::after_millis(500).await;
+    }
+    Timer::after_millis(500).await;
+}
+
 /// This is a background task that is required to run forever alongside any other BLE tasks.
 pub(crate) async fn ble_task<C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool, E: EventHandler>(
     mut runner: Runner<'_, C, P>,
     handler: &E,
 ) {
+    STACK_STARTED.signal(());
     loop {
         if let Err(e) = runner.run_with_handler(handler).await {
             error!("[ble_task] runner error: {:?}", e);
-            embassy_time::Timer::after_millis(100).await;
+            Timer::after_millis(100).await;
         }
     }
 }
@@ -667,107 +677,13 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
     Ok(())
 }
 
-/// How the keyboard advertises while on the dongle slot; `None` selects the
-/// normal discoverable HID advertisement. Computed by the connection loop,
-/// which owns the profile manager. Unused (but inhabited) without `rynk`.
-enum DongleAdv {
-    /// Bonded: reconnect via a directed advertisement to the dongle's address.
-    Directed(Address),
-    /// No bond: non-discoverable seeking broadcast a pairing-window dongle matches.
-    Seeking,
-}
-
-/// Create an advertiser to use to connect to a BLE Central, and wait for it to connect.
-async fn advertise<'a, 'b, C: Controller>(
-    name: &'a str,
-    peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
-    server: &'b Server<'_>,
-    dongle: Option<DongleAdv>,
-) -> Result<GattConnection<'a, 'b, DefaultPacketPool>, BleHostError<C::Error>> {
-    // Wait for 10ms to ensure the USB is checked
-    embassy_time::Timer::after_millis(10).await;
-    let dongle_link = dongle.is_some();
-    let mut advertiser_data = [0; 31];
-    let advertisement = 'adv: {
-        match dongle {
-            Some(DongleAdv::Directed(peer)) => break 'adv Advertisement::ConnectableNonscannableDirected { peer },
-            #[cfg(feature = "rynk")]
-            Some(DongleAdv::Seeking) => {
-                use rmk_types::ble::{DONGLE_SEEKING_ADV_KIND, RMK_ADV_COMPANY_ID};
-                use rmk_types::protocol::rynk::ProtocolVersion;
-                AdStructure::encode_slice(
-                    &[
-                        // Not discoverable: never shows up in a host's add-device list.
-                        AdStructure::Flags(BR_EDR_NOT_SUPPORTED),
-                        AdStructure::ManufacturerSpecificData {
-                            company_identifier: RMK_ADV_COMPANY_ID,
-                            payload: &[DONGLE_SEEKING_ADV_KIND, ProtocolVersion::CURRENT.major],
-                        },
-                    ],
-                    &mut advertiser_data[..],
-                )?;
-                break 'adv Advertisement::ConnectableScannableUndirected {
-                    adv_data: &advertiser_data[..],
-                    scan_data: &[],
-                };
-            }
-            _ => {}
-        }
-        AdStructure::encode_slice(
-            &[
-                AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
-                AdStructure::CompleteServiceUuids16(&[BATTERY.to_le_bytes(), HUMAN_INTERFACE_DEVICE.to_le_bytes()]),
-                AdStructure::CompleteLocalName(name.as_bytes()),
-                AdStructure::Unknown {
-                    ty: 0x19, // Appearance
-                    data: &KEYBOARD.to_le_bytes(),
-                },
-            ],
-            &mut advertiser_data[..],
-        )?;
-        Advertisement::ConnectableScannableUndirected {
-            adv_data: &advertiser_data[..],
-            scan_data: &[],
-        }
-    };
-
-    // Dongle advertising is legacy 1M (split-peripheral precedent): the
-    // dongle's initiator scans/connects on the primary channel, and a 2M
-    // extended advertisement fails link sync (0x3E) with it.
-    let advertise_config = if dongle_link {
-        AdvertisementParameters {
-            tx_power: TxPower::Plus8dBm,
-            interval_min: Duration::from_millis(50),
-            interval_max: Duration::from_millis(50),
-            ..Default::default()
-        }
-    } else {
-        AdvertisementParameters {
-            primary_phy: PhyKind::Le2M,
-            secondary_phy: PhyKind::Le2M,
-            tx_power: TxPower::Plus8dBm,
-            interval_min: Duration::from_millis(200),
-            interval_max: Duration::from_millis(200),
-            ..Default::default()
-        }
-    };
-
-    info!("[adv] advertising");
-    set_ble_state(BleState::Advertising);
-    let advertiser = peripheral.advertise(&advertise_config, advertisement).await?;
-
-    // Timeout for advertising is 300s
-    match with_timeout(Duration::from_secs(300), advertiser.accept()).await {
-        Ok(conn_res) => {
-            let conn = conn_res?.with_attribute_server(server)?;
-            info!("[adv] connection established");
-            if let Err(e) = conn.raw().set_bondable(true) {
-                error!("Set bondable error: {:?}", e);
-            };
-            Ok(conn)
-        }
-        Err(_) => Err(BleHostError::BleHost(Error::Timeout)),
+/// Drop the link and wait for it to actually go down.
+async fn disconnect(conn: &GattConnection<'_, '_, DefaultPacketPool>) {
+    if !conn.raw().is_connected() {
+        return;
     }
+    conn.raw().disconnect();
+    while !matches!(conn.next().await, GattConnectionEvent::Disconnected { .. }) {}
 }
 
 pub(crate) async fn set_conn_params<
@@ -787,41 +703,26 @@ pub(crate) async fn set_conn_params<
         core::future::pending::<()>().await;
     }
 
-    // Wait for 5 seconds before setting connection parameters to avoid connection drop
-    embassy_time::Timer::after_secs(5).await;
-
-    // For macOS/iOS(aka Apple devices), both interval should be set to 15ms
+    // Apple rejects 7.5ms outright, so ask for the 15ms its guidelines allow
+    // first and only then for 7.5ms: platforms that take it end up at the best
+    // interval, and Apple keeps the 15ms it already granted.
     // Reference: https://developer.apple.com/accessories/Accessory-Design-Guidelines.pdf
-    update_conn_params(
-        stack,
-        conn.raw(),
-        &RequestedConnParams {
-            min_connection_interval: Duration::from_millis(15),
-            max_connection_interval: Duration::from_millis(15),
-            max_latency: 30,
-            min_event_length: Duration::from_secs(0),
-            max_event_length: Duration::from_secs(0),
-            supervision_timeout: Duration::from_secs(10),
-        },
-    )
-    .await;
-
-    embassy_time::Timer::after_secs(5).await;
-
-    // Setting the conn param the second time ensures that we have best performance on all platforms
-    update_conn_params(
-        stack,
-        conn.raw(),
-        &RequestedConnParams {
-            min_connection_interval: Duration::from_micros(7500),
-            max_connection_interval: Duration::from_micros(7500),
-            max_latency: 30,
-            min_event_length: Duration::from_secs(0),
-            max_event_length: Duration::from_secs(0),
-            supervision_timeout: Duration::from_secs(10),
-        },
-    )
-    .await;
+    for interval in [Duration::from_millis(15), Duration::from_micros(7500)] {
+        // Wait 5 seconds before each request to avoid connection drop
+        embassy_time::Timer::after_secs(5).await;
+        update_conn_params(
+            stack,
+            conn.raw(),
+            &RequestedConnParams {
+                min_connection_interval: interval,
+                max_connection_interval: interval,
+                max_latency: 30,
+                supervision_timeout: Duration::from_secs(10),
+                ..Default::default()
+            },
+        )
+        .await;
+    }
 
     // Wait forever. This is because we want the conn params setting can be interrupted when the connection is lost.
     // So this task shouldn't quit after setting the conn params.

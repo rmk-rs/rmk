@@ -52,6 +52,10 @@ RMK_FEATURESETS=(
     "rynk,_ble,split,storage,async_matrix"
     "rynk,storage"
     "rynk"
+    "rynk,_ble,storage"
+    "dongle,_ble,storage"
+    "dongle,rynk,split,_ble,storage"
+    "dongle,vial,_ble,storage"
 )
 
 # Behavioral coverage only; RMK_FEATURESETS remains the compile/clippy matrix.
@@ -59,6 +63,7 @@ RMK_TEST_FEATURESETS=(
     ""
     "vial,host_lock,_no_usb,steno,passkey_entry"
     "rynk,_ble,split,async_matrix,storage"
+    "dongle,_ble,storage"
 )
 
 # Examples auto-discovery skiplist. Reasons:
@@ -78,6 +83,14 @@ EXAMPLE_SKIPLIST=(
     "examples/use_rust/sf32lb52x_ble"
 )
 
+# Multi-target examples (several boards in one directory) sit one level
+# deeper than the discovery glob; list their crates explicitly.
+EXTRA_EXAMPLE_MANIFESTS=(
+    "examples/use_rust/nrf_dongle/dongle/Cargo.toml"
+    "examples/use_rust/nrf_dongle/central/Cargo.toml"
+    "examples/use_rust/nrf_dongle/peripheral/Cargo.toml"
+)
+
 # Echoes Cargo.toml paths for every buildable example, one per line.
 # A buildable example is a direct child of examples/use_{rust,config}/ that
 # has both a src/ dir and a Cargo.toml (filters out placeholders like fix/),
@@ -95,6 +108,10 @@ list_example_manifests() {
             fi
         done
         (( skip == 0 )) && printf '%s\n' "${dir}Cargo.toml"
+    done
+    local extra
+    for extra in "${EXTRA_EXAMPLE_MANIFESTS[@]}"; do
+        [[ -f "$extra" ]] && printf '%s\n' "$extra"
     done
 }
 

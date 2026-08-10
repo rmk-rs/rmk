@@ -5,7 +5,26 @@ use embassy_usb::{Builder, msos};
 use embedded_io_async::{ErrorType, Read, Write};
 use rmk_types::protocol::rynk::{RYNK_USB_INTERFACE_CLASS, RYNK_USB_INTERFACE_PROTOCOL, RYNK_USB_INTERFACE_SUBCLASS};
 
-use crate::host::rynk::RynkService;
+/// One framed session over the Rynk byte stream. Served by the keyboard's
+/// `RynkService` and the dongle's `DongleRouter`; a binary attaches one of
+/// them to [`crate::usb::UsbTransport`], so both can coexist in one build.
+pub(crate) trait RynkUsbService {
+    async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W);
+}
+
+#[cfg(feature = "rynk")]
+impl RynkUsbService for crate::host::rynk::RynkService<'_> {
+    async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
+        self.run_session(rx, tx).await
+    }
+}
+
+#[cfg(feature = "dongle")]
+impl RynkUsbService for crate::dongle::DongleRouter {
+    async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
+        self.run_session(rx, tx).await
+    }
+}
 
 #[cfg(feature = "_usb_high_speed")]
 const RYNK_USB_MAX_PACKET_SIZE: usize = 512;
@@ -65,17 +84,17 @@ pub fn build_host_usb<D: Driver<'static>>(builder: &mut Builder<'static, D>) -> 
 }
 
 /// Rynk session loop
-pub async fn run_host_usb<D: Driver<'static>>(
+pub(crate) async fn run_host_usb<D: Driver<'static>, S: RynkUsbService>(
     receiver: &mut HostUsbReader<D>,
     sender: &mut HostUsbWriter<D>,
-    service: &RynkService<'_>,
+    service: &S,
 ) -> ! {
     loop {
         receiver.ep.wait_enabled().await;
         // A bus reset voids any half-consumed packet from the last session.
         receiver.pos = 0;
         receiver.len = 0;
-        service.run_session(receiver, sender).await;
+        service.serve(&mut *receiver, &mut *sender).await;
     }
 }
 

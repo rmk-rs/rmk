@@ -84,11 +84,3 @@ Topics are best-effort pushes; the `Get*` endpoints above mirror their payloads 
 | `0x8004` | `SleepState`          | `bool`             |         |       |
 | `0x8005` | `LedIndicatorChange`  | `LedIndicator`     |         |       |
 | `0x8006` | `BatteryStatusChange` | `BatteryStatus`    | `_ble`  |       |
-
-## Compatibility
-
-- `GetVersion` (`0x0001`) and its `Result<ProtocolVersion, RynkError>` reply are frozen across all versions.
-- Within a major version, adding a CMD or topic is a `minor` bump: old firmware answers `UnknownCmd`, old hosts ignore unknown topics.
-- Appending a `RynkError` variant is also a `minor` bump: an old host fails to decode the new tag and must surface it as a generic failure.
-- Reshaping an existing request/response — including appending a field — is a `major` bump.
-- `0.x` is pre-release and not covered by the rules above: while the protocol is unpublished it stays at `0.1`, whole command segments included.

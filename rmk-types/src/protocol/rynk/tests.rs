@@ -1157,13 +1157,7 @@ mod protocol_reference {
              {endpoints}\n\
              ## Topics\n\n\
              Topics are best-effort pushes; the `Get*` endpoints above mirror their payloads so a host can recover a missed push.\n\n\
-             {topics}\n\
-             ## Compatibility\n\n\
-             - `GetVersion` (`0x0001`) and its `Result<ProtocolVersion, RynkError>` reply are frozen across all versions.\n\
-             - Within a major version, adding a CMD or topic is a `minor` bump: old firmware answers `UnknownCmd`, old hosts ignore unknown topics.\n\
-             - Appending a `RynkError` variant is also a `minor` bump: an old host fails to decode the new tag and must surface it as a generic failure.\n\
-             - Reshaping an existing request/response — including appending a field — is a `major` bump.\n\
-             - `0.x` is pre-release and not covered by the rules above: while the protocol is unpublished it stays at `0.1`, whole command segments included.\n",
+             {topics}",
             header = "<!-- GENERATED — do not edit. Rendered from the `endpoints!`/`topics!` tables in\n     rmk-types/src/protocol/rynk/command.rs. Regenerate with:\n     UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features rynk protocol_reference -->",
             major = v.major,
             minor = v.minor,

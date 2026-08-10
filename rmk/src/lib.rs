@@ -27,6 +27,12 @@ compile_error!("features `rynk` and `vial` are mutually exclusive");
 #[cfg(all(feature = "host", not(any(feature = "rynk", feature = "vial"))))]
 compile_error!("feature `host` requires enabling either `rynk` or `vial`");
 
+#[cfg(all(feature = "dongle", not(feature = "_ble")))]
+compile_error!("feature `dongle` requires a BLE chip feature (e.g. `nrf52840_ble`)");
+
+#[cfg(all(feature = "dongle", feature = "_no_usb"))]
+compile_error!("feature `dongle` requires a chip with USB");
+
 #[cfg(all(feature = "usb_log", feature = "_usb_high_speed"))]
 compile_error!(
     "`usb_log` is not supported on high-speed USB chips yet: embassy-usb-logger \
@@ -89,6 +95,8 @@ pub mod debounce;
 pub mod dfu;
 #[cfg(feature = "display")]
 pub mod display;
+#[cfg(feature = "dongle")]
+pub mod dongle;
 pub mod driver;
 pub mod event;
 pub mod helper_macro;

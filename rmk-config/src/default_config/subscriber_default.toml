@@ -82,6 +82,15 @@ events = [
     { name = "led_indicator" },
 ]
 
+# --- Dongle firmware internal subscribers ---
+
+[[subscriber]]
+features = ["dongle"]
+events = [
+    # dongle/link.rs: LedIndicatorEvent::subscriber() on the one keyboard link.
+    { name = "led_indicator" },
+]
+
 # --- Split-gated internal subscribers ---
 
 [[subscriber]]

@@ -23,17 +23,11 @@ use crate::hid::{
 use crate::light::UsbLedReader;
 use crate::state::{current_usb_state, set_usb_state};
 
-#[cfg(feature = "rynk")]
+// The Rynk vendor interface serves the keyboard's Rynk session and the dongle's router.
+#[cfg(any(feature = "rynk", feature = "dongle"))]
 pub(crate) mod rynk;
 #[cfg(feature = "vial")]
 pub(crate) mod vial;
-
-// Both submodules export the same host-transport names; `rynk` and `vial`
-// are mutually exclusive, so exactly one alias set is compiled.
-#[cfg(feature = "rynk")]
-use self::rynk::{HostUsbReader, HostUsbWriter, build_host_usb, run_host_usb};
-#[cfg(feature = "vial")]
-use self::vial::{HostUsbReader, HostUsbWriter, build_host_usb, run_host_usb};
 
 pub(crate) static USB_REMOTE_WAKEUP: Signal<RawMutex, ()> = Signal::new();
 
@@ -162,7 +156,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
     usb_config.product = Some(keyboard_config.product_name);
     // Informational tag (visible in `lsusb` & co); host discovery keys on the
     // Rynk vendor interface triple, not the serial.
-    #[cfg(feature = "rynk")]
+    #[cfg(any(feature = "rynk", feature = "dongle"))]
     let serial_number = {
         static SERIAL: StaticCell<heapless::String<64>> = StaticCell::new();
         let s = SERIAL.init(heapless::String::new());
@@ -170,7 +164,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
         let _ = s.push_str(keyboard_config.serial_number);
         s.as_str()
     };
-    #[cfg(not(feature = "rynk"))]
+    #[cfg(not(any(feature = "rynk", feature = "dongle")))]
     let serial_number = keyboard_config.serial_number;
     usb_config.serial_number = Some(serial_number);
     usb_config.max_power = 450;
@@ -184,9 +178,21 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
     usb_config.composite_with_iads = true;
 
     // Extra interfaces (usb_log, steno, dfu, rynk) overflow the 128-byte config descriptor buffer.
-    #[cfg(any(feature = "usb_log", feature = "steno", feature = "dfu", feature = "rynk"))]
+    #[cfg(any(
+        feature = "usb_log",
+        feature = "steno",
+        feature = "dfu",
+        feature = "rynk",
+        feature = "dongle"
+    ))]
     const USB_BUF_SIZE: usize = 256;
-    #[cfg(not(any(feature = "usb_log", feature = "steno", feature = "dfu", feature = "rynk")))]
+    #[cfg(not(any(
+        feature = "usb_log",
+        feature = "steno",
+        feature = "dfu",
+        feature = "rynk",
+        feature = "dongle"
+    )))]
     const USB_BUF_SIZE: usize = 128;
 
     // Control buffer must be large enough for the largest DFU transfer block.
@@ -238,15 +244,22 @@ pub struct UsbTransport<'a, D: Driver<'static>> {
     /// Taken by `run`: the logger future consumes the CDC class.
     #[cfg(feature = "usb_log")]
     logger: Option<embassy_usb::class::cdc_acm::CdcAcmClass<'static, D>>,
-    /// Host-protocol transport halves: CDC-ACM under `rynk`, 32-byte HID
-    /// reports under `vial`.
-    #[cfg(feature = "host")]
-    host_reader: HostUsbReader<D>,
-    #[cfg(feature = "host")]
-    host_writer: HostUsbWriter<D>,
+    /// Rynk vendor-class bulk transport (WinUSB), shared by the keyboard's Rynk
+    /// session and the dongle's router.
+    #[cfg(any(feature = "rynk", feature = "dongle"))]
+    rynk_reader: rynk::HostUsbReader<D>,
+    #[cfg(any(feature = "rynk", feature = "dongle"))]
+    rynk_writer: rynk::HostUsbWriter<D>,
+    /// Via 32-byte HID report transport.
+    #[cfg(feature = "vial")]
+    via_reader: vial::HostUsbReader<D>,
+    #[cfg(feature = "vial")]
+    via_writer: vial::HostUsbWriter<D>,
     #[cfg(feature = "host")]
     host_service: Option<&'a crate::host::HostService<'a>>,
-    #[cfg(not(feature = "host"))]
+    #[cfg(feature = "dongle")]
+    dongle_router: Option<&'a crate::dongle::DongleRouter>,
+    #[cfg(not(any(feature = "host", feature = "dongle")))]
     _phantom: core::marker::PhantomData<&'a ()>,
 }
 
@@ -294,8 +307,10 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
             }
         }
 
-        #[cfg(any(feature = "rynk", feature = "vial"))]
-        let (host_reader, host_writer) = build_host_usb(&mut builder);
+        #[cfg(any(feature = "rynk", feature = "dongle"))]
+        let (rynk_reader, rynk_writer) = rynk::build_host_usb(&mut builder);
+        #[cfg(feature = "vial")]
+        let (via_reader, via_writer) = vial::build_host_usb(&mut builder);
 
         let (keyboard_reader, keyboard_writer) = keyboard_rw.split();
         let device = builder.build();
@@ -309,13 +324,19 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
             steno_writer,
             #[cfg(feature = "usb_log")]
             logger,
-            #[cfg(any(feature = "rynk", feature = "vial"))]
-            host_reader,
-            #[cfg(any(feature = "rynk", feature = "vial"))]
-            host_writer,
+            #[cfg(any(feature = "rynk", feature = "dongle"))]
+            rynk_reader,
+            #[cfg(any(feature = "rynk", feature = "dongle"))]
+            rynk_writer,
+            #[cfg(feature = "vial")]
+            via_reader,
+            #[cfg(feature = "vial")]
+            via_writer,
             #[cfg(feature = "host")]
             host_service: None,
-            #[cfg(not(feature = "host"))]
+            #[cfg(feature = "dongle")]
+            dongle_router: None,
+            #[cfg(not(any(feature = "host", feature = "dongle")))]
             _phantom: core::marker::PhantomData,
         }
     }
@@ -324,6 +345,13 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
     #[cfg(feature = "host")]
     pub fn with_host_service(mut self, service: &'a crate::host::HostService<'a>) -> Self {
         self.host_service = Some(service);
+        self
+    }
+
+    /// Attach the dongle's router — this is what makes a binary a dongle.
+    #[cfg(feature = "dongle")]
+    pub fn with_dongle_router(mut self, router: &'a crate::dongle::DongleRouter) -> Self {
+        self.dongle_router = Some(router);
         self
     }
 }
@@ -339,13 +367,19 @@ impl<D: Driver<'static>> Runnable for UsbTransport<'_, D> {
             steno_writer,
             #[cfg(feature = "usb_log")]
             logger,
-            #[cfg(any(feature = "rynk", feature = "vial"))]
-            host_reader,
-            #[cfg(any(feature = "rynk", feature = "vial"))]
-            host_writer,
+            #[cfg(any(feature = "rynk", feature = "dongle"))]
+            rynk_reader,
+            #[cfg(any(feature = "rynk", feature = "dongle"))]
+            rynk_writer,
+            #[cfg(feature = "vial")]
+            via_reader,
+            #[cfg(feature = "vial")]
+            via_writer,
             #[cfg(feature = "host")]
             host_service,
-            #[cfg(not(feature = "host"))]
+            #[cfg(feature = "dongle")]
+            dongle_router,
+            #[cfg(not(any(feature = "host", feature = "dongle")))]
                 _phantom: _,
         } = self;
 
@@ -376,16 +410,35 @@ impl<D: Driver<'static>> Runnable for UsbTransport<'_, D> {
         let led_task = run_led_reader(&mut led_reader, ConnectionType::Usb);
 
         let host_and_extras = async {
-            #[cfg(any(feature = "rynk", feature = "vial"))]
-            let host_task = async {
+            // Rynk session: a dongle binary attaches the router, a keyboard
+            // binary its Rynk service; never both at once.
+            #[cfg(any(feature = "rynk", feature = "dongle"))]
+            let rynk_task = async {
+                #[cfg(feature = "dongle")]
+                if let Some(router) = *dongle_router {
+                    rynk::run_host_usb(&mut *rynk_reader, &mut *rynk_writer, router).await
+                }
+                #[cfg(feature = "rynk")]
                 if let Some(service) = *host_service {
-                    run_host_usb(host_reader, host_writer, service).await
+                    rynk::run_host_usb(&mut *rynk_reader, &mut *rynk_writer, service).await
+                }
+                core::future::pending::<()>().await
+            };
+            #[cfg(not(any(feature = "rynk", feature = "dongle")))]
+            let rynk_task = core::future::pending::<()>();
+
+            #[cfg(feature = "vial")]
+            let via_task = async {
+                if let Some(service) = *host_service {
+                    vial::run_host_usb(via_reader, via_writer, service).await
                 } else {
                     core::future::pending::<()>().await
                 }
             };
-            #[cfg(not(feature = "host"))]
-            let host_task = core::future::pending::<()>();
+            #[cfg(not(feature = "vial"))]
+            let via_task = core::future::pending::<()>();
+
+            let host_task = embassy_futures::join::join(rynk_task, via_task);
 
             #[cfg(feature = "usb_log")]
             let logger_fut = {

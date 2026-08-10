@@ -49,10 +49,10 @@ There are a bunch of things to do with RMK in the near future. I plan to ship 1.
 - [x] Stabilizing BLE feature gate/API
 - [x] Support more MCUs, such as cyw(used in rp2040w/rp2350w)
 - [ ] Deep-sleep mode
-- [x] Better support for dongle
+- [x] Better support for split dongle (dongle as the split central)
 - [ ] Nordic Uart HCI support
 - [ ] Send report via Uart/Usart
-- [ ] Switch between dongle mode and BLE mode
+- [ ] 🔵 Tri-mode dongle: switch between USB, BLE and dongle mode
 
 #### User experience
 

@@ -146,6 +146,15 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         lines.push(format!("pub const LAYOUT_BLOB: &[u8] = b\"{}\";", blob.escape_ascii()));
     }
 
+    // How long one dongle pairing scan lasts. It bonds exactly one keyboard, so
+    // there is nothing else about the relay to size.
+    if env::var("CARGO_FEATURE_DONGLE").is_ok() {
+        lines.push(format!(
+            "pub const DONGLE_PAIRING_WINDOW_SECS: u32 = {};",
+            bc.dongle_pairing_window_secs
+        ));
+    }
+
     // Event channels
     for ev in &bc.events {
         let upper = ev.name.to_uppercase();

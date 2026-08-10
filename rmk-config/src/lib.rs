@@ -309,6 +309,10 @@ pub(crate) struct RmkConstantsConfig {
     /// Default 488 fills exactly two BLE notifications.
     #[serde_inline_default(488)]
     pub rynk_buffer_size: usize,
+    /// Length of one dongle pairing scan in seconds; a dongle repeats it
+    /// whenever it has no keyboard to serve (dongle firmware only)
+    #[serde_inline_default(30)]
+    pub dongle_pairing_window_secs: u32,
 }
 
 fn check_combo_max_num<'de, D>(deserializer: D) -> Result<usize, D::Error>
@@ -400,6 +404,7 @@ impl Default for RmkConstantsConfig {
             protocol_macro_chunk_size: 64,
             auto_mouse_layer_max_num: None,
             rynk_buffer_size: 488,
+            dongle_pairing_window_secs: 30,
         }
     }
 }

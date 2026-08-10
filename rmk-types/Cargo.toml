@@ -48,6 +48,7 @@ host = ["rynk", "_ble", "split", "steno", "serde/alloc"]
 wasm = ["dep:tsify", "dep:wasm-bindgen", "dep:serde-wasm-bindgen", "host"]
 # Build-time only features: forwarded from rmk to control constant generation in build.rs.
 _ble = []
+dongle = []
 split = []
 display = []
 passkey_entry = []

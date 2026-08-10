@@ -51,6 +51,7 @@ pub struct BuildConstants {
     pub auto_mouse_layer_max_num: usize,
     /// Rynk RX/TX buffer size (bytes).
     pub rynk_buffer_size: usize,
+    pub dongle_pairing_window_secs: u32,
     pub events: Vec<EventChannel>,
     pub passkey: Option<Passkey>,
 }
@@ -199,6 +200,7 @@ impl crate::KeyboardTomlConfig {
             protocol_macro_chunk_size: rmk.protocol_macro_chunk_size,
             auto_mouse_layer_max_num,
             rynk_buffer_size: rmk.rynk_buffer_size,
+            dongle_pairing_window_secs: rmk.dongle_pairing_window_secs,
             events,
             passkey,
         })

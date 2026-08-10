@@ -1,13 +1,14 @@
 use bt_hci::cmd::le::LeSetPhy;
 use bt_hci::controller::ControllerCmdAsync;
 use embassy_futures::join::join;
-use embassy_time::{Duration, Timer, with_timeout};
+use embassy_time::{Duration, Timer};
 use rmk_types::connection::ConnectionStatus;
 use trouble_host::prelude::*;
 
 #[cfg(feature = "storage")]
 use super::PeerAddress;
 use super::{GattSplitMessage, SplitMessage};
+use crate::ble::adv::{Adv, advertise};
 use crate::event::{CentralConnectedEvent, KeyboardEvent, SubscribableEvent, publish_event};
 use crate::split::driver::{SplitDriverError, SplitReader, SplitWriter};
 use crate::split::peripheral::SplitPeripheral;
@@ -192,76 +193,21 @@ pub async fn initialize_nrf_ble_split_peripheral_and_run<'b, 's: 'b, C: Controll
     join(crate::ble::ble_task(runner, &crate::ble::NoopHandler), peri_task).await;
 }
 
-/// Create an advertiser to use to connect to a BLE Central, and wait for it to connect.
+/// Reconnect to the saved central, falling back to seeking any central when it
+/// does not answer.
 async fn split_peripheral_advertise<'a, 'b, C: Controller>(
     id: usize,
     central_addr: Option<[u8; 6]>,
     peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
     server: &'b BleSplitPeripheralServer<'_>,
 ) -> Result<GattConnection<'a, 'b, DefaultPacketPool>, BleHostError<C::Error>> {
-    let mut advertiser_data = [0; 31];
-    let advertisement = get_peri_advertiser::<C>(id, central_addr, &mut advertiser_data)?;
-
-    let advertiser = peripheral
-        .advertise(&AdvertisementParameters::default(), advertisement)
-        .await?;
-
-    match with_timeout(Duration::from_secs(10), advertiser.accept()).await {
-        Ok(conn_res) => {
-            let conn = conn_res?.with_attribute_server(server)?;
-            info!("[adv] connection established");
-            Ok(conn)
-        }
-        Err(_) => {
-            warn!("[adv] Try update central_addr");
-            // Advertise without central addr
-            let advertisement = get_peri_advertiser::<C>(id, None, &mut advertiser_data)?;
-            let advertiser = peripheral
-                .advertise(&AdvertisementParameters::default(), advertisement)
-                .await?;
-            match with_timeout(Duration::from_secs(300), advertiser.accept()).await {
-                Ok(re) => Ok(re?.with_attribute_server(server)?),
-                Err(_e) => Err(BleHostError::BleHost(Error::Timeout)),
-            }
+    if let Some(addr) = central_addr {
+        let directed = Adv::Directed(Address::random(addr));
+        match advertise(peripheral, &server.server, directed, Duration::from_secs(10)).await {
+            Err(BleHostError::BleHost(Error::Timeout)) => warn!("[adv] Try update central_addr"),
+            result => return result,
         }
     }
-}
-
-fn get_peri_advertiser<'a, C: Controller>(
-    id: usize,
-    central_addr: Option<[u8; 6]>,
-    advertiser_data: &'a mut [u8; 31],
-) -> Result<Advertisement<'a>, BleHostError<C::Error>> {
-    let advertisement = match central_addr {
-        Some(addr) => Advertisement::ConnectableNonscannableDirected {
-            peer: Address::random(addr),
-        },
-        None => {
-            info!("No central address provided, so we advertise as undirected");
-            // No central address provided, so we advertise as undirected
-            AdStructure::encode_slice(
-                &[
-                    AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
-                    AdStructure::CompleteServiceUuids128(&[
-                        // uuid: 4dd5fbaa-18e5-4b07-bf0a-353698659946
-                        [
-                            70u8, 153u8, 101u8, 152u8, 54u8, 53u8, 10u8, 191u8, 7u8, 75u8, 229u8, 24u8, 170u8, 251u8,
-                            213u8, 77u8,
-                        ],
-                    ]),
-                    AdStructure::ManufacturerSpecificData {
-                        company_identifier: rmk_types::ble::RMK_ADV_COMPANY_ID,
-                        payload: &[id as u8],
-                    },
-                ],
-                &mut advertiser_data[..],
-            )?;
-            trace!("Advertising data: {:?}", advertiser_data);
-            Advertisement::ConnectableScannableUndirected {
-                adv_data: &advertiser_data[..],
-                scan_data: &[],
-            }
-        }
-    };
-    Ok(advertisement)
+    let seeking = Adv::SplitPeripheral { id: id as u8 };
+    advertise(peripheral, &server.server, seeking, Duration::from_secs(300)).await
 }

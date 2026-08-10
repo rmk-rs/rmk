@@ -44,6 +44,8 @@ protocol_macro_chunk_size = 64
 auto_mouse_layer_max_num = 2
 # Rynk RX/TX buffer size in bytes. 488 bytes = 2*BLE maximum packet size
 # rynk_buffer_size = 488
+# Length of one dongle pairing scan in seconds (dongle builds only)
+# dongle_pairing_window_secs = 30
 ```
 
 ## Parameter Details
@@ -98,6 +100,7 @@ These tune the [Rynk](../features/rynk) protocol and rarely need changing.
 
 - `ble_profiles_num`: The number of available Bluetooth profiles, default value is 3. This parameter defines how many Bluetooth paired devices the keyboard can store.
 - `split_central_sleep_timeout_seconds`: Sleep timeout for BLE split central in seconds, default value is 0 (disabled). When set to a non-zero value, the split central will enter sleep mode after this many seconds of inactivity to save power. Set to 0 to disable automatic sleep.
+- `dongle_pairing_window_secs`: Length of one dongle pairing scan in seconds, default value is 30. Used only by builds with the `dongle` feature. A dongle scans whenever it has no keyboard to serve — with no bond, and after a bonded keyboard fails to answer — so this sets how long each round listens, not a deadline after which pairing stops. A scan ends early if the bonded keyboard turns up during it.
 
 ### Auto Mouse Layer Configuration
 

@@ -365,6 +365,30 @@ pub async fn new_storage_for_split_peripheral<F: AsyncNorFlash>(
 
 type StorageCache = Cache<Uncached, Uncached, Uncached, StorageKey>;
 
+/// Keymap-less storage for the dongle firmware, plus the persisted bond of the
+/// keyboard it relays, read out before the storage task takes over.
+#[cfg(feature = "dongle")]
+pub async fn new_storage_for_dongle<F: AsyncNorFlash>(
+    flash: F,
+    storage_config: StorageConfig,
+) -> (Storage<F, 0, 0, 0, 0>, Option<trouble_host::BondInformation>) {
+    let mut storage = Storage::<F, 0, 0, 0, 0>::new(
+        flash,
+        #[cfg(feature = "host")]
+        &[],
+        #[cfg(feature = "host")]
+        &None,
+        &storage_config,
+        &config::BehaviorConfig::default(),
+    )
+    .await;
+    let bond = match storage.fetch_data(StorageKey::bond_info(0)).await {
+        Some(StorageData::BondInfo(info)) if !info.removed => Some(info.info),
+        _ => None,
+    };
+    (storage, bond)
+}
+
 pub struct Storage<
     F: AsyncNorFlash,
     const ROW: usize,

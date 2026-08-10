@@ -1,16 +1,7 @@
-//! BLE status types and advertising constants.
+//! BLE status types.
 
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
-
-/// Company identifier in RMK's manufacturer-specific advertising data.
-pub const RMK_ADV_COMPANY_ID: u16 = 0x5253;
-
-/// First manufacturer-specific-data byte of a keyboard's dongle-seeking
-/// advertisement, followed by the Rynk protocol major version. Every RMK
-/// advertisement kind shares [`RMK_ADV_COMPANY_ID`], so this must not collide
-/// with the split-peripheral payload, whose first byte is a small peripheral id.
-pub const DONGLE_SEEKING_ADV_KIND: u8 = 0xD0;
 
 /// BLE state (what the BLE subsystem is currently doing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
