@@ -6,6 +6,7 @@ use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer, with_timeout};
+use rmk_types::ble::RMK_ADV_COMPANY_ID;
 use trouble_host::prelude::*;
 
 use super::GattSplitMessage;
@@ -119,7 +120,8 @@ impl EventHandler for ScanHandler {
             }
             if report.data[4] == 0x07
                 && report.data[5..].starts_with(&SPLIT_SERVICE_UUID)
-                && report.data[21..25] == [0x04, 0xff, 0x18, 0xe1]
+                && report.data[21..23] == [0x04, 0xff]
+                && report.data[23..25] == RMK_ADV_COMPANY_ID.to_le_bytes()
             {
                 // Uuid and manufacturer specific data check passed
                 let peripheral_id = report.data[25];
