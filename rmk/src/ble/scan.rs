@@ -24,17 +24,20 @@ pub(crate) fn scan_config(window: Duration) -> ScanConfig<'static> {
     }
 }
 
-/// Hold a scan session open, retrying while the controller refuses to start
-/// one. Never returns: callers race it against their own stop condition.
-pub(crate) async fn hold_scan<C: Controller + ControllerCmdSync<LeSetScanParams>>(
-    stack: &Stack<'_, C, DefaultPacketPool>,
+/// Start a scan, retrying while the controller refuses one — it does until a
+/// previous connect's initiator has stopped.
+///
+/// End the session with [`ScanSession::stop`], which waits for the controller to
+/// confirm. Dropping it only signals the cancel, and the controller refuses an
+/// initiator until the runner has issued the stop.
+pub(crate) async fn start_scan<'a, C: Controller + ControllerCmdSync<LeSetScanParams>>(
+    stack: &'a Stack<'_, C, DefaultPacketPool>,
     window: Duration,
-) -> ! {
+) -> ScanSession<'a, false> {
     loop {
         let mut central = stack.central();
-        let mut scanner = Scanner::new(&mut central);
-        match scanner.scan(&scan_config(window)).await {
-            Ok(_session) => core::future::pending::<()>().await,
+        match Scanner::new(&mut central).scan(&scan_config(window)).await {
+            Ok(session) => return session,
             Err(_) => Timer::after_millis(500).await,
         }
     }

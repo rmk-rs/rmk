@@ -19,7 +19,7 @@ use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::futures::future::join;
 use rmk::matrix::direct_pin::DirectPinMatrix;
 use rmk::split::peripheral::run_rmk_split_peripheral;
-use rmk::storage::new_storage_for_split_peripheral;
+use rmk::storage::new_storage_without_keymap;
 use rmk::{DefaultPacketPool, PacketPool, run_all};
 use static_cell::StaticCell;
 
@@ -156,7 +156,7 @@ async fn main(spawner: Spawner) {
         ..Default::default()
     };
     let flash = Flash::take(mpsl, p.RRAMC);
-    let mut storage = new_storage_for_split_peripheral(flash, storage_config).await;
+    let mut storage = new_storage_without_keymap(flash, storage_config).await;
 
     let debouncer = DefaultDebouncer::new();
     let mut matrix = DirectPinMatrix::<_, _, 2, 2, 4>::new(direct_pins, debouncer, true);

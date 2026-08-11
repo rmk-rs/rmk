@@ -99,19 +99,28 @@ pub(crate) enum BleProfileAction {
 /// 2. Storing and loading bonding information for each profile
 /// 3. Updating the bonding information of the active profile to the BLE stack
 /// 4. Handling profile switch, clear, and save operations
+///
+/// `SLOTS` sizes the cache to the role: [`BOND_SLOTS`] for a keyboard, a single
+/// slot for a dongle.
 #[cfg(feature = "_ble")]
-pub(crate) struct ProfileManager<'b, 's, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool>
-where
+pub(crate) struct ProfileManager<
+    'b,
+    's,
+    C: Controller + ControllerCmdAsync<LeSetPhy>,
+    P: PacketPool,
+    const SLOTS: usize,
+> where
     's: 'b,
 {
     /// List of bonded devices
-    bonded_devices: heapless::Vec<ProfileInfo, BOND_SLOTS>,
+    bonded_devices: heapless::Vec<ProfileInfo, SLOTS>,
     /// BLE stack
     stack: &'b Stack<'s, C, P>,
 }
 
 #[cfg(feature = "_ble")]
-impl<'b, 's, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool> ProfileManager<'b, 's, C, P>
+impl<'b, 's, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool, const SLOTS: usize>
+    ProfileManager<'b, 's, C, P, SLOTS>
 where
     's: 'b,
 {
@@ -129,7 +138,7 @@ where
         use crate::storage::{read_active_ble_profile, read_bond_info};
 
         self.bonded_devices.clear();
-        for slot_num in 0..BOND_SLOTS {
+        for slot_num in 0..SLOTS {
             if let Some(info) = read_bond_info(slot_num as u8).await
                 && !info.removed
                 && let Err(e) = self.bonded_devices.push(info)
@@ -161,12 +170,16 @@ where
 
     /// Update bonding information in the stack according to the current active profile
     pub(crate) fn update_stack_bonds(&self) {
-        let identities: heapless::Vec<Identity, BOND_SLOTS> = self
+        // Drain one at a time rather than collecting: the stack holds bonds this
+        // manager has no slot for — a fresh pairing lands there before we prune —
+        // and a `heapless::Vec` collect panics on the overflow.
+        while let Some(identity) = self
             .stack
-            .with_bond_information(|bonds| bonds.iter().map(|b| b.identity).collect());
-        for identity in identities {
+            .with_bond_information(|bonds| bonds.first().map(|b| b.identity))
+        {
             if let Err(e) = self.stack.remove_bond_information(identity) {
                 debug!("Remove bond info error: {:?}", e);
+                break; // a bond that won't come off would spin here forever
             }
         }
 

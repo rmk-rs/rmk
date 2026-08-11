@@ -326,7 +326,8 @@ impl<'a, D: Driver<'static>, S> UsbTransport<'a, D, S> {
         self.serving(service)
     }
 
-    /// Attach the dongle's router — this is what makes a binary a dongle.
+    /// Attach the dongle's router — this is what makes a binary a dongle. The
+    /// same router goes to [`crate::dongle::Dongle`], which relays through it.
     #[cfg(feature = "dongle")]
     pub fn with_dongle_router(
         self,

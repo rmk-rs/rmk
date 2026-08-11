@@ -22,7 +22,7 @@ use rmk::futures::future::join;
 use rmk::matrix::Matrix;
 use rmk::run_all;
 use rmk::split::peripheral::run_rmk_split_peripheral;
-use rmk::storage::new_storage_for_split_peripheral;
+use rmk::storage::new_storage_without_keymap;
 use rmk::watchdog::Rp2040Watchdog;
 use static_cell::StaticCell;
 
@@ -95,7 +95,7 @@ async fn main(spawner: Spawner) {
         num_sectors: 32,
         ..Default::default()
     };
-    let mut storage = new_storage_for_split_peripheral(flash, storage_config).await;
+    let mut storage = new_storage_without_keymap(flash, storage_config).await;
 
     // Pin config
     let (row_pins, col_pins) = config_matrix_pins_rp!(peripherals: p, input: [PIN_6, PIN_7], output: [PIN_19, PIN_20]);

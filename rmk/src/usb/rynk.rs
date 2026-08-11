@@ -91,7 +91,7 @@ pub(crate) async fn run_host_usb<D: Driver<'static>, S: HostSession>(
         // A bus reset voids any half-consumed packet from the last session.
         receiver.pos = 0;
         receiver.len = 0;
-        service.serve(&mut *receiver, &mut *sender).await;
+        service.serve(receiver, sender).await;
     }
 }
 

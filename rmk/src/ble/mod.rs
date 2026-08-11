@@ -1,7 +1,12 @@
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
+use bt_hci::param::Error as HciError;
 use embassy_futures::join::join3;
 use embassy_futures::select::{Either, Either3, select, select3};
+#[cfg(feature = "split")]
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+#[cfg(feature = "split")]
+use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use rmk_types::ble::BleState;
@@ -18,7 +23,7 @@ use crate::ble::host::{HOST_WRITE_BUFFER_SIZE, HostGattHandler, HostWriteOutcome
 use crate::ble::led::BleLedReader;
 #[cfg(feature = "passkey_entry")]
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
-use crate::ble::profile::{ProfileInfo, ProfileManager, UPDATED_CCCD_TABLE, UPDATED_PROFILE};
+use crate::ble::profile::{BOND_SLOTS, ProfileInfo, ProfileManager, UPDATED_CCCD_TABLE, UPDATED_PROFILE};
 use crate::ble::sleep::{report_activity, request_sleep};
 use crate::channel::{BLE_REPORT_CHANNEL, LED_SIGNAL};
 use crate::config::{BleBatteryConfig, DeviceConfig, RmkConfig};
@@ -28,7 +33,7 @@ use crate::hid::{HidWriterTrait, run_led_reader};
 #[cfg(feature = "split")]
 use crate::split::PeripheralMatrixConfig;
 #[cfg(feature = "split")]
-use crate::split::ble::central::run_ble_peripheral_manager;
+use crate::split::ble::central::{run_peripheral_session, scan_and_connect_peripherals};
 use crate::state::set_ble_state;
 
 pub(crate) mod adv;
@@ -57,7 +62,7 @@ const L2CAP_CHANNELS_MAX: usize = CONNECTIONS_MAX * 4; // Signal + att + smp + h
 ///
 /// On a split build the transport is the BLE split central:
 /// `run` also loads the peripherals' stored addresses and drives the
-/// peripheral managers and scanner on the same stack.
+/// radio and per-peripheral session tasks on the same stack.
 pub struct BleTransport<'a, C>
 where
     C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
@@ -129,7 +134,7 @@ where
         let stack = trouble_host::new(controller, &mut resources)
             .set_random_address(Address::random(self.address))
             .build();
-        serve(
+        run_ble_keyboard(
             &stack,
             &self.device_config,
             &self.config,
@@ -155,47 +160,40 @@ where
 
         let controller = self.controller.take().expect("BleTransport::run called twice");
 
-        // Load the peripherals' stored addresses through the storage task,
-        // the same way a peripheral loads its central's address. The scanner
-        // and the managers then share the slots; `Cell` is enough because a
-        // slot is `Copy`.
-        let mut addrs = [None; crate::SPLIT_PERIPHERALS_NUM];
-        for (id, slot) in addrs.iter_mut().enumerate() {
-            *slot = crate::storage::read_peer_address(id as u8)
-                .await
-                .filter(|peer| peer.is_valid)
-                .map(|peer| peer.address);
-        }
-        let addrs = addrs.map(core::cell::Cell::new);
-
         let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> = HostResources::new();
         let stack = trouble_host::new(controller, &mut resources)
             .set_random_address(Address::random(self.address))
             .build();
 
-        let managers =
+        // The connect peripherals task hands each established connection to its
+        // session task, and a session task reports back when its session ends.
+        let conn_channels: [Channel<NoopRawMutex, Connection<'_, DefaultPacketPool>, 1>; crate::SPLIT_PERIPHERALS_NUM] =
+            core::array::from_fn(|_| Channel::new());
+        let ended: Channel<NoopRawMutex, usize, { crate::SPLIT_PERIPHERALS_NUM }> = Channel::new();
+
+        let sessions =
             embassy_futures::join::join_array(core::array::from_fn::<_, { crate::SPLIT_PERIPHERALS_NUM }, _>(|i| {
-                run_ble_peripheral_manager(i, &addrs[i], &stack, self.peripheral_matrices[i])
+                run_peripheral_session(i, &conn_channels[i], &ended, &stack, self.peripheral_matrices[i])
             }));
         join3(
-            serve(
+            run_ble_keyboard(
                 &stack,
                 &self.device_config,
                 &self.config,
                 #[cfg(feature = "host")]
                 self.host_service,
             ),
-            managers,
-            crate::split::ble::central::scan_peripherals(&stack, &addrs),
+            sessions,
+            scan_and_connect_peripherals(&stack, &conn_channels, &ended),
         )
         .await;
         unreachable!("BleTransport sub-tasks must run forever")
     }
 }
 
-/// Advertise→connect→serve forever, joined with the stack runner and the
-/// sleep manager. Builds and owns the GATT server.
-async fn serve<#[cfg(feature = "host")] 'r, C>(
+/// Owns the GATT server and the profile manager, and advertises→connects→
+/// serves forever, joined with the stack runner and the sleep manager.
+async fn run_ble_keyboard<#[cfg(feature = "host")] 'r, C>(
     stack: &Stack<'_, C, DefaultPacketPool>,
     device_config: &DeviceConfig<'static>,
     config: &BleBatteryConfig<'static>,
@@ -250,7 +248,7 @@ where
     if crate::ble::passkey::passkey_entry_enabled() {
         stack.set_io_capabilities(IoCapabilities::KeyboardOnly);
     }
-    let mut profile_manager = ProfileManager::new(stack);
+    let mut profile_manager: ProfileManager<_, _, BOND_SLOTS> = ProfileManager::new(stack);
     // Load the bonded devices from storage
     profile_manager.load_bonded_devices().await;
     profile_manager.update_stack_bonds();
@@ -304,7 +302,7 @@ where
                         continue;
                     }
                     if let Either::Second(_) = select(
-                        run_ble_keyboard(
+                        serve_keyboard_connection(
                             server,
                             &conn,
                             stack,
@@ -718,13 +716,13 @@ pub(crate) async fn set_conn_params<
     core::future::pending::<()>().await;
 }
 
-/// Run BLE keyboard for one connection.
+/// Serve one host keyboard connection.
 ///
 /// Returns when the GATT events task ends (i.e. the connection drops).
 /// `writer_task`, `led_task`, and `host_task` are all infinite, so the outer
 /// `select(communication_task, inner)` cancels them as a side-effect of
 /// `communication_task` returning. `inner` itself never completes.
-async fn run_ble_keyboard<
+async fn serve_keyboard_connection<
     'a,
     'b,
     #[cfg(feature = "host")] 'r,
@@ -812,9 +810,10 @@ pub(crate) async fn update_ble_phy<P: PacketPool>(
     for _ in 0..10 {
         match conn.set_phy(stack, phy).await {
             Err(BleHostError::BleHost(Error::Hci(error))) => {
-                if 0x2A == error.to_status().into_inner() {
-                    // Busy, retry
-                    info!("[update_ble_phy] HCI busy: {:?}", error);
+                // A connection runs one link-layer control procedure at a time, and
+                // a fresh one is still running its own.
+                if error == HciError::CONTROLLER_BUSY || error == HciError::DIFFERENT_TRANSACTION_COLLISION {
+                    info!("[update_ble_phy] controller busy, retrying: {:?}", error);
                     embassy_time::Timer::after_millis(100).await;
                     continue;
                 }
@@ -852,9 +851,10 @@ pub(crate) async fn update_conn_params<
     for _ in 0..10 {
         match conn.update_connection_params(stack, params).await {
             Err(BleHostError::BleHost(Error::Hci(error))) => {
-                if 0x3A == error.to_status().into_inner() {
-                    // Busy, retry
-                    info!("[update_conn_params] HCI busy: {:?}", error);
+                // A connection runs one link-layer control procedure at a time, and
+                // a fresh one is still running its own.
+                if error == HciError::CONTROLLER_BUSY || error == HciError::DIFFERENT_TRANSACTION_COLLISION {
+                    info!("[update_conn_params] controller busy, retrying: {:?}", error);
                     embassy_time::Timer::after_millis(100).await;
                     continue;
                 }

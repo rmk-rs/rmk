@@ -15,8 +15,8 @@ use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
 use panic_probe as _;
 use rmk::config::{DeviceConfig, StorageConfig};
-use rmk::dongle::Dongle;
-use rmk::storage::new_storage_for_dongle;
+use rmk::dongle::{Dongle, DongleRouter};
+use rmk::storage::new_storage_without_keymap;
 use rmk::usb::UsbTransport;
 use rmk::{DefaultPacketPool, PacketPool, run_all};
 use static_cell::StaticCell;
@@ -168,11 +168,13 @@ async fn main(spawner: Spawner) {
     };
 
     let flash = Flash::take(mpsl, p.RRAMC);
-    let (mut storage, bond) = new_storage_for_dongle(flash, storage_config).await;
+    let mut storage = new_storage_without_keymap(flash, storage_config).await;
     info!("Storage initialized");
 
-    let mut dongle = Dongle::new(sdc, ble_addr(), bond);
-    let mut usb_transport = UsbTransport::new(driver, device_config).with_dongle_router(dongle.router());
+    // Shared by the two tasks that relay: the dongle's BLE link and the USB host sessions.
+    let router = DongleRouter::new();
+    let mut dongle = Dongle::new(sdc, ble_addr(), &router);
+    let mut usb_transport = UsbTransport::new(driver, device_config).with_dongle_router(&router);
 
     run_all!(usb_transport, dongle, storage).await;
 }
