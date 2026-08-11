@@ -38,9 +38,9 @@ use rmk_types::protocol::rynk::{
     LightingPageRequest, LightingPhysicalKeysPage, LightingReplicaStatus, LightingResult, LightingRoutesPage,
     LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatus,
     LightingRuntimeConditionalSceneTransaction, LightingRuntimeConditionalScenesPage, LightingScenePageRequest,
-    LightingSceneStatus, LightingSceneTransaction, LightingScenesPage, LightingState, LightingZoneMembershipsPage,
-    LightingZonesPage, LockStatus, MacroData, MatrixState, PeripheralStatus, ProtocolVersion,
-    PutLightingExtendedRuntimeConditionalSceneChunkRequest, PutLightingOverlayChunkRequest,
+    LightingSceneStatus, LightingSceneTransaction, LightingScenesPage, LightingState, LightingZone, LightingZoneId,
+    LightingZoneMembershipsPage, LightingZonesPage, LockStatus, MacroData, MatrixState, PeripheralStatus,
+    ProtocolVersion, PutLightingExtendedRuntimeConditionalSceneChunkRequest, PutLightingOverlayChunkRequest,
     PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest, SetComboBulkRequest, SetComboRequest,
     SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetLightingExtensionLayersRequest,
     SetLightingExtensionParamRequest, SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest,
@@ -1059,9 +1059,57 @@ impl Client {
             leds.extend(page.items.iter().copied());
         }
 
-        KeyTopology::new(revision, keys, leds).map_err(|_| RynkHostError::InconsistentResponse {
-            cmd: Cmd::GetLightingKeys,
-            reason: "key and LED metadata do not form a valid topology",
+        let mut zones: Vec<LightingZone> = Vec::with_capacity(capabilities.zone_count as usize);
+        let mut offset = 0u16;
+        while offset < capabilities.zone_count {
+            let page = self
+                .get_lighting_zones(LightingPageRequest {
+                    topology_revision: revision,
+                    offset,
+                })
+                .await?;
+            if page.topology_revision != revision
+                || page.total_count != capabilities.zone_count
+                || page.items.is_empty()
+                || usize::from(offset) + page.items.len() > usize::from(page.total_count)
+            {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingZones,
+                    reason: "zone page does not match the pinned topology",
+                });
+            }
+            offset += page.items.len() as u16;
+            zones.extend(page.items.iter().cloned());
+        }
+
+        let mut zone_memberships: Vec<LightingZoneId> = Vec::with_capacity(capabilities.zone_membership_count as usize);
+        let mut offset = 0u16;
+        while offset < capabilities.zone_membership_count {
+            let page = self
+                .get_lighting_zone_memberships(LightingPageRequest {
+                    topology_revision: revision,
+                    offset,
+                })
+                .await?;
+            if page.topology_revision != revision
+                || page.total_count != capabilities.zone_membership_count
+                || page.items.is_empty()
+                || usize::from(offset) + page.items.len() > usize::from(page.total_count)
+            {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingZoneMemberships,
+                    reason: "zone-membership page does not match the pinned topology",
+                });
+            }
+            offset += page.items.len() as u16;
+            zone_memberships.extend(page.items.iter().copied());
+        }
+
+        KeyTopology::new(revision, keys, leds, zones, zone_memberships).map_err(|_| {
+            RynkHostError::InconsistentResponse {
+                cmd: Cmd::GetLightingKeys,
+                reason: "key, LED, and zone metadata do not form a valid topology",
+            }
         })
     }
 
