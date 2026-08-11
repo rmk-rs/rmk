@@ -2,7 +2,7 @@
 
 use core::ops::{BitOr, BitOrAssign};
 
-pub use crate::physical_layout::{Coordinate as Coord, KeyPosition as MatrixPosition, PhysicalLayout, Point3};
+pub use crate::physical_layout::{Coordinate as Coord, KeyId, KeyPosition as MatrixPosition, PhysicalLayout, Point3};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(transparent)]
@@ -125,6 +125,30 @@ impl<'a> LightingTopology<'a> {
 
     pub fn has_key(&self, matrix: MatrixPosition) -> bool {
         self.keys.contains(&matrix)
+    }
+
+    /// Resolve a semantic key ID to its low-level matrix position.
+    pub fn key(&self, id: KeyId) -> Option<MatrixPosition> {
+        self.keys.get(id.0 as usize).copied()
+    }
+
+    /// Resolve a low-level matrix position to its semantic key ID.
+    pub fn key_id(&self, matrix: MatrixPosition) -> Option<KeyId> {
+        self.keys
+            .iter()
+            .position(|key| *key == matrix)
+            .and_then(|index| u16::try_from(index).ok())
+            .map(KeyId)
+    }
+
+    pub fn leds_for_key_id(&'a self, id: KeyId) -> impl Iterator<Item = (LedSlot, &'a LedMetadata)> + 'a {
+        let matrix = self.key(id);
+        self.leds.iter().enumerate().filter_map(move |(index, led)| {
+            if led.key != matrix || matrix.is_none() {
+                return None;
+            }
+            Some((LedSlot(u16::try_from(index).ok()?), led))
+        })
     }
 
     pub fn effective_position(&self, slot: LedSlot) -> Option<Point3> {

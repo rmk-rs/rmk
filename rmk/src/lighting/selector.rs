@@ -1,10 +1,11 @@
-use super::topology::{LedId, LedSlot, LightingTopology, MatrixPosition, ZoneId};
+use super::topology::{KeyId, LedId, LedSlot, LightingTopology, MatrixPosition, ZoneId};
 
 /// Stable configuration-level selector. None of these variants exposes a
 /// local frame slot or electrical chain index.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum LedSelector {
     Led(LedId),
+    KeyId(KeyId),
     Key(MatrixPosition),
     Zone(ZoneId),
     All,
@@ -15,6 +16,7 @@ pub enum ResolveError {
     EmptySelection,
     NoMatches(LedSelector),
     UnknownLed(LedId),
+    UnknownKeyId(KeyId),
     UnknownKey(MatrixPosition),
     UnknownZone(ZoneId),
     CapacityExceeded { capacity: usize },
@@ -48,6 +50,15 @@ impl<const CAP: usize> ResolvedTargets<CAP> {
                     let slot = topology.slot(id).ok_or(ResolveError::UnknownLed(id))?;
                     matched = true;
                     resolved.insert(slot)?;
+                }
+                LedSelector::KeyId(id) => {
+                    if topology.key(id).is_none() {
+                        return Err(ResolveError::UnknownKeyId(id));
+                    }
+                    for (slot, _) in topology.leds_for_key_id(id) {
+                        matched = true;
+                        resolved.insert(slot)?;
+                    }
                 }
                 LedSelector::Key(key) => {
                     if !topology.has_key(key) {
@@ -165,12 +176,25 @@ mod tests {
             &topology(),
             &[
                 LedSelector::Led(LedId(10)),
+                LedSelector::KeyId(KeyId(0)),
                 LedSelector::Key(KEY),
                 LedSelector::Zone(ZoneId(7)),
             ],
         )
         .unwrap();
         assert_eq!(targets.as_slice(), &[LedSlot(0), LedSlot(1)]);
+    }
+
+    #[test]
+    fn key_ids_resolve_through_matrix_associations() {
+        let targets = ResolvedTargets::<3>::resolve(&topology(), &[LedSelector::KeyId(KeyId(0))]).unwrap();
+        assert_eq!(targets.as_slice(), &[LedSlot(0), LedSlot(1)]);
+        assert_eq!(topology().key(KeyId(0)), Some(KEY));
+        assert_eq!(topology().key_id(KEY), Some(KeyId(0)));
+        assert_eq!(
+            ResolvedTargets::<3>::resolve(&topology(), &[LedSelector::KeyId(KeyId(1))]),
+            Err(ResolveError::UnknownKeyId(KeyId(1)))
+        );
     }
 
     #[test]

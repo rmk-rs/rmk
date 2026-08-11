@@ -33,20 +33,20 @@ use rmk_types::protocol::rynk::{
     LightingConditionalScenesPage, LightingExtendedRuntimeConditionalScenesPage, LightingExtension,
     LightingExtensionLayers, LightingExtensionNameKind, LightingExtensionNamesPage, LightingExtensionNamesRequest,
     LightingExtensionParamsPage, LightingExtensionParamsRequest, LightingFramePage, LightingFrameRequest,
-    LightingKeysPage, LightingLedsPage, LightingOutputModeState, LightingOutputsPage, LightingOverlayPage,
-    LightingOverlayPageRequest, LightingOverlayTransaction, LightingPageRequest, LightingPhysicalKeysPage,
-    LightingReplicaStatus, LightingResult, LightingRoutesPage, LightingRuntimeConditionalScenePageRequest,
-    LightingRuntimeConditionalSceneStatus, LightingRuntimeConditionalSceneTransaction,
-    LightingRuntimeConditionalScenesPage, LightingScenePageRequest, LightingSceneStatus, LightingSceneTransaction,
-    LightingScenesPage, LightingState, LightingZoneMembershipsPage, LightingZonesPage, LockStatus, MacroData,
-    MatrixState, PeripheralStatus, ProtocolVersion, PutLightingExtendedRuntimeConditionalSceneChunkRequest,
-    PutLightingOverlayChunkRequest, PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest,
-    SetComboBulkRequest, SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest,
-    SetLightingExtensionLayersRequest, SetLightingExtensionParamRequest, SetLightingExtensionStateRequest,
-    SetLightingLayerPolicyRequest, SetLightingOutputModeRequest, SetLightingOverlayRequest,
-    SetLightingSceneCellRequest, SetLightingStateRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest,
-    SplitCentralLatencyPolicy, SplitCentralLatencyState, StorageResetMode, UnsetLightingOverlayRequest,
-    UnsetLightingSceneCellRequest, command,
+    LightingKeysPage, LightingLed, LightingLedsPage, LightingMatrixPosition, LightingOutputModeState,
+    LightingOutputsPage, LightingOverlayPage, LightingOverlayPageRequest, LightingOverlayTransaction,
+    LightingPageRequest, LightingPhysicalKeysPage, LightingReplicaStatus, LightingResult, LightingRoutesPage,
+    LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatus,
+    LightingRuntimeConditionalSceneTransaction, LightingRuntimeConditionalScenesPage, LightingScenePageRequest,
+    LightingSceneStatus, LightingSceneTransaction, LightingScenesPage, LightingState, LightingZoneMembershipsPage,
+    LightingZonesPage, LockStatus, MacroData, MatrixState, PeripheralStatus, ProtocolVersion,
+    PutLightingExtendedRuntimeConditionalSceneChunkRequest, PutLightingOverlayChunkRequest,
+    PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest, SetComboBulkRequest, SetComboRequest,
+    SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetLightingExtensionLayersRequest,
+    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest,
+    SetLightingOutputModeRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
+    SetMacroRequest, SetMorseBulkRequest, SetMorseRequest, SplitCentralLatencyPolicy, SplitCentralLatencyState,
+    StorageResetMode, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest, command,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -56,6 +56,8 @@ use serde::Serialize;
 #[cfg(feature = "alloc")]
 use crate::driver::MAX_IN_FLIGHT;
 use crate::driver::{Client, RynkHostError};
+#[cfg(feature = "alloc")]
+use crate::key_topology::KeyTopology;
 #[cfg(feature = "alloc")]
 use crate::layout::LayoutInfo;
 
@@ -1002,6 +1004,65 @@ impl Client {
             .await
         })
         .await
+    }
+
+    /// Read and validate the semantic key-to-emitter topology under one
+    /// firmware topology revision. The existing paged wire endpoints stay
+    /// low-level; this assembles their relational view for host selectors.
+    pub async fn read_lighting_key_topology(&self) -> Result<KeyTopology, RynkHostError> {
+        let capabilities = self.get_lighting_capabilities().await?;
+        let revision = capabilities.topology_revision;
+
+        let mut keys: Vec<LightingMatrixPosition> = Vec::with_capacity(capabilities.logical_key_count as usize);
+        let mut offset = 0u16;
+        while offset < capabilities.logical_key_count {
+            let page = self
+                .get_lighting_keys(LightingPageRequest {
+                    topology_revision: revision,
+                    offset,
+                })
+                .await?;
+            if page.topology_revision != revision
+                || page.total_count != capabilities.logical_key_count
+                || page.items.is_empty()
+                || usize::from(offset) + page.items.len() > usize::from(page.total_count)
+            {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingKeys,
+                    reason: "logical-key page does not match the pinned topology",
+                });
+            }
+            offset += page.items.len() as u16;
+            keys.extend(page.items.iter().copied());
+        }
+
+        let mut leds: Vec<LightingLed> = Vec::with_capacity(capabilities.led_count as usize);
+        let mut offset = 0u16;
+        while offset < capabilities.led_count {
+            let page = self
+                .get_lighting_leds(LightingPageRequest {
+                    topology_revision: revision,
+                    offset,
+                })
+                .await?;
+            if page.topology_revision != revision
+                || page.total_count != capabilities.led_count
+                || page.items.is_empty()
+                || usize::from(offset) + page.items.len() > usize::from(page.total_count)
+            {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingLeds,
+                    reason: "LED page does not match the pinned topology",
+                });
+            }
+            offset += page.items.len() as u16;
+            leds.extend(page.items.iter().copied());
+        }
+
+        KeyTopology::new(revision, keys, leds).map_err(|_| RynkHostError::InconsistentResponse {
+            cmd: Cmd::GetLightingKeys,
+            reason: "key and LED metadata do not form a valid topology",
+        })
     }
 
     /// Read the whole transient overlay under one state revision. Expiry or a

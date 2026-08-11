@@ -1,6 +1,8 @@
 //! Allocation-free physical key geometry shared by lighting, display, and
 //! host-facing layout consumers.
 
+pub use rmk_types::key::KeyId;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct KeyPosition {
     pub row: u8,

@@ -743,6 +743,7 @@ pub(crate) struct LightingSceneCellTomlConfig {
 #[serde(untagged)]
 pub(crate) enum LightingTargetTomlConfig {
     Led { led: u16 },
+    KeyId { key: u16 },
     Key { key: [u8; 2] },
     Zone { zone: u8 },
     All { all: bool },

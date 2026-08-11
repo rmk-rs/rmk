@@ -290,6 +290,7 @@ impl crate::KeyboardTomlConfig {
         let layer_scenes = resolve_layer_scenes(
             keymap.layers,
             &config.layer_scenes,
+            &layout.keys,
             &emitters,
             &zone_memberships,
             &zone_ids,
@@ -297,6 +298,7 @@ impl crate::KeyboardTomlConfig {
         let conditional_scene_cells = resolve_conditional_scenes(
             keymap.layers,
             &config.conditional_scenes,
+            &layout.keys,
             &emitters,
             &zone_memberships,
             &zone_ids,
@@ -340,6 +342,7 @@ impl crate::KeyboardTomlConfig {
                             let slots = resolve_target_slots(
                                 &indicator.target,
                                 &id_to_slot,
+                                &layout.keys,
                                 &emitters,
                                 &zone_memberships,
                                 &zone_ids,
@@ -531,6 +534,7 @@ fn validate_routes(outputs: &[LightingOutput], routes: &[LightingRoute]) -> Resu
 fn resolve_layer_scenes(
     layer_count: u8,
     config: &[crate::LightingLayerSceneTomlConfig],
+    keys: &[[u8; 2]],
     emitters: &[LightingEmitter],
     zone_memberships: &[u8],
     zone_ids: &HashSet<u8>,
@@ -553,7 +557,7 @@ fn resolve_layer_scenes(
         }
         let mut cells = Vec::new();
         for cell in &scene.cells {
-            let slots = resolve_target_slots(&cell.target, &id_to_slot, emitters, zone_memberships, zone_ids)?;
+            let slots = resolve_target_slots(&cell.target, &id_to_slot, keys, emitters, zone_memberships, zone_ids)?;
             if slots.is_empty() {
                 return Err(format!(
                     "lighting layer scene {} target resolves to no emitters",
@@ -574,6 +578,7 @@ fn resolve_layer_scenes(
 fn resolve_conditional_scenes(
     layer_count: u8,
     config: &[crate::LightingConditionalSceneTomlConfig],
+    keys: &[[u8; 2]],
     emitters: &[LightingEmitter],
     zone_memberships: &[u8],
     zone_ids: &HashSet<u8>,
@@ -638,7 +643,7 @@ fn resolve_conditional_scenes(
             output_mode,
         };
         for cell in &scene.cells {
-            let slots = resolve_target_slots(&cell.target, &id_to_slot, emitters, zone_memberships, zone_ids)?;
+            let slots = resolve_target_slots(&cell.target, &id_to_slot, keys, emitters, zone_memberships, zone_ids)?;
             if slots.is_empty() {
                 return Err(format!(
                     "lighting conditional scene {index} target resolves to no emitters"
@@ -658,6 +663,7 @@ fn resolve_conditional_scenes(
 fn resolve_target_slots(
     target: &LightingTargetTomlConfig,
     id_to_slot: &HashMap<u16, u16>,
+    keys: &[[u8; 2]],
     emitters: &[LightingEmitter],
     zone_memberships: &[u8],
     zone_ids: &HashSet<u8>,
@@ -668,6 +674,17 @@ fn resolve_target_slots(
                 .get(&led)
                 .ok_or_else(|| format!("lighting scene references unknown emitter id {led}"))?,
         ],
+        LightingTargetTomlConfig::KeyId { key: key_id } => {
+            let key = *keys
+                .get(key_id as usize)
+                .ok_or_else(|| format!("lighting scene references unknown logical key id {key_id}"))?;
+            emitters
+                .iter()
+                .enumerate()
+                .filter(|(_, emitter)| emitter.key == Some(key))
+                .map(|(slot, _)| slot as u16)
+                .collect()
+        }
         LightingTargetTomlConfig::Key { key } => emitters
             .iter()
             .enumerate()
@@ -815,6 +832,30 @@ effect = { kind = "solid", color = [1, 2, 3] }
         assert_eq!(lighting.emitters.len(), 2);
         assert_eq!(lighting.routes[0].physical_index, 1);
         assert_eq!(lighting.layer_scenes[0].cells.len(), 2);
+    }
+
+    #[test]
+    fn resolves_logical_key_ids_before_lowering_to_led_slots() {
+        let source = BASE.replace("target = { zone = 1 }", "target = { key = 0 }");
+        let config = parse(&source);
+        let layout = config.layout().unwrap();
+        let keymap = config.keymap().unwrap();
+        let lighting = config.lighting(&layout, &keymap).unwrap().unwrap();
+
+        assert_eq!(layout.keys[0], [0, 0]);
+        assert_eq!(lighting.layer_scenes[0].cells.len(), 1);
+        assert_eq!(lighting.layer_scenes[0].cells[0].slot, 0);
+    }
+
+    #[test]
+    fn rejects_unknown_logical_key_ids() {
+        let source = BASE.replace("target = { zone = 1 }", "target = { key = 2 }");
+        let config = parse(&source);
+        let layout = config.layout().unwrap();
+        let keymap = config.keymap().unwrap();
+        let error = config.lighting(&layout, &keymap).unwrap_err();
+
+        assert!(error.contains("unknown logical key id 2"), "{error}");
     }
 
     #[test]
