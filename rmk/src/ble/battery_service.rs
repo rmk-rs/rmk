@@ -460,10 +460,10 @@ mod tests {
     }
 
     #[test]
-    fn peripheral_battery_presentation_format_supports_maximum_id() {
+    fn peripheral_battery_presentation_format_supports_maximum_configured_id() {
         assert_eq!(
-            peripheral_battery_presentation_format(14),
-            [0x04, 0x00, 0xAD, 0x27, 0x01, 0x0F, 0x00]
+            peripheral_battery_presentation_format(254),
+            [0x04, 0x00, 0xAD, 0x27, 0x01, 0xFF, 0x00]
         );
     }
 

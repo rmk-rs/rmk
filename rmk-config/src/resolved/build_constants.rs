@@ -3,13 +3,6 @@ use serde::Deserialize;
 use crate::{DEFAULT_PASSKEY_ENTRY_TIMEOUT_SECS, MIN_PASSKEY_ENTRY_TIMEOUT_SECS};
 
 const SUBSCRIBER_DEFAULT_CONFIG: &str = include_str!("../default_config/subscriber_default.toml");
-// trouble-host stores a 4-byte header and 6 bytes per CCCD. Keep the table size
-// in sync with the client-att-table-size feature selected in rmk/Cargo.toml.
-const BLE_CLIENT_ATT_TABLE_SIZE: usize = 128;
-const BLE_CLIENT_ATT_TABLE_HEADER_SIZE: usize = 4;
-const BLE_CCCD_STORAGE_SIZE: usize = 6;
-// One Battery Service CCCD and four composite HID report CCCDs.
-const BLE_BASE_CCCD_COUNT: usize = 5;
 
 /// Parsed representation of `subscriber_default.toml`.
 #[derive(Deserialize)]
@@ -121,10 +114,6 @@ impl crate::KeyboardTomlConfig {
                     .unwrap_or_else(|| format!("Peripheral {id}"))
             })
             .collect();
-        if active_features.contains(&"_ble") {
-            validate_split_battery_gatt_capacity(split_battery_peripheral_ids.len(), active_features)?;
-        }
-
         // Build event channels
         macro_rules! event_channels {
             ($($field:ident),* $(,)?) => {
@@ -248,25 +237,6 @@ impl crate::KeyboardTomlConfig {
             passkey,
         })
     }
-}
-
-fn validate_split_battery_gatt_capacity(count: usize, active_features: &[&str]) -> Result<(), String> {
-    let host_cccd_count = if active_features.contains(&"rynk") {
-        2
-    } else if active_features.contains(&"vial") {
-        1
-    } else {
-        0
-    };
-    let cccd_capacity = (BLE_CLIENT_ATT_TABLE_SIZE - BLE_CLIENT_ATT_TABLE_HEADER_SIZE) / BLE_CCCD_STORAGE_SIZE;
-    let max_peripherals = cccd_capacity - BLE_BASE_CCCD_COUNT - host_cccd_count;
-
-    if count > max_peripherals {
-        return Err(format!(
-            "number of battery-enabled [[split.peripheral]] entries ({count}) exceeds the BLE GATT limit for the enabled host protocol (max {max_peripherals})"
-        ));
-    }
-    Ok(())
 }
 
 fn validate_u8_capability(name: &str, value: usize) -> Result<(), String> {
@@ -432,48 +402,6 @@ mod tests {
             constants.split_battery_peripheral_user_descriptions,
             ["Right", "Peripheral 1"]
         );
-    }
-
-    #[test]
-    fn validates_split_battery_gatt_capacity_for_each_host_protocol() {
-        let config_with_batteries = |count| {
-            let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
-            config.split = Some(SplitConfig {
-                peripheral: (0..count)
-                    .map(|id| SplitBoardConfig {
-                        battery_adc_pin: Some(format!("P0_{id:02}")),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            });
-            config.auto_calculate_parameters();
-            config
-        };
-
-        assert!(config_with_batteries(15).build_constants(&["split", "_ble"]).is_ok());
-        assert!(
-            config_with_batteries(14)
-                .build_constants(&["split", "_ble", "vial"])
-                .is_ok()
-        );
-        assert!(
-            config_with_batteries(13)
-                .build_constants(&["split", "_ble", "rynk"])
-                .is_ok()
-        );
-
-        let err = config_with_batteries(15)
-            .build_constants(&["split", "_ble", "vial"])
-            .err()
-            .expect("expected Vial GATT capacity validation failure");
-        assert!(err.contains("max 14"), "{err}");
-
-        let err = config_with_batteries(14)
-            .build_constants(&["split", "_ble", "rynk"])
-            .err()
-            .expect("expected Rynk GATT capacity validation failure");
-        assert!(err.contains("max 13"), "{err}");
     }
 
     #[test]

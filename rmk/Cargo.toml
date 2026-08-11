@@ -123,7 +123,7 @@ watchdog = ["rmk-macro/watchdog"]
 host = ["dep:byteorder"]
 
 ## Enable vial support
-vial = ["host", "rmk-types/vial"]
+vial = ["host"]
 
 ## Enable DFU lock feature — physical key unlock for DFU firmware download
 dfu_lock = ["host_lock"]

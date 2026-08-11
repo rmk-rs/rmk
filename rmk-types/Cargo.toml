@@ -49,7 +49,6 @@ wasm = ["dep:tsify", "dep:wasm-bindgen", "dep:serde-wasm-bindgen", "host"]
 # Build-time only features: forwarded from rmk to control constant generation in build.rs.
 _ble = []
 split = []
-vial = []
 display = []
 passkey_entry = []
 # DFU firmware update support

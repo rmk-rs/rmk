@@ -102,4 +102,4 @@ Each peripheral's Battery Service uses its peripheral ID to set the description 
 
 Battery Level characteristics also expose a Characteristic User Description descriptor. The defaults are `Central` for the central and `Peripheral 0`, `Peripheral 1`, and so on for peripherals. Set `battery_user_description` under `[ble]`, `[split.central]`, or an individual `[[split.peripheral]]` to provide a custom name. `[split.central].battery_user_description` overrides `[ble].battery_user_description` for the central.
 
-The maximum number of battery-enabled peripherals is 15 without a host configurator, 14 with Vial, and 13 with Rynk.
+With the default 128-byte client ATT table, the maximum number of battery-enabled peripherals is 15 without a host configurator, 14 with Vial, and 13 with Rynk.
