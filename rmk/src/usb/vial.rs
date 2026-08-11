@@ -15,22 +15,30 @@ pub(crate) type HostUsbReader<D> = HidReader<'static, D, 32>;
 pub(crate) type HostUsbWriter<D> = HidWriter<'static, D, 32>;
 
 /// Build the Vial HID interface (32-byte input + 32-byte output reports).
-pub fn build_host_usb<D: Driver<'static>>(builder: &mut Builder<'static, D>) -> (HostUsbReader<D>, HostUsbWriter<D>) {
+pub(crate) fn build_host_usb<D: Driver<'static>>(
+    builder: &mut Builder<'static, D>,
+) -> (HostUsbReader<D>, HostUsbWriter<D>) {
     let rw = add_usb_reader_writer!(builder, ViaReport, 32, 32, 32);
     rw.split()
 }
 
+impl super::HostSession for VialService<'_> {
+    async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
+        self.run_session(rx, tx).await
+    }
+}
+
 /// Vial session loop.
-pub async fn run_host_usb<D: Driver<'static>>(
+pub(crate) async fn run_host_usb<D: Driver<'static>, S: super::HostSession>(
     reader: &mut HostUsbReader<D>,
     writer: &mut HostUsbWriter<D>,
-    service: &VialService<'_>,
+    session: &S,
 ) -> ! {
     loop {
         reader.ready().await;
         let mut rx = VialUsbRx { reader: &mut *reader };
         let mut tx = VialUsbTx { writer: &mut *writer };
-        service.run_session(&mut rx, &mut tx).await;
+        session.serve(&mut rx, &mut tx).await;
     }
 }
 

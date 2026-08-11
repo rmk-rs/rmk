@@ -53,17 +53,6 @@ const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + 1;
 /// Max number of L2CAP channels
 const L2CAP_CHANNELS_MAX: usize = CONNECTIONS_MAX * 4; // Signal + att + smp + hid
 
-/// Switch to the dongle bond slot, exactly as a short press of the
-/// `SwitchToDongle` key does: with a bond the keyboard reconnects to its
-/// dongle, without one it starts the seeking broadcast. For firmware that has
-/// no dedicated dongle key (custom input devices, test rigs).
-#[cfg(feature = "dongle")]
-pub async fn switch_to_dongle_profile() {
-    crate::channel::BLE_PROFILE_CHANNEL
-        .send(crate::ble::profile::BleProfileAction::Switch(profile::DONGLE_PROFILE))
-        .await;
-}
-
 /// BLE transport. Owns the whole BLE stack.
 ///
 /// On a split build the transport is the BLE split central:
