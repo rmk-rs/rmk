@@ -48,7 +48,7 @@ RMK has multiple BLE profile support. The number of profiles can be set in the [
 
 Vial user keycodes can be configured to operate wireless profiles. Suppose that you have N BLE profiles, then:
 
-- `User0` - `User(N-1)`: switch to a specific profile
+- `User0` - `User(N-1)`: switch to a specific profile. Hold the key for 5 seconds to clear that profile's bond and pair a new host: the keyboard switches to the cleared profile and advertises openly.
 - `UserN`: switch to the next profile
 - `User(N+1)`: switch to the previous profile
 - `User(N+2)`: clear current profile bond info
@@ -58,7 +58,7 @@ Vial user keycodes can be configured to operate wireless profiles. Suppose that 
 
 Vial also provides a way to customize the displayed keycode, see `customKeycodes` in [this example](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/vial.json). If `customKeycodes` are configured, the `User0` ~ `User(N+3)` will be displayed as `BT0`, ..., `Switch Output`.
 
-If you've connected a host to a profile, other devices will not be able to connect to this profile: the keyboard immediately disconnects any device that doesn't match the profile's stored bond. To pair a different host to that profile, clear it first.
+If you've connected a host to a profile, other devices will not be able to connect to this profile: the keyboard immediately disconnects any device that doesn't match the profile's stored bond. To pair a different host to that profile, clear it first, for example by holding the profile's key for 5 seconds.
 
 ## BLE Passkey Entry
 

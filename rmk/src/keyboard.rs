@@ -1,6 +1,6 @@
 use core::fmt::Debug;
 
-#[cfg(all(feature = "_ble", any(feature = "split", feature = "dongle")))]
+#[cfg(feature = "_ble")]
 use embassy_futures::select::{Either, select};
 use embassy_futures::yield_now;
 #[cfg(feature = "_ble")]
@@ -1668,7 +1668,7 @@ impl<'a> Keyboard<'a> {
 
     /// True when the key is still down 5s later. A release inside the window is
     /// pushed back to `unprocessed_events`, so it replays as a short press.
-    #[cfg(all(feature = "_ble", any(feature = "split", feature = "dongle")))]
+    #[cfg(feature = "_ble")]
     async fn held_for_5s(&mut self) -> bool {
         match select(
             embassy_time::Timer::after_millis(5000),
@@ -1695,6 +1695,14 @@ impl<'a> Keyboard<'a> {
             use crate::ble::profile::BleProfileAction;
             use crate::channel::BLE_PROFILE_CHANNEL;
             if event.pressed {
+                // The uniform gesture across all bond slots: tap switches, a 5s
+                // hold forgets the slot's bond and re-pairs. Holding a profile key
+                // clears that profile and switches to it, so it advertises openly.
+                if id < NUM_BLE_PROFILE as u8 && self.held_for_5s().await {
+                    info!("Profile key held: clearing bond on profile {}", id);
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearSlot(id)).await;
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
+                }
                 // A 5s hold of the dongle key clears the local dongle bond and goes
                 // seeking, which is how a keyboard moves to a different dongle.
                 #[cfg(feature = "dongle")]
