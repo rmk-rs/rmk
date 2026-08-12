@@ -218,20 +218,20 @@ impl KeyboardTomlConfig {
                 next_keys.push_str(&current_keys[last_index..start_index]);
 
                 // The name ends at the grammar's delimiters, so `LM(1, @mods)`
-                // resolves `mods` — not a bogus `mods)`.
-                let mut end_index = start_index + 1;
-                while let Some(&c) = current_keys.as_bytes().get(end_index) {
-                    if c.is_ascii_whitespace() || matches!(c, b'(' | b')' | b',' | b'@') {
-                        break;
-                    }
-                    end_index += 1;
-                }
+                // resolves `mods` — not a bogus `mods)`. Scan by `char` so a
+                // non-ASCII name never produces an invalid UTF-8 slice.
+                let alias_start = start_index + '@'.len_utf8();
+                let alias_len = current_keys[alias_start..]
+                    .char_indices()
+                    .find_map(|(offset, c)| (c.is_whitespace() || matches!(c, '(' | ')' | ',' | '@')).then_some(offset))
+                    .unwrap_or(current_keys.len() - alias_start);
+                let end_index = alias_start + alias_len;
 
-                let alias_key = &current_keys[start_index + 1..end_index];
+                let alias_key = &current_keys[alias_start..end_index];
                 if alias_key.is_empty() {
                     // A bare `@` (trailing, or right before a delimiter) is literal.
                     next_keys.push('@');
-                    last_index = start_index + 1;
+                    last_index = alias_start;
                     continue;
                 }
                 match aliases.get(alias_key) {
@@ -367,6 +367,61 @@ impl KeyboardTomlConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_unicode_alias_resolution() {
+        let aliases = HashMap::from([
+            ("ö".to_string(), "Kc0".to_string()),
+            ("ő".to_string(), "LeftBracket".to_string()),
+        ]);
+
+        assert_eq!(
+            KeyboardTomlConfig::alias_resolver("@ö @ő", &aliases),
+            Ok("Kc0 LeftBracket".to_string())
+        );
+    }
+
+    #[test]
+    fn test_unicode_alias_expands_action_and_recurses() {
+        let aliases = HashMap::from([
+            ("é".to_string(), "WM(Semicolon, RAlt)".to_string()),
+            ("magyar".to_string(), "@é".to_string()),
+        ]);
+        let layer_names = HashMap::new();
+
+        assert_eq!(
+            KeyboardTomlConfig::keymap_parser("@magyar", &aliases, &layer_names, 8),
+            Ok(vec!["WM(Semicolon, RAlt)".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_undefined_unicode_alias_returns_error() {
+        assert_eq!(
+            KeyboardTomlConfig::alias_resolver("不存在", &HashMap::new()),
+            Ok("不存在".to_string())
+        );
+        assert_eq!(
+            KeyboardTomlConfig::alias_resolver("@不存在", &HashMap::new()),
+            Err("Undefined alias: 不存在".to_string())
+        );
+    }
+
+    #[test]
+    fn test_unicode_whitespace_separates_aliases_and_actions() {
+        let aliases = HashMap::from([("ö".to_string(), "Kc0".to_string())]);
+        let layer_names = HashMap::new();
+
+        for separator in ['\u{00a0}', '\u{3000}'] {
+            let keymap = format!("@ö{separator}A");
+            assert_eq!(
+                KeyboardTomlConfig::keymap_parser(&keymap, &aliases, &layer_names, 8),
+                Ok(vec!["Kc0".to_string(), "A".to_string()]),
+                "separator U+{:04X}",
+                separator as u32
+            );
+        }
+    }
 
     #[test]
     fn test_no_action_parsing() {

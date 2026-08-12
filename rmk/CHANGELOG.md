@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix UTF-8 panics when non-ASCII names are used in `keyboard.toml` aliases, and accept Unicode whitespace between keymap actions
 - Fix mouse keys (`KC_MS_*`), media keys and system control keys doing nothing on Android over BLE: Android's HID host only attaches to the first HID service instance (AOSP `bta_hh_le.cc`, b/286413526), so reports served from the separate composite HID service were never subscribed. All HID reports now live in a single HID service, distinguished by report id via the Report Reference descriptor
 - Fix `ClearEeprom` keycode being defined but not functional: pressing the key now resets the storage on release (same operation as `ViaCommand::EepromReset`, requires the `storage` feature), and the keycode round-trips through Vial as `0x7C03` (QMK's `QK_CLEAR_EEPROM`) instead of being rendered as a raw hex literal ([#929](https://github.com/rmk-rs/rmk/issues/929))
 - Fix Vial keycode conversion truncating user keycodes to 4 bits: `User16`–`User31` silently aliased to `User0`–`User15` on the Vial side (assign, view, and save-back). Widen the mask and accepted range to 5 bits (`0x7E00..=0x7E1F`, matching QMK's `QK_KB_0..QK_KB_31`) ([#918](https://github.com/rmk-rs/rmk/issues/918))

@@ -1,7 +1,7 @@
 // Grammar for RMK keyboard.toml layer.keys string
 
-// Define default whitespace handling (space, tab, newline, carriage return)
-WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+// Match Rust's `char::is_whitespace`, which alias scanning also uses.
+WHITESPACE = _{ WHITE_SPACE }
 
 // --- Helper Rules ---
 
