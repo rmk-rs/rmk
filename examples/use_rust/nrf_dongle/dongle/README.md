@@ -14,9 +14,9 @@ cargo build --release
 ./run.sh target/thumbv8m.main-none-eabihf/release/rmk-nrf54lm20-dongle
 ```
 
-The dongle scans for a keyboard whenever it has none to serve: at power-on with
-no bond, and after a bonded keyboard fails to answer. A keyboard that pairs in
-that window replaces whatever the dongle was bonded to, so swapping keyboards
-needs nothing on the host side. Each scan lasts 30s
+A new keyboard pairs only while a window is open: once for 30s at power-on
 ([`dongle_pairing_window_secs`](../../../../docs/docs/main/docs/configuration/rmk_config.md)),
-and ends early if the bonded keyboard turns up after all.
+and continuously while the dongle has no bond. 
+The power-on window ends early if the bonded keyboard turns up after all. 
+Outside those windows the dongle only reconnects its bonded keyboard. 
+To pair with a new dongle: hold the keyboard's dongle key for 5s, then replug the dongle. 

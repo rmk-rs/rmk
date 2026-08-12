@@ -309,8 +309,8 @@ pub(crate) struct RmkConstantsConfig {
     /// Default 488 fills exactly two BLE notifications.
     #[serde_inline_default(488)]
     pub rynk_buffer_size: usize,
-    /// Length of one dongle pairing scan in seconds; a dongle repeats it
-    /// whenever it has no keyboard to serve (dongle firmware only)
+    /// Length of one dongle pairing window in seconds: repeated while no
+    /// keyboard is bonded, opened once at power-on otherwise (dongle firmware only)
     #[serde_inline_default(30)]
     pub dongle_pairing_window_secs: u32,
 }

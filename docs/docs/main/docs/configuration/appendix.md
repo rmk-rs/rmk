@@ -357,8 +357,8 @@ split_central_sleep_timeout_seconds = 0
 protocol_macro_chunk_size = 64
 # Rynk RX/TX buffer size in bytes. 488 bytes = 2*BLE maximum packet size
 rynk_buffer_size = 488
-# Length of one dongle pairing scan in seconds. Dongle builds only; a dongle
-# repeats the scan whenever it has no keyboard to serve
+# Length of one dongle pairing window in seconds. Dongle builds only; repeated
+# while no keyboard is bonded, opened once at power-on otherwise
 dongle_pairing_window_secs = 30
 # Maximum number of [[behavior.auto_mouse_layer]] entries.
 # Auto-derived from the number of configured entries when unset

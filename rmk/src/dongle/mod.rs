@@ -164,22 +164,29 @@ where
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<LeSetScanParams>,
 {
-    /// The dongle's whole state machine: serve the bond, and whenever it does not
-    /// answer, listen for a keyboard seeking a dongle. Seeking follows a deliberate
-    /// 5s hold on the keyboard, so a replacement is never adopted by accident.
     async fn run(&mut self) -> ! {
         wait_for_stack_started().await;
         self.profiles.load_bonded_devices().await;
         self.profiles.update_stack_bonds();
 
+        let bonded = self.profiles.active_bond_info().map(|b| b.info.identity.addr);
+        self.scan.bonded_addr.lock(|a| a.set(bonded.map(|addr| addr.addr)));
+        if bonded.is_some()
+            && let Some((kind, addr)) = self.run_pairing_window().await
+            && let Some(conn) = self.connect(Address { kind, addr }).await
+        {
+            self.run_connection(conn, Peer::New).await;
+        }
+
         loop {
             let bonded = self.profiles.active_bond_info().map(|b| b.info.identity.addr);
             self.scan.bonded_addr.lock(|a| a.set(bonded.map(|addr| addr.addr)));
 
-            if let Some(addr) = bonded
-                && let Some(conn) = self.connect(addr).await
-            {
-                self.run_connection(conn, Peer::Bonded).await;
+            if let Some(addr) = bonded {
+                // If there is bonded keyboard, repeatly connect to that keyboard.
+                if let Some(conn) = self.connect(addr).await {
+                    self.run_connection(conn, Peer::Bonded).await;
+                }
             } else if let Some((kind, addr)) = self.run_pairing_window().await
                 && let Some(conn) = self.connect(Address { kind, addr }).await
             {
@@ -206,7 +213,7 @@ where
                 ..scan_config(DONGLE_SCAN_WINDOW)
             },
         };
-        // A keyboard that is away burns this whole timeout before a window opens.
+        // An absent keyboard times out the attempt; the caller's loop retries.
         match with_timeout(Duration::from_secs(15), central.connect(&config)).await {
             Ok(Ok(conn)) => Some(conn),
             Ok(Err(e)) => {
@@ -221,7 +228,8 @@ where
 
     /// Scan for keyboards seeking a dongle, returning the strongest sighted
     /// within 2s of the first. Ends early with `None` when the bonded keyboard
-    /// turns up, so one back from sleep is not left waiting out the window.
+    /// turns up, so the power-on window with the keyboard present skips
+    /// straight to reconnecting.
     async fn run_pairing_window(&self) -> Option<(AddrKind, BdAddr)> {
         info!("[dongle] pairing window open for {}s", DONGLE_PAIRING_WINDOW_SECS);
         self.scan.seeking_keyboard.reset();
