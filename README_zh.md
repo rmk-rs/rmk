@@ -6,7 +6,7 @@
   </a>
 
   <p align="center">
-  A feature-rich Rust keyboard firmware. 
+  A modern, easy-to-use, and feature-rich keyboard firmware written in Rust. 
   <br />
   <br />
   <a href="https://crates.io/crates/rmk"><img src="https://img.shields.io/crates/v/rmk"></a>
@@ -35,13 +35,13 @@
 
 ## 真实例子
 
-### [rmk-ble-keyboard](https://github.com/rmk-rs/rmk-ble-keyboard)
+| [rmk-ble-keyboard](https://github.com/rmk-rs/rmk-ble-keyboard) | [dactyl-lynx-rmk](https://github.com/whitelynx/dactyl-lynx-rmk) | [sessile](https://github.com/willpuckett/sessile) |
+| --- | --- | --- |
+| <img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/rmk_ble_keyboard.jpg" width="300"> | <img src="https://raw.githubusercontent.com/whitelynx/dactyl-lynx-keyboard/refs/heads/main/resources/skeleton-prototype.jpg" width="300"> | <img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/sessile.png" width="300"> |
 
-<img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/rmk_ble_keyboard.jpg" width="60%">
-
-### [sessile](https://github.com/willpuckett/sessile)
-
-<img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/sessile.png" width="60%">
+| [Urchin](https://github.com/TimoBbz/urchin-rmk-firmware) | [zx66](https://github.com/zongxin1993/zx66-keybord) | [rmk-zsa-voyager](https://github.com/jpds/rmk-zsa-voyager) |
+| --- | --- | --- |
+| <img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/urchin.png" width="300"> | <img src="https://raw.githubusercontent.com/zongxin1993/zx66-keybord/refs/heads/master/Images/zx66-keybord_03.jpg" width="300"> | <img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/zsa-voyager.webp" width="300"> |
 
 ## 使用 RMK
 
