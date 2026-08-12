@@ -80,6 +80,8 @@ impl<
     async fn read_keyboard_event(&mut self) -> KeyboardEvent {
         loop {
             let (row_idx_start, col_idx_start) = self.scan_pos;
+            #[cfg(not(feature = "async_matrix"))]
+            let mut any_active = false;
 
             #[cfg(feature = "async_matrix")]
             self.wait_for_key().await;
@@ -121,13 +123,32 @@ impl<
                         if self.key_states[row_idx][col_idx].pressed {
                             self.scan_start = Some(Instant::now());
                         }
+
+                        // Keep scanning at full rate while a key is held or bouncing.
+                        #[cfg(not(feature = "async_matrix"))]
+                        if self.key_states[row_idx][col_idx].pressed
+                            || matches!(debounce_state, DebounceState::InProgress)
+                        {
+                            any_active = true;
+                        }
                     }
                 }
             }
 
             self.scan_pos = (0, 0);
 
+            // The interrupt gate in wait_for_key already covers idle in async
+            // builds; polling builds slow down when nothing is pressed or
+            // debouncing so the CPU can sleep between passes.
+            #[cfg(feature = "async_matrix")]
             Timer::after_micros(100).await;
+
+            #[cfg(not(feature = "async_matrix"))]
+            if any_active {
+                Timer::after_micros(100).await;
+            } else {
+                Timer::after_millis(crate::MATRIX_IDLE_SCAN_MS.into()).await;
+            }
         }
     }
 }
@@ -173,5 +194,93 @@ impl<
         });
         let _ = select_array(futs).await;
         self.scan_start = Some(Instant::now());
+    }
+}
+
+#[cfg(all(test, not(feature = "async_matrix")))]
+mod tests {
+    use embassy_time::{Duration, Instant};
+    use embedded_hal_mock::eh1::digital::{Mock as PinMock, State as PinState, Transaction as PinTrans};
+
+    use super::*;
+    use crate::debounce::fast_debouncer::FastDebouncer;
+    use crate::test_support::test_block_on as block_on;
+
+    /// While nobody is pressing or debouncing, each pass must actually sleep
+    /// `MATRIX_IDLE_SCAN_MS` instead of busy-polling, and a fresh press must
+    /// still be caught on the very next pass.
+    #[test]
+    fn idle_pass_sleeps_then_catches_the_next_press() {
+        let expectations = [
+            PinTrans::get(PinState::Low),
+            PinTrans::get(PinState::Low),
+            PinTrans::get(PinState::High),
+        ];
+        let pin = PinMock::new(&expectations);
+        let mut matrix: DirectPinMatrix<PinMock, FastDebouncer<1, 1>, 1, 1, 1> =
+            DirectPinMatrix::new([[Some(pin)]], FastDebouncer::new(), false);
+
+        let (elapsed, event) = block_on(async {
+            let start = Instant::now();
+            let event = matrix.read_keyboard_event().await;
+            (start.elapsed(), event)
+        });
+
+        assert!(event.pressed);
+        let idle_period = Duration::from_millis(crate::MATRIX_IDLE_SCAN_MS as u64);
+        // Two idle passes must have actually slept, not busy-looped: bounded
+        // below by two full idle periods (minus one tick of rounding slack)...
+        assert!(
+            elapsed >= idle_period * 2 - Duration::from_micros(100),
+            "expected ~2 idle sleeps of {idle_period:?}, only {elapsed:?} of virtual time passed"
+        );
+        // ...and bounded above so a fresh press is still caught promptly,
+        // rather than the matrix getting stuck idling forever.
+        assert!(
+            elapsed < idle_period * 3,
+            "press should be caught within the next idle pass, took {elapsed:?}"
+        );
+
+        matrix.direct_pins[0][0].as_mut().unwrap().done();
+    }
+
+    /// A key held down on one column must keep the whole pass at active rate,
+    /// even while a second column sees nothing change pass after pass: the
+    /// held key's `pressed` state, not just its own debounce state, has to
+    /// hold `any_active` true for the other column too.
+    #[test]
+    fn held_key_keeps_active_scan_rate_for_the_whole_pass() {
+        // Column 0 (key A) is pressed and held throughout. Column 1 (key B)
+        // stays low for 5 passes, then goes high on the 6th.
+        // +1 for the initial press pass, which reads column A before returning.
+        let a_expectations = core::array::from_fn::<_, 7, _>(|_| PinTrans::get(PinState::High));
+        let mut b_expectations = vec![PinTrans::get(PinState::Low); 5];
+        b_expectations.push(PinTrans::get(PinState::High));
+
+        let pin_a = PinMock::new(&a_expectations);
+        let pin_b = PinMock::new(&b_expectations);
+        let mut matrix: DirectPinMatrix<PinMock, FastDebouncer<1, 2>, 1, 2, 2> =
+            DirectPinMatrix::new([[Some(pin_a), Some(pin_b)]], FastDebouncer::new(), false);
+
+        // Press and hold key A (first pass, returns immediately: not idle-gated).
+        let a_press = block_on(matrix.read_keyboard_event());
+        assert!(a_press.pressed);
+
+        // Now watch key B: 5 no-change passes with A held, then B's press.
+        let (elapsed, b_press) = block_on(async {
+            let start = Instant::now();
+            let event = matrix.read_keyboard_event().await;
+            (start.elapsed(), event)
+        });
+        assert!(b_press.pressed);
+        // 5 passes at the active 100us cadence is ~500us; a single idle sleep
+        // would already blow past MATRIX_IDLE_SCAN_MS (10ms default).
+        assert!(
+            elapsed < Duration::from_millis(crate::MATRIX_IDLE_SCAN_MS as u64) / 2,
+            "key B's no-change passes were idle-gated despite key A being held, took {elapsed:?}"
+        );
+
+        matrix.direct_pins[0][0].as_mut().unwrap().done();
+        matrix.direct_pins[0][1].as_mut().unwrap().done();
     }
 }
