@@ -146,7 +146,9 @@ impl BleTransportControl {
     }
 
     fn set_phase(&self, phase: u8) {
-        if self.phase.swap(phase, Ordering::AcqRel) != phase {
+        // The BLE connection loop is the only phase writer.
+        if self.phase.load(Ordering::Acquire) != phase {
+            self.phase.store(phase, Ordering::Release);
             self.phase_changed.signal(());
         }
     }
@@ -1077,11 +1079,10 @@ mod tests {
     use embassy_time::Timer;
     use rmk_types::ble::{BleState, BleStatus};
 
+    use super::{BLE_TRANSPORT_PAUSED, BLE_TRANSPORT_PAUSING, BleTransportControl};
     use crate::event::{Axis, AxisEvent, AxisValType, KeyboardEvent, PointingEvent, SubscribableEvent, publish_event};
     use crate::state::{current_ble_status, set_ble_profile, set_ble_state};
     use crate::test_support::test_block_on as block_on;
-
-    use super::{BLE_TRANSPORT_PAUSED, BLE_TRANSPORT_PAUSING, BleTransportControl};
 
     fn ble_status_test_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
