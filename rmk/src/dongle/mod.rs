@@ -1,17 +1,20 @@
 //! Dongle firmware (`dongle` feature): a BLE central that relays one bonded
 //! RMK keyboard to a USB host.
 //!
-//! It is a HID-over-GATT client toward the keyboard and a byte relay for
-//! everything else — Rynk frames pass through unparsed in both directions, so
-//! the dongle answers no command of its own and never tracks the protocol.
-//! Keymaps and storage stay on the keyboard; the dongle persists one bond.
+//! It is a HID-over-GATT client toward the keyboard and a relay for everything
+//! else — the keyboard's host protocol (Rynk frames, or Vial reports with the
+//! `vial` feature) passes through unparsed in both directions, so the dongle
+//! answers no command of its own and never tracks the protocol. Keymaps and
+//! storage stay on the keyboard; the dongle persists one bond.
 //!
 //! Task layout (both joined by [`Dongle::run`]):
 //! - `ble_task`: trouble runner with the seeking-advertisement scan handler;
 //! - [`DongleCentral::run`]: find a keyboard, connect, secure, relay, repeat.
 
+#[cfg(not(feature = "vial"))]
 mod router;
-
+#[cfg(feature = "vial")]
+mod vial_router;
 use core::cell::Cell;
 
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
@@ -22,10 +25,15 @@ use embassy_futures::select::{Either, select, select3};
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer, with_deadline, with_timeout};
+#[cfg(not(feature = "vial"))]
 use rmk_types::protocol::rynk::{RYNK_BLE_CHUNK_SIZE, RYNK_INPUT_CHAR_UUID, RYNK_OUTPUT_CHAR_UUID, RYNK_SERVICE_UUID};
 pub use router::DongleRouter;
+#[cfg(feature = "vial")]
+use router::VialReport;
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{MediaKeyboardReport, MouseReport, SystemControlReport};
+#[cfg(feature = "vial")]
+use vial_router as router;
 
 use crate::ble::adv::Adv;
 use crate::ble::profile::{ProfileInfo, ProfileManager};
@@ -45,7 +53,7 @@ const DONGLE_L2CAP_CHANNELS_MAX: usize = DONGLE_CONNECTIONS_MAX * 4; // Signal +
 type DongleBleResources = HostResources<DefaultPacketPool, DONGLE_CONNECTIONS_MAX, DONGLE_L2CAP_CHANNELS_MAX>;
 
 /// The services discovery keeps: 0x1812 matches both the report service and the
-/// rynk HID service, plus the rynk service itself.
+/// host-protocol HID service (rynk or vial), plus rynk's custom service.
 type Client<'a, C> = GattClient<'a, C, DefaultPacketPool, 3>;
 
 const BOND_SLOT: u8 = 0;
@@ -384,7 +392,14 @@ where
 
         self.router.link_up();
         info!("[dongle] relaying");
-        self.relay(conn, client, &mut listener, &chars).await;
+        self.relay(
+            #[cfg(not(feature = "vial"))]
+            conn,
+            client,
+            &mut listener,
+            &chars,
+        )
+        .await;
         Some(())
     }
 
@@ -392,13 +407,14 @@ where
     /// out to USB/router, LED state and router frames back to the keyboard.
     async fn relay(
         &self,
-        conn: &Connection<'_, DefaultPacketPool>,
+        #[cfg(not(feature = "vial"))] conn: &Connection<'_, DefaultPacketPool>,
         client: &Client<'_, C>,
         listener: &mut NotificationListener<'_, 512>,
         chars: &KeyboardCharacteristics,
     ) {
         // Largest single write chunk on the Rynk characteristic: ATT MTU minus the
-        // 3-byte write header.
+        // 3-byte write header. Vial reports are 32 bytes and cross whole.
+        #[cfg(not(feature = "vial"))]
         let chunk_size = RYNK_BLE_CHUNK_SIZE
             .min((conn.att_mtu() as usize).saturating_sub(3))
             .max(1);
@@ -407,15 +423,27 @@ where
             loop {
                 let notification = listener.next().await;
                 let (handle, data) = (notification.handle(), notification.as_ref());
-                // Only the Rynk stream is opaque, and it goes straight to the host.
-                if handle == chars.rynk_input.handle {
-                    // Never block: the typing path shares this notification queue.
-                    if !matches!(self.router.to_host.try_write(data), Ok(n) if n == data.len()) {
-                        // Terminate what got through, so the truncated frame fails on
-                        // its own rather than gluing to the next notify — which would
-                        // decode as one bogus frame and cost the host that reply too.
+                // Only the config stream is opaque, and it goes straight to the host.
+                if handle == chars.config_input.handle {
+                    // A full pipe is usually a host a moment behind, so wait for 20ms at most.
+                    #[cfg(not(feature = "vial"))]
+                    if with_timeout(Duration::from_millis(20), self.router.to_host.write_all(data))
+                        .await
+                        .is_err()
+                    {
+                        // Try to send a delimeter and drop the bytes which cannot be written in 20ms.
                         let _ = self.router.to_host.try_write(&[0]);
                         warn!("[dongle] host config stream overflow, dropping bytes");
+                    }
+                    // Reports are atomic: a dropped one costs its reply, nothing else.
+                    #[cfg(feature = "vial")]
+                    match VialReport::try_from(data) {
+                        Ok(report) => {
+                            if self.router.to_host.try_send(report).is_err() {
+                                warn!("[dongle] host reply queue full, dropping a reply");
+                            }
+                        }
+                        Err(_) => warn!("[dongle] non-report-size vial notify dropped"),
                     }
                 } else if let Some(report) = chars.report(handle, data) {
                     send_hid_report(report).await;
@@ -423,31 +451,43 @@ where
             }
         };
 
-        let host_to_keyboard = async {
+        let led_to_keyboard = async {
             let mut led_events = LedIndicatorEvent::subscriber();
             loop {
-                match select(led_events.next_event(), self.router.to_keyboard.receive()).await {
-                    Either::First(event) => {
-                        let _ = client
-                            .write_characteristic_without_response(&chars.keyboard_output, &[event.0.into_bits()])
-                            .await;
-                    }
-                    Either::Second(frame) => {
-                        for part in frame.chunks(chunk_size) {
-                            if client
-                                .write_characteristic_without_response(&chars.rynk_output, part)
-                                .await
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                    }
+                let event = led_events.next_event().await;
+                let _ = client
+                    .write_characteristic_without_response(&chars.keyboard_output, &[event.0.into_bits()])
+                    .await;
+            }
+        };
+
+        // One characteristic write per pass. Rynk takes a write's worth out of the
+        // byte stream — the read itself is the chunker — while Vial takes one whole
+        // report, because a report can't be split.
+        #[cfg(not(feature = "vial"))]
+        let mut request = [0u8; RYNK_BLE_CHUNK_SIZE];
+        let request_to_keyboard = async {
+            loop {
+                #[cfg(not(feature = "vial"))]
+                {
+                    let n = self.router.to_keyboard.read(&mut request[..chunk_size]).await;
+                    let _ = client
+                        .write_characteristic_without_response(&chars.config_output, &request[..n])
+                        .await;
+                }
+                #[cfg(feature = "vial")]
+                {
+                    let report = self.router.to_keyboard.receive().await;
+                    let _ = client
+                        .write_characteristic_without_response(&chars.config_output, &report)
+                        .await;
                 }
             }
         };
 
-        select(keyboard_to_host, host_to_keyboard).await;
+        // Three independent errands, not one interleaved loop: an LED update must
+        // not wait behind a config write, nor the other way round.
+        select3(keyboard_to_host, led_to_keyboard, request_to_keyboard).await;
     }
 }
 
@@ -473,21 +513,24 @@ struct KeyboardCharacteristics {
     mouse: Characteristic<[u8]>,
     media: Characteristic<[u8]>,
     system: Characteristic<[u8]>,
-    rynk_input: Characteristic<[u8]>,
-    rynk_output: Characteristic<[u8]>,
+    /// The host-protocol pair: rynk's custom service, or the 32-byte report
+    /// pair of vial's own HID service.
+    config_input: Characteristic<[u8]>,
+    config_output: Characteristic<[u8]>,
 }
 
 impl KeyboardCharacteristics {
-    /// Discover the HID and Rynk services. The five HID report characteristics
-    /// share UUID 0x2A4D; both ends are RMK, so their declaration order is
-    /// fixed: keyboard input, keyboard output, mouse, media, system.
+    /// Discover the HID and host-protocol services. The report characteristics
+    /// share UUID 0x2A4D; both ends are RMK, so service and declaration order
+    /// are fixed: the report service comes first with keyboard input, keyboard
+    /// output, mouse, media, system.
     async fn discover<C: Controller>(client: &Client<'_, C>) -> Option<Self> {
-        let hid = client
+        let mut hid_services = client
             .services_by_uuid(&Uuid::new_short(0x1812))
             .await
             .ok()?
-            .into_iter()
-            .next()?;
+            .into_iter();
+        let hid = hid_services.next()?;
         let report_uuid = Uuid::new_short(0x2A4D);
         // Discovery fails unless every characteristic `HidService` declares fits.
         let mut reports = client
@@ -502,20 +545,37 @@ impl KeyboardCharacteristics {
         let media = reports.next()?;
         let system = reports.next()?;
 
-        let rynk = client
-            .services_by_uuid(&RYNK_SERVICE_UUID.into())
-            .await
-            .ok()?
-            .into_iter()
-            .next()?;
-        let rynk_input = client
-            .characteristic_by_uuid::<[u8]>(&rynk, &RYNK_INPUT_CHAR_UUID.into())
-            .await
-            .ok()?;
-        let rynk_output = client
-            .characteristic_by_uuid::<[u8]>(&rynk, &RYNK_OUTPUT_CHAR_UUID.into())
-            .await
-            .ok()?;
+        #[cfg(not(feature = "vial"))]
+        let (config_input, config_output) = {
+            let rynk = client
+                .services_by_uuid(&RYNK_SERVICE_UUID.into())
+                .await
+                .ok()?
+                .into_iter()
+                .next()?;
+            (
+                client
+                    .characteristic_by_uuid::<[u8]>(&rynk, &RYNK_INPUT_CHAR_UUID.into())
+                    .await
+                    .ok()?,
+                client
+                    .characteristic_by_uuid::<[u8]>(&rynk, &RYNK_OUTPUT_CHAR_UUID.into())
+                    .await
+                    .ok()?,
+            )
+        };
+        // Vial rides the second HID service instance: input notify, then output write.
+        #[cfg(feature = "vial")]
+        let (config_input, config_output) = {
+            let vial = hid_services.next()?;
+            let mut reports = client
+                .characteristics::<9>(&vial)
+                .await
+                .ok()?
+                .into_iter()
+                .filter(|c| c.uuid == report_uuid);
+            (reports.next()?, reports.next()?)
+        };
 
         Some(Self {
             keyboard_input,
@@ -523,8 +583,8 @@ impl KeyboardCharacteristics {
             mouse,
             media,
             system,
-            rynk_input,
-            rynk_output,
+            config_input,
+            config_output,
         })
     }
 
@@ -536,7 +596,7 @@ impl KeyboardCharacteristics {
             &self.mouse,
             &self.media,
             &self.system,
-            &self.rynk_input,
+            &self.config_input,
         ] {
             if let Some(cccd) = ch.cccd_handle {
                 client.write_handle(cccd, &[0x01, 0x00]).await.ok()?;

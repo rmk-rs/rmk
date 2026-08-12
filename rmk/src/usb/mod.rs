@@ -24,15 +24,16 @@ use crate::light::UsbLedReader;
 use crate::state::{current_usb_state, set_usb_state};
 
 // The Rynk vendor interface serves the keyboard's Rynk session and the dongle's router.
-#[cfg(any(feature = "rynk", feature = "dongle"))]
+#[cfg(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))))]
 pub(crate) mod rynk;
 #[cfg(feature = "vial")]
 pub(crate) mod vial;
 
 // A build has at most one host interface — Vial's HID report pair or the Rynk
-// vendor bulk pair, and the protocols are mutually exclusive. The two modules
+// vendor bulk pair, and the protocols are mutually exclusive. A dongle relays
+// its keyboard's protocol: Rynk unless `vial` says otherwise. The two modules
 // expose the same names, so the rest of the file only talks to `host_usb`.
-#[cfg(any(feature = "rynk", feature = "dongle"))]
+#[cfg(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))))]
 use rynk as host_usb;
 #[cfg(feature = "vial")]
 use vial as host_usb;
@@ -165,7 +166,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
     usb_config.product = Some(keyboard_config.product_name);
     // Informational tag (visible in `lsusb` & co); host discovery keys on the
     // Rynk vendor interface triple, not the serial.
-    #[cfg(any(feature = "rynk", feature = "dongle"))]
+    #[cfg(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))))]
     let serial_number = {
         static SERIAL: StaticCell<heapless::String<64>> = StaticCell::new();
         let s = SERIAL.init(heapless::String::new());
@@ -173,7 +174,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
         let _ = s.push_str(keyboard_config.serial_number);
         s.as_str()
     };
-    #[cfg(not(any(feature = "rynk", feature = "dongle")))]
+    #[cfg(not(any(feature = "rynk", all(feature = "dongle", not(feature = "vial")))))]
     let serial_number = keyboard_config.serial_number;
     usb_config.serial_number = Some(serial_number);
     usb_config.max_power = 450;
@@ -192,7 +193,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
         feature = "steno",
         feature = "dfu",
         feature = "rynk",
-        feature = "dongle"
+        all(feature = "dongle", not(feature = "vial"))
     ));
     const USB_BUF_SIZE: usize = if EXTRA_INTERFACES { 256 } else { 128 };
 
@@ -204,7 +205,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
 
     // The rynk MS OS 2.0 descriptor set (WinUSB binding) takes ~178 bytes, and
     // its BOS platform capability another 28 on top of the 5-byte BOS header.
-    const RYNK_INTERFACE: bool = cfg!(any(feature = "rynk", feature = "dongle"));
+    const RYNK_INTERFACE: bool = cfg!(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))));
     const BOS_BUF_SIZE: usize = if RYNK_INTERFACE { 64 } else { 16 };
     const MSOS_BUF_SIZE: usize = if RYNK_INTERFACE { 256 } else { 16 };
 

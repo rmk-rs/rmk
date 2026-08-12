@@ -30,11 +30,6 @@ compile_error!("feature `host` requires enabling either `rynk` or `vial`");
 #[cfg(all(feature = "dongle", not(feature = "_ble")))]
 compile_error!("feature `dongle` requires a BLE chip feature (e.g. `nrf52840_ble`)");
 
-#[cfg(all(feature = "dongle", feature = "vial"))]
-compile_error!(
-    "features `dongle` and `vial` are mutually exclusive: a dongle relays the Rynk service, which a Vial keyboard doesn't have"
-);
-
 #[cfg(all(feature = "usb_log", feature = "_usb_high_speed"))]
 compile_error!(
     "`usb_log` is not supported on high-speed USB chips yet: embassy-usb-logger \

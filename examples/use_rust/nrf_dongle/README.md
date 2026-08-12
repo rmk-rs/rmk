@@ -30,3 +30,8 @@ Holding the dongle key for 5s clears the central's dongle bond, which is how a
 keyboard moves to another dongle. A dongle bonds one keyboard, and goes looking
 for a new one whenever the bonded keyboard stops answering, so the replacement
 just has to be seeking — no host involvement, and no reflashing.
+
+The dongle relays whichever host protocol its keyboard speaks. This example is
+Rynk; swapping `rynk` for `vial` on the central and adding `vial` to the dongle
+crate yields a Vial dongle instead, whose USB side is the standard Vial HID
+interface.

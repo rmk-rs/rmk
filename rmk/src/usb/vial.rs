@@ -28,6 +28,13 @@ impl super::HostSession for VialService<'_> {
     }
 }
 
+#[cfg(feature = "dongle")]
+impl super::HostSession for crate::dongle::DongleRouter {
+    async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
+        self.run_session(rx, tx).await
+    }
+}
+
 /// Vial session loop.
 pub(crate) async fn run_host_usb<D: Driver<'static>, S: super::HostSession>(
     reader: &mut HostUsbReader<D>,
