@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix override attributes (`#[Override(...)]` / `#[Overwritten(...)]`) silently falling back to the generated default: an unknown or miscased variant (e.g. `Entry` instead of `entry`) is now a compile error carrying darling's diagnostic, and an extra attribute on the function (doc comments included) no longer disables a valid override ([#966](https://github.com/rmk-rs/rmk/issues/966))
 - Fix `#[Override(bind_interrupt)]` (the form the stm32h7 example documents) never taking effect: the custom interrupt binding is now selected through the shared override matcher instead of being silently dropped in favor of the generated default. The legacy bare `#[bind_interrupt]` marker keeps working unchanged
 - Fix non-`defmt` DFU builds (e.g. `dfu_rp` with `usb_log`) failing with a borrow-of-moved-value error on `central_attrs`: embassy-usb's `DfuAttributes` is `Copy` only under `defmt`, so the DFU descriptor now reads the attribute bits before handing the attributes to `DfuState` ([#973](https://github.com/rmk-rs/rmk/issues/973))
+- Fix a dropped keypress when two keys resolve to the same HID keycode with different modifiers (a plain bracket and its `SHIFTED()` neighbor). Rolling them quickly sent the same usage in two report slots, which some hosts read as a release of the held key and dropped the second key. Keyboard reports now deduplicate keycodes so the shared usage stays down until the last holder releases it
 
 ## [0.8.2] - 2025-12-18
 
