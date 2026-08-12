@@ -1,7 +1,10 @@
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use embassy_futures::join::join3;
 use embassy_futures::select::{Either, Either3, select, select3};
+use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer, with_timeout};
 use rmk_types::ble::BleState;
 use rmk_types::connection::ConnectionType;
@@ -10,6 +13,7 @@ use trouble_host::prelude::appearance::human_interface_device::KEYBOARD;
 use trouble_host::prelude::service::{BATTERY, HUMAN_INTERFACE_DEVICE};
 use trouble_host::prelude::*;
 
+use crate::RawMutex;
 use crate::ble::battery_service::BleBatteryServer;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
@@ -49,6 +53,118 @@ const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + 1;
 /// Max number of L2CAP channels
 const L2CAP_CHANNELS_MAX: usize = CONNECTIONS_MAX * 4; // Signal + att + smp + hid
 
+const BLE_TRANSPORT_ENABLED: u8 = 0;
+const BLE_TRANSPORT_PAUSING: u8 = 1;
+const BLE_TRANSPORT_PAUSED: u8 = 2;
+
+/// Control handle for pausing and resuming a non-split [`BleTransport`].
+///
+/// Allocate this separately from the transport (normally as a `static`) and
+/// attach it with [`BleTransport::with_control`]. [`pause`](Self::pause) does
+/// not cancel the trouble-host runner: it waits until RMK has dropped an active
+/// advertiser, or requested and observed disconnection of an active host, and
+/// parked the host connection loop. [`resume`](Self::resume) lets that same
+/// stack advertise again.
+///
+/// These methods require `BleTransport::run` to be polled concurrently. A
+/// single task should serialize pause/resume requests.
+pub struct BleTransportControl {
+    enabled: AtomicBool,
+    phase: AtomicU8,
+    request_changed: Signal<RawMutex, ()>,
+    phase_changed: Signal<RawMutex, ()>,
+}
+
+impl BleTransportControl {
+    /// Create an enabled BLE transport control.
+    pub const fn new() -> Self {
+        Self {
+            enabled: AtomicBool::new(true),
+            phase: AtomicU8::new(BLE_TRANSPORT_ENABLED),
+            request_changed: Signal::new(),
+            phase_changed: Signal::new(),
+        }
+    }
+
+    /// Create a control that starts paused before the BLE runner is first polled.
+    ///
+    /// This is useful when the application restores another radio transport at
+    /// boot and must prevent a transient BLE advertisement before it calls
+    /// [`resume`](Self::resume).
+    pub const fn new_paused() -> Self {
+        Self {
+            enabled: AtomicBool::new(false),
+            phase: AtomicU8::new(BLE_TRANSPORT_PAUSING),
+            request_changed: Signal::new(),
+            phase_changed: Signal::new(),
+        }
+    }
+
+    /// Pause host advertising/connections without stopping the BLE stack runner.
+    pub async fn pause(&self) {
+        self.enabled.store(false, Ordering::Release);
+        self.request_changed.signal(());
+        self.wait_for_phase(BLE_TRANSPORT_PAUSED).await;
+    }
+
+    /// Resume host advertising on the existing BLE stack.
+    pub async fn resume(&self) {
+        self.enabled.store(true, Ordering::Release);
+        self.request_changed.signal(());
+        self.wait_for_phase(BLE_TRANSPORT_ENABLED).await;
+    }
+
+    async fn wait_for_phase(&self, phase: u8) {
+        while self.phase.load(Ordering::Acquire) != phase {
+            self.phase_changed.wait().await;
+        }
+    }
+
+    async fn wait_for_pause_request(&self) {
+        while self.enabled.load(Ordering::Acquire) {
+            self.request_changed.wait().await;
+        }
+        self.set_phase(BLE_TRANSPORT_PAUSING);
+    }
+
+    fn pause_requested(&self) -> bool {
+        !self.enabled.load(Ordering::Acquire)
+    }
+
+    fn acknowledge_paused(&self) {
+        self.set_phase(BLE_TRANSPORT_PAUSED);
+    }
+
+    async fn wait_for_resume_request(&self) {
+        while !self.enabled.load(Ordering::Acquire) {
+            self.request_changed.wait().await;
+        }
+    }
+
+    fn acknowledge_enabled(&self) {
+        self.set_phase(BLE_TRANSPORT_ENABLED);
+    }
+
+    fn set_phase(&self, phase: u8) {
+        if self.phase.swap(phase, Ordering::AcqRel) != phase {
+            self.phase_changed.signal(());
+        }
+    }
+}
+
+impl Default for BleTransportControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+async fn wait_for_pause_request(control: Option<&BleTransportControl>) {
+    match control {
+        Some(control) => control.wait_for_pause_request().await,
+        None => core::future::pending().await,
+    }
+}
+
 /// BLE transport. Owns the whole BLE stack.
 ///
 /// On a split build the transport is the BLE split central:
@@ -70,6 +186,8 @@ where
     peripheral_matrices: [PeripheralMatrixConfig; crate::SPLIT_PERIPHERALS_NUM],
     #[cfg(feature = "host")]
     host_service: Option<&'a crate::host::HostService<'a>>,
+    #[cfg(not(feature = "split"))]
+    control: Option<&'a BleTransportControl>,
     // Keeps `'a` in the type's parameter list across all feature configurations.
     #[cfg(not(feature = "host"))]
     _phantom: core::marker::PhantomData<&'a ()>,
@@ -94,6 +212,8 @@ where
             peripheral_matrices,
             #[cfg(feature = "host")]
             host_service: None,
+            #[cfg(not(feature = "split"))]
+            control: None,
             #[cfg(not(feature = "host"))]
             _phantom: core::marker::PhantomData,
         }
@@ -105,6 +225,13 @@ where
     #[cfg(feature = "host")]
     pub fn with_host_service(mut self, service: &'a crate::host::HostService<'a>) -> Self {
         self.host_service = Some(service);
+        self
+    }
+
+    /// Attach an application-owned pause/resume control handle.
+    #[cfg(not(feature = "split"))]
+    pub fn with_control(mut self, control: &'a BleTransportControl) -> Self {
+        self.control = Some(control);
         self
     }
 }
@@ -131,6 +258,7 @@ where
             &self.config,
             #[cfg(feature = "host")]
             self.host_service,
+            self.control,
         )
         .await
     }
@@ -196,10 +324,14 @@ async fn serve<#[cfg(feature = "host")] 'r, C>(
     device_config: &DeviceConfig<'static>,
     config: &BleBatteryConfig<'static>,
     #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
+    #[cfg(not(feature = "split"))] control: Option<&BleTransportControl>,
 ) -> !
 where
     C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 {
+    #[cfg(feature = "split")]
+    let control: Option<&BleTransportControl> = None;
+
     let product_name = device_config.product_name;
     #[cfg(feature = "_nrf_ble")]
     let serial_number = crate::ble::nrf::get_serial_number();
@@ -258,13 +390,30 @@ where
 
     let connection_loop = async {
         loop {
-            match select(
+            if let Some(control) = control
+                && control.pause_requested()
+            {
+                set_ble_state(BleState::Inactive);
+                control.acknowledge_paused();
+                loop {
+                    match select(control.wait_for_resume_request(), profile_manager.update_profile()).await {
+                        Either::First(()) => break,
+                        Either::Second(()) => {}
+                    }
+                }
+                control.acknowledge_enabled();
+            } else if let Some(control) = control {
+                control.acknowledge_enabled();
+            }
+
+            match select3(
                 advertise(product_name, &mut peripheral, server),
                 profile_manager.update_profile(),
+                wait_for_pause_request(control),
             )
             .await
             {
-                Either::First(Ok(conn)) => {
+                Either3::First(Ok(conn)) => {
                     // Do NOT emit BleState::Connected here. gatt_events_task emits
                     // Connected when it sees GattConnectionEvent::Encrypted.
                     let active_bond_info = profile_manager.active_bond_info();
@@ -281,7 +430,7 @@ where
                         }
                         continue;
                     }
-                    if let Either::Second(_) = select(
+                    let should_disconnect = match select3(
                         run_ble_keyboard(
                             server,
                             &conn,
@@ -292,9 +441,14 @@ where
                             host_service,
                         ),
                         profile_manager.update_profile(),
+                        wait_for_pause_request(control),
                     )
                     .await
                     {
+                        Either3::First(_) => false,
+                        Either3::Second(_) | Either3::Third(_) => true,
+                    };
+                    if should_disconnect {
                         // When the profile changes, manually disconnect from the current host
                         if conn.raw().is_connected() {
                             conn.raw().disconnect();
@@ -306,7 +460,7 @@ where
                         }
                     }
                 }
-                Either::First(Err(BleHostError::BleHost(Error::Timeout))) => {
+                Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
                     warn!("Advertising timeout, sleep and wait for any key");
                     set_ble_state(BleState::Inactive);
 
@@ -319,18 +473,30 @@ where
                     // instantly with a stale event.
                     let mut key_wake = crate::event::KeyboardEvent::subscriber();
                     let mut pointing_wake = crate::event::PointingEvent::subscriber();
-                    let _ = select(key_wake.next_message_pure(), pointing_wake.next_message_pure()).await;
-
-                    report_activity();
+                    match select3(
+                        key_wake.next_message_pure(),
+                        pointing_wake.next_message_pure(),
+                        wait_for_pause_request(control),
+                    )
+                    .await
+                    {
+                        Either3::First(_) | Either3::Second(_) => report_activity(),
+                        Either3::Third(_) => {}
+                    }
                 }
-                Either::First(Err(e)) => {
+                Either3::First(Err(e)) => {
                     #[cfg(feature = "defmt")]
                     let e = defmt::Debug2Format(&e);
                     error!("Advertise error: {:?}", e);
                     Timer::after_millis(200).await;
                 }
-                Either::Second(()) => {}
+                Either3::Second(()) | Either3::Third(()) => {}
             };
+
+            if control.is_some_and(|control| !control.enabled.load(Ordering::Acquire)) {
+                set_ble_state(BleState::Inactive);
+                continue;
+            }
 
             // Skip the Inactive transition if we never moved off Advertising
             if crate::state::current_ble_status().state != BleState::Advertising {
@@ -903,6 +1069,7 @@ pub(crate) async fn update_conn_params<
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::Ordering;
     use std::sync::{Mutex, OnceLock};
 
     use embassy_futures::join::join;
@@ -913,6 +1080,8 @@ mod tests {
     use crate::event::{Axis, AxisEvent, AxisValType, KeyboardEvent, PointingEvent, SubscribableEvent, publish_event};
     use crate::state::{current_ble_status, set_ble_profile, set_ble_state};
     use crate::test_support::test_block_on as block_on;
+
+    use super::{BLE_TRANSPORT_PAUSED, BLE_TRANSPORT_PAUSING, BleTransportControl};
 
     fn ble_status_test_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -950,6 +1119,58 @@ mod tests {
                 state: BleState::Inactive,
             }
         );
+    }
+
+    #[test]
+    fn transport_control_pauses_and_resumes_the_same_runner() {
+        let control = BleTransportControl::new();
+
+        block_on(async {
+            join(
+                async {
+                    control.pause().await;
+                    assert_eq!(control.phase.load(Ordering::Acquire), BLE_TRANSPORT_PAUSED);
+                    // Requests are idempotent once the phase is acknowledged.
+                    control.pause().await;
+
+                    control.resume().await;
+                    control.resume().await;
+                },
+                async {
+                    control.wait_for_pause_request().await;
+                    assert_eq!(control.phase.load(Ordering::Acquire), BLE_TRANSPORT_PAUSING);
+                    control.acknowledge_paused();
+                    control.wait_for_resume_request().await;
+                    control.acknowledge_enabled();
+                },
+            )
+            .await;
+        });
+    }
+
+    #[test]
+    fn initially_paused_control_does_not_require_an_advertising_cycle() {
+        let control = BleTransportControl::new_paused();
+        assert_eq!(control.phase.load(Ordering::Acquire), BLE_TRANSPORT_PAUSING);
+
+        block_on(async {
+            join(
+                async {
+                    control.pause().await;
+                    assert_eq!(control.phase.load(Ordering::Acquire), BLE_TRANSPORT_PAUSED);
+                    control.resume().await;
+                },
+                async {
+                    control.wait_for_pause_request().await;
+                    control.acknowledge_paused();
+                    control.wait_for_resume_request().await;
+                    control.acknowledge_enabled();
+                },
+            )
+            .await;
+        });
+
+        assert_eq!(control.phase.load(Ordering::Acquire), super::BLE_TRANSPORT_ENABLED);
     }
 
     #[test]
