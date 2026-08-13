@@ -15,16 +15,14 @@ use rmk_types::protocol::rynk::{RYNK_BLE_CHUNK_SIZE, RynkError, RynkHeader, enco
 
 use crate::RawMutex;
 
-/// A whole max-size frame, plus two notifies of slack for a briefly stalled
-/// host. Anything less and one full frame in flight leaves no room for the
-/// notify behind it, which costs a frame every bulk read.
+/// One max-size frame plus two notifies of slack: any less and a full frame in
+/// flight leaves no room for the notify behind it, costing a frame per bulk read.
 const TO_HOST_SIZE: usize = RYNK_BUFFER_SIZE + 2 * RYNK_BLE_CHUNK_SIZE;
 
 /// Serves the Rynk USB interface for a dongle binary, as `RynkService` does for
-/// a keyboard; [`crate::usb::rynk::run_host_usb`] drives one session per
-/// connection. The binary's `main` owns one and lends it to both sides that meet
-/// here: the [`crate::usb::UsbTransport`] running the sessions, and the
-/// [`super::Dongle`] whose dongle task relays what they queue.
+/// a keyboard. `main` owns one and lends it to both sides:
+/// [`crate::usb::rynk::run_host_usb`] drives a session per connection, and the
+/// [`super::Dongle`] task relays what the session queues.
 pub struct DongleRouter {
     /// Raw bytes waiting for the keyboard's `output_data` writes.
     pub(super) to_keyboard: Pipe<RawMutex, RYNK_BUFFER_SIZE>,
@@ -75,10 +73,9 @@ impl DongleRouter {
         select(self.host_to_keyboard(rx), self.keyboard_to_host(tx)).await;
     }
 
-    /// Host→keyboard: bytes cross as they arrive, exactly as they do in the other
-    /// direction. The only state kept is the head of the frame in flight, which is
-    /// all [`RynkHeader::peek`] needs to answer an absent keyboard on the request's
-    /// own CMD and SEQ — the one thing this direction can't do byte-blind.
+    /// Host -> keyboard: bytes cross as they arrive. The only state is the head of
+    /// the frame in flight — all [`RynkHeader::peek`] needs to answer an absent
+    /// keyboard on the request's own CMD and SEQ.
     async fn host_to_keyboard<R: Read>(&self, rx: &mut R) {
         let mut buf = [0u8; RYNK_BLE_CHUNK_SIZE];
         let mut head: heapless::Vec<u8, 8> = heapless::Vec::new();
@@ -94,47 +91,35 @@ impl DongleRouter {
                 head.extend_from_slice(&body[..body.len().min(head.capacity() - head.len())])
                     .ok();
 
-                // `link_dropped` is polled first so it wins the tie when the link
-                // dies mid-write; whatever got through is resynced by the
-                // keyboard's own deframer at the next delimiter.
+                // `link_dropped` is polled first so it wins the tie when the link dies
+                // mid-write; the keyboard's deframer resyncs at the next delimiter.
                 if self.link_connected.load(Ordering::Relaxed) {
                     let _ = select(self.link_dropped.wait(), self.to_keyboard.write_all(piece)).await;
                 }
                 if !ends_frame {
                     continue;
                 }
-                // Whole frame seen. With no keyboard to serve it, queueing would
-                // strand it — nothing drains the queue while the keyboard is away —
-                // and the host has no timeout of its own, so answer it here. A bare
-                // delimiter carries no request, so there is nothing to answer.
+                // Whole frame seen. Nothing drains the queue while the keyboard is
+                // away and the host has no timeout of its own, so answer here; a
+                // bare delimiter carries no request to answer.
                 if !head.is_empty() && !self.link_connected.load(Ordering::Relaxed) {
-                    self.answer_not_ready(&head).await;
+                    if let Some(header) = RynkHeader::peek(&head) {
+                        let mut reply = [0u8; 16];
+                        match encode_frame(&mut reply[1..], header, &Err::<(), RynkError>(RynkError::NotReady)) {
+                            // `reply[0]` is a bare delimiter, closing off any partial frame in the stream.
+                            Ok(n) => self.to_host.write_all(&reply[..n + 1]).await,
+                            Err(e) => warn!("[dongle] reply encode failed: {:?}", e),
+                        }
+                    } else {
+                        warn!("[dongle] undecodable host frame dropped");
+                    }
                 }
                 head.clear();
             }
         }
     }
 
-    /// Answer one request locally, on its own CMD and SEQ, so the host isn't left
-    /// waiting for a keyboard that isn't there.
-    async fn answer_not_ready(&self, head: &[u8]) {
-        let Some(header) = RynkHeader::peek(head) else {
-            warn!("[dongle] undecodable host frame dropped");
-            return;
-        };
-        let mut buf = [0u8; 16];
-        match encode_frame(&mut buf[1..], header, &Err::<(), RynkError>(RynkError::NotReady)) {
-            // `buf[0]` is a bare delimiter, closing off any partial frame in the stream.
-            Ok(n) => self.to_host.write_all(&buf[..n + 1]).await,
-            Err(e) => warn!("[dongle] reply encode failed: {:?}", e),
-        }
-    }
-
-    /// Keyboard→host: raw bytes, forwarded as they arrive. The stream is
-    /// delimiter-framed and the host deframes it, so the relay never needs to
-    /// find a frame boundary — and holding bytes back until it finds one is what
-    /// turns a single lost notification into two lost replies, by gluing the
-    /// surviving half onto the frame behind it. Sole owner of the transport.
+    /// Keyboard -> host: raw bytes forwarded as they arrive.
     async fn keyboard_to_host<T: Write>(&self, tx: &mut T) {
         let mut buf = [0u8; RYNK_BLE_CHUNK_SIZE];
         loop {
