@@ -24,15 +24,17 @@ use crate::light::UsbLedReader;
 use crate::state::{current_usb_state, set_usb_state};
 
 // The Rynk vendor interface serves the keyboard's Rynk session and the dongle's router.
-#[cfg(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))))]
+#[cfg(any(feature = "rynk", feature = "dongle"))]
 pub(crate) mod rynk;
 #[cfg(feature = "vial")]
 pub(crate) mod vial;
 
-// A build has at most one host interface — Vial's HID report pair or the Rynk
-// vendor bulk pair, and the protocols are mutually exclusive. A dongle relays
-// its keyboard's protocol: Rynk unless `vial` says otherwise. The two modules
-// expose the same names, so the rest of the file only talks to `host_usb`.
+// A keyboard build has one host interface — Vial's HID report pair or the Rynk
+// vendor bulk pair, the protocols being mutually exclusive — and `host_usb` is
+// whichever it is. The two modules expose the same names, so the rest of the
+// file only talks to `host_usb`. A dongle+vial build alone carries both, ready
+// for either kind of keyboard: the Vial pair rides `host_usb`, the Rynk pair
+// its own `rynk_*` fields.
 #[cfg(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))))]
 use rynk as host_usb;
 #[cfg(feature = "vial")]
@@ -160,22 +162,34 @@ impl<'d, D: Driver<'d>> HidWriterTrait for UsbKeyboardWriter<'_, 'd, D> {
     }
 }
 
-pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: DeviceConfig<'d>) -> Builder<'d, D> {
+/// `rynk_magic` prefixes the serial with the Rynk discovery tag; it follows the
+/// role, not the feature set — the keyboard binary of a dongle setup carries
+/// the `dongle` feature too, but must not look like a Rynk device.
+pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(
+    driver: D,
+    keyboard_config: DeviceConfig<'d>,
+    rynk_magic: bool,
+) -> Builder<'d, D> {
     let mut usb_config = embassy_usb::Config::new(keyboard_config.vid, keyboard_config.pid);
     usb_config.manufacturer = Some(keyboard_config.manufacturer);
     usb_config.product = Some(keyboard_config.product_name);
     // Informational tag (visible in `lsusb` & co); host discovery keys on the
     // Rynk vendor interface triple, not the serial.
-    #[cfg(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))))]
-    let serial_number = {
+    #[cfg(any(feature = "rynk", feature = "dongle"))]
+    let serial_number = if rynk_magic {
         static SERIAL: StaticCell<heapless::String<64>> = StaticCell::new();
         let s = SERIAL.init(heapless::String::new());
         let _ = s.push_str(rmk_types::protocol::rynk::RYNK_MAGIC);
         let _ = s.push_str(keyboard_config.serial_number);
         s.as_str()
+    } else {
+        keyboard_config.serial_number
     };
-    #[cfg(not(any(feature = "rynk", all(feature = "dongle", not(feature = "vial")))))]
-    let serial_number = keyboard_config.serial_number;
+    #[cfg(not(any(feature = "rynk", feature = "dongle")))]
+    let serial_number = {
+        let _ = rynk_magic;
+        keyboard_config.serial_number
+    };
     usb_config.serial_number = Some(serial_number);
     usb_config.max_power = 450;
     usb_config.supports_remote_wakeup = true;
@@ -193,7 +207,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
         feature = "steno",
         feature = "dfu",
         feature = "rynk",
-        all(feature = "dongle", not(feature = "vial"))
+        feature = "dongle"
     ));
     const USB_BUF_SIZE: usize = if EXTRA_INTERFACES { 256 } else { 128 };
 
@@ -205,7 +219,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
 
     // The rynk MS OS 2.0 descriptor set (WinUSB binding) takes ~178 bytes, and
     // its BOS platform capability another 28 on top of the 5-byte BOS header.
-    const RYNK_INTERFACE: bool = cfg!(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))));
+    const RYNK_INTERFACE: bool = cfg!(any(feature = "rynk", feature = "dongle"));
     const BOS_BUF_SIZE: usize = if RYNK_INTERFACE { 64 } else { 16 };
     const MSOS_BUF_SIZE: usize = if RYNK_INTERFACE { 256 } else { 16 };
 
@@ -249,12 +263,49 @@ pub struct UsbTransport<'a, D: Driver<'static>, S = ()> {
     host_reader: host_usb::HostUsbReader<D>,
     #[cfg(any(feature = "host", feature = "dongle"))]
     host_writer: host_usb::HostUsbWriter<D>,
+    /// The dual dongle's second host interface: `host_usb` carries the Vial
+    /// pair, this the Rynk pair. Only [`Self::new_dongle`] builds it — the
+    /// keyboard binary of a dongle setup shares the feature set, but must not
+    /// grow the interface.
+    #[cfg(all(feature = "dongle", feature = "vial"))]
+    rynk_io: Option<(rynk::HostUsbReader<D>, rynk::HostUsbWriter<D>)>,
+    /// The Rynk half of the dongle's router, concretely typed — the one build
+    /// shape with two interfaces has exactly one router for them.
+    #[cfg(all(feature = "dongle", feature = "vial"))]
+    rynk_router: Option<&'a crate::dongle::router::DongleRouter>,
     /// Serves the host interface; `&()` until a binary attaches its own.
     session: &'a S,
 }
 
 impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
     pub fn new(driver: D, device_config: DeviceConfig<'static>) -> Self {
+        Self::build(driver, device_config, false)
+    }
+
+    /// The dongle role's transport, serving the host interface with the same
+    /// router [`crate::dongle::Dongle`] relays through. It carries the keyboard
+    /// interface set plus — with `vial` — the Rynk vendor interface beside the
+    /// Vial one, because which protocol the bonded keyboard speaks is only
+    /// known once it connects.
+    #[cfg(feature = "dongle")]
+    pub fn new_dongle(
+        driver: D,
+        device_config: DeviceConfig<'static>,
+        router: &'a crate::dongle::DongleRouter,
+    ) -> UsbTransport<'a, D, crate::dongle::DongleRouter> {
+        let this = Self::build(driver, device_config, true);
+        #[cfg(feature = "vial")]
+        let this = UsbTransport {
+            rynk_router: Some(&router.rynk),
+            ..this
+        };
+        this.serving(router)
+    }
+
+    /// `dongle_role` picks what features alone cannot: both binaries of a
+    /// dongle setup share a feature set, but only the dongle itself presents
+    /// the Rynk interface and its magic serial.
+    fn build(driver: D, device_config: DeviceConfig<'static>, dongle_role: bool) -> Self {
         // nRF chips don't have a stable USB serial number unless one is derived
         // from the FICR. Override here so user code doesn't have to know.
         #[cfg(feature = "_nrf_ble")]
@@ -263,7 +314,8 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
             device_config.serial_number = crate::ble::nrf::get_serial_number();
             device_config
         };
-        let mut builder: Builder<'static, D> = new_usb_builder(driver, device_config);
+        let mut builder: Builder<'static, D> =
+            new_usb_builder(driver, device_config, cfg!(feature = "rynk") || dongle_role);
         // Linux's usbhid driver auto-enables power/wakeup when it probes a
         // boot-protocol keyboard, so advertise Boot/Keyboard on the primary
         // HID interface.
@@ -295,6 +347,8 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
 
         #[cfg(any(feature = "host", feature = "dongle"))]
         let (host_reader, host_writer) = host_usb::build_host_usb(&mut builder);
+        #[cfg(all(feature = "dongle", feature = "vial"))]
+        let rynk_io = dongle_role.then(|| rynk::build_host_usb(&mut builder));
 
         let (keyboard_reader, keyboard_writer) = keyboard_rw.split();
         let device = builder.build();
@@ -312,6 +366,10 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
             host_reader,
             #[cfg(any(feature = "host", feature = "dongle"))]
             host_writer,
+            #[cfg(all(feature = "dongle", feature = "vial"))]
+            rynk_io,
+            #[cfg(all(feature = "dongle", feature = "vial"))]
+            rynk_router: None,
             session: &(),
         }
     }
@@ -325,16 +383,6 @@ impl<'a, D: Driver<'static>, S> UsbTransport<'a, D, S> {
         service: &'a crate::host::HostService<'a>,
     ) -> UsbTransport<'a, D, crate::host::HostService<'a>> {
         self.serving(service)
-    }
-
-    /// Attach the dongle's router — this is what makes a binary a dongle. The
-    /// same router goes to [`crate::dongle::Dongle`], which relays through it.
-    #[cfg(feature = "dongle")]
-    pub fn with_dongle_router(
-        self,
-        router: &'a crate::dongle::DongleRouter,
-    ) -> UsbTransport<'a, D, crate::dongle::DongleRouter> {
-        self.serving(router)
     }
 
     /// Rebuild around the session that answers the host interface.
@@ -352,6 +400,10 @@ impl<'a, D: Driver<'static>, S> UsbTransport<'a, D, S> {
             host_reader: self.host_reader,
             #[cfg(any(feature = "host", feature = "dongle"))]
             host_writer: self.host_writer,
+            #[cfg(all(feature = "dongle", feature = "vial"))]
+            rynk_io: self.rynk_io,
+            #[cfg(all(feature = "dongle", feature = "vial"))]
+            rynk_router: self.rynk_router,
             session,
         }
     }
@@ -372,6 +424,10 @@ impl<D: Driver<'static>, S: HostSession> Runnable for UsbTransport<'_, D, S> {
             host_reader,
             #[cfg(any(feature = "host", feature = "dongle"))]
             host_writer,
+            #[cfg(all(feature = "dongle", feature = "vial"))]
+            rynk_io,
+            #[cfg(all(feature = "dongle", feature = "vial"))]
+            rynk_router,
             session,
         } = self;
 
@@ -409,6 +465,15 @@ impl<D: Driver<'static>, S: HostSession> Runnable for UsbTransport<'_, D, S> {
             let _ = session;
             core::future::pending::<()>()
         };
+        // The dual dongle's Rynk interface runs beside the Vial one; a keyboard
+        // build never built the interface and idles here.
+        #[cfg(all(feature = "dongle", feature = "vial"))]
+        let host_task = embassy_futures::join::join(host_task, async {
+            match (rynk_io, rynk_router) {
+                (Some((reader, writer)), Some(router)) => rynk::run_host_usb(reader, writer, *router).await,
+                _ => core::future::pending().await,
+            }
+        });
 
         #[cfg(feature = "usb_log")]
         let logger_task = run_usb_logger(logger.take().expect("UsbTransport::run called twice"));
@@ -435,7 +500,7 @@ async fn run_usb_logger<D: Driver<'static>>(logger_class: CdcAcmClass<'static, D
 
 #[cfg(any(feature = "usb_log", feature = "dfu_nrf", feature = "dfu_rp"))]
 pub async fn run_peripheral_usb<D: Driver<'static>>(driver: D, config: DeviceConfig<'static>) {
-    let mut builder = new_usb_builder(driver, config);
+    let mut builder = new_usb_builder(driver, config, cfg!(feature = "rynk"));
 
     #[cfg(feature = "usb_log")]
     let logger_fut = run_usb_logger(add_usb_logger!(&mut builder));

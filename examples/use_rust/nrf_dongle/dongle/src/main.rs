@@ -174,7 +174,7 @@ async fn main(spawner: Spawner) {
     // Shared by the two tasks that relay: the dongle's BLE link and the USB host sessions.
     let router = DongleRouter::new();
     let mut dongle = Dongle::new(sdc, ble_addr(), &router);
-    let mut usb_transport = UsbTransport::new(driver, device_config).with_dongle_router(&router);
+    let mut usb_transport = UsbTransport::new_dongle(driver, device_config, &router);
 
     run_all!(usb_transport, dongle, storage).await;
 }

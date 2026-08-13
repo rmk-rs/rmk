@@ -28,10 +28,12 @@ impl super::HostSession for VialService<'_> {
     }
 }
 
+// A dongle with `vial` is the dual-protocol shape: the generic session is the
+// whole router, and this interface is its Vial half's.
 #[cfg(feature = "dongle")]
 impl super::HostSession for crate::dongle::DongleRouter {
     async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
-        self.run_session(rx, tx).await
+        self.vial.run_session(rx, tx).await
     }
 }
 

@@ -2,19 +2,20 @@
 //! RMK keyboard to a USB host.
 //!
 //! It is a HID-over-GATT client toward the keyboard and a relay for everything
-//! else — the keyboard's host protocol (Rynk frames, or Vial reports with the
-//! `vial` feature) passes through unparsed in both directions, so the dongle
-//! answers no command of its own and never tracks the protocol. Keymaps and
-//! storage stay on the keyboard; the dongle persists one bond.
+//! else — the keyboard's host protocol passes through unparsed in both
+//! directions, so the dongle answers no command of its own and never tracks the
+//! protocol. That protocol is Rynk frames; with the `vial` feature the dongle
+//! also carries Vial reports, and discovery picks per keyboard which relay the
+//! connection feeds (`Protocol`). Keymaps and storage stay on the keyboard;
+//! the dongle persists one bond.
 //!
 //! Task layout (both joined by [`Dongle::run`]):
 //! - `ble_task`: trouble runner with the seeking-advertisement scan handler;
 //! - [`DongleCentral::run`]: find a keyboard, connect, secure, relay, repeat.
 
-#[cfg(not(feature = "vial"))]
-mod router;
+pub(crate) mod router;
 #[cfg(feature = "vial")]
-mod vial_router;
+pub(crate) mod vial_router;
 use core::cell::Cell;
 
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
@@ -25,15 +26,13 @@ use embassy_futures::select::{Either, select, select3};
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer, with_deadline, with_timeout};
-#[cfg(not(feature = "vial"))]
 use rmk_types::protocol::rynk::{RYNK_BLE_CHUNK_SIZE, RYNK_INPUT_CHAR_UUID, RYNK_OUTPUT_CHAR_UUID, RYNK_SERVICE_UUID};
+#[cfg(not(feature = "vial"))]
 pub use router::DongleRouter;
-#[cfg(feature = "vial")]
-use router::VialReport;
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{MediaKeyboardReport, MouseReport, SystemControlReport};
 #[cfg(feature = "vial")]
-use vial_router as router;
+use vial_router::VialReport;
 
 use crate::ble::adv::Adv;
 use crate::ble::profile::{ProfileInfo, ProfileManager};
@@ -57,6 +56,53 @@ type DongleBleResources = HostResources<DefaultPacketPool, DONGLE_CONNECTIONS_MA
 type Client<'a, C> = GattClient<'a, C, DefaultPacketPool, 3>;
 
 const BOND_SLOT: u8 = 0;
+
+/// Which host protocol the connected keyboard serves, decided by discovery:
+/// the Rynk custom service names Rynk — a Rynk keyboard carries a second HID
+/// service too (its WebHID lane), so that extra 0x1812 alone proves nothing —
+/// and a keyboard without it serves Vial there.
+#[cfg(feature = "vial")]
+#[derive(Clone, Copy, PartialEq)]
+enum Protocol {
+    Rynk,
+    Vial,
+}
+
+/// Both relays side by side. Discovery picks per connection which one the BLE
+/// link feeds ([`Protocol`]); USB serves both interfaces throughout, and the
+/// idle relay answers its interface as if no keyboard were connected.
+#[cfg(feature = "vial")]
+pub struct DongleRouter {
+    /// The Rynk byte relay behind the vendor bulk interface.
+    pub(crate) rynk: router::DongleRouter,
+    /// The Vial report relay behind the Vial HID interface.
+    pub(crate) vial: vial_router::DongleRouter,
+}
+
+#[cfg(feature = "vial")]
+impl DongleRouter {
+    pub const fn new() -> Self {
+        Self {
+            rynk: router::DongleRouter::new(),
+            vial: vial_router::DongleRouter::new(),
+        }
+    }
+
+    /// Close both halves. Only one was up at most, but a spare `link_down` on
+    /// an idle relay is already the norm: `run_connection` fires it even when
+    /// discovery never brought a link up.
+    fn link_down(&self) {
+        self.rynk.link_down();
+        self.vial.link_down();
+    }
+}
+
+#[cfg(feature = "vial")]
+impl Default for DongleRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Which keyboard a connection is to, which decides whether it pairs or
 /// encrypts, and whether a refused key means the stored bond is dead.
@@ -390,16 +436,15 @@ where
         // One catch-all listener for every subscription — one queue, routed by handle.
         let mut listener = client.listen_all().ok()?;
 
+        #[cfg(not(feature = "vial"))]
         self.router.link_up();
+        #[cfg(feature = "vial")]
+        match chars.protocol {
+            Protocol::Rynk => self.router.rynk.link_up(),
+            Protocol::Vial => self.router.vial.link_up(),
+        }
         info!("[dongle] relaying");
-        self.relay(
-            #[cfg(not(feature = "vial"))]
-            conn,
-            client,
-            &mut listener,
-            &chars,
-        )
-        .await;
+        self.relay(conn, client, &mut listener, &chars).await;
         Some(())
     }
 
@@ -407,14 +452,20 @@ where
     /// out to USB/router, LED state and router frames back to the keyboard.
     async fn relay(
         &self,
-        #[cfg(not(feature = "vial"))] conn: &Connection<'_, DefaultPacketPool>,
+        conn: &Connection<'_, DefaultPacketPool>,
         client: &Client<'_, C>,
         listener: &mut NotificationListener<'_, 512>,
         chars: &KeyboardCharacteristics,
     ) {
+        // The connection's relay: the Rynk half of the router, unless discovery
+        // picked Vial — those arms bail out before the shared Rynk path below.
+        #[cfg(not(feature = "vial"))]
+        let rynk = self.router;
+        #[cfg(feature = "vial")]
+        let rynk = &self.router.rynk;
+
         // Largest single write chunk on the Rynk characteristic: ATT MTU minus the
         // 3-byte write header. Vial reports are 32 bytes and cross whole.
-        #[cfg(not(feature = "vial"))]
         let chunk_size = RYNK_BLE_CHUNK_SIZE
             .min((conn.att_mtu() as usize).saturating_sub(3))
             .max(1);
@@ -425,25 +476,27 @@ where
                 let (handle, data) = (notification.handle(), notification.as_ref());
                 // Only the config stream is opaque, and it goes straight to the host.
                 if handle == chars.config_input.handle {
+                    // Reports are atomic: a dropped one costs its reply, nothing else.
+                    #[cfg(feature = "vial")]
+                    if chars.protocol == Protocol::Vial {
+                        match VialReport::try_from(data) {
+                            Ok(report) => {
+                                if self.router.vial.to_host.try_send(report).is_err() {
+                                    warn!("[dongle] host reply queue full, dropping a reply");
+                                }
+                            }
+                            Err(_) => warn!("[dongle] non-report-size vial notify dropped"),
+                        }
+                        continue;
+                    }
                     // A full pipe is usually a host a moment behind, so wait for 20ms at most.
-                    #[cfg(not(feature = "vial"))]
-                    if with_timeout(Duration::from_millis(20), self.router.to_host.write_all(data))
+                    if with_timeout(Duration::from_millis(20), rynk.to_host.write_all(data))
                         .await
                         .is_err()
                     {
                         // Try to send a delimeter and drop the bytes which cannot be written in 20ms.
-                        let _ = self.router.to_host.try_write(&[0]);
+                        let _ = rynk.to_host.try_write(&[0]);
                         warn!("[dongle] host config stream overflow, dropping bytes");
-                    }
-                    // Reports are atomic: a dropped one costs its reply, nothing else.
-                    #[cfg(feature = "vial")]
-                    match VialReport::try_from(data) {
-                        Ok(report) => {
-                            if self.router.to_host.try_send(report).is_err() {
-                                warn!("[dongle] host reply queue full, dropping a reply");
-                            }
-                        }
-                        Err(_) => warn!("[dongle] non-report-size vial notify dropped"),
                     }
                 } else if let Some(report) = chars.report(handle, data) {
                     send_hid_report(report).await;
@@ -464,24 +517,21 @@ where
         // One characteristic write per pass. Rynk takes a write's worth out of the
         // byte stream — the read itself is the chunker — while Vial takes one whole
         // report, because a report can't be split.
-        #[cfg(not(feature = "vial"))]
         let mut request = [0u8; RYNK_BLE_CHUNK_SIZE];
         let request_to_keyboard = async {
             loop {
-                #[cfg(not(feature = "vial"))]
-                {
-                    let n = self.router.to_keyboard.read(&mut request[..chunk_size]).await;
-                    let _ = client
-                        .write_characteristic_without_response(&chars.config_output, &request[..n])
-                        .await;
-                }
                 #[cfg(feature = "vial")]
-                {
-                    let report = self.router.to_keyboard.receive().await;
+                if chars.protocol == Protocol::Vial {
+                    let report = self.router.vial.to_keyboard.receive().await;
                     let _ = client
                         .write_characteristic_without_response(&chars.config_output, &report)
                         .await;
+                    continue;
                 }
+                let n = rynk.to_keyboard.read(&mut request[..chunk_size]).await;
+                let _ = client
+                    .write_characteristic_without_response(&chars.config_output, &request[..n])
+                    .await;
             }
         };
 
@@ -517,6 +567,10 @@ struct KeyboardCharacteristics {
     /// pair of vial's own HID service.
     config_input: Characteristic<[u8]>,
     config_output: Characteristic<[u8]>,
+    /// Which relay the pair belongs to, and so which router half this
+    /// connection feeds.
+    #[cfg(feature = "vial")]
+    protocol: Protocol,
 }
 
 impl KeyboardCharacteristics {
@@ -545,15 +599,22 @@ impl KeyboardCharacteristics {
         let media = reports.next()?;
         let system = reports.next()?;
 
-        #[cfg(not(feature = "vial"))]
-        let (config_input, config_output) = {
-            let rynk = client
-                .services_by_uuid(&RYNK_SERVICE_UUID.into())
-                .await
-                .ok()?
-                .into_iter()
-                .next()?;
-            (
+        // An absent Rynk service ends the search with an empty list, not an
+        // error, so `ok()?` only fails the discovery on a real ATT error.
+        let rynk_service = client
+            .services_by_uuid(&RYNK_SERVICE_UUID.into())
+            .await
+            .ok()?
+            .into_iter()
+            .next();
+        #[cfg(feature = "vial")]
+        let protocol = match rynk_service {
+            Some(_) => Protocol::Rynk,
+            None => Protocol::Vial,
+        };
+
+        let (config_input, config_output) = match rynk_service {
+            Some(rynk) => (
                 client
                     .characteristic_by_uuid::<[u8]>(&rynk, &RYNK_INPUT_CHAR_UUID.into())
                     .await
@@ -562,19 +623,24 @@ impl KeyboardCharacteristics {
                     .characteristic_by_uuid::<[u8]>(&rynk, &RYNK_OUTPUT_CHAR_UUID.into())
                     .await
                     .ok()?,
-            )
-        };
-        // Vial rides the second HID service instance: input notify, then output write.
-        #[cfg(feature = "vial")]
-        let (config_input, config_output) = {
-            let vial = hid_services.next()?;
-            let mut reports = client
-                .characteristics::<9>(&vial)
-                .await
-                .ok()?
-                .into_iter()
-                .filter(|c| c.uuid == report_uuid);
-            (reports.next()?, reports.next()?)
+            ),
+            // No Rynk service names the keyboard a Vial one (see `Protocol`):
+            // its pair rides the second HID service instance — input notify,
+            // then output write.
+            #[cfg(feature = "vial")]
+            None => {
+                let vial = hid_services.next()?;
+                let mut reports = client
+                    .characteristics::<9>(&vial)
+                    .await
+                    .ok()?
+                    .into_iter()
+                    .filter(|c| c.uuid == report_uuid);
+                (reports.next()?, reports.next()?)
+            }
+            // Without the Vial relay there is nothing else to look for.
+            #[cfg(not(feature = "vial"))]
+            None => return None,
         };
 
         Some(Self {
@@ -585,6 +651,8 @@ impl KeyboardCharacteristics {
             system,
             config_input,
             config_output,
+            #[cfg(feature = "vial")]
+            protocol,
         })
     }
 
@@ -633,6 +701,42 @@ impl KeyboardCharacteristics {
         } else {
             None
         }
+    }
+}
+
+#[cfg(all(test, feature = "vial"))]
+mod tests {
+    use rmk_types::protocol::vial::VIAL_EP_SIZE;
+
+    use super::*;
+
+    /// The central's `link_down` is protocol-blind — it must reach both halves,
+    /// so whichever one was relaying drops its queue like a lone router would.
+    #[test]
+    fn link_down_reaches_both_halves() {
+        let router = DongleRouter::new();
+        router.rynk.link_up();
+        router.vial.link_up();
+        router.rynk.to_keyboard.try_write(&[1, 2, 3]).unwrap();
+        router.vial.to_keyboard.try_send([7u8; VIAL_EP_SIZE]).unwrap();
+
+        router.link_down();
+
+        let mut buf = [0u8; 8];
+        assert!(
+            router.rynk.to_keyboard.try_read(&mut buf).is_err(),
+            "no stale rynk request is parked for the next keyboard"
+        );
+        assert!(
+            router.vial.to_keyboard.try_receive().is_err(),
+            "no stale vial request is parked for the next keyboard"
+        );
+        let n = router
+            .rynk
+            .to_host
+            .try_read(&mut buf)
+            .expect("rynk stream is closed off");
+        assert_eq!(&buf[..n], &[0], "with the delimiter that voids a partial frame");
     }
 }
 

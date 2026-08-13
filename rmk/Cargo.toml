@@ -140,7 +140,8 @@ rynk = ["host", "host_lock", "rmk-types/rynk"]
 ## Enable dongle support. Both sides of a dongle setup enable it: the keyboard
 ## gets a bond slot of its own for the dongle plus the `SwitchToDongle` key, the
 ## dongle binary gets `rmk::dongle`. The dongle relays the keyboard's host
-## protocol: Rynk by default, or Vial when both binaries also enable `vial`.
+## protocol: Rynk, plus Vial when the dongle binary also enables `vial` — which
+## of the two a keyboard speaks is discovered when it connects.
 dongle = [
     "storage",
     # In the default Rynk setup both sides speak Rynk on the wire — the keyboard

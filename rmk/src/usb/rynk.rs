@@ -14,8 +14,10 @@ impl HostSession for crate::host::rynk::RynkService<'_> {
     }
 }
 
+// The concrete Rynk relay: the public `DongleRouter` itself without `vial`, the
+// `rynk` half of it with — either way what serves this interface.
 #[cfg(feature = "dongle")]
-impl HostSession for crate::dongle::DongleRouter {
+impl HostSession for crate::dongle::router::DongleRouter {
     async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
         self.run_session(rx, tx).await
     }
