@@ -414,11 +414,11 @@ where
 
     /// Relay both directions for as long as this future is polled: notifications
     /// out to USB/router, LED state and router frames back to the keyboard.
-    async fn relay(
+    async fn relay<const NOTIF_MTU: usize>(
         &self,
         #[cfg(not(feature = "vial"))] conn: &Connection<'_, DefaultPacketPool>,
         client: &Client<'_, C>,
-        listener: &mut NotificationListener<'_, 512>,
+        listener: &mut NotificationListener<'_, NOTIF_MTU>,
         chars: &KeyboardCharacteristics,
     ) {
         // Largest single write chunk on the Rynk characteristic: ATT MTU minus the
