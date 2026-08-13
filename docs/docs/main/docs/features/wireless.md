@@ -25,6 +25,7 @@ The following is the list of available feature gates (i.e., supported BLE chips)
 - nrf52840_ble
 - nrf52833_ble
 - nrf52832_ble
+- nrf52820_ble
 - nrf52811_ble
 - nrf52810_ble
 - esp32c3_ble

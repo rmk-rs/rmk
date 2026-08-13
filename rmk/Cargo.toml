@@ -269,6 +269,10 @@ _no_usb = []
 ## Internal marker for 480 Mbps USB chips; activates 512-byte bulk packets.
 _usb_high_speed = []
 
+## Internal feature that indicates the chip has no SAADC, auto-activated by the
+## chip features that need it (see `nrf52820_ble`). Compiles out `NrfAdc`.
+_no_saadc = []
+
 #! ### BLE feature flags
 #!
 #! ⚠️ Due to the limitation of docs.rs, functions gated by BLE features won't show in docs.rs. You have to head to [`examples`](https://github.com/rmk-rs/rmk/tree/main/examples) folder of RMK repo for their usages.
@@ -280,6 +284,9 @@ nrf54l15_ble = ["_nrf_ble", "_no_usb"]
 nrf52840_ble = ["_nrf_ble"]
 ## Enable feature if you want to use nRF52833 with BLE.
 nrf52833_ble = ["_nrf_ble"]
+## Enable feature if you want to use nRF52820 with BLE.
+## The nRF52820 has no SAADC, so `NrfAdc` is compiled out via `_no_saadc`.
+nrf52820_ble = ["_nrf_ble", "_no_saadc"]
 ## Enable feature if you want to use nRF52832 with BLE.
 nrf52832_ble = ["_nrf_ble", "_no_usb"]
 ## Enable feature if you want to use nRF52811 with BLE.
