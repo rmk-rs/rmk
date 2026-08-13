@@ -48,27 +48,17 @@ use crate::{DONGLE_PAIRING_WINDOW_SECS, RawMutex};
 /// One keyboard link, and no more: the dongle relays exactly one keyboard.
 const DONGLE_CONNECTIONS_MAX: usize = 1;
 
-/// trouble's `CHANNELS` sizes the pool of **dynamic L2CAP connection-oriented
-/// channels** — the ones `ChannelManager::alloc` hands out for `l2cap` create /
-/// accept, on CIDs at or above `L2CAP_CID_DYN_START`. The fixed channels
-/// (signalling, ATT, SMP) are dispatched by CID in `BleHost` and never take a
-/// slot, so they do not belong in this count. A dongle talks pure GATT — HID,
-/// and the relayed host protocol (rynk or vial), all over ATT — and opens no
-/// CoC at all.
+/// trouble's `CHANNELS` counts only dynamic L2CAP channels; the fixed ones
+/// (signalling, ATT, SMP) never take a slot. A dongle talks pure GATT over ATT
+/// and opens no CoC, so zero.
 const DONGLE_L2CAP_CHANNELS_MAX: usize = 0;
 
 /// BLE resources sized for the dongle role; owned by [`Dongle::run`].
 ///
-/// The trailing `1, 2` are `ADV_SETS` and `BONDS`, whose defaults are 1 and 10.
-/// A dongle never advertises, so `ADV_SETS` keeps the default.
-///
-/// `BONDS` is 2 rather than 1 even though a dongle keeps exactly one bond
-/// (`BOND_SLOT`, and its [`ProfileManager`] is `SLOTS = 1`): the stack holds two
-/// for a moment. [`ProfileManager::update_stack_bonds`] prunes *after* the fact
-/// — "a fresh pairing lands there before we prune" — so adopting a replacement
-/// keyboard while the old bond is still loaded needs the second slot. With one,
-/// `add_bond` pushes to a full `Vec` and returns `OutOfMemory`, dropping the new
-/// bond on the floor.
+/// The trailing `1, 2` are `ADV_SETS` (its default) and `BONDS`. The dongle
+/// keeps one bond, but [`ProfileManager::update_stack_bonds`] prunes only after
+/// a new pairing lands, so adopting a replacement keyboard briefly holds two —
+/// with a single slot, `add_bond` fails and the new bond is lost on reboot.
 type DongleBleResources = HostResources<DefaultPacketPool, DONGLE_CONNECTIONS_MAX, DONGLE_L2CAP_CHANNELS_MAX, 1, 2>;
 
 /// The services discovery keeps: 0x1812 matches both the report service and the
