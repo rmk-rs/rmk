@@ -414,6 +414,9 @@ where
 
     /// Relay both directions for as long as this future is polled: notifications
     /// out to USB/router, LED state and router frames back to the keyboard.
+    ///
+    /// `NOTIF_MTU` is trouble's notification buffer size, inferred from the
+    /// listener; restating the constant would pin RMK to one trouble build.
     async fn relay<const NOTIF_MTU: usize>(
         &self,
         #[cfg(not(feature = "vial"))] conn: &Connection<'_, DefaultPacketPool>,
