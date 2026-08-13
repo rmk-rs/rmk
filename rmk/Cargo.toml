@@ -183,7 +183,7 @@ defmt = [
 ## Enable logging via usb
 usb_log = ["dep:embassy-usb-logger", "log", "log/max_level_debug"]
 ## Use log, this feature cannot be enabled when defmt is enabled
-log = ["dep:log", "trouble-host?/log"]
+log = ["dep:log", "trouble-host?/log", "rmk-types/log"]
 
 ## Activate the embassy-time mock driver for deterministic, fast test timing.
 ## (Despite the historic name, this feature does NOT enable embassy-time/std —

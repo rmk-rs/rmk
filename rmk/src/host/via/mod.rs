@@ -2,16 +2,15 @@ use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use embassy_time::Instant;
 use embedded_io_async::{Read, Write};
 use rmk_types::protocol::vial::{VIA_FIRMWARE_VERSION, VIA_PROTOCOL_VERSION, ViaCommand, ViaKeyboardInfo};
+use rmk_types::protocol::vial_keycode::{from_via_keycode, to_via_keycode};
 use vial::process_vial;
 
 use crate::config::{RmkConfig, VialConfig};
 use crate::hid::ViaReport;
 use crate::host::context::KeyboardContext;
-use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
 use crate::keymap::KeyMap;
 use crate::{MACRO_SPACE_SIZE, boot};
 
-pub(crate) mod keycode_convert;
 mod vial;
 
 pub struct VialService<'a> {

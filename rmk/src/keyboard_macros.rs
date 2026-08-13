@@ -1,10 +1,10 @@
 #[cfg(feature = "vial")]
 use rmk_types::action::{Action, KeyAction};
 use rmk_types::keycode::{HidKeyCode, from_ascii, to_ascii};
+#[cfg(feature = "vial")]
+use rmk_types::protocol::vial_keycode::{from_via_keycode, to_via_keycode};
 
 use crate::MACRO_SPACE_SIZE;
-#[cfg(feature = "vial")]
-use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
 use crate::keymap::fill_vec;
 
 /// MacroOperation: encoded with the two bytes, content at the third byte

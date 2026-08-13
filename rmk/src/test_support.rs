@@ -15,7 +15,7 @@ pub const MACRO_SPACE_SIZE: usize = crate::MACRO_SPACE_SIZE;
 
 #[cfg(feature = "vial")]
 pub fn to_via_keycode(action: rmk_types::action::KeyAction) -> u16 {
-    crate::host::via::keycode_convert::to_via_keycode(action)
+    rmk_types::protocol::vial_keycode::to_via_keycode(action)
 }
 
 #[cfg(all(feature = "_no_usb", feature = "_ble"))]

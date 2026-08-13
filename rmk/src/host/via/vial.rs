@@ -3,11 +3,11 @@ use rmk_types::action::KeyAction;
 use rmk_types::constants::{COMBO_MAX_LENGTH, COMBO_MAX_NUM, MORSE_MAX_NUM};
 use rmk_types::morse::{DOUBLE_TAP, HOLD, HOLD_AFTER_TAP, Morse, MorseMode, TAP};
 use rmk_types::protocol::vial::{SettingKey, VIAL_EP_SIZE, VIAL_PROTOCOL_VERSION, VialCommand, VialDynamic};
+use rmk_types::protocol::vial_keycode::{from_via_keycode, to_via_keycode};
 
 use crate::config::VialConfig;
 use crate::hid::ViaReport;
 use crate::host::context::KeyboardContext;
-use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
 
 /// Note: vial uses little endian, while via uses big endian
 pub(crate) async fn process_vial<'a>(

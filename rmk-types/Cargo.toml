@@ -11,6 +11,7 @@ resolver = "2"
 
 [dependencies]
 defmt = { version = "1", optional = true }
+log = { version = "0.4", optional = true }
 
 serde = { version = "1", default-features = false, features = ["derive"] }
 postcard = { version = "1", default-features = false, features = ["experimental-derive"] }
@@ -37,6 +38,8 @@ defmt = [
     "postcard/defmt",
     "heapless/defmt",
 ]
+# Route this crate's own diagnostics (vial keycode conversion) through `log`.
+log = ["dep:log"]
 # Feature for proc-macro code generation only, not included in firmware
 _codegen = []
 # Enable RMK's Rynk protocol

@@ -1,8 +1,32 @@
-use rmk_types::action::{Action, KeyAction, KeyboardAction};
-use rmk_types::keycode::{HidKeyCode, KeyCode, SpecialKey};
-use rmk_types::modifier::ModifierCombination;
+//! Conversion between Via/Vial u16 keycodes and [`KeyAction`], shared by the
+//! firmware's Vial service and host-side Vial clients so both ends of the wire
+//! agree on one mapping.
 
-pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
+use crate::action::{Action, KeyAction, KeyboardAction};
+use crate::keycode::{HidKeyCode, KeyCode, SpecialKey};
+use crate::modifier::ModifierCombination;
+
+/// Local `warn!`: logs through `defmt`/`log` when the matching feature is on
+/// and evaluates to nothing otherwise — same dispatch as the `rmk` crate's
+/// logging shim. Textual scope, so it shadows the built-in `warn` attribute
+/// without an import that would be ambiguous with it.
+macro_rules! warn {
+    ($s:literal $(, $x:expr)* $(,)?) => {{
+        #[cfg(feature = "log")]
+        ::log::warn!($s $(, $x)*);
+        #[cfg(feature = "defmt")]
+        ::defmt::warn!($s $(, $x)*);
+        #[cfg(not(any(feature = "log", feature = "defmt")))]
+        let _ = ($( & $x ),*);
+    }};
+}
+
+/// Convert a [`KeyAction`] to its via keycode. Unrepresentable actions encode
+/// as `0x0000` (`KC_NO`).
+// The wildcards cover feature-gated variants (e.g. `steno`); without those
+// features they are dead and would otherwise warn.
+#[allow(unreachable_patterns)]
+pub fn to_via_keycode(key_action: KeyAction) -> u16 {
     match key_action {
         KeyAction::No => 0x0000,
         KeyAction::Transparent => 0x0001,
@@ -142,7 +166,7 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
 }
 
 /// Convert via keycode to KeyAction.
-pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
+pub fn from_via_keycode(via_keycode: u16) -> KeyAction {
     match via_keycode {
         0x0000 => KeyAction::No,
         0x0001 => KeyAction::Transparent,
@@ -297,9 +321,8 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
 
 #[cfg(test)]
 mod test {
-    use rmk_types::keycode::HidKeyCode;
-
     use super::*;
+    use crate::keycode::HidKeyCode;
 
     #[test]
     fn test_convert_via_keycode_to_key_action() {
@@ -612,7 +635,7 @@ mod test {
 
     #[test]
     fn test_convert_key_action_to_via_keycode() {
-        use rmk_types::keycode::HidKeyCode;
+        use crate::keycode::HidKeyCode;
 
         // A
         let a = KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A)));
@@ -824,7 +847,7 @@ mod test {
 
     #[test]
     fn test_convert_consumer_system_keys_to_via() {
-        use rmk_types::keycode::{ConsumerKey, SystemControlKey};
+        use crate::keycode::{ConsumerKey, SystemControlKey};
 
         // Test Consumer keys conversion
         // AudioMute (ConsumerKey::Mute) -> HidKeyCode::AudioMute (0xA8)
@@ -855,7 +878,7 @@ mod test {
 
     #[test]
     fn test_convert_from_to_ascii_a() {
-        use rmk_types::keycode::{HidKeyCode, from_ascii, to_ascii};
+        use crate::keycode::{HidKeyCode, from_ascii, to_ascii};
 
         let keycode = HidKeyCode::A;
         let shifted = false;
@@ -865,8 +888,8 @@ mod test {
         assert_eq!(from_ascii(ascii), (keycode, shifted));
     }
     #[test]
-    fn test_convert_from_to_ascii_K() {
-        use rmk_types::keycode::{HidKeyCode, from_ascii, to_ascii};
+    fn test_convert_from_to_ascii_shifted_k() {
+        use crate::keycode::{HidKeyCode, from_ascii, to_ascii};
 
         let keycode = HidKeyCode::K;
         let shifted = true;
