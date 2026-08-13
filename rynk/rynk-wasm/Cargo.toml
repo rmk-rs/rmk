@@ -22,6 +22,16 @@ js-sys = "0.3"
 console_error_panic_hook = "0.1"
 console_log = "1"
 log = "0.4"
+# Vial host client: `vial.json` decoding (xz/lzma + JSON) and KLE → LayoutInfo.
+rynk-kle = { path = "../rynk-kle", optional = true }
+lzma-rs = { version = "0.3", optional = true }
+serde_json = { version = "1", optional = true }
+heapless = { version = "0.9", optional = true }
+
+[features]
+# Vial host client (`connect_vial` + `VialClient`), for keyboards on the
+# legacy protocol. Off by default; the GUI's wasm build turns it on.
+vial = ["rynk/vial", "dep:rynk-kle", "dep:lzma-rs", "dep:serde_json", "dep:heapless"]
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

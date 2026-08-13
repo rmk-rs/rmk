@@ -41,6 +41,10 @@ std = ["alloc", "dep:critical-section", "embedded-io-async/std", "rmk-types/_cod
 alloc = ["rmk-types/host", "postcard/alloc", "dep:rmk-config"]
 # Enable rmk-types'/rmk-config's wasm/TS type generation (tsify). Turned on by the rynk-wasm build.
 wasm = ["std", "rmk-types/wasm", "rmk-config/wasm", "dep:wasm-bindgen", "dep:js-sys", "dep:tsify"]
+# Host-side Vial/Via protocol engine (the `vial` module) for keyboards on the
+# legacy protocol. `rmk-types/log` routes the shared keycode-conversion
+# diagnostics through `log`, which every vial host build links anyway.
+vial = ["alloc", "rmk-types/log"]
 
 [dev-dependencies]
 rmk = { path = "../rmk", default-features = false, features = [

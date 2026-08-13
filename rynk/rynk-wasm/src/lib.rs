@@ -8,6 +8,8 @@
 mod catalog;
 mod client;
 mod transport;
+#[cfg(feature = "vial")]
+mod vial;
 
 use wasm_bindgen::prelude::*;
 

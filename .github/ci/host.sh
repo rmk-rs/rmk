@@ -11,6 +11,8 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$target_root/host}"
 
 log_section "Tests"
 cargo +stable test --workspace --lib --tests
+# The Vial host engine is feature-gated; nothing above compiles it.
+cargo +stable test -p rynk --features vial --lib
 
 log_section "Doctests"
 cargo +stable test -p rynk --doc
@@ -33,7 +35,8 @@ log_section "Wasm tests"
 log_section "Wasm package build"
 # wasm-pack emits the JS package + generated .d.ts under rynk-wasm/pkg/ (ignored, not checked in).
 # --dev keeps wasm-bindgen's type descriptors un-optimized, so a malformed one surfaces as invalid TS below.
-(cd rynk-wasm && wasm-pack build --dev --target web >/dev/null)
+# `vial` matches the GUI's build, so `VialClient`'s descriptors get typechecked too.
+(cd rynk-wasm && wasm-pack build --dev --target web --features vial >/dev/null)
 # Typecheck the whole generated .d.ts: a broken descriptor for any exported type fails CI.
 npx --yes --package typescript@5.9.3 tsc \
     --noEmit --strict --target ES2022 --lib ES2022,DOM,ESNext.Disposable \
@@ -42,4 +45,6 @@ npx --yes --package typescript@5.9.3 tsc \
 
 log_section "Clippy"
 cargo +stable clippy --workspace --lib --tests --examples -- -D warnings
+cargo +stable clippy -p rynk --features vial --lib --tests -- -D warnings
 cargo +stable clippy -p rynk-wasm --target wasm32-unknown-unknown -- -D warnings
+cargo +stable clippy -p rynk-wasm --features vial --target wasm32-unknown-unknown -- -D warnings

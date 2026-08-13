@@ -97,6 +97,8 @@ mod device;
 mod driver;
 #[cfg(feature = "alloc")]
 pub mod layout;
+#[cfg(feature = "vial")]
+pub mod vial;
 
 pub use device::RynkDevice;
 pub use driver::{Client, Driver, RynkHostError};
