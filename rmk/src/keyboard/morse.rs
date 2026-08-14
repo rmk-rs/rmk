@@ -412,7 +412,7 @@ impl<'a> Keyboard<'a> {
         };
         per_key
             .or_else(|| keymap.morse_default_profile().enable_flow_tap())
-            .unwrap_or(false)
+            .unwrap_or_else(|| keymap.morse_enable_flow_tap())
     }
 
     /// Checks if the given pattern can fire its action early even though longer

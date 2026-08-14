@@ -150,8 +150,6 @@ async fn client_against_run_session() {
         let mut beh = client.get_behavior().await.unwrap();
         beh.combo_timeout_ms = beh.combo_timeout_ms.wrapping_add(7);
         beh.tap_interval_ms = beh.tap_interval_ms.wrapping_add(3);
-        // Flow-tap set explicitly: an unset bit reads back folded to the
-        // config-level switch, which would break the exact-equality check.
         beh.morse_default_profile =
             MorseProfile::new(Some(true), Some(MorseMode::PermissiveHold), Some(230), Some(140))
                 .with_enable_flow_tap(Some(true));

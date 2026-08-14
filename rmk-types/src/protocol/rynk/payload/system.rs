@@ -302,5 +302,25 @@ mod tests {
             .with_quick_tap_timeout_ms(Some(120)),
             morse_prior_idle_time_ms: 130,
         });
+
+        // Max-width case: every profile field at its widest so the packed u64's
+        // varint encoding is as long as it gets vs the derived `MaxSize`.
+        let cfg = BehaviorConfig {
+            combo_timeout_ms: u16::MAX,
+            oneshot_timeout_ms: u16::MAX,
+            tap_interval_ms: u16::MAX,
+            tap_capslock_interval_ms: u16::MAX,
+            morse_default_profile: MorseProfile::new(
+                Some(true),
+                Some(crate::morse::MorseMode::Normal),
+                Some(8191),
+                Some(8191),
+            )
+            .with_enable_flow_tap(Some(true))
+            .with_quick_tap_timeout_ms(Some(8191)),
+            morse_prior_idle_time_ms: u16::MAX,
+        };
+        round_trip(&cfg);
+        assert_max_size_bound(&cfg);
     }
 }
