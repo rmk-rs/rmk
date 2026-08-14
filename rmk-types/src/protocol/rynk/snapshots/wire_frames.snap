@@ -15,7 +15,7 @@ ClearBleProfile request 1                                                       
 ConnectionChange topic ConnectionStatus{Configured,{1,Adv},Ble}                 03 03 80 03 02 01 02 01 00
 GetBatteryStatus reply Ok(Available{Discharging,85})                            04 03 08 01 05 01 01 01 55 00
 GetBatteryStatus request ()                                                     04 03 08 01 00
-GetBehaviorConfig reply Ok(BehaviorConfig{50,500,200,20})                       04 01 06 01 07 32 f4 03 c8 01 14 00
+GetBehaviorConfig reply Ok(BehaviorConfig{50..120})                             04 01 06 01 0d 32 3c 46 50 da 80 a6 86 e8 8d 08 78 00
 GetBehaviorConfig request ()                                                    04 01 06 01 00
 GetBleStatus reply Ok(BleStatus{1,Advertising})                                 04 03 07 01 02 01 01 00
 GetBleStatus request ()                                                         04 03 07 01 00
@@ -66,7 +66,7 @@ Lock request ()                                                                 
 Reboot reply Ok(())                                                             02 03 02 01 01 00
 Reboot request ()                                                               02 03 02 01 00
 SetBehaviorConfig reply Ok(())                                                  04 02 06 01 01 00
-SetBehaviorConfig request BehaviorConfig{50,500,200,20}                         0a 02 06 01 32 f4 03 c8 01 14 00
+SetBehaviorConfig request BehaviorConfig{50..120}                               10 02 06 01 32 3c 46 50 da 80 a6 86 e8 8d 08 78 00
 SetCombo reply Ok(())                                                           04 02 03 01 01 00
 SetCombo request SetComboRequest{3,combo}                                       08 02 03 01 03 01 02 01 06 04 05 01 01 02 00
 SetDefaultLayer reply Ok(())                                                    04 04 01 01 01 00

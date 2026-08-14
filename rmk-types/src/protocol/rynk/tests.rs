@@ -261,11 +261,16 @@ fn exemplars() -> Exemplars {
         product_name: heapless::String::try_from("RMK Keyboard").unwrap(),
         serial_number: heapless::String::try_from("rynk:0001").unwrap(),
     };
+    // Quick-tap sits in the u64's high bits, so the profile also exercises a
+    // long-varint encoding.
     let behavior = BehaviorConfig {
         combo_timeout_ms: 50,
-        oneshot_timeout_ms: 500,
-        tap_interval_ms: 200,
-        tap_capslock_interval_ms: 20,
+        oneshot_timeout_ms: 60,
+        tap_interval_ms: 70,
+        tap_capslock_interval_ms: 80,
+        morse_default_profile: MorseProfile::new(Some(true), Some(MorseMode::HoldOnOtherPress), Some(90), Some(100))
+            .with_quick_tap_timeout_ms(Some(110)),
+        morse_prior_idle_time_ms: 120,
     };
     let connection = ConnectionStatus {
         usb: UsbState::Configured,
@@ -483,7 +488,7 @@ fn wire_values_locked() {
         ("MatrixState{[0x05,0x00,0x20]}", encode(&ex.matrix)),
         ("DeviceCapabilities{1..16}", encode(&ex.capabilities)),
         ("DeviceInfo{1.2.3,4,5,RMK,..}", encode(&ex.device_info)),
-        ("BehaviorConfig{50,500,200,20}", encode(&ex.behavior)),
+        ("BehaviorConfig{50..120}", encode(&ex.behavior)),
         ("ConnectionStatus{Configured,{1,Adv},Ble}", encode(&ex.connection)),
         ("ProtocolVersion{1,0}", encode(&ProtocolVersion { major: 1, minor: 0 })),
         ("ProtocolVersion::CURRENT", encode(&ProtocolVersion::CURRENT)),
@@ -859,7 +864,7 @@ fn wire_frames_locked() {
             encode_frame(Cmd::GetBehaviorConfig, SEQ, &())
         ),
         (
-            "GetBehaviorConfig reply Ok(BehaviorConfig{50,500,200,20})",
+            "GetBehaviorConfig reply Ok(BehaviorConfig{50..120})",
             encode_frame(
                 Cmd::GetBehaviorConfig,
                 SEQ,
@@ -867,7 +872,7 @@ fn wire_frames_locked() {
             ),
         ),
         (
-            "SetBehaviorConfig request BehaviorConfig{50,500,200,20}",
+            "SetBehaviorConfig request BehaviorConfig{50..120}",
             encode_frame(Cmd::SetBehaviorConfig, SEQ, &ex.behavior)
         ),
         (

@@ -25,7 +25,7 @@ steps = [
     { Single = { Key = { Hid = "A" } } },
     { Single = { Key = { Hid = "B" } } },
   ], output = { Single = { Key = { Hid = "C" } } } } } } },
-  { rynk = { cmd = "SetBehaviorConfig", payload = { combo_timeout_ms = 80, oneshot_timeout_ms = 1000, tap_interval_ms = 200, tap_capslock_interval_ms = 250 } } },
+  { rynk = { cmd = "SetBehaviorConfig", payload = { combo_timeout_ms = 80, oneshot_timeout_ms = 1000, tap_interval_ms = 200, tap_capslock_interval_ms = 250, morse_default_profile = {}, morse_prior_idle_time_ms = 120 } } },
   # One combo key alone stays silent until the written timeout expires, which is
   # what proves the timeout came from the wire and not the compiled default.
   { press = [0, 0] },
@@ -94,8 +94,8 @@ expect = [["C"], [], ["A"], ["A", "B"], ["B"], []]
 [[test]]
 name = "behavior_config_read_returns_what_was_written"
 steps = [
-  { rynk = { cmd = "SetBehaviorConfig", payload = { combo_timeout_ms = 42, oneshot_timeout_ms = 900, tap_interval_ms = 180, tap_capslock_interval_ms = 240 } } },
-  { rynk = { cmd = "GetBehaviorConfig", reply = { combo_timeout_ms = 42, oneshot_timeout_ms = 900, tap_interval_ms = 180, tap_capslock_interval_ms = 240 } } },
+  { rynk = { cmd = "SetBehaviorConfig", payload = { combo_timeout_ms = 42, oneshot_timeout_ms = 900, tap_interval_ms = 180, tap_capslock_interval_ms = 240, morse_default_profile = { unilateral_tap = true, mode = "PermissiveHold", hold_timeout_ms = 210, gap_timeout_ms = 160, quick_tap_timeout_ms = 110 }, morse_prior_idle_time_ms = 95 } } },
+  { rynk = { cmd = "GetBehaviorConfig", reply = { combo_timeout_ms = 42, oneshot_timeout_ms = 900, tap_interval_ms = 180, tap_capslock_interval_ms = 240, morse_default_profile = { unilateral_tap = true, mode = "PermissiveHold", hold_timeout_ms = 210, gap_timeout_ms = 160, quick_tap_timeout_ms = 110 }, morse_prior_idle_time_ms = 95 } } },
 ]
 
 # `actions` is a pattern-to-action map: 2 = tap, 3 = hold, 4 = double tap,

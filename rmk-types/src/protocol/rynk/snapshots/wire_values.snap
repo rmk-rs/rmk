@@ -28,7 +28,7 @@ Action::TriggerMacro(7)                   0c 07
 Action::User(9)                           13 09
 BatteryStatus::Available{Discharging,85}  01 01 01 55
 BatteryStatus::Unavailable                00
-BehaviorConfig{50,500,200,20}             32 f4 03 c8 01 14
+BehaviorConfig{50..120}                   32 3c 46 50 da 80 a6 86 e8 8d 08 78
 BleState::Advertising                     00
 BleState::Connected                       01
 BleState::Inactive                        02

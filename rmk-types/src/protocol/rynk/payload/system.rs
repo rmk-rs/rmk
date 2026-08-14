@@ -6,6 +6,8 @@ use heapless::{String, Vec};
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 
+use crate::morse::MorseProfile;
+
 /// Maximum byte length of each `DeviceInfo` string field.
 pub const DEVICE_INFO_STRING_SIZE: usize = 32;
 
@@ -155,6 +157,10 @@ pub struct BehaviorConfig {
     pub oneshot_timeout_ms: u16,
     pub tap_interval_ms: u16,
     pub tap_capslock_interval_ms: u16,
+    /// Default profile for morse/tap-hold keys; per-key profiles override it.
+    pub morse_default_profile: MorseProfile,
+    /// Flow-tap window: a tap within this time of the previous key forces a tap.
+    pub morse_prior_idle_time_ms: u16,
 }
 
 #[cfg(test)]
@@ -287,6 +293,14 @@ mod tests {
             oneshot_timeout_ms: 500,
             tap_interval_ms: 200,
             tap_capslock_interval_ms: 20,
+            morse_default_profile: MorseProfile::new(
+                Some(true),
+                Some(crate::morse::MorseMode::PermissiveHold),
+                Some(260),
+                Some(180),
+            )
+            .with_quick_tap_timeout_ms(Some(120)),
+            morse_prior_idle_time_ms: 130,
         });
     }
 }
