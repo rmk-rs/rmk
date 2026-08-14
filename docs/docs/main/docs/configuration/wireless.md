@@ -1,11 +1,5 @@
 # Wireless/Bluetooth
 
-::: warning Upgrading from v0.8
-
-RMK v0.9 merges all BLE HID reports into a single HID service and renumbers the HID report ids, so hosts bonded to a keyboard running an older RMK version must forget the device and pair it again. See the [migration guide](../migration/v08_v09#ble-hosts-must-forget-and-re-pair) for details.
-
-:::
-
 ### `[ble]`
 
 To enable BLE, add `enabled = true` under the `[ble]` section.

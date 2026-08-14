@@ -1,12 +1,18 @@
 # Use embassy-boot bootloader
 
-[embassy-boot](https://github.com/embassy-rs/embassy/tree/main/embassy-boot) is a bootloader framework from the Embassy project. It splits the flash into two firmware slots (active and DFU download), so updating is **safe even if power is lost or the transfer fails** — the old firmware remains intact and the bootloader can roll back automatically. You can build your own bootloader, or use a pre-built one like **rmk-boot**.
+:::warning Experimental
+DFU is experimental. Flashing a bootloader repartitions your flash, and on the nRF52840 it
+**overwrites the Adafruit UF2 bootloader**. The partition layout can change between RMK releases, so
+only follow this guide on a board you can recover with a debug probe.
+:::
+
+[embassy-boot](https://github.com/embassy-rs/embassy/tree/main/embassy-boot) is a bootloader framework from the Embassy project. It splits the flash into two firmware slots (active and DFU download), so updating is **safe even if power is lost or the transfer fails** — the old firmware remains intact and the bootloader can roll back automatically. You can build your own bootloader, or use a ready-made one like **rmk-boot**.
 
 RMK supports DFU for **RP2040** (via `dfu_rp`) and **nRF52840** (via `dfu_nrf`).
 
-[rmk-boot](https://github.com/rmk-rs/rmk-boot) is a pre-built embassy-boot bootloader for both platforms. It sits at the beginning of flash and handles the dual-slot firmware switching and rollback on boot. RMK itself provides the DFU USB interface (via `embassy-usb-dfu`) for subsequent updates, so once rmk-boot and RMK are flashed, you never need to press BOOTSEL again.
+[rmk-boot](https://github.com/rmk-rs/rmk-boot) is a ready-made embassy-boot bootloader for both platforms. It sits at the beginning of flash and handles the dual-slot firmware switching and rollback on boot. RMK itself provides the DFU USB interface (via `embassy-usb-dfu`) for subsequent updates, so once rmk-boot and RMK are flashed, you never need to press BOOTSEL again.
 
-rmk-boot ships a **`rmk-memory.x`** file alongside its firmware binaries. This file **is** your project's `memory.x` — it contains the correct flash layout for the ACTIVE partition. Download it alongside the bootloader, rename it to `memory.x`, and place it next to your `Cargo.toml` (replacing any existing `memory.x`). Your project's `build.rs` already copies `memory.x` into the linker's search path.
+Building rmk-boot produces a **`rmk-memory.x`** file next to its firmware binary. This file **is** your project's `memory.x` — it contains the correct flash layout for the ACTIVE partition. Rename it to `memory.x` and place it next to your `Cargo.toml` (replacing any existing `memory.x`). Your project's `build.rs` already copies `memory.x` into the linker's search path.
 
 Example for RP2040 with 2MB flash:
 ```text title="rmk-memory.x → rename to memory.x"
@@ -72,27 +78,29 @@ Make sure `FLASH : ORIGIN` in your `MEMORY` block starts at your ACTIVE partitio
 
 ### rmk-boot + rmk-memory.x
 
-You need the [rmk-boot](https://github.com/rmk-rs/rmk-boot) bootloader in the **correct flash size** for your board, and the matching `rmk-memory.x` file. Both are available from the [GitHub releases page](https://github.com/rmk-rs/rmk-boot/releases). Alternatively, build rmk-boot yourself — the build also produces `rmk-memory.x` in the project root.
+You need the [rmk-boot](https://github.com/rmk-rs/rmk-boot) bootloader built for the **correct flash size** for your board, plus the `rmk-memory.x` that build generates. There are no pre-built downloads yet, so clone rmk-boot and build the variant you need:
 
-Download the **matching pair** for your board, e.g.:
-- `rmk-boot-rp2040-2mb.uf2` + `rmk-rp2040-2mb-memory.x`
-- `rmk-boot-nrf52840.uf2` + `rmk-nrf52840-memory.x`
+```bash
+rustup target add thumbv6m-none-eabi     # RP2040
+rustup target add thumbv7em-none-eabihf  # nRF52840
 
-Rename the `*-memory.x` file to `memory.x` and place it next to your `Cargo.toml`.
+cargo make uf2-2mb   # → rmk-boot-rp2040-2mb.uf2  (or uf2-4mb / uf2-8mb / uf2-16mb)
+cargo make uf2-nrf   # → rmk-boot-nrf52840.uf2
+```
 
-**RP2040:**
-- `rmk-boot-rp2040-2mb` – for 2 MB flash
-- `rmk-boot-rp2040-4mb` – for 4 MB flash
-- `rmk-boot-rp2040-8mb` – for 8 MB flash
-- `rmk-boot-rp2040-16mb` – for 16 MB flash
+Each build also writes `rmk-memory.x` into the rmk-boot project root. Rename it to `memory.x` and place it next to your `Cargo.toml`.
+
+**RP2040 variants:**
+- `uf2-2mb` → `rmk-boot-rp2040-2mb.uf2` – for 2 MB flash
+- `uf2-4mb` → `rmk-boot-rp2040-4mb.uf2` – for 4 MB flash
+- `uf2-8mb` → `rmk-boot-rp2040-8mb.uf2` – for 8 MB flash
+- `uf2-16mb` → `rmk-boot-rp2040-16mb.uf2` – for 16 MB flash
 
 ::: tip
 The **2 MB version works with larger flash chips as well** (e.g. 4 MB or 8 MB), using only the first 2 MB. On 2 MB you get ~992K of ACTIVE space, which is ample for most RMK firmwares. If you need more room (e.g. with large keymaps, displays, RGB, or many features), pick the matching flash size variant.
 :::
 
-**nRF52840:**
-- `rmk-boot-nrf52840.uf2` + `rmk-nrf52840-memory.x` – for 1 MB flash
-- `rmk-boot-nrf52840.elf` + `rmk-nrf52840-memory.x` – for direct flashing via probe-rs
+**nRF52840:** `cargo make uf2-nrf` builds the 1 MB variant. To flash with a probe instead, run `cargo run --release --target thumbv7em-none-eabihf --features nrf52840` from the rmk-boot directory.
 
 ::: warning
 When using the nRF52840 with the **Adafruit UF2 bootloader**, flashing rmk-boot **overwrites** the Adafruit bootloader (even when flashing via UF2). Subsequent UF2 uploads won't work.

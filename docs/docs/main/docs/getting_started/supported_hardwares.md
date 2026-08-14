@@ -17,6 +17,7 @@ Below is a (non-exhaustive) list of the currently supported hardware:
 | nRF54L15    | Cortex-M33        | BLE          | ✅                 | ✅                    | No USB peripheral                             |
 | nRF52840/33 | Cortex-M4F        | USB + BLE    | ✅                 | ✅                    | -                                             |
 | nRF52832    | Cortex-M4F        | BLE          | ✅                 | ✅                    | -                                             |
+| nRF52820    | Cortex-M4         | USB + BLE    | -                  | -                     | No SAADC, so no battery ADC; not tested       |
 | nRF52810/11 | Cortex-M4         | BLE          | -                  | Partial (52810)       | not tested                                    |
 | PY32F07X    | Cortex-M0+        | USB          | ✅                 | ✅                    | Storage support is currently unavailable      |
 | SF32LB52    | Cortex-M33        | USB + BLE    | ✅                 | ✅                    | -                                             |

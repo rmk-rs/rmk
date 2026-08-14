@@ -1,6 +1,6 @@
 [package]
 name = "rmk-types"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2024"
 authors = ["Haobo Gu <haobogu@outlook.com>"]
 description = "Common types in RMK"
@@ -27,7 +27,7 @@ wasm-bindgen = { version = "0.2", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 
 [build-dependencies]
-rmk-config = { path = "../rmk-config", version = "=0.6.1" }
+rmk-config = { path = "../rmk-config", version = "=0.7.0" }
 toml = "1"
 
 [features]

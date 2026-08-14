@@ -3,8 +3,9 @@
 The `[host]` section selects the firmware protocol used by host-side tools.
 RMK currently supports two mutually exclusive protocols:
 
-- `rynk_enabled`: RMK's native protocol for RMK-aware host tools.
-- `vial_enabled`: the Vial/VIA-compatible protocol for the Vial app.
+- `vial_enabled`: the Vial/VIA-compatible protocol for the Vial app. This is the default.
+- `rynk_enabled`: RMK's native protocol for RMK-aware host tools. **Experimental** — see
+  [Rynk](../features/rynk).
 
 The `keyboard.toml` values must match the `rmk` Cargo features. If
 `host.rynk_enabled = true`, enable the `rynk` Cargo feature. If

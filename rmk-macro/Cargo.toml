@@ -1,6 +1,6 @@
 [package]
 name = "rmk-macro"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2024"
 authors = ["Haobo Gu <haobogu@outlook.com>"]
 description = "Proc-macro crate of RMK"
@@ -10,8 +10,8 @@ license = "MIT OR Apache-2.0"
 resolver = "2"
 
 [dependencies]
-rmk-config = { path = "../rmk-config", version = "=0.6.1"}
-rmk-types = { path = "../rmk-types", version = "=0.2.2", features = ["_codegen"] }
+rmk-config = { path = "../rmk-config", version = "=0.7.0"}
+rmk-types = { path = "../rmk-types", version = "=0.3.0", features = ["_codegen"] }
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "extra-traits"] }
 proc-macro2 = "1.0"

@@ -4,9 +4,15 @@
 RMK supports DFU firmware updates via embassy-boot for **RP2040** and **nRF52840**. An embassy-boot based bootloader splits flash into ACTIVE and DFU slots, providing safe updates with automatic rollback on failure.
 This is an optional feature of RMK, the default bootloaders of the devices can still be used as usual without runtime updates via USB DFU.
 
-A pre-built embassy-boot based bootloader called **rmk-boot** is available for both platforms. RMK integrates with rmk-boot through a **`memory.x`** file that ships alongside the bootloader. When using rmk-boot’s prebuilt binaries, download the matching `rmk-*-memory.x` from the [GitHub releases](https://github.com/rmk-rs/rmk-boot/releases).
-When building rmk-boot yourself, it will create its matching `rmk-memory.x` in the project directory of rmk-boot.
-In either way, rename the file to `memory.x` and place it next to your projects `Cargo.toml`.
+:::warning Experimental
+DFU is experimental. Enabling it repartitions your flash, and the partition layout, the `[dfu]`
+options on this page, and the Rust API can change in any release. A firmware built for one partition
+layout cannot be flashed over a bootloader built for another, so treat a board with DFU enabled as
+one you may have to re-flash with a probe.
+:::
+
+An embassy-boot based bootloader for both platforms lives in [rmk-boot](https://github.com/rmk-rs/rmk-boot). RMK integrates with it through a **`memory.x`** file that the bootloader generates: build rmk-boot for your chip and it writes its matching `rmk-memory.x` into the rmk-boot project directory.
+Rename that file to `memory.x` and place it next to your project's `Cargo.toml`, so the firmware and the bootloader agree on the partition layout.
 
 At runtime RMK reads partition offsets from **linker symbols** embedded in `memory.x` — you never compute or hardcode partition addresses yourself.
 

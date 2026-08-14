@@ -12,10 +12,6 @@ RMK also provides BLE examples; check out [nrf52840_ble](https://github.com/rmk-
 
 Since multiple targets are not currently supported by `docs.rs`, API documentation is not available on `docs.rs`. Check the examples for usage.
 
-::: warning Upgrading from v0.8?
-v0.9 moves all BLE HID reports into a single HID service and renumbers the HID report ids, so hosts bonded to a v0.8 keyboard cache a stale layout. After flashing v0.9, forget the keyboard in the Bluetooth settings of every previously paired host, then pair again. See the [migration guide](../migration/v08_v09#ble-hosts-must-forget-and-re-pair).
-:::
-
 ## Supported Microcontrollers
 
 The following is the list of available feature gates (i.e., supported BLE chips):
@@ -55,7 +51,7 @@ Vial user keycodes can be configured to operate wireless profiles. Suppose that 
 - `User(N+2)`: clear current profile bond info
 - `User(N+3)`: switch default output between USB/BLE
 - `User(N+4)`: clear the stored split peer bond — hold the key for 5 seconds (BLE split keyboards only)
-- `User(N+5)`: switch to the dongle bond slot, a slot of its own that profile cycling never reaches. Hold the key for 5 seconds to clear that bond and go looking for another dongle. Keyboards built with the `dongle` feature only.
+- `User(N+5)`: switch to the dongle bond slot, a slot of its own that profile cycling never reaches. Hold the key for 5 seconds to clear that bond and go looking for another dongle. Keyboards built with the `dongle` feature only — see [Dongle](./dongle).
 
 Vial also provides a way to customize the displayed keycode, see `customKeycodes` in [this example](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/vial.json). If `customKeycodes` are configured, the `User0` ~ `User(N+3)` will be displayed as `BT0`, ..., `Switch Output`.
 

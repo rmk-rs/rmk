@@ -52,7 +52,7 @@ There are a bunch of things to do with RMK in the near future. I plan to ship 1.
 - [x] Better support for split dongle (dongle as the split central)
 - [ ] Nordic Uart HCI support
 - [ ] Send report via Uart/Usart
-- [ ] 🔵 Tri-mode dongle: switch between USB, BLE and dongle mode
+- [x] 🔵 Tri-mode dongle: switch between USB, BLE and dongle mode
 
 #### User experience
 

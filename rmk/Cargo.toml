@@ -1,6 +1,6 @@
 [package]
 name = "rmk"
-version = "0.8.2"
+version = "0.9.0"
 authors = ["Haobo Gu <haobogu@outlook.com>"]
 description = "Keyboard firmware written in Rust"
 homepage = "https://github.com/rmk-rs/rmk"
@@ -11,8 +11,8 @@ license = "MIT OR Apache-2.0"
 resolver = "2"
 
 [dependencies]
-rmk-macro = { version = "=0.7.1", path = "../rmk-macro" }
-rmk-types = { version = "=0.2.2", path = "../rmk-types" }
+rmk-macro = { version = "=0.8.0", path = "../rmk-macro" }
+rmk-types = { version = "=0.3.0", path = "../rmk-types" }
 embedded-hal = { version = "1.0.0" }
 embedded-hal-async = { version = "1.0.0" }
 embedded-io-async = { version = "0.7" }
@@ -125,7 +125,7 @@ host = ["dep:byteorder"]
 ## Enable vial support
 vial = ["host"]
 
-## Enable DFU lock feature — physical key unlock for DFU firmware download
+## **Experimental.** Enable DFU lock feature — physical key unlock for DFU firmware download
 dfu_lock = ["host_lock"]
 
 ## Enable physical key unlock and matrix state tracking — the shared base of the
@@ -133,7 +133,8 @@ dfu_lock = ["host_lock"]
 ## Vial lock).
 host_lock = []
 
-## Enable Rynk protocol support (RMK-native protocol, mutually exclusive with vial).
+## **Experimental.** Enable Rynk protocol support (RMK-native protocol, mutually exclusive with
+## vial). The wire protocol and host API can change in any release; `vial` is the stable default.
 ## Includes `host_lock` so the lock gate always has matrix-state tracking.
 rynk = ["host", "host_lock", "rmk-types/rynk"]
 
@@ -250,13 +251,15 @@ adafruit_bl = ["_nrf_ble"]
 ## Enable feature if you're using the ZSA Voyager ignition DFU bootloader
 zsa_voyager_bl = []
 
-## Enable DFU firmware update support (USB DFU interface)
+## **Experimental.** Enable DFU firmware update support (USB DFU interface).
+## The flash layout, config, and API can change in any release.
 dfu = ["dep:embassy-usb-dfu", "dep:embassy-embedded-hal", "rmk-types/dfu"]
-## Enable RP2040-specific DFU with embassy-boot-rp (implies `dfu` and `rp2040`)
+## **Experimental.** Enable RP2040-specific DFU with embassy-boot-rp (implies `dfu` and `rp2040`)
 dfu_rp = ["dfu", "dep:embassy-boot-rp", "dep:embassy-boot", "rp2040", "rmk-macro/dfu_rp"]
-## Enable nRF DFU firmware update support (add a chip feature like `nrf52840` too)
+## **Experimental.** Enable nRF DFU firmware update support (add a chip feature like `nrf52840` too)
 dfu_nrf = ["dfu", "dep:embassy-boot", "dep:embassy-nrf", "rmk-macro/dfu_nrf"]
-## Enable split firmware update support — forward firmware to peripherals over split link
+## **Experimental.** Enable split firmware update support — forward firmware to peripherals over
+## split link. Wired split only; see the guard in `lib.rs` for BLE.
 dfu_split = ["dfu", "rmk-macro/dfu_split"]
 
 ## Enable Plover HID stenography support: adds the steno HID descriptor,

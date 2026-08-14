@@ -1298,7 +1298,7 @@ checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 
 [[package]]
 name = "rmk"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "bt-hci",
  "cortex-m",
@@ -1330,7 +1330,7 @@ dependencies = [
 
 [[package]]
 name = "rmk-config"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "config",
  "miniz_oxide",
@@ -1346,7 +1346,7 @@ dependencies = [
 
 [[package]]
 name = "rmk-macro"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "cargo_toml",
  "darling 0.23.0",
@@ -1360,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "rmk-types"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "bitfield-struct",
  "heapless 0.9.3",

@@ -220,6 +220,21 @@ In the latest git version of Embassy, the task arena size can be calculated auto
 
 If you're comfortable with nightly Rust, you can enable the `nightly` feature of embassy-executor and remove the `task-arena-size-*` feature.
 
+### `rustc` overflowed its stack while compiling `rmk-types`
+
+Some `rustc` versions run out of stack on `rmk-types`' generated keycode tables. Give the compiler a bigger stack:
+
+```bash
+export RUST_MIN_STACK=67108864
+```
+
+To make it stick for a project, put it in the project's `.cargo/config.toml` instead of exporting it every time:
+
+```toml title=".cargo/config.toml"
+[env]
+RUST_MIN_STACK = "67108864"
+```
+
 ### What font is used for the RMK logo?
 
 It's [Honk](https://fonts.google.com/specimen/Honk?categoryFilters=Technology:%2FTechnology%2FColor&preview.text=RMK).
