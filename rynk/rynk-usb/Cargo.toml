@@ -10,6 +10,6 @@ repository.workspace = true
 keywords = ["keyboard", "firmware", "rmk", "protocol", "usb"]
 
 [dependencies]
-rynk = { path = ".." }
+rynk = { path = "..", version = "=0.2.0" }
 nusb = { version = "0.2", features = ["tokio"] }
 embedded-io-adapters = { workspace = true, features = ["tokio-1"] }
