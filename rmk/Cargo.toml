@@ -183,7 +183,7 @@ defmt = [
 ]
 
 ## Enable logging via usb
-usb_log = ["dep:embassy-usb-logger", "log", "log/max_level_debug"]
+usb_log = ["dep:embassy-usb-logger", "log"]
 ## Use log, this feature cannot be enabled when defmt is enabled
 log = ["dep:log", "trouble-host?/log"]
 
@@ -275,6 +275,11 @@ _usb_high_speed = []
 ## Internal marker for chips without SAADC; compiles out `NrfAdc`.
 _no_saadc = []
 
+## Enable BLE connection subrating for split Connections
+subrating = []
+## Internal feature that indicates that subrating is not supported, this will be auto-activated for some chips
+_no_subrating = []
+
 #! ### BLE feature flags
 #!
 #! ⚠️ Due to the limitation of docs.rs, functions gated by BLE features won't show in docs.rs. You have to head to [`examples`](https://github.com/rmk-rs/rmk/tree/main/examples) folder of RMK repo for their usages.
@@ -307,7 +312,7 @@ esp32s3_ble = ["_esp_ble"]
 _esp_ble = ["_ble", "dep:esp-hal"]
 
 ## Enable feature if you want to use RP2040W with BLE.
-pico_w_ble = ["_ble", "dep:embassy-rp"]
+pico_w_ble = ["_ble", "_no_subrating", "dep:embassy-rp"]
 
 ## Enable feature if you want to use SF32LB52x with BLE.
 sf32lb52x_ble = ["_ble"]

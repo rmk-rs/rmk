@@ -10,7 +10,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "nrf52840_ble", "split", "async_matrix", "adafruit_bl"] }
+rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "nrf52840_ble", "split", "async_matrix", "adafruit_bl", "subrating"] }
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "f54b6389ffa2750d4d3a4f5435660cb66b47e51a", features = [
     "defmt",
     "peripheral",

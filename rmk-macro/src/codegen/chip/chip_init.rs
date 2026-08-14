@@ -5,6 +5,7 @@ use rmk_config::resolved::Hardware;
 use rmk_config::resolved::hardware::{BoardConfig, ChipModel, ChipSeries, CommunicationConfig};
 use syn::{ItemFn, ItemMod};
 
+use crate::codegen::feature::{get_rmk_features, is_feature_enabled};
 use crate::codegen::override_helper::{Overwritten, find_overwritten};
 
 /// Expand chip initialization code
@@ -83,14 +84,36 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
             let ble_addr = get_ble_addr(hardware, peripheral_id);
             // Calculate the size of sdc memory pool.
             // Unibody: 4696. Split central: 6080 + (N-1) * 2288 per peripheral.
-            let sdc_mem_size = if peripheral_id.is_none() {
-                if peri_num > 0 {
-                    6080 + (peri_num.saturating_sub(1)) * 2288
+            // Base memory sizes for the nrf-sdc memory pool
+            const SDC_MEM_UNIBODY: usize = 4696;
+            const SDC_MEM_SPLIT_BASE: usize = 6080;
+            const SDC_MEM_PER_EXTRA_PERIPHERAL: usize = 2288;
+
+            // Connection subrating adds extra memory per connection
+            const SDC_MEM_SUBRATING_BASE: usize = 136;
+            const SDC_MEM_SUBRATING_PER_PERIPHERAL: usize = 56;
+            const SDC_MEM_SUBRATING_PER_EXTRA_PERIPHERAL: usize = 8;
+
+            let subrating_enabled = is_feature_enabled(&get_rmk_features(), "subrating");
+
+            let sdc_mem_size = if peripheral_id.is_none() && peri_num > 0 {
+                // Split central
+                let base =
+                    SDC_MEM_SPLIT_BASE + peri_num.saturating_sub(1) * SDC_MEM_PER_EXTRA_PERIPHERAL;
+                if subrating_enabled {
+                    base + SDC_MEM_SUBRATING_BASE
+                        + peri_num.saturating_sub(1) * SDC_MEM_SUBRATING_PER_PERIPHERAL
+                        + peri_num.saturating_sub(2) * SDC_MEM_SUBRATING_PER_EXTRA_PERIPHERAL
                 } else {
-                    4696
+                    base
                 }
             } else {
-                4696
+                // Unibody or split peripheral
+                if subrating_enabled {
+                    SDC_MEM_UNIBODY + SDC_MEM_SUBRATING_BASE
+                } else {
+                    SDC_MEM_UNIBODY
+                }
             };
             let ble_init = match &communication {
                 CommunicationConfig::Ble(_) | CommunicationConfig::Both(_, _) => quote! {
