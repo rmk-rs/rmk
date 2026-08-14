@@ -345,6 +345,13 @@ impl<'a> KeyMap<'a> {
         behavior: &'a mut BehaviorConfig,
         positional_config: &'a PositionalConfig<ROW, COL>,
     ) -> Self {
+        // The default profile heads every per-field fallback chain, so fold the
+        // config-level flow-tap switch in; an unset bit has nowhere left to fall.
+        let morse = &mut behavior.morse;
+        if morse.default_profile.enable_flow_tap().is_none() {
+            morse.default_profile = morse.default_profile.with_enable_flow_tap(Some(morse.enable_flow_tap));
+        }
+
         let layers = data.keymap.as_mut_slice().as_flattened_mut().as_flattened_mut();
         let encoders = if NUM_ENCODER > 0 {
             Some(data.encoder_map.as_mut_slice().as_flattened_mut())
@@ -574,10 +581,6 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow().behavior.tap.tap_capslock_interval
     }
 
-    pub(crate) fn morse_enable_flow_tap(&self) -> bool {
-        self.inner.borrow().behavior.morse.enable_flow_tap
-    }
-
     pub(crate) fn morse_prior_idle_time(&self) -> Duration {
         self.inner.borrow().behavior.morse.prior_idle_time
     }
@@ -629,7 +632,15 @@ impl<'a> KeyMap<'a> {
     }
 
     pub(crate) fn set_morse_default_profile(&self, profile: MorseProfile) {
-        self.inner.borrow_mut().behavior.morse.default_profile = profile;
+        let mut inner = self.inner.borrow_mut();
+        let morse = &mut inner.behavior.morse;
+        // Same fold as `build`: keep the top of the fallback chain concrete
+        // so a host write can't silently drop the config-level switch.
+        morse.default_profile = if profile.enable_flow_tap().is_none() {
+            profile.with_enable_flow_tap(Some(morse.enable_flow_tap))
+        } else {
+            profile
+        };
     }
 
     pub(crate) fn set_morse_prior_idle_time(&self, time: Duration) {
