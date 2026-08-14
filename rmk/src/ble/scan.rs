@@ -27,16 +27,24 @@ pub(crate) fn scan_config(window: Duration) -> ScanConfig<'static> {
 /// Start a scan, retrying while the controller refuses one — it does until a
 /// previous connect's initiator has stopped.
 ///
+/// A non-empty `filter_accept_list` drops everyone else's reports at the
+/// controller; `&[]` scans unfiltered.
+///
 /// End the session with [`ScanSession::stop`], which waits for the controller to
 /// confirm. Dropping it only signals the cancel, and the controller refuses an
 /// initiator until the runner has issued the stop.
 pub(crate) async fn start_scan<'a, C: Controller + ControllerCmdSync<LeSetScanParams>>(
     stack: &'a Stack<'_, C, DefaultPacketPool>,
     window: Duration,
+    filter_accept_list: &[Address],
 ) -> ScanSession<'a, false> {
+    let config = ScanConfig {
+        filter_accept_list,
+        ..scan_config(window)
+    };
     loop {
         let mut central = stack.central();
-        match Scanner::new(&mut central).scan(&scan_config(window)).await {
+        match Scanner::new(&mut central).scan(&config).await {
             Ok(session) => return session,
             Err(_) => Timer::after_millis(500).await,
         }

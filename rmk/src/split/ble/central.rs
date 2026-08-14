@@ -121,7 +121,7 @@ pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + ControllerC
         } else if peripheral_slots.iter().any(|s| matches!(s, SlotState::NoAddr)) {
             // No `Disconnected` peripherals, check `NoAddr` peripheral slot and scan new peripherals
             info!("Start scanning peripherals");
-            let session = start_scan(stack, SPLIT_CENTRAL_SCAN_WINDOW).await;
+            let session = start_scan(stack, SPLIT_CENTRAL_SCAN_WINDOW, &[]).await;
             let event = select(PERIPHERAL_FOUND.wait(), ended.ready_to_receive()).await;
             // Wait until the controller has confirmed the stop: it refuses an
             // initiator until then.

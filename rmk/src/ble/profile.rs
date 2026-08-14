@@ -168,6 +168,17 @@ where
             .cloned()
     }
 
+    /// Is `identity` the dongle this keyboard is bonded to? Host profiles turn it
+    /// away: an empty slot would otherwise pair the dongle into a host's slot.
+    #[cfg(feature = "dongle")]
+    pub(crate) fn is_bonded_dongle(&self, identity: &Identity) -> bool {
+        self.bonded_devices.iter().any(|bond_info| {
+            !bond_info.removed
+                && bond_info.slot_num == DONGLE_PROFILE
+                && bond_info.info.identity.match_identity(identity)
+        })
+    }
+
     /// Update bonding information in the stack according to the current active profile
     pub(crate) fn update_stack_bonds(&self) {
         // Drain one at a time rather than collecting: the stack holds bonds this

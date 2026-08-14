@@ -301,6 +301,15 @@ where
                         disconnect(&conn).await;
                         continue;
                     }
+                    // The bonded dongle belongs to its own slot, whatever it connects on.
+                    #[cfg(feature = "dongle")]
+                    if crate::state::current_profile() != crate::ble::profile::DONGLE_PROFILE
+                        && profile_manager.is_bonded_dongle(&conn.raw().peer_identity())
+                    {
+                        warn!("[ble] the bonded dongle connected on a host profile, disconnecting");
+                        disconnect(&conn).await;
+                        continue;
+                    }
                     if let Either::Second(_) = select(
                         serve_keyboard_connection(
                             server,

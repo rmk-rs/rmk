@@ -19,7 +19,7 @@ use core::cell::Cell;
 
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
-use bt_hci::param::{AddrKind, BdAddr, Status};
+use bt_hci::param::{AddrKind, BdAddr, LeAdvEventKind, Status};
 use embassy_futures::join::join;
 use embassy_futures::select::{Either, select, select3};
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
@@ -86,8 +86,12 @@ struct ScanHandler {
     bonded_addr: BlockingMutex<RawMutex, Cell<Option<BdAddr>>>,
     /// The latest keyboard sighted seeking a dongle, and how strong its signal was.
     seeking_keyboard: Signal<RawMutex, ((AddrKind, BdAddr), i8)>,
-    /// The bonded keyboard turned up, so the pairing window can stand down.
+    /// The bonded keyboard was sighted at all — alive, on any profile. This
+    /// vetoes adopting a replacement; it never licenses a connect.
     bonded_seen: Signal<RawMutex, ()>,
+    /// The bonded keyboard asked for a dongle: a directed advertisement, or
+    /// seeking anew after dropping its bond. The only license to connect.
+    bonded_sought: Signal<RawMutex, ()>,
 }
 
 impl ScanHandler {
@@ -96,20 +100,30 @@ impl ScanHandler {
             bonded_addr: BlockingMutex::new(Cell::new(None)),
             seeking_keyboard: Signal::new(),
             bonded_seen: Signal::new(),
+            bonded_sought: Signal::new(),
         }
     }
 }
 
-/// Runner event handler: surface seeking keyboards, and the bonded one's return.
+/// Runner event handler: surface seeking keyboards, and the bonded one's sightings and calls.
 impl EventHandler for ScanHandler {
     fn on_adv_reports(&self, mut it: LeAdvReportsIter<'_>) {
         while let Some(Ok(report)) = it.next() {
+            let bonded = self.bonded_addr.lock(|addr| addr.get()) == Some(report.addr);
             if Adv::decode(report.data) == Some(Adv::DongleSeeking) {
                 debug!("[dongle] seeking keyboard {:?} rssi {}", report.addr, report.rssi);
                 self.seeking_keyboard
                     .signal(((report.addr_kind, report.addr), report.rssi));
-            } else if self.bonded_addr.lock(|addr| addr.get()) == Some(report.addr) {
+                // Seeking anew means it cleared its bond; reconnecting re-pairs it.
+                if bonded {
+                    self.bonded_sought.signal(());
+                }
+            } else if bonded {
                 self.bonded_seen.signal(());
+                // Directed advertisements are only reported to their target: us.
+                if report.event_kind == LeAdvEventKind::AdvDirectInd {
+                    self.bonded_sought.signal(());
+                }
             }
         }
     }
@@ -200,7 +214,12 @@ where
             self.scan.bonded_addr.lock(|a| a.set(bonded.map(|addr| addr.addr)));
 
             if let Some(addr) = bonded {
-                // If there is bonded keyboard, repeatly connect to that keyboard.
+                // Initiate only once the keyboard asks for a dongle; its bare address
+                // would answer its host advertising too. Accept list drops ambient traffic.
+                self.scan.bonded_sought.reset();
+                let session = start_scan(self.stack, DONGLE_SCAN_WINDOW, &[addr]).await;
+                self.scan.bonded_sought.wait().await;
+                session.stop().await;
                 if let Some(conn) = self.connect(addr).await {
                     self.run_connection(conn, Peer::Bonded).await;
                 }
@@ -243,10 +262,10 @@ where
         }
     }
 
-    /// Scan for keyboards seeking a dongle, returning the strongest sighted
-    /// within 2s of the first. Ends early with `None` when the bonded keyboard
-    /// turns up, so the power-on window with the keyboard present skips
-    /// straight to reconnecting.
+    /// Scan for keyboards seeking a dongle, returning the strongest sighted within
+    /// 2s of the first. First evidence wins: sighting the bonded keyboard ends the
+    /// window with `None`; a seeker sighted while it is silent was staged by hand
+    /// before the (re)plug, which outranks an automatic reconnect.
     async fn run_pairing_window(&self) -> Option<(AddrKind, BdAddr)> {
         info!("[dongle] pairing window open for {}s", DONGLE_PAIRING_WINDOW_SECS);
         self.scan.seeking_keyboard.reset();
@@ -265,7 +284,7 @@ where
             (best_addr, best_rssi)
         };
 
-        let Ok(session) = with_deadline(deadline, start_scan(self.stack, DONGLE_SCAN_WINDOW)).await else {
+        let Ok(session) = with_deadline(deadline, start_scan(self.stack, DONGLE_SCAN_WINDOW, &[])).await else {
             info!("[dongle] pairing window closed, the scanner never started");
             return None;
         };
@@ -275,7 +294,7 @@ where
                 Some(addr)
             }
             Ok(Either::Second(())) => {
-                debug!("[dongle] bonded keyboard is back, closing the pairing window");
+                debug!("[dongle] bonded keyboard is alive, closing the pairing window");
                 None
             }
             Err(_) => {
@@ -664,5 +683,79 @@ async fn release_held_keys() {
         Report::SystemControlReport(SystemControlReport { usage_id: 0 }),
     ] {
         send_hid_report(report).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bt_hci::FromHciBytes;
+    use bt_hci::param::LeAdvReports;
+
+    use super::*;
+
+    const BONDED: [u8; 6] = [1, 2, 3, 4, 5, 6];
+    const OTHER: [u8; 6] = [7, 8, 9, 10, 11, 12];
+
+    const ADV_IND: u8 = 0;
+    const ADV_DIRECT_IND: u8 = 1;
+
+    /// Flags + manufacturer-specific data naming a dongle-seeking advertisement (see `Adv::build`).
+    const SEEKING_DATA: &[u8] = &[0x02, 0x01, 0x04, 0x04, 0xFF, 0x53, 0x52, 0x01];
+    /// A host advertisement carries no RMK payload; flags alone stand in for it.
+    const HOST_DATA: &[u8] = &[0x02, 0x01, 0x06];
+
+    /// One legacy advertising report as the controller lays it out:
+    /// count, kind, address kind, address, data length, data, rssi.
+    fn report(handler: &ScanHandler, event_kind: u8, addr: [u8; 6], data: &[u8]) {
+        let mut bytes: heapless::Vec<u8, 64> = heapless::Vec::new();
+        bytes.extend_from_slice(&[1, event_kind, 1]).unwrap();
+        bytes.extend_from_slice(&addr).unwrap();
+        bytes.push(data.len() as u8).unwrap();
+        bytes.extend_from_slice(data).unwrap();
+        bytes.push(0xC0).unwrap(); // rssi
+        let (reports, _) = LeAdvReports::from_hci_bytes(&bytes).unwrap();
+        handler.on_adv_reports(reports.iter());
+    }
+
+    fn bonded_handler() -> ScanHandler {
+        let handler = ScanHandler::new();
+        handler.bonded_addr.lock(|a| a.set(Some(BdAddr::new(BONDED))));
+        handler
+    }
+
+    #[test]
+    fn a_host_advertisement_vetoes_adoption_but_never_licenses_a_connect() {
+        let handler = bonded_handler();
+        report(&handler, ADV_IND, BONDED, HOST_DATA);
+        assert!(handler.bonded_seen.signaled());
+        assert!(!handler.bonded_sought.signaled());
+    }
+
+    #[test]
+    fn a_directed_advertisement_licenses_the_connect() {
+        let handler = bonded_handler();
+        report(&handler, ADV_DIRECT_IND, BONDED, &[]);
+        assert!(handler.bonded_sought.signaled());
+        assert!(handler.bonded_seen.signaled());
+    }
+
+    #[test]
+    fn the_bonded_keyboard_seeking_anew_licenses_the_connect() {
+        let handler = bonded_handler();
+        report(&handler, ADV_IND, BONDED, SEEKING_DATA);
+        assert!(handler.seeking_keyboard.signaled());
+        assert!(handler.bonded_sought.signaled());
+        // Seeking stays out of the veto: it competes in the window's RSSI pick instead.
+        assert!(!handler.bonded_seen.signaled());
+    }
+
+    #[test]
+    fn another_keyboard_is_a_pairing_candidate_and_nothing_more() {
+        let handler = bonded_handler();
+        report(&handler, ADV_IND, OTHER, SEEKING_DATA);
+        report(&handler, ADV_DIRECT_IND, OTHER, &[]);
+        assert!(handler.seeking_keyboard.signaled());
+        assert!(!handler.bonded_seen.signaled());
+        assert!(!handler.bonded_sought.signaled());
     }
 }
