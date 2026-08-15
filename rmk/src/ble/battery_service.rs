@@ -257,11 +257,6 @@ pub(crate) struct BlePeripheralBatteryServer<'stack, 'server, 'conn, P: PacketPo
 }
 
 #[cfg(feature = "split")]
-fn peripheral_battery_slot(peripheral_id: usize) -> Option<usize> {
-    find_peripheral_battery_slot(&crate::SPLIT_BATTERY_PERIPHERAL_IDS, peripheral_id)
-}
-
-#[cfg(feature = "split")]
 fn find_peripheral_battery_slot(configured_ids: &[usize], peripheral_id: usize) -> Option<usize> {
     configured_ids
         .iter()
@@ -320,7 +315,7 @@ impl<P: PacketPool> Runnable for BlePeripheralBatteryServer<'_, '_, '_, P> {
 
         loop {
             let event = self.sub.next_message_pure().await;
-            if let Some(slot) = peripheral_battery_slot(event.id)
+            if let Some(slot) = find_peripheral_battery_slot(&crate::SPLIT_BATTERY_PERIPHERAL_IDS, event.id)
                 && let BatteryStatus::Available { level: Some(level), .. } = event.state.0
                 && let Err(e) = self.battery_levels[slot].notify(self.conn, &level, true).await
             {
@@ -460,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn peripheral_battery_presentation_format_supports_maximum_configured_id() {
+    fn peripheral_battery_presentation_format_maps_id_254_to_assigned_description() {
         assert_eq!(
             peripheral_battery_presentation_format(254),
             [0x04, 0x00, 0xAD, 0x27, 0x01, 0xFF, 0x00]

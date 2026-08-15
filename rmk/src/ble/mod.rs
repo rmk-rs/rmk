@@ -795,7 +795,8 @@ async fn run_ble_keyboard<
     let mut ble_led_reader = BleLedReader;
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
     #[cfg(feature = "split")]
-    let mut ble_peripheral_battery_server = BlePeripheralBatteryServer::new(server, conn);
+    let mut ble_peripheral_battery_server =
+        (crate::SPLIT_BATTERY_PERIPHERALS_NUM > 0).then(|| BlePeripheralBatteryServer::new(server, conn));
 
     // CCCD lookup uses cached bond info to avoid a cancellable flash read while
     // this future is racing other arms of an outer `select`.
@@ -819,9 +820,7 @@ async fn run_ble_keyboard<
     #[cfg(not(feature = "split"))]
     let battery_task = ble_battery_server.run();
     #[cfg(feature = "split")]
-    let battery_task = async {
-        embassy_futures::join::join(ble_battery_server.run(), ble_peripheral_battery_server.run()).await;
-    };
+    let battery_task = embassy_futures::join::join(ble_battery_server.run(), ble_peripheral_battery_server.run());
 
     let communication_task = async {
         if let Either3::First(e) = select3(
