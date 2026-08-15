@@ -10,4 +10,3 @@ start_addr = 0x100000
 num_sectors = 32
 
 [dfu]
-flash_size = 2097152

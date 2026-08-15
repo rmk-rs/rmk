@@ -40,8 +40,8 @@ If you press One-Shot Modifier again, it will be sent as a normal modifier key p
 
 The `quick_release` option controls when the one-shot modifier is released:
 
-- `false` (default): the modifier is released when the next key is **released** (chain mode, equivalent to ZMK `&skn`). The modifier stays active for the entire duration of the next keypress, including key repeat.
-- `true`: the modifier is released when the next key is **pressed** (equivalent to ZMK `&skq`). Only the initial press of the next key is modified; key repeat will not include the modifier.
+- `false` (default): the modifier is included in the next key's press report and stays part of that report for as long as the key is held, including key repeat (chain mode, equivalent to ZMK `&skn`). No separate report is sent when the key is released.
+- `true`: an extra report is sent right after the next key's press with the modifier removed (equivalent to ZMK `&skq`). Only the initial press of the next key is modified; key repeat will not include the modifier.
 
 Default values:
 

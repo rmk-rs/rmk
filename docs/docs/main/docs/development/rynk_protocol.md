@@ -84,9 +84,3 @@ Topics are best-effort pushes; the `Get*` endpoints above mirror their payloads 
 | `0x8004` | `SleepState`          | `bool`             |         |       |
 | `0x8005` | `LedIndicatorChange`  | `LedIndicator`     |         |       |
 | `0x8006` | `BatteryStatusChange` | `BatteryStatus`    | `_ble`  |       |
-
-## Compatibility
-
-- `GetVersion` (`0x0001`) and its `Result<ProtocolVersion, RynkError>` reply are frozen across all versions.
-- Within a major version, adding a CMD or topic is a `minor` bump: old firmware answers `UnknownCmd`, old hosts ignore unknown topics.
-- Reshaping an existing request/response — including appending a field — is a `major` bump.

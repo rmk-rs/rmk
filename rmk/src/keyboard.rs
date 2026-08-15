@@ -1,6 +1,6 @@
 use core::fmt::Debug;
 
-#[cfg(all(feature = "split", feature = "_ble"))]
+#[cfg(feature = "_ble")]
 use embassy_futures::select::{Either, select};
 use embassy_futures::yield_now;
 #[cfg(feature = "_ble")]
@@ -1666,6 +1666,26 @@ impl<'a> Keyboard<'a> {
         }
     }
 
+    /// True when the key is still down 5s later. A release inside the window is
+    /// pushed back to `unprocessed_events`, so it replays as a short press.
+    #[cfg(feature = "_ble")]
+    async fn held_for_5s(&mut self) -> bool {
+        match select(
+            embassy_time::Timer::after_millis(5000),
+            self.keyboard_event_subscriber.next_message_pure(),
+        )
+        .await
+        {
+            Either::First(_) => true,
+            Either::Second(e) => {
+                if self.unprocessed_events.push(e).is_err() {
+                    warn!("Unprocessed event queue is full, dropping event");
+                }
+                false
+            }
+        }
+    }
+
     async fn process_user(&mut self, id: u8, event: KeyboardEvent) {
         debug!("Processing user key id: {:?}, event: {:?}", id, event);
 
@@ -1675,32 +1695,29 @@ impl<'a> Keyboard<'a> {
             use crate::ble::profile::BleProfileAction;
             use crate::channel::BLE_PROFILE_CHANNEL;
             if event.pressed {
-                // Clear Peer is processed when pressed
-                if id == NUM_BLE_PROFILE as u8 + 4 {
-                    #[cfg(feature = "split")]
-                    if event.pressed {
-                        // Wait for 5s, if the key is still pressed, clear split peer info
-                        // If there's any other key event received during this period, skip
-                        match select(
-                            embassy_time::Timer::after_millis(5000),
-                            self.keyboard_event_subscriber.next_message_pure(),
-                        )
-                        .await
-                        {
-                            Either::First(_) => {
-                                // Timeout reached, send clear peer message
-                                #[cfg(feature = "split")]
-                                publish_event(ClearPeerEvent);
-                                info!("Clear peer");
-                            }
-                            Either::Second(e) => {
-                                // Received a new key event before timeout, add to unprocessed list
-                                if self.unprocessed_events.push(e).is_err() {
-                                    warn!("Unprocessed event queue is full, dropping event");
-                                }
-                            }
-                        }
-                    }
+                // The uniform gesture across all bond slots: tap switches, a 5s
+                // hold forgets the slot's bond and re-pairs. Holding a profile key
+                // clears that profile and switches to it, so it advertises openly.
+                if id < NUM_BLE_PROFILE as u8 && self.held_for_5s().await {
+                    info!("Profile key held: clearing bond on profile {}", id);
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearSlot(id)).await;
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
+                }
+                // A 5s hold of the dongle key clears the local dongle bond and goes
+                // seeking, which is how a keyboard moves to a different dongle.
+                #[cfg(feature = "dongle")]
+                if id == NUM_BLE_PROFILE as u8 + 5 && self.held_for_5s().await {
+                    use crate::ble::profile::DONGLE_PROFILE;
+                    info!("Dongle key held: clearing dongle bond, seeking a dongle");
+                    BLE_PROFILE_CHANNEL
+                        .send(BleProfileAction::ClearSlot(DONGLE_PROFILE))
+                        .await;
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(DONGLE_PROFILE)).await;
+                }
+                #[cfg(feature = "split")]
+                if id == NUM_BLE_PROFILE as u8 + 4 && self.held_for_5s().await {
+                    publish_event(ClearPeerEvent);
+                    info!("Clear peer");
                 }
             } else {
                 // Other user keys are processed when released.
@@ -1723,6 +1740,16 @@ impl<'a> Keyboard<'a> {
                     // only meaningful when both transports exist in this build.
                     #[cfg(not(feature = "_no_usb"))]
                     crate::state::toggle_preferred().await;
+                }
+                // Short press of the dongle key: switch to the dongle slot. Also runs
+                // after a 5s hold, where it is a no-op (the hold already put the
+                // keyboard on the dongle profile or was an in-place authorization).
+                #[cfg(feature = "dongle")]
+                if id == NUM_BLE_PROFILE as u8 + 5 {
+                    info!("Switch to dongle profile");
+                    BLE_PROFILE_CHANNEL
+                        .send(BleProfileAction::Switch(crate::ble::profile::DONGLE_PROFILE))
+                        .await;
                 }
             }
         }
@@ -1841,20 +1868,40 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    pub(crate) async fn send_keyboard_report_with_resolved_modifiers(&mut self, pressed: bool) {
-        // all modifier related effects are combined here to be sent with the hid report:
+    /// Build the keyboard report for the current held keycodes with modifiers
+    /// resolved.
+    ///
+    /// Multiple slots can hold the same HID usage, but the host only tracks
+    /// each usage as up or down, so duplicates are collapsed to the first slot
+    /// that holds them. This keeps the shared usage down until the last holder
+    /// releases it.
+    pub(crate) fn build_keyboard_report(&mut self, pressed: bool) -> KeyboardReport {
         let modifiers = self.resolve_modifiers(pressed);
         info!(
             "Sending keyboard report, modifiers: {:?}, keycodes: {:?}",
             modifiers, &self.held_keycodes,
         );
-        self.send_report(Report::KeyboardReport(KeyboardReport {
+        let mut keycodes = [0u8; 6];
+        let mut n = 0;
+        for k in self.held_keycodes {
+            let code = k as u8;
+            if code != 0 && !keycodes[..n].contains(&code) {
+                keycodes[n] = code;
+                n += 1;
+            }
+        }
+        KeyboardReport {
             modifier: modifiers.into_bits(),
             reserved: 0,
             leds: LOCK_LED_STATES.load(core::sync::atomic::Ordering::Relaxed),
-            keycodes: self.held_keycodes.map(|k| k as u8),
-        }))
-        .await;
+            keycodes,
+        }
+    }
+
+    /// Send the keyboard report with resolved modifiers to the host.
+    pub(crate) async fn send_keyboard_report_with_resolved_modifiers(&mut self, pressed: bool) {
+        let report = self.build_keyboard_report(pressed);
+        self.send_report(Report::KeyboardReport(report)).await;
 
         // Yield once after sending the report to channel
         yield_now().await;
@@ -1902,26 +1949,17 @@ impl<'a> Keyboard<'a> {
 
     /// Register a key to be sent in hid report.
     fn register_keycode(&mut self, key: HidKeyCode, event: KeyboardEvent) {
-        // First, find the key event slot according to the position
-        let slot = self.registered_keys.iter().enumerate().find_map(|(i, k)| {
-            if let Some(e) = k
-                && event.pos == e.pos
-            {
-                return Some(i);
-            }
-            None
-        });
+        // First, find the key event slot according to the position, then the first
+        // free slot.
+        let slot = self
+            .registered_keys
+            .iter()
+            .position(|k| k.is_some_and(|e| e.pos == event.pos))
+            .or_else(|| self.held_keycodes.iter().position(|&k| k == HidKeyCode::No));
 
-        // If the slot is found, update the key in the slot
-        if let Some(index) = slot {
-            self.held_keycodes[index] = key;
-            self.registered_keys[index] = Some(event);
-        } else {
-            // Otherwise, find the first free slot
-            if let Some(index) = self.held_keycodes.iter().position(|&k| k == HidKeyCode::No) {
-                self.held_keycodes[index] = key;
-                self.registered_keys[index] = Some(event);
-            }
+        if let Some(slot) = slot {
+            self.held_keycodes[slot] = key;
+            self.registered_keys[slot] = Some(event);
         }
     }
 

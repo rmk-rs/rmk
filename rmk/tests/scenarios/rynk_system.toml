@@ -46,7 +46,7 @@ steps = [
 [[test]]
 name = "device_info_reports_the_identity"
 steps = [
-  { rynk = { cmd = "GetDeviceInfo", reply = { rmk_version = { major = 0, minor = 8, patch = 2 }, vendor_id = 19531, product_id = 17987, manufacturer = "RMK", product_name = "RMK Keyboard", serial_number = "rmk:0.8.2" } } },
+  { rynk = { cmd = "GetDeviceInfo", reply = { rmk_version = { major = 0, minor = 9, patch = 0 }, vendor_id = 19531, product_id = 17987, manufacturer = "RMK", product_name = "RMK Keyboard", serial_number = "rmk:0.9.0" } } },
 ]
 
 [[test]]

@@ -24,7 +24,7 @@ use rmk::input_device::rotary_encoder::RotaryEncoder;
 use rmk::matrix::Matrix;
 use rmk::run_all;
 use rmk::split::peripheral::run_rmk_split_peripheral;
-use rmk::storage::new_storage_for_split_peripheral;
+use rmk::storage::new_storage_without_keymap;
 use rmk::watchdog::Nrf52Watchdog;
 use static_cell::StaticCell;
 
@@ -138,7 +138,7 @@ async fn main(spawner: Spawner) {
         ..Default::default()
     };
     let flash = Flash::take(mpsl, p.NVMC);
-    let mut storage = new_storage_for_split_peripheral(flash, storage_config).await;
+    let mut storage = new_storage_without_keymap(flash, storage_config).await;
 
     // Initialize the peripheral matrix
     let debouncer = DefaultDebouncer::new();

@@ -25,7 +25,7 @@
 ## Features
 
 - **Broad microcontroller compatibility**: Leveraging [embassy](https://github.com/embassy-rs/embassy), RMK supports a comprehensive range of microcontrollers, including stm32, nRF, rp2040(w), esp32, etc
-- **Dynamic keymap customization**: RMK offers real-time keymap modifications through [Vial](https://get.vial.today), or its native [Rynk](https://rmk.rs/docs/features/rynk) protocol. You can even edit keymaps over BLE connections wirelessly
+- **Dynamic keymap customization**: RMK offers real-time keymap modifications through [Vial](https://get.vial.today), or its native [Rynk](https://rmk.rs/docs/features/rynk) protocol (experimental). You can even edit keymaps over BLE connections wirelessly
 - **Advanced keyboard functionality**: RMK comes with lots of advanced keyboard features by default, including layer switching, media controls, system commands, mouse control, and more
 - **Wireless connectivity**: BLE wireless support with automatic reconnection and multi-device capabilities for nRF52 and esp32 microcontrollers, tested on nRF52840, esp32c3, esp32s3, Pi Pico W
 - **Easy configuration**: RMK simplifies keyboard development through a single `keyboard.toml` configuration file. For Rust enthusiasts, the firmware remains highly customizable using Rust code
@@ -35,29 +35,13 @@
 
 ## Real-World Implementations
 
-### [rmk-ble-keyboard](https://github.com/rmk-rs/rmk-ble-keyboard)
+| [rmk-ble-keyboard](https://github.com/rmk-rs/rmk-ble-keyboard) | [dactyl-lynx-rmk](https://github.com/whitelynx/dactyl-lynx-rmk) | [sessile](https://github.com/willpuckett/sessile) |
+| --- | --- | --- |
+| <img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/rmk_ble_keyboard.jpg" width="300"> | <img src="https://raw.githubusercontent.com/whitelynx/dactyl-lynx-keyboard/refs/heads/main/resources/skeleton-prototype.jpg" width="300"> | <img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/sessile.png" width="300"> |
 
-<img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/rmk_ble_keyboard.jpg" width="60%">
-
-### [dactyl-lynx-rmk](https://github.com/whitelynx/dactyl-lynx-rmk)
-
-<img src="https://raw.githubusercontent.com/whitelynx/dactyl-lynx-keyboard/refs/heads/main/resources/skeleton-prototype.jpg" width="60%">
-
-### [sessile](https://github.com/willpuckett/sessile)
-
-<img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/sessile.png" width="60%">
-
-### [Urchin](https://github.com/TimoBbz/urchin-rmk-firmware)
-
-<img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/urchin.png" width="60%">
-
-### [zx66](https://github.com/zongxin1993/zx66-keybord)
-
-<img src="https://raw.githubusercontent.com/zongxin1993/zx66-keybord/refs/heads/master/Images/zx66-keybord_03.jpg" width="60%">
-
-### [rmk-zsa-voyager](https://github.com/jpds/rmk-zsa-voyager)
-
-<img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/zsa-voyager.webp" width="60%">
+| [Urchin](https://github.com/TimoBbz/urchin-rmk-firmware) | [zx66](https://github.com/zongxin1993/zx66-keybord) | [rmk-zsa-voyager](https://github.com/jpds/rmk-zsa-voyager) |
+| --- | --- | --- |
+| <img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/urchin.png" width="300"> | <img src="https://raw.githubusercontent.com/zongxin1993/zx66-keybord/refs/heads/master/Images/zx66-keybord_03.jpg" width="300"> | <img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/zsa-voyager.webp" width="300"> |
 
 ## Getting Started
 
@@ -68,7 +52,7 @@ Quickly bootstrap your project using [rmkit](https://github.com/rmk-rs/rmkit) an
 ```shell
 cargo install rmkit flip-link
 # If you encounter installation issues on Windows, try this alternative command:
-# powershell -ExecutionPolicy ByPass -c "irm https://github.com/rmk-rs/rmkit/releases/download/v0.0.20/rmkit-installer.ps1 | iex"
+# powershell -ExecutionPolicy ByPass -c "irm https://github.com/rmk-rs/rmkit/releases/latest/download/rmkit-installer.ps1 | iex"
 rmkit init
 ```
 

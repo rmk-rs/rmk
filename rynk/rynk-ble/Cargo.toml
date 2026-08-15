@@ -10,7 +10,7 @@ repository.workspace = true
 keywords = ["keyboard", "firmware", "rmk", "protocol", "ble"]
 
 [dependencies]
-rynk = { path = ".." }
+rynk = { path = "..", version = "=0.2.0" }
 bluest.workspace = true
 futures-util.workspace = true
 async-stream = "0.3"

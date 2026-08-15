@@ -51,27 +51,11 @@ pub(crate) fn expand_flash_init(hardware: &Hardware) -> TokenStream2 {
                     let dfu = hardware.dfu.as_ref().expect(
                         "[dfu] section is required in keyboard.toml (or chip default) when dfu_nrf is enabled"
                     );
-                    let storage_num_sectors = hardware.storage.as_ref().map(|s| s.num_sectors).unwrap_or(32) as u32;
-                    let erase_size = dfu.page_size;
-                    let storage_offset = dfu.dfu_offset + dfu.dfu_size;
-                    let storage_size = storage_num_sectors * erase_size;
-                    let state_offset = dfu.state_offset;
-                    let state_size = dfu.state_size;
-                    let dfu_offset = dfu.dfu_offset;
-                    let dfu_size = dfu.dfu_size;
                     let dfu_unlock_keys = expand_dfu_unlock_keys(dfu);
                     quote! {
                         #dfu_unlock_keys
                         let flash = ::rmk::storage::async_flash_wrapper(
-                            ::rmk::dfu::init_flash(
-                                p.NVMC,
-                                #storage_offset,
-                                #storage_size,
-                                #state_offset,
-                                #state_size,
-                                #dfu_offset,
-                                #dfu_size,
-                            )
+                            ::rmk::dfu::init_flash_from_linkerscript(p.NVMC)
                         );
                     }
                 };
@@ -96,27 +80,11 @@ pub(crate) fn expand_flash_init(hardware: &Hardware) -> TokenStream2 {
                 let dfu = hardware.dfu.as_ref().expect(
                     "[dfu] section is required in keyboard.toml (or chip default) when dfu_rp is enabled"
                 );
-                let storage_num_sectors = hardware.storage.as_ref().map(|s| s.num_sectors).unwrap_or(32) as u32;
-                let erase_size = dfu.page_size;
-                let storage_offset = dfu.dfu_offset + dfu.dfu_size;
-                let storage_size = storage_num_sectors * erase_size;
-                let state_offset = dfu.state_offset;
-                let state_size = dfu.state_size;
-                let dfu_offset = dfu.dfu_offset;
-                let dfu_size = dfu.dfu_size;
                 let dfu_unlock_keys = expand_dfu_unlock_keys(dfu);
                 quote! {
                     #dfu_unlock_keys
                     let flash = ::rmk::storage::async_flash_wrapper(
-                        ::rmk::dfu::init_flash(
-                            p.FLASH,
-                            #storage_offset,
-                            #storage_size,
-                            #state_offset,
-                            #state_size,
-                            #dfu_offset,
-                            #dfu_size,
-                        )
+                        ::rmk::dfu::init_flash_from_linkerscript(p.FLASH)
                     );
                 }
             }

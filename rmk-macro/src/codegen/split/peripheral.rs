@@ -339,7 +339,7 @@ fn expand_split_peripheral(
         let flash_init = expand_flash_init(hardware);
         chip_init.extend(quote! {
             #flash_init
-            let mut storage = ::rmk::storage::new_storage_for_split_peripheral(flash, storage_config).await;
+            let mut storage = ::rmk::storage::new_storage_without_keymap(flash, storage_config).await;
         });
     } else if dfu_enabled {
         let flash_init = expand_flash_init(hardware);

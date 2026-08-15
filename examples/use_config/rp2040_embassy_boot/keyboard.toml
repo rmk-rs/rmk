@@ -39,26 +39,6 @@ _  _      _
 _  _      _
 """
 
-# DFU partition layout — must match your bootloader's memory.x
-#
-# By default RMK uses the rmk-boot formula with flash_size from the
-# chip default (2 MB for RP2040).
-# Calculation: 
-# 2 * 1024 * 1024;    // 2 MB (default)
-# 4 * 1024 * 1024;    // 4 MB
-# and so on
-# the addresses for the state, dfu, active and storage partitions are then automatically calculated.
-# Uncomment and adjust to override:
-# [dfu]
-# flash_size = 2097152   # total flash (default: 2 MB)
-#
-# To set addresses manually, uncomment and edit the values below.
-# Doing so disables the auto-calculation:
-# state_offset = 0x6000
-# state_size = 0x1000
-# dfu_offset = 0x87000
-# dfu_size = 528384
-
 [dfu]
 led = "PIN_25"
 # Optional DFU lock — physical keys to press simultaneously to unlock DFU firmware download.

@@ -1,0 +1,20 @@
+# All a `use_rust` keyboard still reads from TOML: the layout rynk serves over
+# `GetLayout`. The two halves share one 7x7 unified matrix, but they are two
+# separate boards, so the map draws them apart.
+#
+# Left: the Elytra left hand, taken from the Elytra firmware's own `vial.json`
+# (its cols 0-6) — a 6-degree tilt, a widening pinky column down the left edge,
+# and a bottom row of three 1.25u keys plus a 2.25u thumb key. Right: the
+# nRF54L15 DK's four buttons, flat and on their own.
+[layout]
+rows = 7
+cols = 7
+map = """
+[r=6.0@(8.0,-1.0)] [0.75] (0,0) (0,1) (0,2) (0,3) (0,4) (0,5) (0,6)
+[0.75] (1,0,@1.5u) (1,1) (1,2) (1,3) (1,4) (1,5)
+[0.75] (2,0,@1.75u) (2,1) (2,2) (2,3) (2,4) (2,5)
+[0.75] (3,0,@2.25u) (3,1) (3,2) (3,3) (3,4) (3,5)
+[0.75] (4,0,@1.25u) (4,1,@1.25u) (4,2,@1.25u) [1.25] (4,4,@2.25u)
+[r=0] [y=-4] [9.5] (5,0) (5,1)
+[9.5] (6,0) (6,1)
+"""

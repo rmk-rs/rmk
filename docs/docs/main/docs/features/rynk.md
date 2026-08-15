@@ -5,14 +5,15 @@ your keymap, layers, combos, tap-dance, macros and more without reflashing the
 firmware. It plays the same role as [Vial](./vial_support), but it is built
 natively for RMK and understands every RMK feature.
 
-::: tip Rynk or Vial — which should I use?
-Rynk speaks RMK's full feature set, but it is opt-in and its host tools are still
-young. [Vial](./vial_support) is enabled by default and
-has a polished cross-platform app, but only supports the features in the Vial
-standard.
+::: warning Experimental
+Rynk is experimental. The wire protocol, the host crates, and the `[host]`
+options on this page can change in any release, and there is no ready-made
+desktop app yet — only the reference web page described below. Firmware built
+against one RMK version may not talk to host tools from another.
 
-If you want a click-and-go app today, choose Vial. If you want access to every
-RMK feature and don't mind newer tooling, choose Rynk.
+[Vial](./vial_support) is the default and the supported choice for a keyboard you
+rely on. Reach for Rynk if you want RMK's full feature set and don't mind
+tracking the changes yourself.
 :::
 
 ## What you can configure
@@ -71,18 +72,19 @@ restarts. See [Storage](./storage).
 
 Rynk works over the connection you already use:
 
-- **USB** — plug the keyboard in. Host tools find RMK keyboards automatically, so
-  you don't have to hunt for the right serial port.
+- **USB** — plug the keyboard in. RMK exposes Rynk on its own vendor interface
+  (class `0xFF`, subclass and protocol `0x52`), so host tools find RMK keyboards
+  by that interface instead of asking you to pick a port.
 - **Bluetooth** — native tools connect to an already-connected keyboard (the OS
   must have it bonded and currently connected).
-- **Browser** — Chromium browsers (Chrome or Edge) connect over USB (Web Serial)
-  or Bluetooth (WebHID). Firefox and Safari are not supported.
+- **Browser** — Chromium browsers (Chrome or Edge) reach USB through WebUSB and
+  Bluetooth through WebHID. Firefox and Safari are not supported.
 
 Rynk tooling is still young. Today you have two options:
 
 - **A browser demo** — the `rynk-wasm` package ships a reference web page
   (`index.html`) you build and serve locally; follow the steps in its README.
-- **Rust libraries** — the `rynk`, `rynk-serial`, and `rynk-ble` crates let you
+- **Rust libraries** — the `rynk`, `rynk-usb`, and `rynk-ble` crates let you
   build a native tool (see [For tool authors](#for-tool-authors) below). The
   browser build is a separate package, `rynk-wasm`.
 
@@ -168,9 +170,13 @@ If you're building your own host tool, RMK ships ready-made client crates so you
 don't have to implement the protocol yourself:
 
 - `rynk` — the core typed client; talks to a keyboard over any byte link.
-- `rynk-serial` — USB discovery and connection.
+- `rynk-usb` — USB discovery and connection.
 - `rynk-ble` — native Bluetooth discovery and connection.
 - `rynk-wasm` — the browser build, driven from JavaScript over Web Serial / WebHID.
+
+While Rynk is experimental these crates are not published to crates.io. Depend on
+them by path or git from the [`rynk/` workspace](https://github.com/rmk-rs/rmk/tree/main/rynk),
+and pin the same revision as the firmware you're talking to.
 
 A minimal native USB tool looks like this (add `embassy-futures` to your
 `Cargo.toml` for `select`):
@@ -178,11 +184,12 @@ A minimal native USB tool looks like this (add `embassy-futures` to your
 ```rust
 use embassy_futures::select::{Either, select};
 use rynk::RynkDevice;
-use rynk_serial::SerialDevice;
+use rynk_usb::UsbDevice;
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Find a connected Rynk keyboard and open it (the handshake runs in `connect`).
-    let device = SerialDevice::discover()?
+    let device = UsbDevice::discover()
+        .await?
         .into_iter()
         .next()
         .ok_or("no Rynk keyboard found")?;

@@ -163,17 +163,15 @@ impl<'a> Keyboard<'a> {
     /// Update OSM state based on the keyboard event.
     /// Returns `true` if the OSM was consumed (transitioned from Single to None).
     pub(crate) fn update_osm(&mut self, event: KeyboardEvent) -> bool {
-        let quick_release = self.keymap.one_shot_modifiers_config().quick_release;
         match self.osm_state {
             OneShotState::Initial(m) => {
                 self.osm_state = OneShotState::Held(m);
                 false
             }
-            OneShotState::Single(_) if quick_release && event.pressed => {
-                self.osm_state = OneShotState::None;
-                true
-            }
-            OneShotState::Single(_) if !quick_release && !event.pressed => {
+            // Consume on press so a key rolled over before this one releases doesn't
+            // also see the modifier (resolve_explicit_modifiers only applies `Single`
+            // on the pressed report anyway, so the release report is unaffected).
+            OneShotState::Single(_) if event.pressed => {
                 self.osm_state = OneShotState::None;
                 true
             }

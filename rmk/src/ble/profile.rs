@@ -17,6 +17,16 @@ use crate::state::{current_profile, set_ble_profile};
 pub(crate) static UPDATED_PROFILE: Signal<crate::RawMutex, ProfileInfo> = Signal::new();
 pub(crate) static UPDATED_CCCD_TABLE: Signal<crate::RawMutex, heapless::Vec<u8, CCCD_TABLE_SIZE>> = Signal::new();
 
+/// The dedicated dongle bond slot: the slot number after the normal profiles,
+/// so pairing a dongle never touches a host bond. Selected only via the
+/// `SwitchToDongle` key, never by profile cycling.
+#[cfg(feature = "dongle")]
+pub(crate) const DONGLE_PROFILE: u8 = NUM_BLE_PROFILE as u8;
+
+/// Bond slots kept by the profile manager: the host profiles, plus the
+/// dedicated dongle slot on `dongle` builds.
+pub(crate) const BOND_SLOTS: usize = NUM_BLE_PROFILE + cfg!(feature = "dongle") as usize;
+
 /// BLE profile info
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -89,19 +99,28 @@ pub(crate) enum BleProfileAction {
 /// 2. Storing and loading bonding information for each profile
 /// 3. Updating the bonding information of the active profile to the BLE stack
 /// 4. Handling profile switch, clear, and save operations
+///
+/// `SLOTS` sizes the cache to the role: [`BOND_SLOTS`] for a keyboard, a single
+/// slot for a dongle.
 #[cfg(feature = "_ble")]
-pub(crate) struct ProfileManager<'b, 's, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool>
-where
+pub(crate) struct ProfileManager<
+    'b,
+    's,
+    C: Controller + ControllerCmdAsync<LeSetPhy>,
+    P: PacketPool,
+    const SLOTS: usize,
+> where
     's: 'b,
 {
     /// List of bonded devices
-    bonded_devices: heapless::Vec<ProfileInfo, NUM_BLE_PROFILE>,
+    bonded_devices: heapless::Vec<ProfileInfo, SLOTS>,
     /// BLE stack
     stack: &'b Stack<'s, C, P>,
 }
 
 #[cfg(feature = "_ble")]
-impl<'b, 's, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool> ProfileManager<'b, 's, C, P>
+impl<'b, 's, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool, const SLOTS: usize>
+    ProfileManager<'b, 's, C, P, SLOTS>
 where
     's: 'b,
 {
@@ -119,7 +138,7 @@ where
         use crate::storage::{read_active_ble_profile, read_bond_info};
 
         self.bonded_devices.clear();
-        for slot_num in 0..NUM_BLE_PROFILE {
+        for slot_num in 0..SLOTS {
             if let Some(info) = read_bond_info(slot_num as u8).await
                 && !info.removed
                 && let Err(e) = self.bonded_devices.push(info)
@@ -151,12 +170,16 @@ where
 
     /// Update bonding information in the stack according to the current active profile
     pub(crate) fn update_stack_bonds(&self) {
-        let identities: heapless::Vec<Identity, NUM_BLE_PROFILE> = self
+        // Drain one at a time rather than collecting: the stack holds bonds this
+        // manager has no slot for — a fresh pairing lands there before we prune —
+        // and a `heapless::Vec` collect panics on the overflow.
+        while let Some(identity) = self
             .stack
-            .with_bond_information(|bonds| bonds.iter().map(|b| b.identity).collect());
-        for identity in identities {
+            .with_bond_information(|bonds| bonds.first().map(|b| b.identity))
+        {
             if let Err(e) = self.stack.remove_bond_information(identity) {
                 debug!("Remove bond info error: {:?}", e);
+                break; // a bond that won't come off would spin here forever
             }
         }
 
@@ -307,8 +330,10 @@ where
                             self.switch_profile(profile).await;
                         }
                         BleProfileAction::Next => {
-                            let mut profile = current_profile() + 1;
-                            profile %= NUM_BLE_PROFILE as u8;
+                            // Cycling stays within the host profiles. The dongle slot sits past
+                            // the last one, so wrap there too instead of landing on profile 1.
+                            let next = current_profile() + 1;
+                            let profile = if next >= NUM_BLE_PROFILE as u8 { 0 } else { next };
 
                             self.switch_profile(profile).await;
                         }

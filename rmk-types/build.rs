@@ -23,6 +23,20 @@ fn main() {
     let active_features = collect_active_features();
     let feature_refs: Vec<&str> = active_features.iter().map(|s| s.as_str()).collect();
 
+    if let Some(conflict) = config.dfu_storage_conflict()
+        && active_features.iter().any(|f| f == "dfu")
+    {
+        let keys = match (conflict.start_addr_set, conflict.num_sectors_set) {
+            (true, true) => "[storage] start_addr and num_sectors",
+            (true, false) => "[storage] start_addr",
+            (false, true) => "[storage] num_sectors",
+            (false, false) => unreachable!(),
+        };
+        println!(
+            "cargo:warning={keys} have no effect while [dfu] is enabled: the storage partition size and position are fixed by the bootloader linker script (rmk-boot build.rs STORAGE_SIZE -> rmk-memory.x, default 8 x 4K = 32K). Change it there and re-flash the bootloader"
+        );
+    }
+
     let bc = config
         .build_constants(&feature_refs)
         .unwrap_or_else(|err| panic!("Failed to resolve build constants: {err}"));
@@ -160,6 +174,15 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
             .unwrap_or_else(|err| panic!("Failed to resolve the layout blob: {err}"))
             .blob;
         lines.push(format!("pub const LAYOUT_BLOB: &[u8] = b\"{}\";", blob.escape_ascii()));
+    }
+
+    // How long one dongle pairing window lasts. It bonds exactly one keyboard,
+    // so there is nothing else about the relay to size.
+    if env::var("CARGO_FEATURE_DONGLE").is_ok() {
+        lines.push(format!(
+            "pub const DONGLE_PAIRING_WINDOW_SECS: u32 = {};",
+            bc.dongle_pairing_window_secs
+        ));
     }
 
     // Event channels

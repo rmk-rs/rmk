@@ -22,8 +22,8 @@ serde_json = "1"
 # legend normalization) so we don't hand-roll it.
 kle-serial = "0.3"
 # Build and decode layout blobs through the firmware/host path.
-rmk-config = { path = "../../rmk-config" }
-rynk = { path = ".." }
+rmk-config = { path = "../../rmk-config", version = "=0.7.0" }
+rynk = { path = "..", version = "=0.2.0" }
 toml = "1.0"
 
 wasm-bindgen = { version = "0.2", optional = true }

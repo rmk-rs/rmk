@@ -1,4 +1,4 @@
-use embassy_futures::join::join4;
+use embassy_futures::join::join5;
 use embassy_futures::select::{Either, select};
 use embassy_sync::signal::Signal;
 #[cfg(feature = "usb_log")]
@@ -23,19 +23,36 @@ use crate::hid::{
 use crate::light::UsbLedReader;
 use crate::state::{current_usb_state, set_usb_state};
 
-#[cfg(feature = "rynk")]
+// The Rynk vendor interface serves the keyboard's Rynk session and the dongle's router.
+#[cfg(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))))]
 pub(crate) mod rynk;
 #[cfg(feature = "vial")]
 pub(crate) mod vial;
 
-// Both submodules export the same host-transport names; `rynk` and `vial`
-// are mutually exclusive, so exactly one alias set is compiled.
-#[cfg(feature = "rynk")]
-use self::rynk::{HostUsbReader, HostUsbWriter, build_host_usb, run_host_usb};
+// A build has at most one host interface — Vial's HID report pair or the Rynk
+// vendor bulk pair, and the protocols are mutually exclusive. A dongle relays
+// its keyboard's protocol: Rynk unless `vial` says otherwise. The two modules
+// expose the same names, so the rest of the file only talks to `host_usb`.
+#[cfg(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))))]
+use rynk as host_usb;
 #[cfg(feature = "vial")]
-use self::vial::{HostUsbReader, HostUsbWriter, build_host_usb, run_host_usb};
+use vial as host_usb;
 
 pub(crate) static USB_REMOTE_WAKEUP: Signal<RawMutex, ()> = Signal::new();
+
+/// Serves one framed session over the USB byte stream: the keyboard's Vial or
+/// Rynk service, the dongle's router, or `()` in a build that serves none.
+/// Which one is a type parameter of [`UsbTransport`], so only the attached one
+/// reaches the image.
+pub(crate) trait HostSession {
+    async fn serve<R: embedded_io_async::Read, W: embedded_io_async::Write>(&self, rx: &mut R, tx: &mut W);
+}
+
+impl HostSession for () {
+    async fn serve<R: embedded_io_async::Read, W: embedded_io_async::Write>(&self, _rx: &mut R, _tx: &mut W) {
+        core::future::pending().await
+    }
+}
 
 /// Borrowed view over the USB HID IN endpoints used by the report writer task.
 ///
@@ -49,20 +66,7 @@ pub(crate) struct UsbKeyboardWriter<'a, 'd, D: Driver<'d>> {
     pub(crate) steno_writer: &'a mut HidWriter<'d, D, 9>,
 }
 
-impl<'a, 'd, D: Driver<'d>> UsbKeyboardWriter<'a, 'd, D> {
-    pub(crate) fn new(
-        keyboard_writer: &'a mut HidWriter<'d, D, 8>,
-        other_writer: &'a mut HidWriter<'d, D, 9>,
-        #[cfg(feature = "steno")] steno_writer: &'a mut HidWriter<'d, D, 9>,
-    ) -> Self {
-        Self {
-            keyboard_writer,
-            other_writer,
-            #[cfg(feature = "steno")]
-            steno_writer,
-        }
-    }
-
+impl<'d, D: Driver<'d>> UsbKeyboardWriter<'_, 'd, D> {
     pub(crate) async fn run_writer(&mut self) -> ! {
         loop {
             let report = USB_REPORT_CHANNEL.receive().await;
@@ -162,7 +166,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
     usb_config.product = Some(keyboard_config.product_name);
     // Informational tag (visible in `lsusb` & co); host discovery keys on the
     // Rynk vendor interface triple, not the serial.
-    #[cfg(feature = "rynk")]
+    #[cfg(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))))]
     let serial_number = {
         static SERIAL: StaticCell<heapless::String<64>> = StaticCell::new();
         let s = SERIAL.init(heapless::String::new());
@@ -170,7 +174,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
         let _ = s.push_str(keyboard_config.serial_number);
         s.as_str()
     };
-    #[cfg(not(feature = "rynk"))]
+    #[cfg(not(any(feature = "rynk", all(feature = "dongle", not(feature = "vial")))))]
     let serial_number = keyboard_config.serial_number;
     usb_config.serial_number = Some(serial_number);
     usb_config.max_power = 450;
@@ -184,27 +188,26 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
     usb_config.composite_with_iads = true;
 
     // Extra interfaces (usb_log, steno, dfu, rynk) overflow the 128-byte config descriptor buffer.
-    #[cfg(any(feature = "usb_log", feature = "steno", feature = "dfu", feature = "rynk"))]
-    const USB_BUF_SIZE: usize = 256;
-    #[cfg(not(any(feature = "usb_log", feature = "steno", feature = "dfu", feature = "rynk")))]
-    const USB_BUF_SIZE: usize = 128;
+    const EXTRA_INTERFACES: bool = cfg!(any(
+        feature = "usb_log",
+        feature = "steno",
+        feature = "dfu",
+        feature = "rynk",
+        all(feature = "dongle", not(feature = "vial"))
+    ));
+    const USB_BUF_SIZE: usize = if EXTRA_INTERFACES { 256 } else { 128 };
 
     // Control buffer must be large enough for the largest DFU transfer block.
     #[cfg(feature = "dfu")]
-    const CONTROL_BUF_SIZE: usize = ::rmk::dfu::BLOCK_SIZE_DFU;
+    const CONTROL_BUF_SIZE: usize = crate::dfu::BLOCK_SIZE_DFU;
     #[cfg(not(feature = "dfu"))]
     const CONTROL_BUF_SIZE: usize = USB_BUF_SIZE;
 
     // The rynk MS OS 2.0 descriptor set (WinUSB binding) takes ~178 bytes, and
     // its BOS platform capability another 28 on top of the 5-byte BOS header.
-    #[cfg(feature = "rynk")]
-    const BOS_BUF_SIZE: usize = 64;
-    #[cfg(not(feature = "rynk"))]
-    const BOS_BUF_SIZE: usize = 16;
-    #[cfg(feature = "rynk")]
-    const MSOS_BUF_SIZE: usize = 256;
-    #[cfg(not(feature = "rynk"))]
-    const MSOS_BUF_SIZE: usize = 16;
+    const RYNK_INTERFACE: bool = cfg!(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))));
+    const BOS_BUF_SIZE: usize = if RYNK_INTERFACE { 64 } else { 16 };
+    const MSOS_BUF_SIZE: usize = if RYNK_INTERFACE { 256 } else { 16 };
 
     static CONFIG_DESC: StaticCell<[u8; USB_BUF_SIZE]> = StaticCell::new();
     static BOS_DESC: StaticCell<[u8; BOS_BUF_SIZE]> = StaticCell::new();
@@ -228,7 +231,11 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
 
 /// USB transport. Owns the embassy-usb device + every HID reader/writer
 /// pair and runs them concurrently for the lifetime of the program.
-pub struct UsbTransport<'a, D: Driver<'static>> {
+///
+/// `S` is whatever serves the host interface in this binary — a keyboard's
+/// Vial or Rynk service, a dongle's `DongleRouter`, or `()` for a build that
+/// serves none. Picking it at compile time keeps the others out of the image.
+pub struct UsbTransport<'a, D: Driver<'static>, S = ()> {
     device: UsbDevice<'static, D>,
     keyboard_reader: HidReader<'static, D, 1>,
     keyboard_writer: HidWriter<'static, D, 8>,
@@ -238,16 +245,12 @@ pub struct UsbTransport<'a, D: Driver<'static>> {
     /// Taken by `run`: the logger future consumes the CDC class.
     #[cfg(feature = "usb_log")]
     logger: Option<embassy_usb::class::cdc_acm::CdcAcmClass<'static, D>>,
-    /// Host-protocol transport halves: CDC-ACM under `rynk`, 32-byte HID
-    /// reports under `vial`.
-    #[cfg(feature = "host")]
-    host_reader: HostUsbReader<D>,
-    #[cfg(feature = "host")]
-    host_writer: HostUsbWriter<D>,
-    #[cfg(feature = "host")]
-    host_service: Option<&'a crate::host::HostService<'a>>,
-    #[cfg(not(feature = "host"))]
-    _phantom: core::marker::PhantomData<&'a ()>,
+    #[cfg(any(feature = "host", feature = "dongle"))]
+    host_reader: host_usb::HostUsbReader<D>,
+    #[cfg(any(feature = "host", feature = "dongle"))]
+    host_writer: host_usb::HostUsbWriter<D>,
+    /// Serves the host interface; `&()` until a binary attaches its own.
+    session: &'a S,
 }
 
 impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
@@ -279,23 +282,19 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
         #[cfg(feature = "usb_log")]
         let logger = Some(add_usb_logger!(&mut builder));
 
-        #[cfg(feature = "dfu")]
-        {
-            let product_name = device_config.product_name;
-            #[cfg(any(feature = "dfu_rp", feature = "dfu_nrf"))]
-            if let Some(mgr) = ::rmk::dfu::get_manager() {
-                ::rmk::dfu::register_dfu_interface(
-                    &mut builder,
-                    mgr,
-                    product_name,
-                    #[cfg(feature = "dfu_split")]
-                    crate::SPLIT_PERIPHERALS_NUM,
-                );
-            }
+        #[cfg(any(feature = "dfu_rp", feature = "dfu_nrf"))]
+        if let Some(mgr) = crate::dfu::get_manager() {
+            crate::dfu::register_dfu_interface(
+                &mut builder,
+                mgr,
+                device_config.product_name,
+                #[cfg(feature = "dfu_split")]
+                crate::SPLIT_PERIPHERALS_NUM,
+            );
         }
 
-        #[cfg(any(feature = "rynk", feature = "vial"))]
-        let (host_reader, host_writer) = build_host_usb(&mut builder);
+        #[cfg(any(feature = "host", feature = "dongle"))]
+        let (host_reader, host_writer) = host_usb::build_host_usb(&mut builder);
 
         let (keyboard_reader, keyboard_writer) = keyboard_rw.split();
         let device = builder.build();
@@ -309,26 +308,56 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
             steno_writer,
             #[cfg(feature = "usb_log")]
             logger,
-            #[cfg(any(feature = "rynk", feature = "vial"))]
+            #[cfg(any(feature = "host", feature = "dongle"))]
             host_reader,
-            #[cfg(any(feature = "rynk", feature = "vial"))]
+            #[cfg(any(feature = "host", feature = "dongle"))]
             host_writer,
-            #[cfg(feature = "host")]
-            host_service: None,
-            #[cfg(not(feature = "host"))]
-            _phantom: core::marker::PhantomData,
+            session: &(),
         }
-    }
-
-    /// Attach the host-protocol service
-    #[cfg(feature = "host")]
-    pub fn with_host_service(mut self, service: &'a crate::host::HostService<'a>) -> Self {
-        self.host_service = Some(service);
-        self
     }
 }
 
-impl<D: Driver<'static>> Runnable for UsbTransport<'_, D> {
+impl<'a, D: Driver<'static>, S> UsbTransport<'a, D, S> {
+    /// Attach the host-protocol service (Vial or Rynk, picked by feature).
+    #[cfg(feature = "host")]
+    pub fn with_host_service(
+        self,
+        service: &'a crate::host::HostService<'a>,
+    ) -> UsbTransport<'a, D, crate::host::HostService<'a>> {
+        self.serving(service)
+    }
+
+    /// Attach the dongle's router — this is what makes a binary a dongle. The
+    /// same router goes to [`crate::dongle::Dongle`], which relays through it.
+    #[cfg(feature = "dongle")]
+    pub fn with_dongle_router(
+        self,
+        router: &'a crate::dongle::DongleRouter,
+    ) -> UsbTransport<'a, D, crate::dongle::DongleRouter> {
+        self.serving(router)
+    }
+
+    /// Rebuild around the session that answers the host interface.
+    fn serving<T>(self, session: &'a T) -> UsbTransport<'a, D, T> {
+        UsbTransport {
+            device: self.device,
+            keyboard_reader: self.keyboard_reader,
+            keyboard_writer: self.keyboard_writer,
+            other_writer: self.other_writer,
+            #[cfg(feature = "steno")]
+            steno_writer: self.steno_writer,
+            #[cfg(feature = "usb_log")]
+            logger: self.logger,
+            #[cfg(any(feature = "host", feature = "dongle"))]
+            host_reader: self.host_reader,
+            #[cfg(any(feature = "host", feature = "dongle"))]
+            host_writer: self.host_writer,
+            session,
+        }
+    }
+}
+
+impl<D: Driver<'static>, S: HostSession> Runnable for UsbTransport<'_, D, S> {
     async fn run(&mut self) -> ! {
         let Self {
             device,
@@ -339,14 +368,11 @@ impl<D: Driver<'static>> Runnable for UsbTransport<'_, D> {
             steno_writer,
             #[cfg(feature = "usb_log")]
             logger,
-            #[cfg(any(feature = "rynk", feature = "vial"))]
+            #[cfg(any(feature = "host", feature = "dongle"))]
             host_reader,
-            #[cfg(any(feature = "rynk", feature = "vial"))]
+            #[cfg(any(feature = "host", feature = "dongle"))]
             host_writer,
-            #[cfg(feature = "host")]
-            host_service,
-            #[cfg(not(feature = "host"))]
-                _phantom: _,
+            session,
         } = self;
 
         let usb_device_task = async {
@@ -364,41 +390,32 @@ impl<D: Driver<'static>> Runnable for UsbTransport<'_, D> {
             }
         };
 
-        let mut writer = UsbKeyboardWriter::new(
+        let mut writer = UsbKeyboardWriter {
             keyboard_writer,
             other_writer,
             #[cfg(feature = "steno")]
             steno_writer,
-        );
+        };
         let writer_task = writer.run_writer();
 
         let mut led_reader = UsbLedReader::new(keyboard_reader);
         let led_task = run_led_reader(&mut led_reader, ConnectionType::Usb);
 
-        let host_and_extras = async {
-            #[cfg(any(feature = "rynk", feature = "vial"))]
-            let host_task = async {
-                if let Some(service) = *host_service {
-                    run_host_usb(host_reader, host_writer, service).await
-                } else {
-                    core::future::pending::<()>().await
-                }
-            };
-            #[cfg(not(feature = "host"))]
-            let host_task = core::future::pending::<()>();
-
-            #[cfg(feature = "usb_log")]
-            let logger_fut = {
-                let logger_class = logger.take().expect("UsbTransport::run called twice");
-                run_usb_logger(logger_class)
-            };
-            #[cfg(not(feature = "usb_log"))]
-            let logger_fut = core::future::pending::<()>();
-
-            embassy_futures::join::join(host_task, logger_fut).await;
+        #[cfg(any(feature = "host", feature = "dongle"))]
+        let host_task = host_usb::run_host_usb(host_reader, host_writer, *session);
+        #[cfg(not(any(feature = "host", feature = "dongle")))]
+        let host_task = {
+            // No host interface was built, so the session is always `()`.
+            let _ = session;
+            core::future::pending::<()>()
         };
 
-        join4(usb_device_task, writer_task, led_task, host_and_extras).await;
+        #[cfg(feature = "usb_log")]
+        let logger_task = run_usb_logger(logger.take().expect("UsbTransport::run called twice"));
+        #[cfg(not(feature = "usb_log"))]
+        let logger_task = core::future::pending::<()>();
+
+        join5(usb_device_task, writer_task, led_task, host_task, logger_task).await;
         unreachable!("UsbTransport sub-tasks must run forever");
     }
 }
@@ -427,7 +444,7 @@ pub async fn run_peripheral_usb<D: Driver<'static>>(driver: D, config: DeviceCon
 
     #[cfg(any(feature = "dfu_rp", feature = "dfu_nrf"))]
     if let Some(mgr) = crate::dfu::get_manager() {
-        ::rmk::dfu::register_dfu_interface(
+        crate::dfu::register_dfu_interface(
             &mut builder,
             mgr,
             config.product_name,
@@ -454,50 +471,11 @@ macro_rules! add_usb_logger {
     }};
 }
 
-macro_rules! add_usb_writer {
-    ($usb_builder:expr, $descriptor:ty, $n:expr) => {
-        $crate::usb::add_usb_writer!($usb_builder, $descriptor, $n, 64)
-    };
-    // Size $max_packet to the actual report to conserve Packet Memory Area on tight parts.
-    ($usb_builder:expr, $descriptor:ty, $n:expr, $max_packet:expr) => {{
-        // `paste` generates per-descriptor `static`s so each writer keeps its own State/Handler.
-        use usbd_hid::descriptor::SerializedDescriptor;
-        paste::paste! {
-            static [<$descriptor:snake:upper _STATE>]: ::static_cell::StaticCell<::embassy_usb::class::hid::State> = ::static_cell::StaticCell::new();
-            static [<$descriptor:snake:upper _HANDLER>]: ::static_cell::StaticCell<$crate::usb::UsbRequestHandler> = ::static_cell::StaticCell::new();
-        }
-
-        let state = paste::paste! { [<$descriptor:snake:upper _STATE>].init(::embassy_usb::class::hid::State::new()) };
-        let request_handler = paste::paste! { [<$descriptor:snake:upper _HANDLER>].init($crate::usb::UsbRequestHandler {}) };
-
-        let hid_config = ::embassy_usb::class::hid::Config {
-            report_descriptor: <$descriptor>::desc(),
-            request_handler: Some(request_handler),
-            poll_ms: 1,
-            max_packet_size: $max_packet,
-            hid_subclass: ::embassy_usb::class::hid::HidSubclass::No,
-            hid_boot_protocol: ::embassy_usb::class::hid::HidBootProtocol::None,
-        };
-
-        let rw: ::embassy_usb::class::hid::HidWriter<_, $n> = ::embassy_usb::class::hid::HidWriter::new($usb_builder, state, hid_config);
-        rw
-    }};
-}
-
-macro_rules! add_usb_reader_writer {
-    ($usb_builder:expr, $descriptor:ty, $read_n:expr, $write_n:expr) => {
-        $crate::usb::add_usb_reader_writer!($usb_builder, $descriptor, $read_n, $write_n, 64)
-    };
-    // Size $max_packet to the actual report to conserve Packet Memory Area on tight parts.
-    ($usb_builder:expr, $descriptor:ty, $read_n:expr, $write_n:expr, $max_packet:expr) => {
-        $crate::usb::add_usb_reader_writer!(
-            $usb_builder, $descriptor, $read_n, $write_n, $max_packet,
-            ::embassy_usb::class::hid::HidSubclass::No,
-            ::embassy_usb::class::hid::HidBootProtocol::None
-        )
-    };
-    ($usb_builder:expr, $descriptor:ty, $read_n:expr, $write_n:expr, $max_packet:expr, $subclass:expr, $protocol:expr) => {{
-        // `paste` generates per-descriptor `static`s so each reader/writer keeps its own State/Handler.
+/// Per-descriptor HID `(State, Config)` pair. `paste` generates the `static`s
+/// from the descriptor name so each interface keeps its own State/Handler.
+/// Size `$max_packet` to the actual report to conserve Packet Memory Area on tight parts.
+macro_rules! usb_hid_state_and_config {
+    ($descriptor:ty, $max_packet:expr, $subclass:expr, $protocol:expr) => {{
         use usbd_hid::descriptor::SerializedDescriptor;
         paste::paste! {
             static [<$descriptor:snake:upper _STATE>]: ::static_cell::StaticCell<::embassy_usb::class::hid::State> = ::static_cell::StaticCell::new();
@@ -515,9 +493,38 @@ macro_rules! add_usb_reader_writer {
             hid_subclass: $subclass,
             hid_boot_protocol: $protocol,
         };
+        (state, hid_config)
+    }};
+}
 
-        let rw: ::embassy_usb::class::hid::HidReaderWriter<_, $read_n, $write_n> = ::embassy_usb::class::hid::HidReaderWriter::new($usb_builder, state, hid_config);
-        rw
+macro_rules! add_usb_writer {
+    ($usb_builder:expr, $descriptor:ty, $n:expr, $max_packet:expr) => {{
+        let (state, hid_config) = $crate::usb::usb_hid_state_and_config!(
+            $descriptor,
+            $max_packet,
+            ::embassy_usb::class::hid::HidSubclass::No,
+            ::embassy_usb::class::hid::HidBootProtocol::None
+        );
+        ::embassy_usb::class::hid::HidWriter::<_, $n>::new($usb_builder, state, hid_config)
+    }};
+}
+
+macro_rules! add_usb_reader_writer {
+    ($usb_builder:expr, $descriptor:ty, $read_n:expr, $write_n:expr, $max_packet:expr) => {
+        $crate::usb::add_usb_reader_writer!(
+            $usb_builder,
+            $descriptor,
+            $read_n,
+            $write_n,
+            $max_packet,
+            ::embassy_usb::class::hid::HidSubclass::No,
+            ::embassy_usb::class::hid::HidBootProtocol::None
+        )
+    };
+    ($usb_builder:expr, $descriptor:ty, $read_n:expr, $write_n:expr, $max_packet:expr, $subclass:expr, $protocol:expr) => {{
+        let (state, hid_config) =
+            $crate::usb::usb_hid_state_and_config!($descriptor, $max_packet, $subclass, $protocol);
+        ::embassy_usb::class::hid::HidReaderWriter::<_, $read_n, $write_n>::new($usb_builder, state, hid_config)
     }};
 }
 
@@ -525,6 +532,7 @@ macro_rules! add_usb_reader_writer {
 pub(crate) use add_usb_logger;
 pub(crate) use add_usb_reader_writer;
 pub(crate) use add_usb_writer;
+pub(crate) use usb_hid_state_and_config;
 
 pub(crate) struct UsbRequestHandler {}
 

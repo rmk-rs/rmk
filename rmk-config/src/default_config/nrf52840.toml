@@ -12,7 +12,6 @@ start_addr = 0xA0000
 num_sectors = 32
 
 [dfu]
-flash_size = 1048576
 
 [chip.nrf52840]
 # DCDC regulator 0 enabled (default: true)

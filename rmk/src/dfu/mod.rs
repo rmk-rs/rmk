@@ -28,9 +28,9 @@ mod nrf;
 mod rp;
 
 #[cfg(feature = "dfu_nrf")]
-pub use self::nrf::{DFU_WRITE_SIZE, get_manager, init_flash, mark_booted};
+pub use self::nrf::{DFU_WRITE_SIZE, get_manager, init_flash, init_flash_from_linkerscript, mark_booted};
 #[cfg(feature = "dfu_rp")]
-pub use self::rp::{DFU_WRITE_SIZE, get_manager, init_flash, mark_booted};
+pub use self::rp::{DFU_WRITE_SIZE, get_manager, init_flash, init_flash_from_linkerscript, mark_booted};
 
 // ---------------------------------------------------------------------------
 // Chip-specific type aliases

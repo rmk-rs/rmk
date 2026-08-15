@@ -1,6 +1,6 @@
 [package]
 name = "rmk"
-version = "0.8.2"
+version = "0.9.0"
 authors = ["Haobo Gu <haobogu@outlook.com>"]
 description = "Keyboard firmware written in Rust"
 homepage = "https://github.com/rmk-rs/rmk"
@@ -11,8 +11,8 @@ license = "MIT OR Apache-2.0"
 resolver = "2"
 
 [dependencies]
-rmk-macro = { version = "=0.7.1", path = "../rmk-macro" }
-rmk-types = { version = "=0.2.2", path = "../rmk-types" }
+rmk-macro = { version = "=0.8.0", path = "../rmk-macro" }
+rmk-types = { version = "=0.3.0", path = "../rmk-types" }
 embedded-hal = { version = "1.0.0" }
 embedded-hal-async = { version = "1.0.0" }
 embedded-io-async = { version = "0.7" }
@@ -125,7 +125,7 @@ host = ["dep:byteorder"]
 ## Enable vial support
 vial = ["host"]
 
-## Enable DFU lock feature — physical key unlock for DFU firmware download
+## **Experimental.** Enable DFU lock feature — physical key unlock for DFU firmware download
 dfu_lock = ["host_lock"]
 
 ## Enable physical key unlock and matrix state tracking — the shared base of the
@@ -133,9 +133,27 @@ dfu_lock = ["host_lock"]
 ## Vial lock).
 host_lock = []
 
-## Enable Rynk protocol support (RMK-native protocol, mutually exclusive with vial).
+## **Experimental.** Enable Rynk protocol support (RMK-native protocol, mutually exclusive with
+## vial). The wire protocol and host API can change in any release; `vial` is the stable default.
 ## Includes `host_lock` so the lock gate always has matrix-state tracking.
 rynk = ["host", "host_lock", "rmk-types/rynk"]
+
+## Enable dongle support. Both sides of a dongle setup enable it: the keyboard
+## gets a bond slot of its own for the dongle plus the `SwitchToDongle` key, the
+## dongle binary gets `rmk::dongle`. The dongle relays the keyboard's host
+## protocol: Rynk by default, or Vial when both binaries also enable `vial`.
+dongle = [
+    "storage",
+    # In the default Rynk setup both sides speak Rynk on the wire — the keyboard
+    # serves it, the dongle relays it — and the dongle binary has no `rynk` of
+    # its own to pull the frame types in.
+    "rmk-types/rynk",
+    "rmk-types/dongle",
+    "trouble-host?/connection-event-queue-size-2",
+    "trouble-host?/l2cap-rx-queue-size-16",
+    "trouble-host?/l2cap-tx-queue-size-16",
+    "trouble-host?/gatt-client-notification-queue-size-8",
+]
 
 ## Enable the storage. The storage is optional to save memory
 storage = [
@@ -233,13 +251,15 @@ adafruit_bl = ["_nrf_ble"]
 ## Enable feature if you're using the ZSA Voyager ignition DFU bootloader
 zsa_voyager_bl = []
 
-## Enable DFU firmware update support (USB DFU interface)
+## **Experimental.** Enable DFU firmware update support (USB DFU interface).
+## The flash layout, config, and API can change in any release.
 dfu = ["dep:embassy-usb-dfu", "dep:embassy-embedded-hal", "rmk-types/dfu"]
-## Enable RP2040-specific DFU with embassy-boot-rp (implies `dfu` and `rp2040`)
+## **Experimental.** Enable RP2040-specific DFU with embassy-boot-rp (implies `dfu` and `rp2040`)
 dfu_rp = ["dfu", "dep:embassy-boot-rp", "dep:embassy-boot", "rp2040", "rmk-macro/dfu_rp"]
-## Enable nRF DFU firmware update support (add a chip feature like `nrf52840` too)
+## **Experimental.** Enable nRF DFU firmware update support (add a chip feature like `nrf52840` too)
 dfu_nrf = ["dfu", "dep:embassy-boot", "dep:embassy-nrf", "rmk-macro/dfu_nrf"]
-## Enable split firmware update support — forward firmware to peripherals over split link
+## **Experimental.** Enable split firmware update support — forward firmware to peripherals over
+## split link. Wired split only; see the guard in `lib.rs` for BLE.
 dfu_split = ["dfu", "rmk-macro/dfu_split"]
 
 ## Enable Plover HID stenography support: adds the steno HID descriptor,
@@ -252,6 +272,9 @@ _no_usb = []
 ## Internal marker for 480 Mbps USB chips; activates 512-byte bulk packets.
 _usb_high_speed = []
 
+## Internal marker for chips without SAADC; compiles out `NrfAdc`.
+_no_saadc = []
+
 #! ### BLE feature flags
 #!
 #! ⚠️ Due to the limitation of docs.rs, functions gated by BLE features won't show in docs.rs. You have to head to [`examples`](https://github.com/rmk-rs/rmk/tree/main/examples) folder of RMK repo for their usages.
@@ -263,6 +286,8 @@ nrf54l15_ble = ["_nrf_ble", "_no_usb"]
 nrf52840_ble = ["_nrf_ble"]
 ## Enable feature if you want to use nRF52833 with BLE.
 nrf52833_ble = ["_nrf_ble"]
+## Enable feature if you want to use nRF52820 with BLE. The chip has no SAADC, so `NrfAdc` is unavailable.
+nrf52820_ble = ["_nrf_ble", "_no_saadc"]
 ## Enable feature if you want to use nRF52832 with BLE.
 nrf52832_ble = ["_nrf_ble", "_no_usb"]
 ## Enable feature if you want to use nRF52811 with BLE.

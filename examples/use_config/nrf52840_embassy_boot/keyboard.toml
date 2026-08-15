@@ -8,8 +8,8 @@ chip = "nrf52840"
 usb_enable = true
 
 [matrix]
-row_pins = ["P0_07", "P0_22", "P0_11", "P0_12"]
-col_pins = ["P0_13", "P0_17", "P0_20"]
+row_pins = ["P0_02", "P0_03", "P0_04", "P0_05"]
+col_pins = ["P0_06", "P0_07", "P0_08"]
 
 [layout]
 rows = 4
@@ -35,26 +35,6 @@ _   Kp0 _
 
 [ble]
 enabled = true
-
-# DFU partition layout — must match your bootloader's memory.x
-#
-# By default RMK uses the rmk-boot formula with flash_size from the
-# chip default (1 MB for nRF52840).
-# Calculation: 
-# 2 * 1024 * 1024;    // 2 MB (default)
-# 4 * 1024 * 1024;    // 4 MB
-# and so on
-# the addresses for the state, dfu, active and storage partitions are then automatically calculated.
-# Uncomment and adjust to override:
-# [dfu]
-# flash_size = 2097152   # total flash (default: 1 MB)
-#
-# To set addresses manually, uncomment and edit the values below.
-# Doing so disables the auto-calculation:
-# state_offset = 0x6000
-# state_size = 0x1000
-# dfu_offset = 0x87000
-# dfu_size = 528384
 
 [dfu]
 led = "P0_15" # default P0_15, to not use set to "none"

@@ -64,3 +64,39 @@ pub fn mark_booted() {
 pub fn get_manager() -> Option<&'static DfuFlashManager> {
     MANAGER.try_get()
 }
+
+/// Initialize flash using partition offsets from the linker (rmk-memory.x).
+///
+/// Requires `rmk-memory.x` to be linked into the firmware binary
+/// (e.g. `-Trmk-memory.x` in the linker flags). It reads the same
+/// `__bootloader_*` symbols that embassy-boot's
+/// `from_linkerfile_blocking()` uses; `__bootloader_storage_*` is an RMK
+/// extension.
+///
+/// # Safety
+///
+/// Reads linker-defined absolute symbols. The symbols must be present in the
+/// linked binary or the firmware will not link.
+pub fn init_flash_from_linkerscript(flash_peri: Peri<'static, NVMC>) -> PartitionType {
+    unsafe extern "C" {
+        static __bootloader_state_start: u8;
+        static __bootloader_state_end: u8;
+        static __bootloader_dfu_start: u8;
+        static __bootloader_dfu_end: u8;
+        static __bootloader_storage_start: u8;
+        static __bootloader_storage_end: u8;
+    }
+    // SAFETY: linker-defined symbols — reading their addresses is safe.
+    init_flash(
+        flash_peri,
+        core::ptr::addr_of!(__bootloader_storage_start) as usize as u32,
+        core::ptr::addr_of!(__bootloader_storage_end) as usize as u32
+            - core::ptr::addr_of!(__bootloader_storage_start) as usize as u32,
+        core::ptr::addr_of!(__bootloader_state_start) as usize as u32,
+        core::ptr::addr_of!(__bootloader_state_end) as usize as u32
+            - core::ptr::addr_of!(__bootloader_state_start) as usize as u32,
+        core::ptr::addr_of!(__bootloader_dfu_start) as usize as u32,
+        core::ptr::addr_of!(__bootloader_dfu_end) as usize as u32
+            - core::ptr::addr_of!(__bootloader_dfu_start) as usize as u32,
+    )
+}

@@ -346,8 +346,11 @@ pub fn async_flash_wrapper<F: NorFlash>(flash: F) -> BlockingAsync<F> {
     embassy_embedded_hal::adapter::BlockingAsync::new(flash)
 }
 
-#[cfg(feature = "split")]
-pub async fn new_storage_for_split_peripheral<F: AsyncNorFlash>(
+/// Storage for the firmwares that hold no keymap of their own — a split
+/// peripheral and a dongle. Both still persist their BLE bonds, which the
+/// profile manager loads over `FLASH_CHANNEL`.
+#[cfg(any(feature = "split", feature = "dongle"))]
+pub async fn new_storage_without_keymap<F: AsyncNorFlash>(
     flash: F,
     storage_config: StorageConfig,
 ) -> Storage<F, 0, 0, 0, 0> {

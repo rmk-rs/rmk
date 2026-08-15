@@ -52,6 +52,25 @@ expect = [
   [],
 ]
 
+# Rollover: a second key goes down before the first shifted key comes up.
+# `update_osm` in oneshot.rs consumes the one-shot state on that first key's
+# press, so a key rolled over before the release doesn't also get shifted.
+[[test]]
+name = "osm_rollover_second_key_not_shifted"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift)
+  { press = [0, 2] },  # Press A
+  { press = [1, 3] },  # Press W before A is released (rollover)
+  { release = [0, 2] },
+  { release = [1, 3] },
+]
+expect = [
+  ["LShift", "A"],  # A gets the one-shot modifier
+  ["A", "W"],        # W does not, even though A is still held
+  ["W"],
+  [],
+]
+
 # OSM released while the tap-hold key is still down: the tap still carries it.
 [[test]]
 name = "osm_rolling_with_tap_hold"
@@ -159,6 +178,22 @@ steps = [
   { tap = { pos = [0, 2], duration = 10 } },
 ]
 expect = [["C"], []]
+
+# A held (not tapped) OSL consumes a pending OSM at the OSL's own press, same
+# as the tapped case above. The key typed under the held layer must not see
+# the modifier either.
+[[test]]
+name = "osm_then_held_osl"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift)
+  { press = [0, 1] },  # Press OSL(1), held rather than tapped
+  { tap = { pos = [0, 2], duration = 10 } },  # C from layer 1
+  { release = [0, 1] },  # Release OSL(1)
+]
+expect = [
+  ["C"],  # OSM already consumed by the OSL press
+  [],
+]
 
 # OSL first, so (0,0) resolves to layer 1's OSM(LShift | LCtrl); the layer is
 # spent by then, so the next key comes from layer 0.

@@ -48,8 +48,17 @@ let rmk_config = RmkConfig {
 </Tab>
 </Tabs>
 
+## Storage and DFU
+
+When using DFU (`dfu_rp` / `dfu_nrf`), the storage partition is placed **after the DFU download slot**, determined by the `rmk-memory.x` linker script. In this mode:
+
+- `start_addr` is **ignored** — RMK automatically places storage at the address defined in `rmk-memory.x` (`__bootloader_storage_start`).
+- The default `num_sectors` is **8** (32 KB, matching rmk-boot's default storage area). You can override `num_sectors` to use fewer sectors, but cannot exceed the allocated area.
+
+If you change the storage size in rmk-boot's `build.rs`, rebuild the bootloader and regenerate `rmk-memory.x`. All partition addresses recalculate automatically.
+
 ::: info Storage is re-initialized when the firmware changes
 
-Every firmware build embeds a unique build hash, and on boot RMK compares it with the hash saved in flash. If they differ (for example after flashing a new build), the whole storage area is erased and re-initialized with the firmware's defaults, so saved keymap changes and BLE bonds don't survive a firmware update.
+Every firmware build embeds a unique build hash, and on boot RMK compares it with the hash saved in Flash. If they differ (for example after flashing a new build), the whole storage area is erased and re-initialized with the firmware's defaults, so saved keymap changes and BLE bonds don't survive a firmware update.
 
 :::

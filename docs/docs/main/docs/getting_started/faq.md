@@ -183,7 +183,7 @@ ERROR Keymap reading aborted!
 └─ rmk::keymap::{impl#0}::new_from_storage::{async_fn#0} @ /Users/haobogu/Projects/keyboard/rmk/rmk/src/keymap.rs:38
 ```
 
-If you have more sectors available in your internal flash, you can increase `num_sectors` in `[storage]` section of your `keyboard.toml`, or change `storage_config` in your [`RmkConfig`](https://docs.rs/rmk/latest/rmk/config/struct.RmkConfig.html) if you're using Rust API.
+If you have more sectors available in your internal flash, you can increase `num_sectors` in `[storage]` section of your `keyboard.toml`, or change `storage_config` in your [`RmkConfig`](https://docs.rs/rmk/latest/rmk/config/struct.RmkConfig.html) if you're using Rust API. When using DFU (`dfu_rp` / `dfu_nrf`), the storage partition is placed after the DFU slot (via `rmk-memory.x`) and the default is 8 sectors (32 KB).
 
 ### OUTDATED: panicked at embassy-executor: task arena is full.
 
@@ -219,6 +219,21 @@ embassy-executor = { version = "0.10", features = [
 In the latest git version of Embassy, the task arena size can be calculated automatically, but it requires the **nightly** version of Rust.
 
 If you're comfortable with nightly Rust, you can enable the `nightly` feature of embassy-executor and remove the `task-arena-size-*` feature.
+
+### `rustc` overflowed its stack while compiling `rmk-types`
+
+Some `rustc` versions run out of stack on `rmk-types`' generated keycode tables. Give the compiler a bigger stack:
+
+```bash
+export RUST_MIN_STACK=67108864
+```
+
+To make it stick for a project, put it in the project's `.cargo/config.toml` instead of exporting it every time:
+
+```toml title=".cargo/config.toml"
+[env]
+RUST_MIN_STACK = "67108864"
+```
 
 ### What font is used for the RMK logo?
 

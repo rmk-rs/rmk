@@ -113,7 +113,7 @@ mod snapshot {
             "# {title} — DO NOT edit by hand.\n\
              # File: {rel_path}\n\
              {blurb}\n\
-             #   UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features rynk {test_filter}\n\
+             #   UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features host {test_filter}\n\
              # Format: <label>  <hex bytes>\n\
              \n",
         ));
@@ -178,6 +178,7 @@ fn round_trip_rynk_error_and_result() {
     round_trip(&RynkError::Invalid);
     round_trip(&RynkError::UnknownCmd);
     round_trip(&RynkError::Locked);
+    round_trip(&RynkError::Busy);
     let ok: Result<(), RynkError> = Ok(());
     let err: Result<(), RynkError> = Err(RynkError::StorageFault);
     let _ = round_trip(&ok);
@@ -190,6 +191,8 @@ fn encode<T: serde::Serialize>(val: &T) -> alloc::vec::Vec<u8> {
     bytes.to_vec()
 }
 
+/// Frames are frozen only on `host`; see [`wire_frames_locked`].
+#[cfg(feature = "host")]
 fn encode_frame<T: serde::Serialize>(cmd: Cmd, seq: u8, val: &T) -> alloc::vec::Vec<u8> {
     let mut buf = [0u8; 256];
     let n = super::message::encode_frame(&mut buf, RynkHeader { cmd, seq }, val).expect("frame");
@@ -212,6 +215,8 @@ struct Exemplars {
     morse: Morse,
     macro_data: MacroData,
     encoder: EncoderAction,
+    battery: BatteryStatus,
+    layout: LayoutChunk,
 }
 
 fn exemplars() -> Exemplars {
@@ -303,6 +308,14 @@ fn exemplars() -> Exemplars {
     macro_bytes.extend_from_slice(&[0x01, 0x02, 0x03]).unwrap();
     let macro_data = MacroData { data: macro_bytes };
     let encoder = EncoderAction::new(KeyAction::Morse(3), KeyAction::No);
+    // A page shorter than the chunk size, with a `total_len` that outgrows it and
+    // takes two varint bytes, so swapping the two fields flips the bytes.
+    let mut layout_bytes: heapless::Vec<u8, RYNK_BLE_CHUNK_SIZE> = heapless::Vec::new();
+    layout_bytes.extend_from_slice(&[0x0a, 0x0b, 0x0c]).unwrap();
+    let layout = LayoutChunk {
+        total_len: 300,
+        bytes: layout_bytes,
+    };
 
     Exemplars {
         matrix,
@@ -316,6 +329,11 @@ fn exemplars() -> Exemplars {
         morse,
         macro_data,
         encoder,
+        battery: BatteryStatus::Available {
+            charge_state: ChargeState::Discharging,
+            level: Some(85),
+        },
+        layout,
     }
 }
 
@@ -365,6 +383,7 @@ fn wire_values_locked() {
         ("RynkError::StorageFault", encode(&RynkError::StorageFault)),
         ("RynkError::Unimplemented", encode(&RynkError::Unimplemented)),
         ("RynkError::UnknownCmd", encode(&RynkError::UnknownCmd)),
+        ("RynkError::Busy", encode(&RynkError::Busy)),
         // --- KeyAction: every variant tag (positional) ---
         ("KeyAction::No", encode(&KeyAction::No)),
         ("KeyAction::Transparent", encode(&KeyAction::Transparent)),
@@ -470,13 +489,7 @@ fn wire_values_locked() {
         ("ProtocolVersion::CURRENT", encode(&ProtocolVersion::CURRENT)),
         ("LockStatus{true,false,2,[(1,2),(3,4)]}", encode(&lock_status),),
         ("BatteryStatus::Unavailable", encode(&BatteryStatus::Unavailable)),
-        (
-            "BatteryStatus::Available{Discharging,85}",
-            encode(&BatteryStatus::Available {
-                charge_state: ChargeState::Discharging,
-                level: Some(85)
-            }),
-        ),
+        ("BatteryStatus::Available{Discharging,85}", encode(&ex.battery)),
         ("ChargeState::Charging", encode(&ChargeState::Charging)),
         ("ChargeState::Discharging", encode(&ChargeState::Discharging)),
         ("ChargeState::Unknown", encode(&ChargeState::Unknown)),
@@ -496,6 +509,7 @@ fn wire_values_locked() {
         ("UsbState::Suspended", encode(&UsbState::Suspended)),
         ("StorageResetMode::Full", encode(&StorageResetMode::Full)),
         ("StorageResetMode::LayoutOnly", encode(&StorageResetMode::LayoutOnly)),
+        ("LayoutChunk{300,[0x0a,0x0b,0x0c]}", encode(&ex.layout)),
         // --- Request payloads: pin field order of the Get/Set structs ---
         (
             "SetKeyRequest{{0,5,13},Morse(7)}",
@@ -575,10 +589,15 @@ fn wire_values_locked() {
 ///
 /// Requests and replies use SEQ 1 (a reply echoes its request's SEQ); topics
 /// always use SEQ 0. The `GetVersion` probe and reply are frozen across all
-/// majors. Feature-gated commands (`bulk`, `_ble`, split) are excluded so
-/// every `rynk` feature set yields the same file. Payloads reuse the shared
-/// [`exemplars`], so a frame and its bare-payload entry in
-/// `wire_values.snap` stay in lockstep.
+/// majors. Payloads reuse the shared [`exemplars`], so a frame and its
+/// bare-payload entry in `wire_values.snap` stay in lockstep.
+///
+/// Gated on `host`, the feature superset (`_ble` + `split` + `steno`): the file
+/// then holds every gated row exactly once instead of dropping the rows a
+/// lesser feature set can't name. Only `bulk` stays out —
+/// its payload types differ between host and firmware. Regenerate with
+/// `UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features host`.
+#[cfg(feature = "host")]
 #[test]
 fn wire_frames_locked() {
     let ex = exemplars();
@@ -664,6 +683,11 @@ fn wire_frames_locked() {
         (
             "Lock reply Ok(())",
             encode_frame(Cmd::Lock, SEQ, &Ok::<(), RynkError>(()))
+        ),
+        ("GetLayout request 256", encode_frame(Cmd::GetLayout, SEQ, &256u32)),
+        (
+            "GetLayout reply Ok(LayoutChunk{300,[0x0a,0x0b,0x0c]})",
+            encode_frame(Cmd::GetLayout, SEQ, &Ok::<LayoutChunk, RynkError>(ex.layout.clone())),
         ),
         ("GetDeviceInfo request ()", encode_frame(Cmd::GetDeviceInfo, SEQ, &())),
         (
@@ -911,6 +935,51 @@ fn wire_frames_locked() {
             "GetLedIndicator reply Ok(LedIndicator(Num|Scroll))",
             encode_frame(Cmd::GetLedIndicator, SEQ, &Ok::<LedIndicator, RynkError>(led)),
         ),
+        // Connection / status rows behind `_ble` and `split`.
+        ("GetBleStatus request ()", encode_frame(Cmd::GetBleStatus, SEQ, &())),
+        (
+            "GetBleStatus reply Ok(BleStatus{1,Advertising})",
+            encode_frame(Cmd::GetBleStatus, SEQ, &Ok::<BleStatus, RynkError>(ex.connection.ble)),
+        ),
+        (
+            "SwitchBleProfile request 1",
+            encode_frame(Cmd::SwitchBleProfile, SEQ, &1u8)
+        ),
+        (
+            "SwitchBleProfile reply Ok(())",
+            encode_frame(Cmd::SwitchBleProfile, SEQ, &Ok::<(), RynkError>(())),
+        ),
+        (
+            "ClearBleProfile request 1",
+            encode_frame(Cmd::ClearBleProfile, SEQ, &1u8)
+        ),
+        (
+            "ClearBleProfile reply Ok(())",
+            encode_frame(Cmd::ClearBleProfile, SEQ, &Ok::<(), RynkError>(())),
+        ),
+        (
+            "GetBatteryStatus request ()",
+            encode_frame(Cmd::GetBatteryStatus, SEQ, &())
+        ),
+        (
+            "GetBatteryStatus reply Ok(Available{Discharging,85})",
+            encode_frame(Cmd::GetBatteryStatus, SEQ, &Ok::<BatteryStatus, RynkError>(ex.battery)),
+        ),
+        (
+            "GetPeripheralStatus request 1",
+            encode_frame(Cmd::GetPeripheralStatus, SEQ, &1u8)
+        ),
+        (
+            "GetPeripheralStatus reply Ok(PeripheralStatus{true,Available{Discharging,85}})",
+            encode_frame(
+                Cmd::GetPeripheralStatus,
+                SEQ,
+                &Ok::<PeripheralStatus, RynkError>(PeripheralStatus {
+                    connected: true,
+                    battery: ex.battery,
+                }),
+            ),
+        ),
         // Topics (0x80xx, server→host push, SEQ 0).
         ("LayerChange topic 3", encode_frame(Cmd::LayerChange, 0, &3u8)),
         ("WpmUpdate topic 42", encode_frame(Cmd::WpmUpdate, 0, &42u16)),
@@ -922,6 +991,10 @@ fn wire_frames_locked() {
         (
             "LedIndicatorChange topic LedIndicator(Num|Scroll)",
             encode_frame(Cmd::LedIndicatorChange, 0, &led)
+        ),
+        (
+            "BatteryStatusChange topic Available{Discharging,85}",
+            encode_frame(Cmd::BatteryStatusChange, 0, &ex.battery)
         ),
     ];
     let view: alloc::vec::Vec<(&str, &[u8])> = entries.iter().map(|(l, b)| (*l, b.as_slice())).collect();
@@ -1084,11 +1157,7 @@ mod protocol_reference {
              {endpoints}\n\
              ## Topics\n\n\
              Topics are best-effort pushes; the `Get*` endpoints above mirror their payloads so a host can recover a missed push.\n\n\
-             {topics}\n\
-             ## Compatibility\n\n\
-             - `GetVersion` (`0x0001`) and its `Result<ProtocolVersion, RynkError>` reply are frozen across all versions.\n\
-             - Within a major version, adding a CMD or topic is a `minor` bump: old firmware answers `UnknownCmd`, old hosts ignore unknown topics.\n\
-             - Reshaping an existing request/response — including appending a field — is a `major` bump.\n",
+             {topics}",
             header = "<!-- GENERATED — do not edit. Rendered from the `endpoints!`/`topics!` tables in\n     rmk-types/src/protocol/rynk/command.rs. Regenerate with:\n     UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features rynk protocol_reference -->",
             major = v.major,
             minor = v.minor,

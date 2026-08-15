@@ -1,11 +1,13 @@
 [package]
 name = "rynk-wasm"
-version = "0.0.0"
-edition = "2024"
-publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
 description = "Rynk host support compiled to a wasm package: typed `rynk` Client plus JS byte-link transport, built with wasm-pack"
-license = "MIT OR Apache-2.0"
+license.workspace = true
 repository.workspace = true
+keywords = ["keyboard", "firmware", "rmk", "protocol", "wasm"]
 
 # Built by `wasm-pack build --target web`; unit tests run with `wasm-pack test --node`.
 # Native checks compile an empty crate because `src/lib.rs` is wasm32-gated.
@@ -13,7 +15,7 @@ repository.workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-rynk = { path = "..", features = ["wasm"] }
+rynk = { path = "..", version = "=0.2.0", features = ["wasm"] }
 embassy-futures = "0.1"
 embassy-sync.workspace = true
 wasm-bindgen = "0.2"

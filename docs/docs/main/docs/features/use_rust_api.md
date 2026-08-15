@@ -12,6 +12,10 @@ If you're using **nRF52840**, ensure that you have [Adafruit_nRF52_Bootloader](h
 
 You can check either your microcontroller's datasheet or an existing Rust project for your microcontroller for the correct values.
 
+::: note
+If you're using **rmk-boot** with DFU firmware updates (`dfu_rp` / `dfu_nrf`), you don't need to write a `memory.x` manually. Download `rmk-memory.x` alongside the bootloader binary, place it next to your `Cargo.toml`, and configure your `build.rs` as described in the [embassy-boot flashing guide](../user_guide/flash_firmware/use_embassy_boot.mdx).
+:::
+
 ### Update `main.rs`
 
 The generated `main.rs` needs to be updated as well to use Rust code. You can copy the code from RMK's Rust example, such as <https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/rp2040/src/main.rs> to `src/main.rs` to get started.
