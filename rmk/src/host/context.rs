@@ -9,6 +9,8 @@ use rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rmk_types::fork::Fork;
 use rmk_types::led_indicator::LedIndicator;
 use rmk_types::morse::{Morse, MorseProfile};
+#[cfg(feature = "rynk")]
+use rmk_types::protocol::rynk::BehaviorConfig;
 
 use crate::event::KeyboardEventPos;
 use crate::keyboard::combo::Combo;
@@ -277,6 +279,32 @@ impl<'a> KeyboardContext<'a> {
         self.keymap.set_morse_prior_idle_time(Duration::from_millis(ms as u64));
         #[cfg(feature = "storage")]
         FLASH_CHANNEL.send(FlashOperationMessage::PriorIdleTime(ms)).await;
+    }
+
+    // Whole-struct write for Rynk's SetBehaviorConfig: one flash message instead
+    // of six read-modify-write cycles of the same storage item.
+    #[cfg(feature = "rynk")]
+    pub async fn set_behavior_config(&self, cfg: BehaviorConfig) {
+        self.keymap
+            .set_combo_timeout(Duration::from_millis(cfg.combo_timeout_ms as u64));
+        self.keymap
+            .set_one_shot_timeout(Duration::from_millis(cfg.oneshot_timeout_ms as u64));
+        self.keymap.set_tap_interval(cfg.tap_interval_ms);
+        self.keymap.set_tap_capslock_interval(cfg.tap_capslock_interval_ms);
+        self.keymap.set_morse_default_profile(cfg.morse_default_profile);
+        self.keymap
+            .set_morse_prior_idle_time(Duration::from_millis(cfg.morse_prior_idle_time_ms as u64));
+        #[cfg(feature = "storage")]
+        FLASH_CHANNEL
+            .send(FlashOperationMessage::BehaviorConfig(crate::storage::BehaviorConfig {
+                prior_idle_time: cfg.morse_prior_idle_time_ms,
+                morse_default_profile: cfg.morse_default_profile,
+                combo_timeout: cfg.combo_timeout_ms,
+                one_shot_timeout: cfg.oneshot_timeout_ms,
+                tap_interval: cfg.tap_interval_ms,
+                tap_capslock_interval: cfg.tap_capslock_interval_ms,
+            }))
+            .await;
     }
 
     pub async fn set_layout_options(&self, opts: u32) {

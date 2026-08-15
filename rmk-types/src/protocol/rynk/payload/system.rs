@@ -159,7 +159,8 @@ pub struct BehaviorConfig {
     pub tap_capslock_interval_ms: u16,
     /// Default profile for morse/tap-hold keys; per-key profiles override it.
     pub morse_default_profile: MorseProfile,
-    /// Flow-tap window: a tap within this time of the previous key forces a tap.
+    /// Flow-tap window: a morse key pressed within this time of the previous
+    /// key press is forced to its tap action.
     pub morse_prior_idle_time_ms: u16,
 }
 

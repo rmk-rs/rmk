@@ -22,12 +22,7 @@ impl Handle<GetBehaviorConfig> for RynkService<'_> {
 
 impl Handle<SetBehaviorConfig> for RynkService<'_> {
     async fn handle(&self, cfg: BehaviorConfig) -> Result<(), RynkError> {
-        self.ctx.set_combo_timeout(cfg.combo_timeout_ms).await;
-        self.ctx.set_one_shot_timeout(cfg.oneshot_timeout_ms).await;
-        self.ctx.set_tap_interval(cfg.tap_interval_ms).await;
-        self.ctx.set_tap_capslock_interval(cfg.tap_capslock_interval_ms).await;
-        self.ctx.set_morse_default_profile(cfg.morse_default_profile).await;
-        self.ctx.set_morse_prior_idle_time(cfg.morse_prior_idle_time_ms).await;
+        self.ctx.set_behavior_config(cfg).await;
         Ok(())
     }
 }

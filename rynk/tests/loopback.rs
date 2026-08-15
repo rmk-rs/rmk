@@ -20,7 +20,6 @@ use rmk::keymap::{KeyMap, KeymapData};
 use rmk_types::action::KeyAction;
 use rmk_types::combo::Combo;
 use rmk_types::constants::{MACRO_DATA_SIZE, RYNK_BUFFER_SIZE};
-use rmk_types::morse::{MorseMode, MorseProfile};
 use rmk_types::protocol::rynk::{MacroData, ProtocolVersion, RYNK_MAX_PAYLOAD_SIZE, RynkError, StorageResetMode};
 use rynk::layout::{Key, Rect, Variant};
 use rynk::{Client, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
@@ -150,9 +149,7 @@ async fn client_against_run_session() {
         let mut beh = client.get_behavior().await.unwrap();
         beh.combo_timeout_ms = beh.combo_timeout_ms.wrapping_add(7);
         beh.tap_interval_ms = beh.tap_interval_ms.wrapping_add(3);
-        beh.morse_default_profile =
-            MorseProfile::new(Some(true), Some(MorseMode::PermissiveHold), Some(230), Some(140))
-                .with_enable_flow_tap(Some(true));
+        beh.morse_default_profile = beh.morse_default_profile.with_enable_flow_tap(Some(true));
         beh.morse_prior_idle_time_ms = beh.morse_prior_idle_time_ms.wrapping_add(5);
         client.set_behavior(beh).await.unwrap();
         assert_eq!(client.get_behavior().await.unwrap(), beh);

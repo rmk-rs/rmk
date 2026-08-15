@@ -152,6 +152,10 @@ pub(crate) enum FlashOperationMessage {
     PriorIdleTime(u16),
     // Default morse profile containing all morse/tap-hold settings (mode, timeouts, unilateral_tap)
     MorseDefaultProfile(MorseProfile),
+    #[cfg(feature = "rynk")]
+    // The whole behavior config in one message (Rynk's SetBehaviorConfig carries
+    // every field, so one store beats six read-modify-write cycles)
+    BehaviorConfig(BehaviorConfig),
     #[cfg(feature = "_ble")]
     // Read bond info for the given slot; storage task replies via `BOND_INFO_RESPONSE`.
     ReadBleBondInfo(u8),
@@ -806,6 +810,14 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                 }
                 FlashOperationMessage::MorseDefaultProfile(morse_default_profile) => {
                     update_storage_field!(&mut self.flash, &mut self.buffer, BehaviorConfig, morse_default_profile)
+                }
+                #[cfg(feature = "rynk")]
+                FlashOperationMessage::BehaviorConfig(behavior_config) => {
+                    self.store_data(
+                        StorageKey::BehaviorConfig,
+                        &StorageData::BehaviorConfig(behavior_config),
+                    )
+                    .await
                 }
             };
 
