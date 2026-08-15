@@ -13,7 +13,8 @@ map = """
 [[keymap.layer]]
 keys = "A  B  TD(0)"
 
-# Overwritten over the wire below; present so `TD(0)` resolves.
+# Lets `TD(0)` resolve. Most cases overwrite it over the wire, but the flow-tap
+# case asserts `X`/`Y` directly, so renaming them breaks it.
 [[behavior.morse.morses]]
 tap = "X"
 hold = "Y"
