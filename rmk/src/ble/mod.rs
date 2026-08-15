@@ -301,12 +301,12 @@ where
                         disconnect(&conn).await;
                         continue;
                     }
-                    // The bonded dongle belongs to its own slot, whatever it connects on.
+                    // When connecting to BLE host, check the connected peer is not a dongle.
                     #[cfg(feature = "dongle")]
                     if crate::state::current_profile() != crate::ble::profile::DONGLE_PROFILE
                         && profile_manager.is_bonded_dongle(&conn.raw().peer_identity())
                     {
-                        warn!("[ble] the bonded dongle connected on a host profile, disconnecting");
+                        warn!("[ble] the bonded dongle connected on a host BLE profile, disconnecting");
                         disconnect(&conn).await;
                         continue;
                     }

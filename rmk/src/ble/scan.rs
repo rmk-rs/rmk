@@ -27,9 +27,6 @@ pub(crate) fn scan_config(window: Duration) -> ScanConfig<'static> {
 /// Start a scan, retrying while the controller refuses one — it does until a
 /// previous connect's initiator has stopped.
 ///
-/// A non-empty `filter_accept_list` drops everyone else's reports at the
-/// controller; `&[]` scans unfiltered.
-///
 /// End the session with [`ScanSession::stop`], which waits for the controller to
 /// confirm. Dropping it only signals the cancel, and the controller refuses an
 /// initiator until the runner has issued the stop.

@@ -168,8 +168,10 @@ where
             .cloned()
     }
 
-    /// Is `identity` the dongle this keyboard is bonded to? Host profiles turn it
-    /// away: an empty slot would otherwise pair the dongle into a host's slot.
+    /// Check if the `identity` is the bonded dongle's identity.
+    ///
+    /// This function is used when searching for BLE host,
+    /// the connected dongle(in the DONGLE_PROFILE) should be excluded.
     #[cfg(feature = "dongle")]
     pub(crate) fn is_bonded_dongle(&self, identity: &Identity) -> bool {
         self.bonded_devices.iter().any(|bond_info| {
