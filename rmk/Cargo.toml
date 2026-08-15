@@ -212,7 +212,6 @@ use_1m_phy = []
 ## Enable split keyboard support.
 split = [
     "trouble-host?/connection-event-queue-size-2",
-    "trouble-host?/client-att-table-size-128",
     "trouble-host?/l2cap-rx-queue-size-16",
     "trouble-host?/l2cap-tx-queue-size-16",
     "trouble-host?/gatt-client-notification-queue-size-8",

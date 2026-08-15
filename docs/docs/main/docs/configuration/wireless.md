@@ -102,4 +102,11 @@ Each peripheral's Battery Service uses its peripheral ID to set the description 
 
 Battery Level characteristics also expose a Characteristic User Description descriptor. The defaults are `Central` for the central and `Peripheral 0`, `Peripheral 1`, and so on for peripherals. Set `battery_user_description` under `[ble]`, `[split.central]`, or an individual `[[split.peripheral]]` to provide a custom name. `[split.central].battery_user_description` overrides `[ble].battery_user_description` for the central.
 
-With the default 128-byte client ATT table, the maximum number of battery-enabled peripherals is 15 without a host configurator, 14 with Vial, and 13 with Rynk.
+The split feature uses trouble-host's default client ATT table size. To reserve more space for client-specific attributes such as CCCDs, set `TROUBLE_HOST_CLIENT_ATT_TABLE_SIZE` in the project environment, for example in `.cargo/config.toml`:
+
+```toml
+[env]
+TROUBLE_HOST_CLIENT_ATT_TABLE_SIZE = "128"
+```
+
+This project-wide override takes precedence over trouble-host Cargo feature settings and can be set to the size required by the enabled services.
