@@ -33,6 +33,8 @@ pub struct KeymapData<const ROW: usize, const COL: usize, const NUM_LAYER: usize
     layer_cache: [[u8; COL]; ROW],
     /// Layer cache for encoder directions
     encoder_layer_cache: [[u8; 2]; NUM_ENCODER],
+    /// VIA/Vial layout options; persisted via `LayoutConfig`
+    pub(crate) layout_option: u32,
 }
 
 impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize> KeymapData<ROW, COL, NUM_LAYER, 0> {
@@ -44,6 +46,7 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize> KeymapData<ROW,
             layer_state: [false; NUM_LAYER],
             layer_cache: [[0; COL]; ROW],
             encoder_layer_cache: [],
+            layout_option: 0,
         }
     }
 }
@@ -62,6 +65,7 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             layer_state: [false; NUM_LAYER],
             layer_cache: [[0; COL]; ROW],
             encoder_layer_cache: [[0u8; 2]; NUM_ENCODER],
+            layout_option: 0,
         }
     }
 }
@@ -102,6 +106,8 @@ struct KeyMapInner<'a> {
     hand: &'a [Hand],
     /// Mouse button state
     mouse_buttons: u8,
+    /// VIA/Vial layout options; persisted via `LayoutConfig`
+    layout_option: u32,
     /// Matrix state for vial lock
     #[cfg(feature = "host_lock")]
     matrix_state: MatrixState,
@@ -370,6 +376,7 @@ impl<'a> KeyMap<'a> {
                 behavior,
                 hand,
                 mouse_buttons: 0,
+                layout_option: data.layout_option,
                 #[cfg(feature = "host_lock")]
                 matrix_state: MatrixState::new(ROW, COL),
             }),
@@ -530,6 +537,14 @@ impl<'a> KeyMap<'a> {
 
     pub(crate) fn set_default_layer(&self, layer_num: u8) {
         self.inner.borrow_mut().set_default_layer(layer_num);
+    }
+
+    pub(crate) fn layout_option(&self) -> u32 {
+        self.inner.borrow().layout_option
+    }
+
+    pub(crate) fn set_layout_option(&self, layout_option: u32) {
+        self.inner.borrow_mut().layout_option = layout_option;
     }
 
     pub(crate) fn update_fn_layer_state(&self) {

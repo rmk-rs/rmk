@@ -107,6 +107,8 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                 (StorageKey::LayoutConfig, StorageData::LayoutConfig(config)) => {
                     // Restore the default (base) layer set via a `PDF` key
                     behavior.default_layer = config.default_layer;
+                    // Restore the VIA/Vial layout options selection
+                    data.layout_option = config.layout_option;
                 }
                 _ => continue,
             }

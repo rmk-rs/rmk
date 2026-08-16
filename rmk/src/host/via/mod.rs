@@ -55,8 +55,7 @@ impl<'a> VialService<'a> {
                             BigEndian::write_u32(&mut report.input_data[2..6], value);
                         }
                         ViaKeyboardInfo::LayoutOptions => {
-                            // TODO: retrieve layout option from storage
-                            let layout_option: u32 = 0;
+                            let layout_option = self.ctx.layout_options();
                             BigEndian::write_u32(&mut report.input_data[2..6], layout_option);
                         }
                         #[cfg(not(feature = "host_lock"))]
@@ -323,6 +322,35 @@ mod tests {
             let mut report = macro_set_buffer_report(29);
             block_on(service.process_via_packet(&mut report));
             assert_eq!(report.input_data[0], 0xFF);
+        });
+    }
+
+    /// A `GetKeyboardValue(LayoutOptions)` (0x02 0x02) or
+    /// `SetKeyboardValue(LayoutOptions)` (0x03 0x02) report carrying `value`
+    /// as the big-endian payload.
+    fn layout_options_report(command_id: u8, value: u32) -> ViaReport {
+        let mut output_data = [0u8; 32];
+        output_data[0] = command_id;
+        output_data[1] = 0x02; // ViaKeyboardInfo::LayoutOptions
+        BigEndian::write_u32(&mut output_data[2..6], value);
+        ViaReport {
+            input_data: output_data,
+            output_data,
+        }
+    }
+
+    // GetKeyboardValue(LayoutOptions) must return the value written by
+    // SetKeyboardValue(LayoutOptions) instead of a hardcoded 0, so the Vial
+    // GUI shows the user's selection again after a reconnect.
+    #[test]
+    fn layout_options_set_then_get_roundtrip() {
+        with_service(|service| {
+            let mut set = layout_options_report(0x03, 0x00C0_FFEE);
+            block_on(service.process_via_packet(&mut set));
+
+            let mut get = layout_options_report(0x02, 0);
+            block_on(service.process_via_packet(&mut get));
+            assert_eq!(BigEndian::read_u32(&get.input_data[2..6]), 0x00C0_FFEE);
         });
     }
 }

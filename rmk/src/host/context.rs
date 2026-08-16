@@ -280,10 +280,13 @@ impl<'a> KeyboardContext<'a> {
     }
 
     pub async fn set_layout_options(&self, opts: u32) {
+        self.keymap.set_layout_option(opts);
         #[cfg(feature = "storage")]
         FLASH_CHANNEL.send(FlashOperationMessage::LayoutOptions(opts)).await;
-        #[cfg(not(feature = "storage"))]
-        let _ = opts;
+    }
+
+    pub fn layout_options(&self) -> u32 {
+        self.keymap.layout_option()
     }
 
     pub async fn reset_storage(&self) {
