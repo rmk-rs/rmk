@@ -4,27 +4,35 @@
 #[macro_use]
 mod macros;
 mod keymap;
+mod rgb;
 
 use defmt::{info, unwrap};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nrf::config::{ClockSpeed, Config as NrfConfig, HfclkSource, LfclkSource};
+use embassy_nrf::gpio::{Flex, Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::mode::Blocking;
-use embassy_nrf::peripherals::USBHS;
+use embassy_nrf::peripherals::{SERIAL30, USBHS};
+use embassy_nrf::spim::{self, Spim};
 use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
 use embassy_nrf::usb::{self, Driver};
 use embassy_nrf::{bind_interrupts, cracen, pac};
-use keymap::{COL, ROW, SIZE};
+use keymap::{COL, ROW};
 use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
 use panic_probe as _;
+use rgb::{RgbService, Ws2812};
 use rmk::ble::BleTransport;
 use rmk::config::{BehaviorConfig, DeviceConfig, LockConfig, PositionalConfig, RmkConfig, StorageConfig};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::host::HostService;
+use rmk::input_device::battery::{BatteryProcessor, ChargingStateReader};
+use rmk::input_device::pmw3610::{BitBangSpiBus, Pmw3610, Pmw3610Config};
+use rmk::input_device::pointing::{PointingDevice, PointingProcessor, PointingProcessorConfig};
+use rmk::input_device::rotary_encoder::RotaryEncoder;
 use rmk::keyboard::Keyboard;
-use rmk::matrix::direct_pin::DirectPinMatrix;
+use rmk::matrix::Matrix;
 use rmk::processor::builtin::wpm::WpmProcessor;
 use rmk::usb::UsbTransport;
 use rmk::{DefaultPacketPool, KeymapData, PacketPool, initialize_keymap_and_storage, run_all};
@@ -35,6 +43,7 @@ type RandomSource = cracen::Cracen<'static, Blocking>;
 bind_interrupts!(struct Irqs {
     USBHS => usb::InterruptHandler<USBHS>;
     VREGUSB => usb::vbus_detect::InterruptHandler;
+    SERIAL30 => spim::InterruptHandler<SERIAL30>;
     SWI00 => nrf_sdc::mpsl::LowPrioInterruptHandler;
     CLOCK_POWER => nrf_sdc::mpsl::ClockInterruptHandler;
     RADIO_0 => nrf_sdc::mpsl::HighPrioInterruptHandler;
@@ -54,6 +63,10 @@ const RYNK_UNLOCK_KEYS: &[(u8, u8)] = &[(0, 0), (0, 1)];
 
 const L2CAP_TXQ: u8 = 4;
 const L2CAP_RXQ: u8 = 4;
+
+/// The battery divider is R91 806k (high side) / R92 2M (low side).
+const ADC_DIVIDER_MEASURED: u32 = 2000;
+const ADC_DIVIDER_TOTAL: u32 = 2806;
 
 fn build_sdc<'d, const N: usize>(
     p: nrf_sdc::Peripherals<'d>,
@@ -168,19 +181,19 @@ async fn main(spawner: Spawner) {
     );
     info!("USB driver ready");
 
-    let direct_pins = config_matrix_pins_nrf! {
+    // The switch diodes point from the columns to the rows, so the columns are
+    // driven and the rows are read: `COL2ROW = true`.
+    let (row_pins, col_pins) = config_matrix_pins_nrf!(
         peripherals: p,
-        direct_pins: [
-            [P1_26, P1_09],
-            [P1_08, P0_05],
-        ]
-    };
+        input: [P1_01, P1_02, P1_00, P1_04, P3_12],
+        output: [P0_01, P0_00, P3_04, P1_06, P0_08, P1_10, P1_22, P1_25]
+    );
 
     let keyboard_device_config = DeviceConfig {
         vid: 0x4c4b,
         pid: 0x4643,
         manufacturer: "Haobo",
-        product_name: "RMK nRF54LM20A",
+        product_name: "ME54BS13",
         ..DeviceConfig::default()
     };
     let storage_config = StorageConfig {
@@ -199,7 +212,7 @@ async fn main(spawner: Spawner) {
         ..Default::default()
     };
 
-    let mut keymap_data = KeymapData::new(keymap::get_default_keymap());
+    let mut keymap_data = KeymapData::new_with_encoder(keymap::get_default_keymap(), keymap::get_default_encoder_map());
     let mut behavior_config = BehaviorConfig::default();
     let per_key_config = PositionalConfig::default();
 
@@ -216,14 +229,66 @@ async fn main(spawner: Spawner) {
     info!("Storage initialized");
 
     let debouncer = DefaultDebouncer::new();
-    let mut matrix = DirectPinMatrix::<_, _, ROW, COL, SIZE>::new(direct_pins, debouncer, true);
+    let mut matrix = Matrix::<_, _, _, ROW, COL, true>::new(row_pins, col_pins, debouncer);
     let mut keyboard = Keyboard::new(&keymap);
     let host_service = HostService::new(&keymap, &rmk_config);
 
+    // `J1`'s middle pin is tied to ground, so both phases need an internal pull-up.
+    let mut encoder = RotaryEncoder::new(
+        Input::new(p.P1_23, Pull::Up),
+        Input::new(p.P1_19, Pull::Up),
+        0,
+    );
+
+    // PMW3610 trackball on the `TRACKBALL`/`H13` connectors. Those carry four
+    // signals for the sensor's NCS/SCLK/SDIO/MOT: the data line is half-duplex
+    // and bit-banged over `MOSI`, and `MISO` is the motion interrupt.
+    let pmw3610_spi = BitBangSpiBus::new(
+        Output::new(p.P1_17, Level::High, OutputDrive::Standard),
+        Flex::new(p.P1_16),
+    );
+    let mut trackball = PointingDevice::<Pmw3610<_, _, _>>::new(
+        0,
+        pmw3610_spi,
+        Output::new(p.P1_15, Level::High, OutputDrive::Standard),
+        Some(Input::new(p.P1_18, Pull::Up)),
+        Pmw3610Config {
+            res_cpi: 800,
+            smart_mode: true,
+            ..Default::default()
+        },
+    );
+    let mut pointing_processor = PointingProcessor::new(&keymap, PointingProcessorConfig::default());
+
+    // Two WS2812s on `RGB`, powered through `RGB_EN`. See `rgb` for why the data
+    // line is clocked out of SPIM30 rather than a PWM sequence.
+    let mut spim_config = spim::Config::default();
+    spim_config.frequency = spim::Frequency::M4;
+    let rgb_spi = Spim::new_txonly_nosck(p.SERIAL30, Irqs, p.P0_04, spim_config);
+    let rgb_power = Output::new(p.P1_30, Level::Low, OutputDrive::Standard);
+    let mut rgb = RgbService::new(Ws2812::new(rgb_spi, rgb_power));
+
+    // TP4057 pulls `CHRG` low while charging.
+    let mut charging_reader = ChargingStateReader::new(Input::new(p.P2_02, Pull::Up), true);
+    let mut battery_processor = BatteryProcessor::new(ADC_DIVIDER_MEASURED, ADC_DIVIDER_TOTAL);
+
     let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config).with_host_service(&host_service);
-    let mut ble_transport = BleTransport::new(sdc, ble_addr(), rmk_config)
-        .with_host_service(&host_service);
+    let mut ble_transport = BleTransport::new(sdc, ble_addr(), rmk_config).with_host_service(&host_service);
     let mut wpm_processor = WpmProcessor::new();
 
-    run_all!(matrix, storage, usb_transport, ble_transport, wpm_processor, keyboard).await;
+    run_all!(
+        matrix,
+        encoder,
+        trackball,
+        charging_reader,
+        storage,
+        usb_transport,
+        ble_transport,
+        pointing_processor,
+        battery_processor,
+        wpm_processor,
+        rgb,
+        keyboard
+    )
+    .await;
 }

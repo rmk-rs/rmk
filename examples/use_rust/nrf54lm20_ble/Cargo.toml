@@ -42,6 +42,8 @@ embassy-nrf = { version = "0.11", features = [
     "gpiote",
     "unstable-pac",
     "time",
+    # ROW0/ROW1 sit on P1.01/P1.02, which default to the NFC antenna pins.
+    "nfc-pins-as-gpio",
 ] }
 embassy-executor = { version = "0.10", features = [
     "defmt",
