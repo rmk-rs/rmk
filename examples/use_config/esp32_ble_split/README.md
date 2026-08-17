@@ -19,7 +19,7 @@ cargo install cargo-espflash espflash
 We've provided convenient aliases in `.cargo/config.toml`:
 
 ```bash
-cd examples/use_config/esp32c3_ble_split
+cd examples/use_config/esp32_ble_split
 
 # Build and flash central (ESP32C6)
 cargo run-central

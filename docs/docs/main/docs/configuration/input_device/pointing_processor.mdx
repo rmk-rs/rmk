@@ -85,7 +85,7 @@ Caret mode currently gets rid of all pressed modifiers (shift, CTRL) and sends t
 
 ## Mode switching
 
-Users can define a processor, in this case called `PointingProcessorController`, which subscribes to events (e.g. layer changes) and updates the active mode. The example below switches to Cursor on layer 0, Sniper on layer 1, Scroll on layer 2, and Caret on layer 3 or when a key bound to `User0` is pressed (see the shipped [`rp2040_pointing_modes`](https://github.com/rmk-rs/rmk/tree/main/examples/use_config/rp2040_pointing_modes) example):
+Users can define a processor, in this case called `PointingProcessorController`, which subscribes to events (e.g. layer changes) and updates the active mode. The example below extends the shipped [`rp2040_pointing_modes`](https://github.com/rmk-rs/rmk/tree/main/examples/use_config/rp2040_pointing_modes) example, which switches to Cursor on layer 0, Sniper on layer 1, Scroll on layer 2, and Caret on layer 3, with an `ActionEvent` handler that also switches to Caret when a key bound to `User0` is pressed:
 
 ```rust title="src/pointing_processor_controller.rs"
 use rmk::event::{ActionEvent, LayerChangeEvent, PointingProcessorEvent, publish_event};

@@ -133,6 +133,13 @@ You can also use the resolution based phase:
     let mut encoder = RotaryEncoder::with_resolution(pin_a, pin_b, 2, false, encoder_id)
 ```
 
+To debounce the encoder (the `debounce_ms` field in `keyboard.toml`), chain `with_debounce`:
+
+```rust
+    // Suppress events arriving within 5 ms of the last one
+    let mut encoder = RotaryEncoder::with_resolution(pin_a, pin_b, 2, false, encoder_id).with_debounce(5);
+```
+
 Then add the encoder to `run_all!` macro.
 
 ```rust

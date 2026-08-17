@@ -12,6 +12,7 @@
   "storage",
   "use_rust_api",
   "processor",
+  "event",
   "input_device",
   "display",
   "steno",

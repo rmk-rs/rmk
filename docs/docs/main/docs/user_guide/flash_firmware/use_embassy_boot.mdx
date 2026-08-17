@@ -51,7 +51,7 @@ let flash = async_flash_wrapper(
 );
 ```
 
-The `#[rmk_keyboard]` macro generates this call automatically when a `[dfu]` section is present in `keyboard.toml`.
+The `#[rmk_keyboard]` macro generates this call automatically when RMK is built with the `dfu_rp` or `dfu_nrf` feature. The macro reads the `[dfu]` section for LED and unlock-key options; the chip defaults for RP2040, nRF52840, nice!nano and Pico W already ship an empty `[dfu]`, so you only add one to override those options.
 
 The storage size defaults to **32 KB** (8 sectors × 4K pages). To change it, edit `STORAGE_SIZE` in rmk-boot's `build.rs`, rebuild, adjust `num_sectors` in your `[storage]` section accordingly and copy the newly generated `rmk-memory.x` into your project.
 
@@ -117,7 +117,7 @@ If configuring manually, ensure:
 
 - `Cargo.toml` uses the `dfu_rp` (RP2040) or `dfu_nrf` (nRF52840) feature
 - `memory.x` from rmk-boot is present next to your `Cargo.toml`
-- `keyboard.toml` has a `[dfu]` section (at minimum an empty `[dfu]`)
+- the resolved config has a `[dfu]` section — the RP2040, nRF52840, nice!nano and Pico W chip defaults already ship an empty one, so on those chips you only add `[dfu]` to `keyboard.toml` to override its options
 
 The `[dfu]` section needs only behavioural options — partition offsets come from the linker symbols in `memory.x`:
 
@@ -199,7 +199,7 @@ cargo run --release
 
 ### All subsequent updates via DFU
 
-Once rmk-boot and the RMK firmware have been flashed once, all future updates can be done **easily over USB via DFU**. As stated above, as long as you build with `memory.x` present, you can still use probe-rs (RP2040 and nRF52480), the DFU functionality of rmk-boot (nRF52840) or the UF2 bootloader. (RP2040)
+Once rmk-boot and the RMK firmware have been flashed once, all future updates can be done **easily over USB via DFU**. As stated above, as long as you build with `memory.x` present, you can still use probe-rs (RP2040 and nRF52840), the DFU functionality of rmk-boot (nRF52840) or the UF2 bootloader. (RP2040)
 
 #### Generate the .bin file
 
@@ -247,7 +247,7 @@ If your RMK was compiled with the `dfu_lock` feature, DFU starts in a **locked**
 
 1. Run `dfu-util -D your-firmware.bin` — the download will be rejected, but this signals the keyboard to open the unlock window
 2. The DFU LED turns **solid on** — you have **10 seconds** to press the `unlock_keys` combination configured in `keyboard.toml` (e.g. `[[0, 0], [1, 1]]`)
-3. Once the keys are pressed, the LED blinks **"D F U"** in Morse code (`-.. ..-. ..-`) — the DFU lock is released for another **10 seconds**
+3. Once the keys are pressed, the LED blinks (toggles every 200 ms) — the DFU lock is released for another **10 seconds**
 4. Re-run `dfu-util -D your-firmware.bin` — this time the download proceeds, the LED flickers, and the firmware is updated
 5. After the update completes, the LED turns off and the board reboots
 
@@ -260,7 +260,7 @@ If an LED pin is configured in `keyboard.toml` (default `PIN_25` on RP2040 and `
 | State                                 | LED behavior                     |
 |---------------------------------------|----------------------------------|
 | Unlock window open (waiting for keys) | Solid on                         |
-| DFU unlocked (ready for dfu-util)     | Blinks Morse "D F U"             |
+| DFU unlocked (ready for dfu-util)     | Blinks (toggles every 200 ms)    |
 | DFU download started                  | On                               |
 | Writing data blocks                   | Toggles on each block (flickers) |
 | DFU finished / system reset           | Off                              |
@@ -270,7 +270,7 @@ Additionally the rmk-boot bootloader has blinking codes using PIN_25 (RP2040) / 
 |------------------------------------------------------------------------------------------------------------|------------------------------------|
 | Normal boot — bootloader ran and jumped to ACTIVE                                                          | 2 short blinks (≈2 Hz)             |
 | Bootloader detected a pending DFU→ACTIVE swap and is about to copy                                         | 1 s solid on                       |
-| Previous forward swap completed but the new app did not call =mark_booted()= — reverting to the old ACTIVE | 3 short blinks (50 ms)             |
+| Previous forward swap completed but the new app did not call `mark_booted()` — reverting to the old ACTIVE | 3 short blinks (50 ms)             |
 | Successful DFU→ACTIVE copy; about to jump                                                                  | 5 short blinks (50 ms)             |
 | Bootloader itself panicked (e.g. flash read error, invalid state partition)                                | Morse SOS (... --- ...), repeating |
 
@@ -406,8 +406,8 @@ The index of the alternate setting (`-a`) is off by one due to technical reasons
 
 The peripheral must call `init_flash_from_linkerscript()` to partition its flash and `mark_booted()` so that the
 bootloader does not revert the update. With `#[rmk_peripheral(id = …)]`
-(TOML API) this is generated automatically when a `[dfu]` section is
-present in `keyboard.toml`.
+(TOML API) this is generated automatically when RMK is built with the
+`dfu_rp` or `dfu_nrf` feature.
 
 If you are using the Rust API on the peripheral, place the `memory.x` from rmk-boot next to `Cargo.toml` (same as the central) and call:
 
@@ -435,5 +435,5 @@ Without `mark_booted()` embassy-boot will revert the update at next reboot, beca
 
 | Symptom | Likely cause |
 |---|---|
-| Peripheral flashes 3 times after update | Firmware crashed or `mark_booted()` not called in the peripheral. Add `[dfu]` to `keyboard.toml` (using config) or call `rmk::dfu::mark_booted()` (using Rust). |
+| Peripheral flashes 3 times after update | Firmware crashed or `mark_booted()` not called in the peripheral. Build with the `dfu_rp`/`dfu_nrf` feature (using config) or call `rmk::dfu::mark_booted()` (using Rust). |
 | `dfu-util -a 1` shows `dfuERROR` or hangs at 0% | Peripheral not connected or its firmware is built without the `dfu_split` feature. |

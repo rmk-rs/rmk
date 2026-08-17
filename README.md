@@ -11,7 +11,7 @@
   <br />
   <a href="https://crates.io/crates/rmk"><img src="https://img.shields.io/crates/v/rmk"></a>
   <a href="https://docs.rs/rmk/latest/rmk/"><img src="https://img.shields.io/docsrs/rmk"></a>
-  <a href="https://github.com/rmk-rs/rmk/actions"><img src="https://github.com/rmk-rs/rmk/actions/workflows/build.yml/badge.svg"></a>
+  <a href="https://github.com/rmk-rs/rmk/actions"><img src="https://github.com/rmk-rs/rmk/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://discord.gg/HHGA7pQxkG"><img src="https://img.shields.io/discord/1166665039793639424?label=discord"></a>
   </p>
 </p>
@@ -27,7 +27,7 @@
 - **Broad microcontroller compatibility**: Leveraging [embassy](https://github.com/embassy-rs/embassy), RMK supports a comprehensive range of microcontrollers, including stm32, nRF, rp2040(w), esp32, etc
 - **Dynamic keymap customization**: RMK offers real-time keymap modifications through [Vial](https://get.vial.today), or its native [Rynk](https://rmk.rs/docs/features/rynk) protocol (experimental). You can even edit keymaps over BLE connections wirelessly
 - **Advanced keyboard functionality**: RMK comes with lots of advanced keyboard features by default, including layer switching, media controls, system commands, mouse control, and more
-- **Wireless connectivity**: BLE wireless support with automatic reconnection and multi-device capabilities for nRF52 and esp32 microcontrollers, tested on nRF52840, esp32c3, esp32s3, Pi Pico W
+- **Wireless connectivity**: BLE wireless support with automatic reconnection and multi-device capabilities for nRF52, nRF54, esp32, Pi Pico W and SF32LB52 microcontrollers, tested on nRF52840, nRF54L15, nRF54LM20, esp32c3, esp32c6, esp32h2, esp32s3, Pi Pico W
 - **Easy configuration**: RMK simplifies keyboard development through a single `keyboard.toml` configuration file. For Rust enthusiasts, the firmware remains highly customizable using Rust code
 - **Optimized performance**: RMK achieves approximately 2ms latency in wired mode and 10ms in wireless mode. With the `async_matrix` feature enabled, power consumption is significantly reduced—a 2000mAh battery can power your keyboard for several months
 

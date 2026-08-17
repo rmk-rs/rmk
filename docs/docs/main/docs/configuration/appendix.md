@@ -7,8 +7,8 @@ The following TOML contains all available settings in `keyboard.toml`
 ```toml
 # Basic info of the keyboard
 [keyboard]
-name = "RMK Keyboard" # Keyboard name
-product_name = "RMK Keyboard" # Display name of this keyboard
+name = "RMK Keyboard" # Keyboard name, a label for your config; the generated firmware doesn't use it
+product_name = "RMK Keyboard" # USB product string and BLE device name, defaults to "RMK Keyboard"
 vendor_id = 0x4c4b
 product_id = 0x4643
 manufacturer = "haobo"
@@ -73,6 +73,23 @@ map = """
 (3,0,R)  (3,1,R)  (3,2,R)  (3,3,R)
 (4,0,R)           (4,1,R)
 """
+# Optional rendered-layout settings, see the Layout documentation page. They only change how
+# the keyboard is drawn in Vial/Rynk, never what a key does
+# Name of the [[layout.variant]] shown first
+default_variant = "full"
+
+# Custom key shapes, referenced as `@name` in `map`
+[layout.shapes]
+wide_zero = { w = 2.0 }
+
+# Render variants of the same keymap: each hides some keys and reshapes others
+[[layout.variant]]
+name = "full"
+
+[[layout.variant]]
+name = "no_numlock"
+hidden = ["(0,0)"]
+shapes = { "(4,0)" = "@wide_zero" }
 
 [keymap]
 # Number of layers. Be careful, since large layer number takes more flash and RAM
@@ -104,8 +121,8 @@ Kp1     Kp2     Kp3        Enter
     Kp0         KpDot
 """
 # Per-layer encoder actions, one [clockwise, counter-clockwise] pair per encoder
-# defined in [[input_device.encoder]]. Optional
-# encoders = [["AudioVolUp", "AudioVolDown"]]
+# defined in [[input_device.encoder]]. Optional: a layer without `encoders` has no encoder actions
+encoders = [["AudioVolUp", "AudioVolDown"]]
 
 # layer 1:
 [[keymap.layer]]
@@ -173,17 +190,7 @@ morses = [
       {pattern = ".--", action = "W"},
       {pattern = "-..-", action = "X"},
       {pattern = "-.--", action = "Y"},
-      {pattern = "--..", action = "Z"},
-      {pattern = ".----", action = "Kc1"},
-      {pattern = "..---", action = "Kc2"},
-      {pattern = "...--", action = "Kc3"},
-      {pattern = "....-", action = "Kc4"},
-      {pattern = ".....", action = "Kc5"},
-      {pattern = "-....", action = "Kc6"},
-      {pattern = "--...", action = "Kc7"},
-      {pattern = "---..", action = "Kc8"},
-      {pattern = "----.", action = "Kc9"},
-      {pattern = "-----", action = "Kc0"}
+      {pattern = "--..", action = "Z"}
     ], profile = "MRZ" }
 ]
 
@@ -216,6 +223,56 @@ forks = [
   { trigger = "Dot", negative_output = "Dot", positive_output = "WM(Semicolon, LShift)", match_any = "LShift|RShift" }
 ]
 
+# Auto mouse layer: activate a layer on pointing-device motion, see the Behavior documentation page.
+# Note the double brackets [[ ]], one entry per pointing device id
+[[behavior.auto_mouse_layer]]
+# Pointing device id this entry applies to; omit for a fallback that matches any device
+device_id = 0
+# Layer to activate on cursor motion
+target_layer = 3
+# Inactivity time before the layer is deactivated, defaults to "500ms"
+timeout = "600ms"
+# Minimum absolute X/Y delta counted as motion, defaults to 1
+threshold = 2
+# Deactivate the layer on any non-mouse key press; requires [event.action] subs >= 1
+deactivate_on_key = false
+# Keys that don't deactivate the layer when deactivate_on_key is set
+extra_mouse_keys = ["LCtrl", "LShift"]
+# Non-deactivating key presses push the timeout forward
+reset_timeout_on_key = false
+
+# Input devices, see the Input Device documentation pages.
+# For split keyboards, use [split.central.input_device] / [split.peripheral.input_device] instead
+# Rotary encoder; its per-layer actions go in [[keymap.layer]].encoders
+[[input_device.encoder]]
+pin_a = "PIN_14"
+pin_b = "PIN_15"
+# Use the MCU's internal pull-up resistor, defaults to false
+internal_pullup = false
+# Working mode: "default", "e8h7" or "resolution" (then set `resolution`, or `detent` and `pulse`)
+phase = "default"
+
+# Analog joystick
+[[input_device.joystick]]
+name = "default"
+pin_x = "P0_31"
+pin_y = "P0_29"
+pin_z = "_"
+transform = [[80, 0], [0, 80]]
+bias = [29130, 29365]
+resolution = 6
+
+# PMW3610 optical sensor. [[input_device.pmw33xx]] and [[input_device.iqs5xx]] follow the same
+# pattern, see their documentation pages
+[[input_device.pmw3610]]
+name = "trackball0"
+# Pointing device id, pairs the sensor with its PointingProcessor and [[behavior.auto_mouse_layer]]. Defaults to 0
+id = 0
+spi = { instance = "bitbang0", sck = "P0_05", mosi = "P0_04", miso = "P0_04", cs = "P0_09" }
+# Motion interrupt pin; omit to poll the sensor
+motion = "P0_02"
+cpi = 800
+
 # Lighting configuration, if you don't have any light, just ignore this section.
 [light]
 # LED pins, capslock, scrolllock, numslock. You can safely ignore any of them if you don't have
@@ -236,7 +293,7 @@ low_active = false
 [display]
 # Display driver: "ssd1306", "sh1106", "sh1107", "sh1108" or "ssd1309"
 driver = "ssd1306"
-# Display resolution
+# Display resolution. Each driver accepts a fixed set of sizes, see the Display documentation page
 size = "128x32"
 # Display rotation in degrees: 0, 90, 180 or 270. Default is 0
 rotation = 0
@@ -264,10 +321,10 @@ enabled = true
 # Note: When the `dfu_rp` or `dfu_nrf` feature is enabled, this value is ignored.
 # The storage partition is automatically placed after the DFU download slot.
 start_addr = 0xA0000
-# Number of sectors used for storage, >= 2 (defaults to 8 when DFU is enabled)
+# Number of sectors used for storage, >= 2. Defaults to 8 when the resolved config contains a [dfu]
+# table (the chip defaults for nRF52840, nice!nano, RP2040 and Pico W ship one), otherwise 2 unless
+# your chip's default config sets a value. With DFU it cannot exceed the storage partition from rmk-memory.x
 num_sectors = 16
-# Note: When the `dfu_rp` or `dfu_nrf` feature is enabled, this value is ignored.
-# The storage partition is automatically placed after the DFU download slot (from rmk-memory.x).
 # Clear storage at keyboard boot.
 # Set it to true will reset the storage(including keymap, BLE bond info, etc.) at each reboot.
 # This option is useful when testing the firmware.
@@ -279,8 +336,6 @@ clear_layout = false
 # All fields are optional. Partition offsets are NOT set here — they come from the
 # `memory.x` linker symbols generated by rmk-boot.
 [dfu]
-# Flash page size in bytes
-page_size = 4096
 # DFU activity LED pin ("none" to disable; defaults to "PIN_25" on RP2040, "P0_15" on nRF52)
 led = "PIN_25"
 # Unlock keys for the DFU lock (requires the `dfu_lock` Cargo feature)
@@ -299,9 +354,9 @@ battery_adc_pin = "vddh"
 adc_divider_measured = 2000
 # Total resistance of the full path for input adc
 adc_divider_total = 2806
-# BLE tx power; higher means better signal but more power consumption
+# BLE tx power; higher means better signal but more power consumption. nRF52 only, ignored on other chips
 default_tx_power = 0
-# Whether to enable 2M PHY, defaults to true
+# Whether to enable 2M PHY, defaults to true. nRF52 only, ignored on other chips
 use_2m_phy = true
 # Enable passkey entry during BLE pairing, defaults to false
 passkey_entry = false
@@ -330,8 +385,9 @@ fork_max_num = 8
 morse_max_num = 8
 # Capacity of the named morse profile table ([behavior.morse.profiles], max 255)
 morse_profile_max_num = 16
-# Maximum number of patterns a morse key can handle
-max_patterns_per_key = 36
+# Maximum number of patterns a morse key can handle (min 4, max 32; raised automatically to fit the
+# largest configured morse key)
+max_patterns_per_key = 32
 # Macro space size in bytes for storing sequences
 macro_space_size = 256
 # Default debounce time in ms
@@ -416,6 +472,8 @@ matrix_type = "normal"
 # Matrix IO definition on central board
 row_pins = ["PIN_9", "PIN_11"]
 col_pins = ["PIN_10", "PIN_12"]
+# Bootmagic key of the central board, in the central's local (row, col). Optional
+bootmagic = [0, 0]
 
 # Output configuration for split central (optional)
 [[split.central.output]]
@@ -423,6 +481,21 @@ col_pins = ["PIN_10", "PIN_12"]
 pin = "PIN_12"
 initial_state_active = false
 low_active = false
+
+# Display on the central board (optional), same fields as [display]
+[split.central.display]
+driver = "ssd1306"
+size = "128x64"
+
+[split.central.display.protocol.i2c]
+instance = "I2C1"
+scl = "PIN_3"
+sda = "PIN_2"
+
+# Input devices on the central board (optional), same tables as [input_device]
+[[split.central.input_device.encoder]]
+pin_a = "PIN_14"
+pin_b = "PIN_15"
 
 # Configuration for the first split peripheral
 # Note the double brackets [[ ]], which indicate that multiple split peripherals can be defined.
@@ -444,12 +517,19 @@ ble_addr = [0x7e, 0xfe, 0x73, 0x9e, 0x66, 0xe3]
 battery_adc_pin = "P0_02"
 adc_divider_measured = 2000
 adc_divider_total = 2806
+# Peripheral firmware for automatic dfu_split updates (requires the `dfu_split` Cargo feature),
+# path relative to Cargo.toml. See the Bootloader documentation page
+firmware = "./peripheral.bin"
+# "MatchHash" (default) flashes only when the peripheral's firmware differs; "force" flashes at every start
+update_policy = "MatchHash"
 
 [split.peripheral.matrix]
 matrix_type = "normal"
 # Matrix IO definition on peripheral board
 row_pins = ["PIN_9", "PIN_11"]
 col_pins = ["PIN_10"]
+# Bootmagic key of this peripheral, in the peripheral's local (row, col). Optional
+bootmagic = [0, 0]
 
 # Output configuration, if you don't need to set an output pin, just ignore this section.
 # Note the double brackets [[ ]], which indicate that multiple outputs can be defined.
@@ -458,6 +538,21 @@ col_pins = ["PIN_10"]
 pin = "PIN_13"
 initial_state_active = false
 low_active = false
+
+# Display on this peripheral (optional), same fields as [display]
+[split.peripheral.display]
+driver = "ssd1306"
+size = "128x32"
+
+[split.peripheral.display.protocol.i2c]
+instance = "I2C1"
+scl = "PIN_3"
+sda = "PIN_2"
+
+# Input devices on this peripheral (optional), same tables as [input_device]
+[[split.peripheral.input_device.encoder]]
+pin_a = "PIN_14"
+pin_b = "PIN_15"
 
 # More split peripherals (if you have any)
 [[split.peripheral]]
@@ -490,11 +585,13 @@ write_requires_unlock = false
 # To use the default configuration, ignore this section completely
 # Use chip-specific sections like [chip.nrf52840] for chip-specific settings
 [chip.nrf52840]
-# DCDC regulator 0 enabled (nrf52840 only, default: true)
+# DCDC regulator 0 enabled (nrf52840 only; default: false for chip = "nrf52840" and the XIAO BLE,
+# nrfmicro, bluemicro840 and puchi_ble boards, true for nice!nano and nice!nano_v2)
 # **Note**: Do not enable DC/DC regulator without an external LC filter being connected
 # as this will inhibit device operation, including debug access, until an LC filter is connected.
 dcdc_reg0 = true
-# DCDC regulator 1 enabled (nrf52840, nrf52833, default: true)
+# DCDC regulator 1 enabled (nrf52840, nrf52833; default: false for chip = "nrf52840" and the XIAO BLE,
+# nrfmicro, bluemicro840 and puchi_ble boards, true for nice!nano, nice!nano_v2 and nrf52833)
 # **Note**: Do not enable DC/DC regulator without an external LC filter being connected
 # as this will inhibit device operation, including debug access, until an LC filter is connected.
 dcdc_reg1 = true

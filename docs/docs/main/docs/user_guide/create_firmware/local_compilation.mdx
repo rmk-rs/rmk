@@ -98,7 +98,7 @@ The [Keyboard Configuration](../../configuration) section has full instructions 
 
 ### Update `memory.x`
 
-`memory.x` is the linker script of the Rust embedded project, it's used to define the memory layout of the microcontroller. RMK enables the `memory-x` feature for `embassy-stm32`, so if you're using stm32, you can just ignore this step.
+`memory.x` is the linker script of the Rust embedded project, it's used to define the memory layout of the microcontroller. The generated project (like the STM32 examples) enables the `memory-x` feature of `embassy-stm32`, so if you're using stm32, you can just ignore this step.
 
 For other ARM Cortex-M microcontrollers, you only need to update the `LENGTH` of FLASH and RAM to your microcontroller.
 

@@ -27,9 +27,11 @@ via J-Link (`./run.sh <elf>`).
    transparently — the dongle passes those frames through untouched.
 
 Holding the dongle key for 5s clears the central's dongle bond, which is how a
-keyboard moves to another dongle. A dongle bonds one keyboard, and goes looking
-for a new one whenever the bonded keyboard stops answering, so the replacement
-just has to be seeking — no host involvement, and no reflashing.
+keyboard moves to another dongle. A dongle bonds one keyboard and afterwards only
+reconnects that keyboard; it drops the bond only when the keyboard rejects its
+key. To replace the keyboard, set the new one seeking and power-cycle the dongle:
+a bonded dongle opens one pairing window at power-on — no host involvement, and
+no reflashing.
 
 The dongle relays whichever host protocol its keyboard speaks. This example is
 Rynk; swapping `rynk` for `vial` on the central and adding `vial` to the dongle

@@ -19,8 +19,9 @@ battery_adc_pin = "vddh"
 adc_divider_measured = 2000
 adc_divider_total = 2806
 # Set the BLE tx power; higher means better signal but more power consumption. For nRF52840 the maximum tx power is 8.
+# nRF52 only, ignored on other chips
 default_tx_power = 0
-# Whether to enable 2M PHY, defaults to true.
+# Whether to enable 2M PHY, defaults to true. nRF52 only, ignored on other chips
 use_2m_phy = true
 # Enable or disable passkey entry, defaults to false
 passkey_entry = false

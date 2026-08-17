@@ -16,9 +16,11 @@ BLE host profiles. Profile cycling never lands on it, so switching between your
 laptop and your phone doesn't disturb the dongle link, and pairing a new host
 doesn't cost you the dongle.
 
-The dongle bonds exactly one keyboard. When the bonded keyboard stops answering
-it goes looking for a new one, so replacing a keyboard needs no host involvement
-and no reflashing.
+The dongle bonds exactly one keyboard. Once bonded, it only ever reconnects
+that keyboard, and it drops the bond only when the keyboard rejects its key.
+Replacing the keyboard needs no host involvement and no reflashing: set the new
+keyboard seeking and power-cycle the dongle, which opens one pairing window at
+power-on (see [Pairing](#pairing)).
 
 The dongle also relays the **host configurator protocol**, so [Vial](./vial_support)
 and [Rynk](./rynk) work through the dongle exactly as they do over a direct
@@ -110,6 +112,11 @@ The pairing window length is configurable:
 # Seconds per pairing window, default 30. Dongle builds only.
 dongle_pairing_window_secs = 30
 ```
+
+The dongle binary is written in Rust, so this setting only takes effect if the
+dongle crate points `KEYBOARD_TOML_PATH` (in its `.cargo/config.toml`) at a
+`keyboard.toml` that sets it. The `nrf_dongle` example has no such file and
+uses the default of 30 seconds.
 
 ## Example
 

@@ -17,7 +17,8 @@ cols = 2
 row_offset = 0
 col_offset = 0
 
-# Central's ble addr will be automatically generated. You can override it if you want.
+# Central's ble addr. On nRF52 it's derived from the chip's device ID and this value is ignored;
+# on RP2040/ESP32 it overrides the built-in default.
 # ble_addr = [0x18, 0xe2, 0x21, 0x80, 0xc0, 0xc7]
 
 # Central's matrix
@@ -33,7 +34,7 @@ rows = 2
 cols = 1
 row_offset = 2
 col_offset = 2
-# Peripheral's ble addr will be automatically generated. You can override it if you want.
+# Peripheral's ble addr. Same rules as the central's: ignored on nRF52, overrides the default on RP2040/ESP32.
 # ble_addr = [0x7e, 0xfe, 0x73, 0x9e, 0x11, 0xe3]
 
 # Peripheral 0's matrix definition
@@ -49,7 +50,7 @@ rows = 2
 cols = 1
 row_offset = 2
 col_offset = 0
-# Peripheral's ble addr will be automatically generated. You can override it if you want.
+# Peripheral's ble addr. Same rules as the central's: ignored on nRF52, overrides the default on RP2040/ESP32.
 # ble_addr = [0x7e, 0xfe, 0x71, 0x91, 0x11, 0xe3]
 
 # Peripheral 1's matrix definition
@@ -85,9 +86,9 @@ col_offset = 2 # The col offset of the peripheral. Central has 2 cols, so the co
 
 ## Split keyboard connection configuration
 
-If you're using BLE, `ble_addr` will be automatically generated. You can also override it if you want.
+If you're using BLE, each board's address depends on the chip. On nRF52 it is derived from the chip's factory device ID (FICR) and `ble_addr` in `keyboard.toml` is ignored. On RP2040 and ESP32, RMK uses a built-in default address (the peripheral index is baked into each peripheral's default) which you can override with `ble_addr`.
 
-If you're using serial, in `[split.central]` you need to define a list of serial ports; the number of items in the list should be the same as the number of peripherals:
+If you're using serial, in `[split.central]` you need to define a list of serial ports; the number of items in the list should be the same as the number of peripherals. Serial split via `keyboard.toml` is generated for RP2040 only; on other chips the build fails with "Serial for chip ... isn't implemented yet", so use the [Rust API](#define-central-and-peripherals-via-rust) there.
 
 ```toml
 [split]
@@ -115,7 +116,7 @@ serial = [{ instance = "UART0", tx_pin = "PIN_0", rx_pin = "PIN_1" }]
 serial = [{ instance = "UART0", tx_pin = "PIN_0", rx_pin = "PIN_1" }]
 ```
 
-If you're using the Programmable IO (PIO) serial port with an RP2040 chip, substitute the UART serial port interface with the PIO block, e.g. `PIO0`:
+If you're using the Programmable IO (PIO) serial port with an RP2040 chip, substitute the UART serial port interface with the PIO block, e.g. `PIO0`. PIO needs the `rp2040` feature of the `rmk` crate. Setting `tx_pin` and `rx_pin` to the same pin selects half-duplex mode; different pins select full-duplex mode:
 
 ```toml
 [split]

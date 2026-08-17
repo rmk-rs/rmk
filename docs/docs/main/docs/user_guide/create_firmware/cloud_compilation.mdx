@@ -30,7 +30,7 @@ There are some limitations currently for cloud compilation via Github Actions. F
 
    ![artifacts](../../../images/artifacts.png)
 
-5. Now you get your RMK firmware! RMK provides `hex` and `uf2` firmware that you can use.
+5. Now you get your RMK firmware! The workflow uploads `uf2` and `hex` firmware (a `bin` image for ESP32 chips instead, ready for `espflash`), plus the raw `elf` for flashing with a debug probe.
 
 ## Next Steps
 

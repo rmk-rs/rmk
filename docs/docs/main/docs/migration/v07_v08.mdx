@@ -6,7 +6,7 @@ RMK v0.8 is a major release with lots of updates and improvements. The key chang
 
 - **Tap-hold system refactoring**: Introduced the new `Morse` operation — a superset of tap-hold and tap-dance functionalities.
 
-- **Simplified matrix configuration**: Replaced `input/output_pins` with `row/col_pins` in `keyboard.toml` and removed the `col2row` feature from `Cargo.toml`, making matrix setup more intuitive.
+- **Simplified matrix configuration**: Replaced `input/output_pins` with `row/col_pins` in `keyboard.toml` and made the `col2row` Cargo feature a no-op — diode direction is now set by `row2col` in `[matrix]` (the feature declaration itself is removed in v0.9). This makes matrix setup more intuitive.
 
 - **Dongle support**: Reintroduced dongle support for split keyboards.
 

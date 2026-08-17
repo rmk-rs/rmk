@@ -8,14 +8,22 @@ Configures the display for non-split keyboards. For split keyboards, use `[split
 
 ### Display Fields
 
-| Field                 | Required | Default          | Description                                                                                                           |
-| --------------------- | -------- | ---------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `driver`              | Yes      | —                | Display driver: `ssd1306`, `sh1106`, `sh1107`, `sh1108`, or `ssd1309`                                                 |
-| `size`                | Yes      | —                | Display resolution (e.g. `"128x64"`, `"128x32"`)                                                                      |
-| `rotation`            | No       | `0`              | Display rotation in degrees: `0`, `90`, `180`, or `270`                                                               |
-| `renderer`            | No       | `"LogoRenderer"` | Renderer to use. Built-in: `"OledRenderer"`, `"LogoRenderer"`. Custom: full Rust path (e.g. `"my_crate::MyRenderer"`) |
-| `render_interval`     | No       | —                | Poll interval in ms for periodic redraws (animations). Omit for event-driven only                                     |
-| `min_render_interval` | No       | `33`             | Minimum time in ms between event-driven renders. Coalesces rapid events to avoid flickering                           |
+| Field                 | Required | Default          | Description                                                                                                                                              |
+| --------------------- | -------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `driver`              | Yes      | —                | Display driver: `ssd1306`, `sh1106`, `sh1107`, `sh1108`, or `ssd1309`                                                                                    |
+| `size`                | Yes      | —                | Display resolution. Each driver accepts a fixed set of sizes, listed below                                                                               |
+| `rotation`            | No       | `0`              | Display rotation in degrees: `0`, `90`, `180`, or `270`                                                                                                  |
+| `renderer`            | No       | `"LogoRenderer"` | Renderer to use. Built-in: `"OledRenderer"`, `"LogoRenderer"`. Custom: full Rust path (e.g. `"my_crate::MyRenderer"`); the type must implement `Default` |
+| `render_interval`     | No       | —                | Poll interval in ms for periodic redraws (animations). Omit for event-driven only                                                                        |
+| `min_render_interval` | No       | `33`             | Minimum time in ms between event-driven renders. Coalesces rapid events to avoid flickering                                                              |
+
+Supported `size` values per driver:
+
+- `ssd1306`: `128x64`, `128x32`, `96x16`, `72x40`, `64x48`
+- `sh1106`: `128x64`
+- `sh1107`: `64x128`, `128x128`
+- `sh1108`: `64x160`, `96x160`, `128x160`, `160x160`
+- `ssd1309`: `128x64`
 
 ### `[display.protocol.i2c]`
 

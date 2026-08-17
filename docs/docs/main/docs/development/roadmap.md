@@ -25,7 +25,7 @@ There are a bunch of things to do with RMK in the near future. I plan to ship 1.
   - [x] 🟢 Encoder
   - [x] 🔴 Mouse
   - [x] 🔴 Trackball
-  - [ ] 🔴 Trackpad
+  - [x] 🔴 Trackpad
 - [x] 🔴 Basic Macro support
   - [x] 🔴 Macro definition via Rust
   - [x] 🔴 Unicode and umlaute support
@@ -33,7 +33,7 @@ There are a bunch of things to do with RMK in the near future. I plan to ship 1.
   - [x] 🟢 Macro definition via toml
   - [x] 🟢 Make macro storage space configurable
 - [x] 🔴 Tap dance
-- [x] 🔵 Controller device
+- [x] 🔵 Processor (output devices)
   - [x] External power control(GPIO)
   - [ ] 🔴 RGB
   - [x] 🔴 Display support

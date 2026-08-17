@@ -16,8 +16,8 @@ Since multiple targets are not currently supported by `docs.rs`, API documentati
 
 The following is the list of available feature gates (i.e., supported BLE chips):
 
-- nrf54lm20_ble
-- nrf54l15_ble
+- nrf54lm20_ble (Rust API only)
+- nrf54l15_ble (Rust API only)
 - nrf52840_ble
 - nrf52833_ble
 - nrf52832_ble
@@ -29,13 +29,21 @@ The following is the list of available feature gates (i.e., supported BLE chips)
 - esp32h2_ble
 - esp32s3_ble
 - pico_w_ble (for Raspberry Pi Pico W and Raspberry Pi Pico 2 W)
-- sf32lb52x_ble
+- sf32lb52x_ble (Rust API only)
+
+`keyboard.toml` recognizes `chip` values starting with `stm32`, `nrf52`, `rp2040` or `esp32`, plus the [supported boards](../configuration/keyboard_device#supported-development-boards). Chips marked "Rust API only" have no `keyboard.toml` support yet; start from their `examples/use_rust` projects.
 
 ## Nice!nano Support
 
 RMK has special support for [nice!nano](https://nicekeyboards.com/), a widely used board for building wireless keyboards.
 
 nice!nano has a built-in bootloader that enables flashing a .uf2 format firmware via USB drive. [`examples/use_rust/nrf52840_ble/README.md`](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/README.md) provides instructions for converting RMK firmware to .uf2 format.
+
+Enable the `adafruit_bl` Cargo feature so that the `Bootloader` keycode reboots into the Adafruit nRF52 bootloader (the UF2 drive); without it the key only reboots the keyboard. Both `nrf52840_ble` examples enable it:
+
+```toml
+rmk = { version = "0.9", features = ["nrf52840_ble", "adafruit_bl"] }
+```
 
 You can also refer to the [RMK user guide](../user_guide/flash_firmware#use-uf2-bootloader) for the instructions.
 

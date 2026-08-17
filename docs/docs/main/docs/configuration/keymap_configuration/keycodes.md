@@ -144,15 +144,15 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 
 ## Lock keys
 
-| Keycode             | Aliases                       | Usage                                   |
-| ------------------- | ----------------------------- | --------------------------------------- |
-| `CapsLock`          | `caps_lock`, `caps`           | Caps Lock                               |
-| `CapsWordToggle`    | `caps_word`, `cword`          | Activate Caps Lock for next word only   |
-| `ScrollLock`        | `scroll_lock`, `scrl`, `brmd` | Scroll Lock or Brightness Down on macOS |
-| `NumLock`           | `num_lock`, `num`             | Num Lock                                |
-| `LockingCapsLock`   | `locking_caps_lock`, `lcap`   | Locking Caps Lock                       |
-| `LockingNumLock`    | `locking_num_lock`, `lnum`    | Locking Num Lock                        |
-| `LockingScrollLock` | `locking_scroll_lock`, `lscr` | Locking Scroll Lock                     |
+| Keycode             | Aliases                       | Usage                                        |
+| ------------------- | ----------------------------- | -------------------------------------------- |
+| `CapsLock`          | `caps_lock`, `caps`           | Caps Lock                                    |
+| `CapsWordToggle`    |                               | Toggle [Caps Word](./special_keys#caps-word) |
+| `ScrollLock`        | `scroll_lock`, `scrl`, `brmd` | Scroll Lock or Brightness Down on macOS      |
+| `NumLock`           | `num_lock`, `num`             | Num Lock                                     |
+| `LockingCapsLock`   | `locking_caps_lock`, `lcap`   | Locking Caps Lock                            |
+| `LockingNumLock`    | `locking_num_lock`, `lnum`    | Locking Num Lock                             |
+| `LockingScrollLock` | `locking_scroll_lock`, `lscr` | Locking Scroll Lock                          |
 
 ## International keys
 
@@ -287,9 +287,74 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `MouseAccel1`     | `mouse_accel_1`, `mouseacceleration1`, `mouse_acceleration_1`, `ms_acl1` | Mouse acceleration level 1 |
 | `MouseAccel2`     | `mouse_accel_2`, `mouseacceleration2`, `mouse_acceleration_2`, `ms_acl2` | Mouse acceleration level 2 |
 
+## Keyboard control keys
+
+| Keycode           | Aliases | Usage                                                                 |
+| ----------------- | ------- | --------------------------------------------------------------------- |
+| `Bootloader`      |         | Jump to the bootloader on release                                     |
+| `Reboot`          |         | Reboot the keyboard on release                                        |
+| `ClearEeprom`     |         | Reset the stored settings on release (requires the `storage` feature) |
+| `ComboOn`         |         | Enable combos                                                         |
+| `ComboOff`        |         | Disable combos                                                        |
+| `ComboToggle`     |         | Toggle combos                                                         |
+| `CapsWordToggle`  |         | Toggle [Caps Word](./special_keys#caps-word)                          |
+| `DebugToggle`     |         | Not implemented yet                                                   |
+| `OutputAuto`      |         | Not implemented yet                                                   |
+| `OutputUsb`       |         | Not implemented yet                                                   |
+| `OutputBluetooth` |         | Not implemented yet                                                   |
+
+## User keys
+
+| Keycode          | Aliases   | Usage                                                                                                                                                                                                                                                      |
+| ---------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `User0`–`User31` | `User(n)` | User-defined key `n`. On BLE keyboards, `User0` onwards switch and manage BLE profiles, see [Wireless](../../features/wireless#multiple-profile-support). Like every resolved action, a user key is published as an `ActionEvent` for your own processors. |
+
+## Macro keys
+
+| Keycode             | Aliases    | Usage                                                                               |
+| ------------------- | ---------- | ----------------------------------------------------------------------------------- |
+| `Macro0`–`Macro255` | `Macro(n)` | Trigger [keyboard macro](./keyboard_macros) `n`, counted from 0 in definition order |
+
+## Light keys
+
+RMK accepts these keys in a keymap, but the firmware does not act on them yet.
+
+| Keycode                    | Aliases | Usage                     |
+| -------------------------- | ------- | ------------------------- |
+| `BacklightOn`              |         | Backlight on              |
+| `BacklightOff`             |         | Backlight off             |
+| `BacklightToggle`          |         | Backlight toggle          |
+| `BacklightDown`            |         | Backlight brightness down |
+| `BacklightUp`              |         | Backlight brightness up   |
+| `BacklightStep`            |         | Backlight step            |
+| `BacklightToggleBreathing` |         | Backlight breathing       |
+| `RgbTog`                   |         | RGB toggle                |
+| `RgbModeForward`           |         | RGB next mode             |
+| `RgbModeReverse`           |         | RGB previous mode         |
+| `RgbHui`                   |         | RGB hue up                |
+| `RgbHud`                   |         | RGB hue down              |
+| `RgbSai`                   |         | RGB saturation up         |
+| `RgbSad`                   |         | RGB saturation down       |
+| `RgbVai`                   |         | RGB value up              |
+| `RgbVad`                   |         | RGB value down            |
+| `RgbSpi`                   |         | RGB speed up              |
+| `RgbSpd`                   |         | RGB speed down            |
+| `RgbModePlain`             |         | RGB mode: plain           |
+| `RgbModeBreathe`           |         | RGB mode: breathe         |
+| `RgbModeRainbow`           |         | RGB mode: rainbow         |
+| `RgbModeSwirl`             |         | RGB mode: swirl           |
+| `RgbModeSnake`             |         | RGB mode: snake           |
+| `RgbModeKnight`            |         | RGB mode: knight          |
+| `RgbModeXmas`              |         | RGB mode: xmas            |
+| `RgbModeGradient`          |         | RGB mode: gradient        |
+| `RgbModeRgbtest`           |         | RGB mode: RGB test        |
+| `RgbModeTwinkle`           |         | RGB mode: twinkle         |
+
 ## Special keys
 
-| Keycode | Aliases                                                              | Usage                                   |
-| ------- | -------------------------------------------------------------------- | --------------------------------------- |
-| `No`    |                                                                      | Ignore this key                         |
-| `TRNS`  | `_`, `__`, ... (you can repeat underscore as many times as you like) | Use the next lowest non-transparent key |
+| Keycode       | Aliases                                                              | Usage                                                                       |
+| ------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `No`          |                                                                      | Ignore this key                                                             |
+| `TRNS`        | `_`, `__`, ... (you can repeat underscore as many times as you like) | Use the next lowest non-transparent key                                     |
+| `GraveEscape` |                                                                      | `Escape`, or `Grave` while any modifier is held                             |
+| `Repeat`      |                                                                      | Repeat the last key, see [Repeat/Again key](./special_keys#repeatagain-key) |

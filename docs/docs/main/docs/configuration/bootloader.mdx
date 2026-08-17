@@ -29,9 +29,6 @@ import { Tab, Tabs, Rust, Toml } from '@theme'
 
 ```toml title="keyboard.toml"
 [dfu]
-# (Optional) Flash page size in bytes (4096 for RP2040).
-page_size = 4096
-
 # (Optional) DFU activity LED pin, default "PIN_25".
 led = "PIN_25"
 # led = "none" to omit DFU LED
@@ -79,9 +76,6 @@ Add a `[dfu]` section to your `keyboard.toml` or use the Rust API directly.
 
 ```toml title="keyboard.toml"
 [dfu]
-# (Optional) Flash page size in bytes (4096 for nRF52840).
-page_size = 4096
-
 # (Optional) DFU activity LED pin, default "P0_15".
 led = "P0_15"
 # led = "none" to omit DFU LED
@@ -137,7 +131,7 @@ The bootloader divides flash into regions. All offsets and sizes come from linke
 
 The DFU partition size follows embassy-boot guidelines, the additional page is used for status information during flashing.
 
-The `[dfu]` section is **optional** and configures only DFU behaviour (LED, unlock keys, page size). Partition offsets are read at link time from `memory.x` — you do **not** set `state_offset`, `dfu_offset`, or `flash_size` in `keyboard.toml`.
+The `[dfu]` section is **optional** and configures only DFU behaviour (LED, unlock keys). Partition offsets are read at link time from `memory.x` — you do **not** set `state_offset`, `dfu_offset`, or `flash_size` in `keyboard.toml`.
 
 ## Custom bootloader
 
@@ -178,3 +172,17 @@ See the [DFU lock section](../user_guide/flash_firmware/use_embassy_boot.mdx#unl
 ::: tip
 Choose keys that are easy to press simultaneously but not commonly pressed together accidentally.
 :::
+
+## Split peripheral firmware (optional, feature `dfu_split`)
+
+With the `dfu_split` Cargo feature, the central can flash its peripherals over the split link. Point each `[[split.peripheral]]` at the peripheral's firmware binary and RMK embeds it with `include_bytes!`:
+
+```toml title="keyboard.toml"
+[[split.peripheral]]
+# Path relative to your project's Cargo.toml
+firmware = "./peripheral.bin"
+# "MatchHash" (default): flash only when the peripheral's firmware differs; "force": flash at every start
+update_policy = "MatchHash"
+```
+
+See [Split peripheral updates](../user_guide/flash_firmware/use_embassy_boot.mdx#split-peripheral-updates-dfu_split) for the update flow, the passthrough path and the peripheral firmware requirements.

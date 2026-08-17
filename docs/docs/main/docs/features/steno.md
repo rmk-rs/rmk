@@ -54,6 +54,19 @@ let keymap = [
 ];
 ```
 
+#### Key names
+
+`STN(key)` and `steno!(key)` accept any `StenoKey` name (case-insensitive in `keyboard.toml`), each mapped to its position in the Plover HID key chart:
+
+| Group                                              | Keys                                                                      |
+| -------------------------------------------------- | ------------------------------------------------------------------------- |
+| Standard (left hand, vowels, asterisk, number bar) | `S1`, `T`, `K`, `P`, `W`, `H`, `R`, `A`, `O`, `STAR1`, `NUM1`             |
+| Standard (right hand, prefixed `R`)                | `RE`, `RU`, `RF`, `RR`, `RP`, `RB`, `RL`, `RG`, `RT`, `RS`, `RD`, `RZ`    |
+| Extended                                           | `S2`, `STAR2`, `STAR3`, `STAR4`, `NUM2` to `NUM9`, `NUMA`, `NUMB`, `NUMC` |
+| Extra (vendor-defined)                             | `X1` to `X26`                                                             |
+
+`STAR` is an alias for `STAR1`.
+
 ## Connecting Plover
 
 1. Flash your keyboard with the `steno` feature enabled.

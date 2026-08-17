@@ -49,7 +49,7 @@ By default, Rust compiler generates `elf` file in target folder. There're a litt
   cargo objcopy --release -- -O ihex rmk.hex
   ```
 
-- `uf2`: RMK provides [cargo-make](https://github.com/sagiegurari/cargo-make) config for all examples to generate `uf2` file automatically. Check `Makefile.toml` files in the example folders. The following command can be used to generate uf2 firmware:
+- `uf2`: most Cortex-M examples (nRF52, RP2040, STM32) ship a [cargo-make](https://github.com/sagiegurari/cargo-make) config that generates the `uf2` file automatically; ESP32 examples are flashed with `espflash` instead. Check the `Makefile.toml` files in the example folders. The following command can be used to generate uf2 firmware:
 
   ```shell
   # Install cargo-make
@@ -172,7 +172,7 @@ run `cargo clean` and then `cargo run --release`. Open an [issue](https://github
 
 ### I see "ERROR: Storage is full" error in the log
 
-By default, RMK uses only 2 sectors of your microcontroller's internal flash. You may get the following error if 2 sectors are not big enough to store all your keymaps:
+By default, RMK uses only a few sectors of your microcontroller's internal flash: `num_sectors` defaults to 8 when the resolved config contains a `[dfu]` table (the chip defaults for nRF52840, nice!nano, RP2040 and Pico W ship one), otherwise 2. The Rust API `StorageConfig::default()` is 2. You may get the following error if the sectors are not big enough to store all your keymaps:
 
 ```
 ERROR Storage is full
@@ -183,7 +183,7 @@ ERROR Keymap reading aborted!
 └─ rmk::keymap::{impl#0}::new_from_storage::{async_fn#0} @ /Users/haobogu/Projects/keyboard/rmk/rmk/src/keymap.rs:38
 ```
 
-If you have more sectors available in your internal flash, you can increase `num_sectors` in `[storage]` section of your `keyboard.toml`, or change `storage_config` in your [`RmkConfig`](https://docs.rs/rmk/latest/rmk/config/struct.RmkConfig.html) if you're using Rust API. When using DFU (`dfu_rp` / `dfu_nrf`), the storage partition is placed after the DFU slot (via `rmk-memory.x`) and the default is 8 sectors (32 KB).
+If you have more sectors available in your internal flash, you can increase `num_sectors` in `[storage]` section of your `keyboard.toml`, or change `storage_config` in your [`RmkConfig`](https://docs.rs/rmk/latest/rmk/config/struct.RmkConfig.html) if you're using Rust API. When using DFU (`dfu_rp` / `dfu_nrf`), the storage partition is placed after the DFU slot (via `rmk-memory.x`) and the 8-sector default matches its 32 KB size.
 
 ### OUTDATED: panicked at embassy-executor: task arena is full.
 

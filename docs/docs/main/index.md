@@ -22,7 +22,7 @@ features:
     icon: 🖥️
 
   - title: Real-time Keymap Configuration
-    details: Real-time keymap modification via Vial (enabled by default) or RMK's native Rynk protocol
+    details: Real-time keymap modification via Vial (enabled by default) or RMK's native Rynk protocol (experimental)
     icon: 🧪
 
   - title: Advanced Features

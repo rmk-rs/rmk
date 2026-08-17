@@ -13,7 +13,7 @@ If you're using **nRF52840**, ensure that you have [Adafruit_nRF52_Bootloader](h
 You can check either your microcontroller's datasheet or an existing Rust project for your microcontroller for the correct values.
 
 ::: note
-If you're using **rmk-boot** with DFU firmware updates (`dfu_rp` / `dfu_nrf`), you don't need to write a `memory.x` manually. Download `rmk-memory.x` alongside the bootloader binary, place it next to your `Cargo.toml`, and configure your `build.rs` as described in the [embassy-boot flashing guide](../user_guide/flash_firmware/use_embassy_boot.mdx).
+If you're using **rmk-boot** with DFU firmware updates (`dfu_rp` / `dfu_nrf`), you don't need to write a `memory.x` manually. Building rmk-boot generates a `rmk-memory.x` next to the bootloader binary; rename it to `memory.x` and place it next to your `Cargo.toml`. The generated project's `build.rs` already copies it into the linker's search path. See the [embassy-boot flashing guide](../user_guide/flash_firmware/use_embassy_boot.mdx).
 :::
 
 ### Update `main.rs`
@@ -44,11 +44,11 @@ After adding the layout of your keyboard, the default keymap should also be upda
 
 RMK provides a bunch of useful [macros](https://docs.rs/rmk/latest/rmk/#macros) to help you define your keymap. Check out the [keymap configuration](../configuration/keymap_configuration) chapter for more details. You can also check the `src/keymap.rs` files in the <https://github.com/rmk-rs/rmk/blob/main/examples/use_rust> examples for reference.
 
-Some `KeyAction`s are not supported by the macros; plain `KeyAction`s also work, for example: `KeyAction::TapHold(Action::Key(KeyCode::Hid(HidKeyCode::Kc1)), Action::Key(KeyCode::Hid(HidKeyCode::Kc2)), u8::MAX)` (the last argument indexes the morse profile table; use `u8::MAX` for the default tap-hold timing)
+Some `KeyAction`s have no macro; plain `KeyAction`s also work, for example a key that runs macro 0 when tapped and acts as Shift when held: `KeyAction::TapHold(Action::TriggerMacro(0), Action::Modifier(ModifierCombination::LSHIFT), u8::MAX)` (the last argument indexes the morse profile table; use `u8::MAX` for the default tap-hold timing)
 
 ### Define your matrix
 
-Next, you're going to change the I/O pins of the keyboard matrix to make RMK run on your own PCB. Generally, I/O pins are defined in `src/main.rs`. RMK will generate a helper macro to help you define the matrix. For example, if you're using RP2040, you can define your pins using `config_matrix_pins_rp!`:
+Next, you're going to change the I/O pins of the keyboard matrix to make RMK run on your own PCB. Generally, I/O pins are defined in `src/main.rs`. The Rust examples ship a small helper macro in `src/macros.rs` to define the matrix; it's part of the example, not of the `rmk` crate. For example, [`examples/use_rust/rp2040`](https://github.com/rmk-rs/rmk/tree/main/examples/use_rust/rp2040) defines pins with `config_matrix_pins_rp!`:
 
 ```rust
 let (row_pins, col_pins) = config_matrix_pins_rp!(
@@ -60,7 +60,7 @@ let (row_pins, col_pins) = config_matrix_pins_rp!(
 
 `input` and `output` are lists of used pins; change them accordingly.
 
-If your keys are directly connected to the microcontroller pins, you can define your pins like this:
+If your keys are directly connected to the microcontroller pins, use the `direct_pins` variant of the macro from [`examples/use_rust/rp2040_direct_pin`](https://github.com/rmk-rs/rmk/tree/main/examples/use_rust/rp2040_direct_pin) instead:
 
 ```rust
     let direct_pins = config_matrix_pins_rp! {

@@ -1,0 +1,23 @@
+# Features
+
+This section explains what RMK can do and how each feature works. It focuses on concepts and usage; the exact `keyboard.toml` fields and Rust API for each feature are documented in the [Configuration](../configuration) section.
+
+- **[Matrix](./matrix.md)** - Normal, direct-pin and bidirectional matrices, async scanning and custom matrix traits
+- **[Layers](./layers.md)** - Layer stack, default layer and layer keys
+- **[Wireless](./wireless.md)** - Supported BLE chips, multiple profiles, passkey entry and wireless split
+- **[Configuration](./configuration.md)** - Overview of `keyboard.toml` and the Rust API
+- **[Low Power](./low_power.md)** - `async_matrix`, BLE idle sleep and external VCC control
+- **[Split Keyboard](./split_keyboard.mdx)** - Wired and wireless split keyboards
+- **[Dongle](./dongle.md)** - USB dongle that relays a wireless keyboard to the host
+- **[Vial support](./vial_support.mdx)** - Real-time keymap editing with the Vial app
+- **[Rynk](./rynk.md)** - RMK's native host protocol (experimental)
+- **[USB Logging](./usb_logging.md)** - Logs over a USB serial port without a debug probe
+- **[Storage](./storage.md)** - Persistent flash storage for keymaps and bonding data
+- **[Use Rust](./use_rust_api.md)** - Switch a generated project from `keyboard.toml` to the Rust API
+- **[Processor](./processor.md)** - Components that consume events, such as displays and LEDs
+- **[Event](./event.md)** - The event channels that connect input devices, processors and the keyboard core
+- **[Input Device](./input_device.md)** - Encoders, joysticks, pointing devices and other input hardware
+- **[Display](./display.md)** - OLED and other small displays
+- **[Stenography](./steno.md)** - Plover stenography over USB HID
+- **[Binary size](./binary_size_optimization.md)** - Tricks to shrink the firmware
+- **[Watchdog](./watchdog.md)** - Hardware watchdog for recovering from hangs

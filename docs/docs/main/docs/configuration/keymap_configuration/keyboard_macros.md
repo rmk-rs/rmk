@@ -46,7 +46,7 @@ See [macro](../behavior#macro) section under `behavior`
 
 A new field `keyboard_macros` has been added to the `BehaviorConfig` struct. Within it a field `macro_sequences` has to be set. This is in binary format (`[u8]`) and can only be as long as `MACRO_SPACE_SIZE`, which defaults to 256 and can be changed via `macro_space_size` in the `[rmk]` section of `keyboard.toml`.
 
-The maximum number of Macros depends on the length of the sequences: The space consumed is MacroOperations \* 3 + Number of Macros (where the operation `text` is only 1/3).
+The maximum number of Macros depends on the length of the sequences. Each `Text` operation takes 1 byte, `Tap`/`Press`/`Release` take 3 bytes, `Delay` and `TapAction`/`PressAction`/`ReleaseAction` take 4 bytes, and every macro ends with a 1-byte terminator.
 
 If your sequences don't fit into `MACRO_SPACE_SIZE`, `define_macro_sequences` panics with "Too many Macro Operations!".
 

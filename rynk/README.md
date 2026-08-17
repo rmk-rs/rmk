@@ -4,9 +4,12 @@ Runtime-free host-side client for **Rynk**, RMK's native host-communication
 protocol. Use it to read and write a running RMK keyboard's keymap, combos,
 forks, morse, macros, and behavior, and to observe live status.
 
-This crate owns the protocol state machine only. Device discovery, connection,
-and byte I/O live in separate transport crates such as `rynk-usb` and
-`rynk-ble`. The `rynk-kle` crate converts KLE exports / Vial `vial.json` ↔
+This crate owns the protocol state machine and the `RynkDevice` trait, whose
+default `connect()` opens the link and runs the handshake. Device discovery and
+byte I/O live in separate transport crates that implement `RynkDevice::open`:
+`rynk-usb` and `rynk-ble` natively, and `rynk-wasm` in the browser, where the
+page supplies the byte link (WebHID today) and drives the client from
+JavaScript. The `rynk-kle` crate converts KLE exports / Vial `vial.json` ↔
 RMK's `[layout]` and decodes layouts into `rynk::layout` types — natively and,
 via its `wasm` feature, on the web; the `rmkit layout` CLI in
 [rmkit](https://github.com/rmk-rs/rmkit) wraps it.

@@ -1,6 +1,6 @@
 # Keyboard Matrix
 
-This section covers the basic keyboard identification and physical matrix configuration in your `keyboard.toml` file.
+This section covers the physical matrix configuration in your `keyboard.toml` file.
 
 ## Matrix Configuration
 
@@ -132,6 +132,7 @@ A safe procedure to flash the peripheral side:
 **Bootmagic Behavior:**
 
 - The scan runs once at boot, before the keyboard task or USB enumeration, and adds ~50µs to boot time when configured
+- Jumping to the bootloader needs the matching `rmk` Cargo feature: `rp2040` for the RP2040 BOOTSEL bootloader, `adafruit_bl` for the Adafruit nRF52 bootloader, or `zsa_voyager_bl` for the ZSA Voyager bootloader. Without one of them, the held key only reboots the keyboard
 
 If `bootmagic` is omitted, no scan is performed and there is zero runtime overhead.
 

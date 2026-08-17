@@ -4,7 +4,7 @@ The keyboard matrix is the core hardware system responsible for scanning switche
 
 ## Matrix Types in RMK
 
-RMK provides three built-in matrix implementations to match different hardware designs:
+RMK provides four built-in matrix implementations to match different hardware designs:
 
 ### Normal Matrix
 
@@ -18,9 +18,19 @@ Each key connects directly to its own GPIO pin, eliminating the matrix grid and 
 
 The bidirectional matrix design uses dynamically switchable GPIO pins that can change between input and output modes during the scan cycle. Because the bidirectional matrix is more complicated than the normal matrix, only the [Rust API](https://github.com/rmk-rs/rmk/blob/main/rmk/src/matrix/bidirectional_matrix.rs) is provided at the moment.
 
+### 74HC595 Shift Register Matrix
+
+Columns are driven by one or more daisy-chained 74HC595 shift registers on an SPI bus (up to 32 columns), while rows stay on GPIO input pins. This saves MCU pins on wide keyboards. Only the Rust API is provided: [`rmk::matrix::hc595_matrix::Hc595Matrix`](https://github.com/rmk-rs/rmk/blob/main/rmk/src/matrix/hc595_matrix.rs) takes an `SpiDevice`, the latch (RCLK) output pin, the row input pins and a debouncer, and derives the chain length from the `COL` const generic:
+
+```rust
+use rmk::matrix::hc595_matrix::Hc595Matrix;
+
+let mut matrix = Hc595Matrix::<_, _, _, _, ROW, COL>::new(spi_device, latch_pin, row_pins, debouncer).await;
+```
+
 ## Async Matrix Feature
 
-Async matrix is a power-saving feature that transforms how the matrix operates, dramatically reducing power consumption for wireless keyboards. This feature works out-of-the-box for nRF52 series. STM32 requires additional EXTI (external interrupt) configuration due to hardware limitations—see the [Low Power](./low_power) documentation for details.
+Async matrix is a power-saving feature that transforms how the matrix operates, dramatically reducing power consumption for wireless keyboards. This feature works out-of-the-box for nRF and RP2040. STM32 requires additional EXTI (external interrupt) configuration due to hardware limitations—see the [Low Power](./low_power) documentation for details.
 
 To enable it, add the `async_matrix` feature in `Cargo.toml`:
 

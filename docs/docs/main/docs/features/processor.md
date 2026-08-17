@@ -6,10 +6,11 @@ RMK's processor system provides a unified interface for components that consume 
 
 Processors subscribe to events and react accordingly. Events are published by [Input Devices](./input_device) or other processors. For details about events, see the [Event](./event) documentation.
 
-Processors can operate in two modes:
+Processors can operate in three modes:
 
 - **Event-driven** - React to events as they arrive
 - **Polling** - Perform periodic updates at specified intervals (in addition to handling events)
+- **Deadline** - Fire a callback at a deadline the processor computes from its own state (in addition to handling events)
 
 ## Defining Processors
 
@@ -130,6 +131,50 @@ impl<D: DrawTarget> StatusScreen<D> {
 
     fn render_layer(&mut self) {
         // Render current layer to display
+    }
+}
+```
+
+## Deadline Processor
+
+For timeouts that move — a layer that deactivates some time after the last mouse motion, for example — a fixed `poll_interval` doesn't fit. Implement `DeadlineProcessor` instead: `deadline()` returns the next `Instant` to fire at, or `None` when nothing is armed, and `on_deadline()` runs when that instant passes without an event in between. `deadline_loop()` drives it, re-reading `deadline()` after every event.
+
+The `Runnable` that `#[processor]` generates only runs the event loop, so mark the struct with `#[::rmk::macros::runnable_generated]` to suppress it and write `Runnable` yourself:
+
+```rust
+use embassy_time::{Duration, Instant};
+use rmk::core_traits::Runnable;
+use rmk::event::PointingEvent;
+use rmk::macros::processor;
+use rmk::processor::DeadlineProcessor;
+
+#[processor(subscribe = [PointingEvent])]
+#[::rmk::macros::runnable_generated]
+pub struct MotionTimeout {
+    armed_until: Option<Instant>,
+}
+
+impl MotionTimeout {
+    async fn on_pointing_event(&mut self, _event: PointingEvent) {
+        // Every motion pushes the deadline back
+        self.armed_until = Some(Instant::now() + Duration::from_millis(500));
+    }
+}
+
+impl DeadlineProcessor for MotionTimeout {
+    fn deadline(&self) -> Option<Instant> {
+        self.armed_until
+    }
+
+    async fn on_deadline(&mut self) {
+        self.armed_until = None;
+        // Motion stopped 500ms ago
+    }
+}
+
+impl Runnable for MotionTimeout {
+    async fn run(&mut self) -> ! {
+        self.deadline_loop().await
     }
 }
 ```

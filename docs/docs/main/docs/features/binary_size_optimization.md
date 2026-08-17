@@ -52,9 +52,9 @@ cargo +nightly size --release
 
 RMK provides several options that you can use to reduce the binary size:
 
-1. If you don't need storage, you can disable the `storage` feature to save some flash. To disable `storage` feature you need to disable default features of `rmk` crate, and then enable other features you need.
+1. If you don't need storage, you can disable the `storage` feature to save some flash. To disable `storage` feature you need to disable default features of `rmk` crate, and then enable other features you need. This only works for USB-only builds: every BLE chip feature and the `dongle` feature enable `storage` themselves.
 
-2. You can also fully remove `defmt` by removing `defmt` feature from `rmk` crate and similar feature gates from all other dependencies.
+2. You can also fully remove `defmt` by removing `defmt` feature from `rmk` crate and similar feature gates from all other dependencies. Setting `defmt_log = false` in `keyboard.toml` (see below) only swaps `defmt-rtt` for an empty logger; the generated code still uses `panic-probe` and declares a `#[defmt::global_logger]`, so `defmt` and `panic-probe` stay in your `Cargo.toml`.
 
 3. If you don't need on-the-fly configuration, you can disable the host configurator feature by disabling default features of the `rmk` crate.
 
@@ -63,10 +63,10 @@ RMK provides several options that you can use to reduce the binary size:
 rmk = { version = "0.9", default-features = false }
 ```
 
-If you're using `keyboard.toml`, you'll also need to disable storage, defmt, and the host protocol in the toml config:
+If you're using `keyboard.toml`, you'll also need to disable storage, defmt logging, and the host protocol in the toml config:
 
 ```toml
-# Disable storage, defmt and the host protocol in keyboard.toml
+# Disable storage, defmt logging and the host protocol in keyboard.toml
 [storage]
 enabled = false
 

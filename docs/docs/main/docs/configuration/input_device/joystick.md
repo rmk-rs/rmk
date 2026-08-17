@@ -64,7 +64,7 @@ The transform might be not very intuitive, please read the document below for mo
 
    If `transform[new_axis][old_axis]` is 0, that old axis value is ignored.
 
-   Since the value range read by the ADC device is usually much larger than the mouse report range of -256~255, `transform` is designed as a divisor.
+   Since the value range read by the ADC device is usually much larger than the mouse report range of -128~127 (values outside it are clamped), `transform` is designed as a divisor.
 
 4. Each axis value is adjusted to the largest integer multiple of `resolution` that is less than its original value to reduce noise from ADC device readings.
 

@@ -25,10 +25,12 @@ Through Rynk, a host tool can read and change:
 - Tap-hold and other behavior settings
 
 It can also watch live status — the current layer, a key tester (matrix state),
-typing speed (WPM), the caps-lock/num-lock indicators, battery level, and, on
-wireless boards, the connection and BLE profile (including switching or clearing
-a profile). Finally it can reboot the keyboard, enter the bootloader, and reset
-stored settings.
+typing speed (WPM), the caps-lock/num-lock indicators, sleep state, battery
+level, and, on wireless boards, the connection and BLE profile (including
+switching or clearing a profile) and split peripheral status. It can read the
+device info (RMK version, USB IDs, names) and the physical layout, so a tool can
+draw your keyboard. Finally it can reboot the keyboard, enter the bootloader,
+and reset stored settings.
 
 ## Enable Rynk
 
@@ -77,16 +79,25 @@ Rynk works over the connection you already use:
   by that interface instead of asking you to pick a port.
 - **Bluetooth** — native tools connect to an already-connected keyboard (the OS
   must have it bonded and currently connected).
-- **Browser** — Chromium browsers (Chrome or Edge) reach USB through WebUSB and
-  Bluetooth through WebHID. Firefox and Safari are not supported.
+- **Dongle** — a [dongle](./dongle) relays Rynk to the keyboard behind it, so
+  the host tool talks to the dongle as if it were the keyboard.
+- **Browser** — Chromium browsers (Chrome or Edge) reach a Bluetooth keyboard
+  through WebHID. Browser USB is not available yet: nothing implements a WebUSB
+  link to the vendor interface. Firefox and Safari are not supported.
 
 Rynk tooling is still young. Today you have two options:
 
 - **A browser demo** — the `rynk-wasm` package ships a reference web page
   (`index.html`) you build and serve locally; follow the steps in its README.
+  Today it connects to Bluetooth keyboards over WebHID.
 - **Rust libraries** — the `rynk`, `rynk-usb`, and `rynk-ble` crates let you
   build a native tool (see [For tool authors](#for-tool-authors) below). The
   browser build is a separate package, `rynk-wasm`.
+
+Two examples show a Rynk-enabled firmware:
+[`examples/use_config/rp2040_rynk`](https://github.com/rmk-rs/rmk/tree/main/examples/use_config/rp2040_rynk)
+and
+[`examples/use_rust/qemu-riscv-rynk`](https://github.com/rmk-rs/rmk/tree/main/examples/use_rust/qemu-riscv-rynk).
 
 A ready-made desktop app is not available yet.
 
@@ -172,11 +183,17 @@ don't have to implement the protocol yourself:
 - `rynk` — the core typed client; talks to a keyboard over any byte link.
 - `rynk-usb` — USB discovery and connection.
 - `rynk-ble` — native Bluetooth discovery and connection.
-- `rynk-wasm` — the browser build, driven from JavaScript over Web Serial / WebHID.
+- `rynk-wasm` — the browser build, driven from JavaScript over a byte link the
+  page supplies (WebHID today).
+- `rynk-kle` — converts KLE / Vial `vial.json` layouts to and from RMK's
+  `[layout]` section, and decodes a `[layout]` into the types a Rynk host draws.
 
-While Rynk is experimental these crates are not published to crates.io. Depend on
-them by path or git from the [`rynk/` workspace](https://github.com/rmk-rs/rmk/tree/main/rynk),
-and pin the same revision as the firmware you're talking to.
+These crates are published to crates.io (currently 0.2.0), but Rynk is
+experimental and their API can change in any release. Pin an exact version
+(`rynk = "=0.2.0"`) or a git revision from the
+[`rynk/` workspace](https://github.com/rmk-rs/rmk/tree/main/rynk) that matches
+the firmware you're talking to. The wire format is documented in the
+[Rynk protocol reference](../development/rynk_protocol).
 
 A minimal native USB tool looks like this (add `embassy-futures` to your
 `Cargo.toml` for `select`):

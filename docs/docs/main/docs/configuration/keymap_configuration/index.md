@@ -10,10 +10,9 @@ Please check [layout section](../layout) in keyboard configuration doc.
 
 ## Define default keymap in Rust source file
 
-The default keymap could also be defined at a Rust source file, There are `keymap.rs`s in example folder, such as [this](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/src/keymap.rs), which could be a good example of defining keymaps using Rust in RMK:
+The default keymap could also be defined at a Rust source file, There are `keymap.rs`s in example folder, such as [this](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/src/keymap.rs), which could be a good example of defining keymaps using Rust in RMK. A simplified two-layer version:
 
 ```rust
-// https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/src/keymap.rs
 use rmk::types::action::KeyAction;
 use rmk::{a, k, layer, mo};
 pub(crate) const COL: usize = 14;

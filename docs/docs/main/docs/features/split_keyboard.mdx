@@ -1,8 +1,12 @@
 # Split keyboard
 
-RMK supports multi-split keyboard, which contains one central board and unlimited peripheral boards. The host is connected to the central board via USB or BLE.
+RMK supports multi-split keyboard, which contains one central board and up to [`split_peripherals_num`](../configuration/rmk_config) peripheral boards. The host is connected to the central board via USB or BLE.
 
-::: info There are many examples for split keyboards in [RMK examples folder](https://github.com/rmk-rs/rmk/tree/main/examples/use_config). :::
+::: info
+
+There are many examples for split keyboards in [RMK examples folder](https://github.com/rmk-rs/rmk/tree/main/examples/use_config).
+
+:::
 
 ## Communication
 
@@ -17,9 +21,13 @@ Currently, the communication type indicates that how split central communicates 
 
 RMK supports most existing opensource serial based split keyboard hardwares using UART, USART, PIO, etc.
 
-::: details RMK uses `embedded-io-async` as the abstract layer of wired communication. Any device that implements `embedded-io-async::Read` and `embedded-io-async::Write` traits can be used as RMK split central/peripheral. That unlocks many possibilities of RMK's split keyboard.
+::: details
 
-The most common implementations of those traits are serial ports(UART/USART), such as `embassy_rp::uart::BufferedUart` and `embassy_stm32::usart::BufferedUart`. :::
+RMK uses `embedded-io-async` as the abstract layer of wired communication. Any device that implements `embedded-io-async::Read` and `embedded-io-async::Write` traits can be used as RMK split central/peripheral. That unlocks many possibilities of RMK's split keyboard.
+
+The most common implementations of those traits are serial ports(UART/USART), such as `embassy_rp::uart::BufferedUart` and `embassy_stm32::usart::BufferedUart`.
+
+:::
 
 For keyboards connected using only a single wire, e.g. a 3-pole TRS cable, for the **RP2040 only** RMK implements a half-duplex UART serial port, `rmk::split::rp::uart::BufferedUart`, using one or both of the Programmable IO (PIO) blocks available on the RP2040 chip. The PIO serial port also supports full-duplex over two wires, and can be used when the central/peripheral connection does not use the pins connected to the chip's standard UART ports.
 
@@ -36,7 +44,11 @@ rmk = { version = "0.9", features = [
 
 RMK supports BLE wireless split on nRF52, nRF54, ESP32 and Pi Pico W right now. For BLE split, the central and peripheral parts are connected via BLE, and the host is connected to the central via USB or BLE.
 
-::: tip [storage](./storage.md) feature is required for BLE split. :::
+::: tip
+
+BLE split needs the [storage](./storage.md) feature; every BLE chip feature enables it automatically.
+
+:::
 
 ## Split keyboard project
 
@@ -44,9 +56,8 @@ A project of split keyboard could be like:
 
 ```
 src
- - bin
-   - central.rs
-   - peripheral.rs
+ - central.rs
+ - peripheral.rs
 keyboard.toml
 Cargo.toml
 ```
