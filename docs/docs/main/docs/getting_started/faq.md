@@ -188,7 +188,7 @@ If you have more sectors available in your internal flash, you can increase `num
 ### ZMK no longer works after flashing RMK
 
 ::: info
-Generally, the behavior you'll see is that ZMK is not outputting any keys or broadcasting a bluetooth connection. If you have other symptoms, something else is likely wrong.
+Generally, the behavior you'll see is that ZMK is not outputting any keys or and isn't broadcasting a bluetooth connection. If you have other symptoms, something else is likely wrong.
 :::
 
 For nRF boards (i.e. the `nice!nano` or `XIAO BLE`), ZMK uses a legacy SoftDevice Bluetooth stack. RMK uses a more recent version which is not compatible. To get ZMK working again, you must disable SoftDevice in the firmware; see below. All future firmwares for the ZMK board should be built with SoftDevice disabled.
