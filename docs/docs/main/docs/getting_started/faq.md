@@ -185,6 +185,39 @@ ERROR Keymap reading aborted!
 
 If you have more sectors available in your internal flash, you can increase `num_sectors` in `[storage]` section of your `keyboard.toml`, or change `storage_config` in your [`RmkConfig`](https://docs.rs/rmk/latest/rmk/config/struct.RmkConfig.html) if you're using Rust API. When using DFU (`dfu_rp` / `dfu_nrf`), the storage partition is placed after the DFU slot (via `rmk-memory.x`) and the 8-sector default matches its 32 KB size.
 
+### ZMK no longer works after flashing RMK
+
+::: info
+Generally, the behavior you'll see is that ZMK is not outputting any keys or broadcasting a bluetooth connection. If you have other symptoms, something else is likely wrong.
+:::
+
+For nRF boards (i.e. the `nice!nano` or `XIAO BLE`), ZMK uses a legacy SoftDevice Bluetooth stack. RMK uses a more recent version which is not compatible. To get ZMK working again, you must disable SoftDevice in the firmware; see below. All future firmwares for the ZMK board should be built with SoftDevice disabled.
+
+A more permanent solution would be to re-flash the bootloader with SoftDevice support. Unfortunately, the stock `XIAO BLE` bootloader does not seem to be published anywhere, so this is not an easy option.
+
+#### Disable SoftDevice for a cloud build
+Add the `nrf52840-nosd` (for the nRF82840) or `nrf52833-nosd` (for the nRF52833) snippet to your `build.yaml`, i.e.
+
+```yaml
+  - board: xiao_ble//zmk
+    snippet: nrf52840-nosd
+    shield: <your_keyboard>
+```
+
+You may also need to perform a [settings reset](https://zmk.dev/docs/troubleshooting/connection-issues#building-a-reset-firmware) to clear the Bluetooth settings so the board can re-pair:
+
+```yaml
+  - board: xiao_ble//zmk
+    snippet: nrf52840-nosd
+    shield: settings_reset
+```
+
+#### Disable SoftDevice for a local build
+
+Build with the `nrf52840-nosd` or `rnf52833-nosd` snippet (depending on your chip) by adding `--snippet nrf52840-nosd` (or `--snippet rnf52833-nosd`) to the `west build` command.
+
+If you need to perform a settings reset, you can change the board type (i.e. `-b settings_reset`).
+
 ### OUTDATED: panicked at embassy-executor: task arena is full.
 
 ::: info
