@@ -10,7 +10,7 @@ one_shot_modifiers = { activate_on_keypress = false }
 ```
 
 ::: note Rust API only
-`BehaviorConfig` has three fields with no `keyboard.toml` counterpart: `default_layer` (the base layer at startup), `tap` (`TapConfig`) and `mouse_key` (`MouseKeyConfig`, mouse-key acceleration; only its repeat intervals come from `[rmk].mouse_key_interval` and `[rmk].mouse_wheel_interval`). The generated code always uses their defaults; set them when you build `BehaviorConfig` in Rust.
+`BehaviorConfig` has three fields with no `keyboard.toml` counterpart: `default_layer` (the base layer at startup), `tap` (`TapConfig`) and `mouse_key` (`MouseKeyConfig`, mouse-key acceleration; only its repeat intervals come from `[rmk].mouse_key_interval` and `[rmk].mouse_wheel_interval`). With `keyboard.toml` they keep their defaults; set them when you build `BehaviorConfig` in Rust.
 :::
 
 ## Tri Layer

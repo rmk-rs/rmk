@@ -7,7 +7,7 @@ The following TOML contains all available settings in `keyboard.toml`
 ```toml
 # Basic info of the keyboard
 [keyboard]
-name = "RMK Keyboard" # Keyboard name, a label for your config; the generated firmware doesn't use it
+name = "RMK Keyboard" # A label for your configuration; it does not appear on USB or BLE
 product_name = "RMK Keyboard" # USB product string and BLE device name, defaults to "RMK Keyboard"
 vendor_id = 0x4c4b
 product_id = 0x4643
@@ -321,9 +321,9 @@ enabled = true
 # Note: When the `dfu_rp` or `dfu_nrf` feature is enabled, this value is ignored.
 # The storage partition is automatically placed after the DFU download slot.
 start_addr = 0xA0000
-# Number of sectors used for storage, >= 2. Defaults to 8 when the resolved config contains a [dfu]
-# table (the chip defaults for nRF52840, nice!nano, RP2040 and Pico W ship one), otherwise 2 unless
-# your chip's default config sets a value. With DFU it cannot exceed the storage partition from rmk-memory.x
+# Number of sectors used for storage, >= 2. Defaults to 8 when a [dfu] section is present, either
+# here or in the chip default (nRF52840, nice!nano, RP2040 and Pico W ship one); otherwise 2 unless
+# the chip default sets a value. With DFU it cannot exceed the storage partition from rmk-memory.x
 num_sectors = 16
 # Clear storage at keyboard boot.
 # Set it to true will reset the storage(including keymap, BLE bond info, etc.) at each reboot.

@@ -172,7 +172,7 @@ run `cargo clean` and then `cargo run --release`. Open an [issue](https://github
 
 ### I see "ERROR: Storage is full" error in the log
 
-By default, RMK uses only a few sectors of your microcontroller's internal flash: `num_sectors` defaults to 8 when the resolved config contains a `[dfu]` table (the chip defaults for nRF52840, nice!nano, RP2040 and Pico W ship one), otherwise 2. The Rust API `StorageConfig::default()` is 2. You may get the following error if the sectors are not big enough to store all your keymaps:
+By default, RMK uses only a few sectors of your microcontroller's internal flash: `num_sectors` defaults to 8 when a `[dfu]` section is present, either in your `keyboard.toml` or in the chip default (nRF52840, nice!nano, RP2040 and Pico W ship one), otherwise 2. The Rust API `StorageConfig::default()` is 2. You may get the following error if the sectors are not big enough to store all your keymaps:
 
 ```
 ERROR Storage is full

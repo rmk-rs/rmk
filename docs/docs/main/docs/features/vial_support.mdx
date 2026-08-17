@@ -50,8 +50,7 @@ If your `keyboard.toml` already defines the [`[layout]`](../configuration/layout
 :::
 
 Once you have your `vial.json` file, simply place it in the root directory of your RMK firmware
-project. The project's `build.rs` (from the project template or an example) compresses it into
-`VIAL_KEYBOARD_DEF` in `OUT_DIR/config_generated.rs`, which the `#[rmk_keyboard]` macro includes. If you
+project. The `build.rs` that comes with the project template embeds it into the firmware. If you
 wrote your own `build.rs`, copy the `generate_vial_config` step from an [example](https://github.com/rmk-rs/rmk/blob/main/examples/use_config/rp2040/build.rs).
 
 ## Disable Vial

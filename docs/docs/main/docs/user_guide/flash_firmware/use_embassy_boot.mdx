@@ -117,7 +117,7 @@ If configuring manually, ensure:
 
 - `Cargo.toml` uses the `dfu_rp` (RP2040) or `dfu_nrf` (nRF52840) feature
 - `memory.x` from rmk-boot is present next to your `Cargo.toml`
-- the resolved config has a `[dfu]` section — the RP2040, nRF52840, nice!nano and Pico W chip defaults already ship an empty one, so on those chips you only add `[dfu]` to `keyboard.toml` to override its options
+- a `[dfu]` section is present, either in `keyboard.toml` or in the chip default — RP2040, nRF52840, nice!nano and Pico W ship an empty one, so on those chips you only add `[dfu]` to override its options
 
 The `[dfu]` section needs only behavioural options — partition offsets come from the linker symbols in `memory.x`:
 

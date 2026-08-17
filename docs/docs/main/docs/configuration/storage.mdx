@@ -17,9 +17,9 @@ import { Tab, Tabs, Rust, Toml } from '@theme'
 [storage]
 # Enable/disable storage feature (default: true). Must match the `storage` Cargo feature of rmk
 enabled = true
-# Number of flash sectors to allocate. Defaults to 8 when the resolved config contains a [dfu]
-# table (the chip defaults for nRF52840, nice!nano, RP2040 and Pico W ship one), otherwise 2
-# unless your chip's default config sets a value
+# Number of flash sectors to allocate. Defaults to 8 when a [dfu] section is present, either here or
+# in the chip default (nRF52840, nice!nano, RP2040 and Pico W ship one); otherwise 2 unless the chip
+# default sets a value
 num_sectors = 2
 # Storage start address (default: 0 = auto-allocate from end; on nRF BLE builds without DFU,
 # 0 means 0x60000)

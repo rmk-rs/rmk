@@ -173,7 +173,7 @@ Then pass it to `DisplayProcessor::with_renderer`:
 let mut oled = DisplayProcessor::with_renderer(display, MyRenderer);
 ```
 
-Or reference it in `keyboard.toml`. The crate must be a dependency of your keyboard crate, and the renderer must implement `Default`, because the generated code constructs it with `MyRenderer::default()`:
+Or reference it in `keyboard.toml`. The crate must be a dependency of your keyboard crate, and the renderer must implement `Default`, because RMK constructs it with `MyRenderer::default()`:
 
 ```toml
 [display]

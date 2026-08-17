@@ -65,7 +65,7 @@ When the keyboard falls asleep, RMK publishes a `SleepStateEvent`, holds battery
 Two related behaviors are always on:
 
 - When BLE advertising times out without a connection (after 5 minutes), the keyboard sleeps immediately and waits for a key or pointing event before it advertises again.
-- `NrfAdc` takes a `light_sleep` interval as its last argument. When the analog inputs have been idle for more than 1.2 seconds, the ADC polls at that interval instead of `polling_interval`. The `keyboard.toml` codegen sets it to 350ms when a joystick is configured.
+- `NrfAdc` takes a `light_sleep` interval as its last argument. When the analog inputs have been idle for more than 1.2 seconds, the ADC polls at that interval instead of `polling_interval`. A joystick configured in `keyboard.toml` uses 350ms.
 
 ## External VCC
 
