@@ -1,5 +1,5 @@
 use rmk::types::action::{EncoderAction, KeyAction};
-use rmk::{a, encoder, k, layer, mo};
+use rmk::{a, encoder, k, layer, mo, user};
 
 pub(crate) const COL: usize = 8;
 pub(crate) const ROW: usize = 5;
@@ -20,7 +20,7 @@ pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
             [k!(Grave),    k!(F1),   k!(F2),   k!(F3),   k!(F4),    k!(F5),     k!(F6),         k!(F7)],
             [a!(Transparent), a!(No), a!(No),  k!(Up),   a!(No),    a!(No),     a!(No),         a!(No)],
             [a!(Transparent), a!(No), k!(Left), k!(Down), k!(Right), a!(No),    a!(No),         a!(No)],
-            [a!(Transparent), a!(No), a!(No),  a!(No),   a!(No),    a!(No),     a!(No),         a!(No)],
+            [a!(Transparent), user!(8), a!(No), a!(No),   a!(No),    a!(No),     a!(No),         a!(No)],
             [a!(Transparent), a!(Transparent), a!(Transparent), mo!(1), a!(Transparent), k!(AudioMute), k!(KbVolumeDown), k!(KbVolumeUp)]
         ]),
     ]

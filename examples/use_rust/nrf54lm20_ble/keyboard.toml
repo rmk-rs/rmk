@@ -16,10 +16,7 @@ map = """
 [input_device]
 encoder = [{ pin_a = "P1_23", pin_b = "P1_19", internal_pullup = true }]
 
-# `RgbService` adds one subscriber to each of these on top of the slots RMK's
-# own components reserve, so the base counts need raising by one.
-[event.battery_status]
-subs = 1
-
+# `RgbService` adds one subscriber on top of the slots RMK's own components
+# reserve, so this base count needs raising by one.
 [event.connection_status_change]
 subs = 2

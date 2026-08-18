@@ -5,6 +5,7 @@
 mod macros;
 mod keymap;
 mod rgb;
+mod vial;
 
 use defmt::{info, unwrap};
 use defmt_rtt as _;
@@ -24,7 +25,7 @@ use nrf_sdc::{self as sdc, mpsl};
 use panic_probe as _;
 use rgb::{RgbService, Ws2812};
 use rmk::ble::BleTransport;
-use rmk::config::{BehaviorConfig, DeviceConfig, LockConfig, PositionalConfig, RmkConfig, StorageConfig};
+use rmk::config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::host::HostService;
 use rmk::input_device::battery::{BatteryProcessor, ChargingStateReader};
@@ -37,6 +38,7 @@ use rmk::processor::builtin::wpm::WpmProcessor;
 use rmk::usb::UsbTransport;
 use rmk::{DefaultPacketPool, KeymapData, PacketPool, initialize_keymap_and_storage, run_all};
 use static_cell::StaticCell;
+use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
 type RandomSource = cracen::Cracen<'static, Blocking>;
 
@@ -59,7 +61,8 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
 const SDC_MEM_SIZE: usize = 5788;
 const FLASH_START_ADDR: usize = 0x120000;
 const FLASH_SECTORS: u8 = 6;
-const RYNK_UNLOCK_KEYS: &[(u8, u8)] = &[(0, 0), (0, 1)];
+/// Hold these two together to unlock the keyboard for Vial writes.
+const VIAL_UNLOCK_KEYS: &[(u8, u8)] = &[(0, 0), (0, 1)];
 
 const L2CAP_TXQ: u8 = 4;
 const L2CAP_RXQ: u8 = 4;
@@ -193,7 +196,7 @@ async fn main(spawner: Spawner) {
         vid: 0x4c4b,
         pid: 0x4643,
         manufacturer: "Haobo",
-        product_name: "ME54BS13",
+        product_name: "RMK nRF54LM20A",
         ..DeviceConfig::default()
     };
     let storage_config = StorageConfig {
@@ -203,11 +206,7 @@ async fn main(spawner: Spawner) {
     };
     let rmk_config = RmkConfig {
         device_config: keyboard_device_config,
-        lock_config: LockConfig {
-            unlock_keys: RYNK_UNLOCK_KEYS,
-            insecure: false,
-            write_requires_unlock: false,
-        },
+        vial_config: VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, VIAL_UNLOCK_KEYS),
         storage_config,
         ..Default::default()
     };
@@ -234,15 +233,8 @@ async fn main(spawner: Spawner) {
     let host_service = HostService::new(&keymap, &rmk_config);
 
     // `J1`'s middle pin is tied to ground, so both phases need an internal pull-up.
-    let mut encoder = RotaryEncoder::new(
-        Input::new(p.P1_23, Pull::Up),
-        Input::new(p.P1_19, Pull::Up),
-        0,
-    );
+    let mut encoder = RotaryEncoder::new(Input::new(p.P1_23, Pull::Up), Input::new(p.P1_19, Pull::Up), 0);
 
-    // PMW3610 trackball on the `TRACKBALL`/`H13` connectors. Those carry four
-    // signals for the sensor's NCS/SCLK/SDIO/MOT: the data line is half-duplex
-    // and bit-banged over `MOSI`, and `MISO` is the motion interrupt.
     let pmw3610_spi = BitBangSpiBus::new(
         Output::new(p.P1_17, Level::High, OutputDrive::Standard),
         Flex::new(p.P1_16),
