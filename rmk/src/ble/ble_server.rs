@@ -3,7 +3,7 @@ use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
 use super::battery_service::BatteryService;
 #[cfg(feature = "split")]
-use super::battery_service::ConfiguredPeripheralBatteryServices;
+use super::battery_service::PeripheralBatteryServices;
 use super::device_info::DeviceConfigurationService;
 #[cfg(feature = "rynk")]
 use crate::hid::RynkHidReport;
@@ -24,7 +24,7 @@ use rmk_types::protocol::rynk::{
 #[gatt_server]
 pub(crate) struct Server {
     pub(crate) battery_service: BatteryService,
-    pub(crate) peripheral_battery_services: ConfiguredPeripheralBatteryServices,
+    pub(crate) peripheral_battery_services: PeripheralBatteryServices,
     pub(crate) hid_service: HidService,
     pub(crate) vial_service: VialGattService,
     pub(crate) device_config_service: DeviceConfigurationService,
@@ -43,7 +43,7 @@ pub(crate) struct Server {
 #[gatt_server]
 pub(crate) struct Server {
     pub(crate) battery_service: BatteryService,
-    pub(crate) peripheral_battery_services: ConfiguredPeripheralBatteryServices,
+    pub(crate) peripheral_battery_services: PeripheralBatteryServices,
     pub(crate) hid_service: HidService,
     pub(crate) rynk_service: RynkGattService,
     pub(crate) rynk_hid_service: RynkHidService,
@@ -64,7 +64,7 @@ pub(crate) struct Server {
 #[gatt_server]
 pub(crate) struct Server {
     pub(crate) battery_service: BatteryService,
-    pub(crate) peripheral_battery_services: ConfiguredPeripheralBatteryServices,
+    pub(crate) peripheral_battery_services: PeripheralBatteryServices,
     pub(crate) hid_service: HidService,
     pub(crate) device_config_service: DeviceConfigurationService,
 }
