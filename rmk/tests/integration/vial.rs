@@ -155,6 +155,22 @@ fn combo_and_behavior_writes_change_the_chord() {
 }
 
 #[test]
+fn tap_capslock_interval_reads_back_its_own_value() {
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[k!(A)]]]).build().await;
+        keyboard.set_behavior(SettingKey::TapInterval, 180);
+        keyboard.set_behavior(SettingKey::TapCapslockInterval, 240);
+        let mut request = vial(VialCommand::GetBehaviorSetting);
+        request[2..4].copy_from_slice(&(SettingKey::TapCapslockInterval as u16).to_le_bytes());
+        let mut reply = [0xFF; REPORT];
+        reply[0] = 0;
+        reply[1..3].copy_from_slice(&240u16.to_le_bytes());
+        keyboard.host_exchange(request, reply);
+        keyboard.run().await;
+    });
+}
+
+#[test]
 fn morse_write_changes_the_tap() {
     test_block_on(async {
         let mut keyboard = SimKeyboard::builder([[[rmk::td!(0)]]]).build().await;
