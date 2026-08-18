@@ -86,6 +86,15 @@ impl crate::KeyboardTomlConfig {
         } else {
             rmk.split_peripherals_num
         };
+        if let Some(split) = &self.split {
+            for (id, peripheral) in split.peripheral.iter().enumerate() {
+                if peripheral.battery_user_description.is_some() && peripheral.battery_adc_pin.is_none() {
+                    return Err(format!(
+                        "keyboard.toml: [[split.peripheral]] at index {id} requires battery_adc_pin when battery_user_description is set"
+                    ));
+                }
+            }
+        }
         let split_battery_peripheral_ids = if active_features.contains(&"split") {
             match &self.split {
                 Some(split) => split
@@ -445,6 +454,28 @@ mod tests {
 
         assert!(ble.split_battery_peripheral_ids.is_empty());
         assert_eq!(subs(&ble), subs(&base));
+    }
+
+    #[test]
+    fn rejects_peripheral_battery_user_description_without_adc_pin() {
+        let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
+        config.split = Some(SplitConfig {
+            peripheral: vec![SplitBoardConfig {
+                battery_user_description: Some("Right".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let err = match config.build_constants(&["split"]) {
+            Ok(_) => panic!("expected battery user description validation failure"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err,
+            "keyboard.toml: [[split.peripheral]] at index 0 requires battery_adc_pin when battery_user_description is set"
+        );
     }
 
     #[test]
