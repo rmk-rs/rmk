@@ -270,6 +270,8 @@ where
     retry: Option<RetryState>,
     in_flight: Option<OutputOperation>,
     lighting_change_pending: bool,
+    present_interval_ms: Option<NonZeroU32>,
+    last_present_ms: u64,
 }
 
 impl<P, E> LightingService<P, E>
@@ -294,7 +296,26 @@ where
             retry: None,
             in_flight: None,
             lighting_change_pending: false,
+            present_interval_ms: None,
+            last_present_ms: 0,
         }
+    }
+
+    /// Re-present the frame at this interval while active, even when unchanged.
+    ///
+    /// Presentation is normally driven by the compositor's changed-detection,
+    /// so a source that renders a constant frame is written to the hardware
+    /// exactly once and then never again. That is correct for a display that
+    /// retains what it was told, but write-only LED chains hold their frame in
+    /// volatile per-pixel registers: one left powered and unrefreshed can latch
+    /// noise and show it indefinitely, because no further write is ever due.
+    ///
+    /// Re-presenting on a deadline bounds how long any such corruption
+    /// survives. It costs one bus transaction per interval, so pick an interval
+    /// against that cost rather than the animation frame rate.
+    pub const fn with_present_interval(mut self, interval_ms: NonZeroU32) -> Self {
+        self.present_interval_ms = Some(interval_ms);
+        self
     }
 
     pub const fn desired_power(&self) -> PowerState {
@@ -452,6 +473,13 @@ where
             self.lighting_change_pending |= outcome.state_changed;
         }
 
+        if !self.present_required
+            && let Some(interval) = self.present_interval_ms
+            && now_ms.saturating_sub(self.last_present_ms) >= interval.get() as u64
+        {
+            self.present_required = true;
+        }
+
         if self.present_required {
             if self.operation_ready(OutputOperation::Present, now_ms) {
                 self.in_flight = Some(OutputOperation::Present);
@@ -488,6 +516,7 @@ where
                     OutputOperation::Present => {
                         self.engine.on_presented(&self.frame);
                         self.present_required = false;
+                        self.last_present_ms = now_ms;
                     }
                     OutputOperation::Suspend => {
                         self.output_state = OutputState::Suspended;
@@ -550,7 +579,19 @@ where
     }
 
     fn wait_deadline(&self) -> Option<u64> {
-        earliest(self.next_render_ms, self.retry.and_then(|retry| retry.at_ms))
+        // The refresh deadline only applies to an active, idle output: while a
+        // presentation is pending or blocked it would busy-loop the adapter,
+        // and while suspended it would wake it for nothing.
+        let refresh = match (self.output_state, self.desired_power, self.present_required) {
+            (OutputState::Active, PowerState::Active, false) => self
+                .present_interval_ms
+                .and_then(|interval| self.last_present_ms.checked_add(interval.get() as u64)),
+            _ => None,
+        };
+        earliest(
+            earliest(self.next_render_ms, refresh),
+            self.retry.and_then(|retry| retry.at_ms),
+        )
     }
 }
 
@@ -1029,6 +1070,60 @@ mod tests {
         );
         service.retry_output_now().unwrap();
         assert_eq!(service.next_action(u64::MAX), Ok(ServiceAction::Initialize));
+    }
+
+    #[test]
+    fn present_interval_represents_the_unchanged_frame_on_schedule() {
+        let mut service = LightingService::new(Provider::new(3), Engine::new(), BoardFrame::default())
+            .with_present_interval(NonZeroU32::new(1000).unwrap());
+        initial_present(&mut service, 0);
+
+        // Idle waits until the refresh deadline instead of forever.
+        assert_eq!(
+            service.next_action(500),
+            Ok(ServiceAction::Wait {
+                next_wake_ms: Some(1000)
+            })
+        );
+
+        // At the deadline the stored frame is presented again without a render.
+        assert!(matches!(service.next_action(1000), Ok(ServiceAction::Present(_))));
+        complete(&mut service, 1000);
+        assert_eq!(service.engine.render_calls, 1);
+        assert_eq!(service.engine.presented_calls, 2);
+        assert_eq!(
+            service.next_action(1001),
+            Ok(ServiceAction::Wait {
+                next_wake_ms: Some(2000)
+            })
+        );
+
+        // Suspension disarms the refresh schedule entirely.
+        service.set_power(PowerState::Suspended).unwrap();
+        assert_eq!(service.next_action(1500), Ok(ServiceAction::Suspend));
+        complete(&mut service, 1500);
+        assert_eq!(
+            service.next_action(3000),
+            Ok(ServiceAction::Wait { next_wake_ms: None })
+        );
+    }
+
+    #[test]
+    fn blocked_present_does_not_busy_loop_on_the_refresh_deadline() {
+        let mut service = LightingService::new(Provider::new(1), Engine::new(), BoardFrame::default())
+            .with_present_interval(NonZeroU32::new(1000).unwrap());
+        initialize(&mut service, 0);
+        assert!(matches!(service.next_action(0), Ok(ServiceAction::Present(_))));
+        service
+            .complete_output(0, OutputCompletion::Failed { retry_in_ms: None })
+            .unwrap();
+
+        // The presentation is blocked on an explicit retry; the past refresh
+        // deadline must not turn the wait into an immediate wake.
+        assert_eq!(
+            service.next_action(5000),
+            Ok(ServiceAction::Wait { next_wake_ms: None })
+        );
     }
 
     #[test]
