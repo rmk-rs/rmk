@@ -223,8 +223,8 @@ st7796 = ["lcd_async"]
 ## Enable async matrix scanning
 async_matrix = []
 
-## Use 1M PHY.
-## Some legacy adapters cannot connect to devices using 2M PHY. 
+## Use 1M PHY toward the host.
+## The dongle link and the split link are unaffected: they always run at 2M.
 use_1m_phy = []
 
 ## Enable split keyboard support.

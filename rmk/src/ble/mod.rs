@@ -760,7 +760,13 @@ async fn serve_keyboard_connection<
         }
     }
 
-    let host_phy = if cfg!(feature = "use_1m_phy") {
+    // `use_1m_phy` exists for legacy host adapters that cannot do 2M.
+    // Always use 2M for the dongle link.
+    #[cfg(feature = "dongle")]
+    let dongle_link = crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE;
+    #[cfg(not(feature = "dongle"))]
+    let dongle_link = false;
+    let host_phy = if cfg!(feature = "use_1m_phy") && !dongle_link {
         PhyKind::Le1M
     } else {
         PhyKind::Le2M
