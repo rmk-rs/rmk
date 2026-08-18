@@ -86,7 +86,9 @@ impl crate::KeyboardTomlConfig {
         } else {
             rmk.split_peripherals_num
         };
-        if let Some(split) = &self.split {
+        if active_features.contains(&"split")
+            && let Some(split) = &self.split
+        {
             for (id, peripheral) in split.peripheral.iter().enumerate() {
                 if peripheral.battery_user_description.is_some() && peripheral.battery_adc_pin.is_none() {
                     return Err(format!(
@@ -466,6 +468,8 @@ mod tests {
             }],
             ..Default::default()
         });
+
+        assert!(config.build_constants(&[]).is_ok());
 
         let err = match config.build_constants(&["split"]) {
             Ok(_) => panic!("expected battery user description validation failure"),
