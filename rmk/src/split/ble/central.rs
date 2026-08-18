@@ -298,7 +298,7 @@ pub(crate) mod subrating {
 
     const CONN_INTERVAL_US: u32 = 7500;
     const SLEEP_HOST_CONN_SUBRATE: u16 = 60;
-    const SLEEP_NO_HOST_SUBRATE: u16 = 250;
+    const SLEEP_NO_HOST_SUBRATE: u16 = 125;
     const DEFAULT_MAX_LATENCY: u16 = 300;
     pub(crate) const HOST_MAX_LATENCY: u16 = 300;
 
