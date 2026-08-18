@@ -82,11 +82,15 @@ pub static SPLIT_APP_TX: Channel<RawMutex, SplitAppData, 26> = Channel::new();
 
 /// This side's inbox of received application messages. Filled with `try_send`
 /// (drop-on-full) by the split read loops.
-pub static SPLIT_APP_RX: Channel<RawMutex, SplitAppData, 8> = Channel::new();
+// Sized like SPLIT_APP_TX: an application snapshot arrives as one
+// back-to-back burst, and unlike BLE a wired transport delivers it faster
+// than the consumer drains, so the burst must fit or `deliver_received`
+// silently drops the difference.
+pub static SPLIT_APP_RX: Channel<RawMutex, SplitAppData, 112> = Channel::new();
 
 /// Peripheral → central queue. Producers must use `try_send`. Small: meant
 /// for tiny, rare state such as a build identity announced once per link-up.
-pub static SPLIT_APP_PERIPH_TX: Channel<RawMutex, SplitAppData, 2> = Channel::new();
+pub static SPLIT_APP_PERIPH_TX: Channel<RawMutex, SplitAppData, 16> = Channel::new();
 
 /// Deliver a received payload into [`SPLIT_APP_RX`]. Drop-on-full: a slow
 /// application consumer must never stall the split read loops, and the
