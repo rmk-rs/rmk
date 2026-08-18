@@ -210,6 +210,13 @@ impl<S: PointingDriver> PointingDevice<S> {
         }
 
         loop {
+            // A sensor that used up its init retries never reports again, and an
+            // unpopulated motion pin can sit low — `wait_for_low` would then return
+            // instantly and spin this loop at full speed, starving the executor.
+            if self.init_state == InitState::Failed {
+                pending::<()>().await;
+            }
+
             let poll_wait = async {
                 if let Some(gpio) = self.sensor.motion_gpio() {
                     let _ = gpio.wait_for_low().await;
