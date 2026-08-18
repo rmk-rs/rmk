@@ -15,27 +15,28 @@ use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
 use crate::keyboard::LAST_KEY_TIMESTAMP;
 
-const CPF_FORMAT_UINT8: u8 = 0x04;
-const CPF_EXPONENT_ZERO: u8 = 0x00;
-const CPF_UNIT_PERCENTAGE: u16 = 0x27AD;
-const CPF_NAMESPACE_BLUETOOTH_SIG: u8 = 0x01;
-const CPF_DESCRIPTION_MAIN: u16 = 0x0106;
+const CHARACTERISTIC_PRESENTATION_FORMAT_UINT8: u8 = 0x04;
+const CHARACTERISTIC_PRESENTATION_FORMAT_EXPONENT_ZERO: u8 = 0x00;
+const CHARACTERISTIC_PRESENTATION_FORMAT_UNIT_PERCENTAGE: u16 = 0x27AD;
+const CHARACTERISTIC_PRESENTATION_FORMAT_NAMESPACE_BLUETOOTH_SIG: u8 = 0x01;
+const CHARACTERISTIC_PRESENTATION_FORMAT_DESCRIPTION_MAIN: u16 = 0x0106;
 
 const fn battery_presentation_format(description: u16) -> [u8; 7] {
-    let [unit_low, unit_high] = CPF_UNIT_PERCENTAGE.to_le_bytes();
+    let [unit_low, unit_high] = CHARACTERISTIC_PRESENTATION_FORMAT_UNIT_PERCENTAGE.to_le_bytes();
     let [description_low, description_high] = description.to_le_bytes();
     [
-        CPF_FORMAT_UINT8,
-        CPF_EXPONENT_ZERO,
+        CHARACTERISTIC_PRESENTATION_FORMAT_UINT8,
+        CHARACTERISTIC_PRESENTATION_FORMAT_EXPONENT_ZERO,
         unit_low,
         unit_high,
-        CPF_NAMESPACE_BLUETOOTH_SIG,
+        CHARACTERISTIC_PRESENTATION_FORMAT_NAMESPACE_BLUETOOTH_SIG,
         description_low,
         description_high,
     ]
 }
 
-const MAIN_BATTERY_PRESENTATION_FORMAT: [u8; 7] = battery_presentation_format(CPF_DESCRIPTION_MAIN);
+const MAIN_BATTERY_PRESENTATION_FORMAT: [u8; 7] =
+    battery_presentation_format(CHARACTERISTIC_PRESENTATION_FORMAT_DESCRIPTION_MAIN);
 
 /// Battery service
 #[gatt_service(uuid = service::BATTERY)]
@@ -327,12 +328,12 @@ impl<P: PacketPool> Runnable for BlePeripheralBatteryServer<'_, '_, '_, P> {
 
 #[cfg(test)]
 mod cpf_tests {
-    use super::{CPF_DESCRIPTION_MAIN, battery_presentation_format};
+    use super::{CHARACTERISTIC_PRESENTATION_FORMAT_DESCRIPTION_MAIN, battery_presentation_format};
 
     #[test]
     fn battery_presentation_format_uses_assigned_numbers() {
         assert_eq!(
-            battery_presentation_format(CPF_DESCRIPTION_MAIN),
+            battery_presentation_format(CHARACTERISTIC_PRESENTATION_FORMAT_DESCRIPTION_MAIN),
             [0x04, 0x00, 0xAD, 0x27, 0x01, 0x06, 0x01]
         );
         assert_eq!(
