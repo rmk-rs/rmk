@@ -1,7 +1,9 @@
 use embassy_time::Duration;
 use heapless::Vec;
+use rmk_types::action::{Action, KeyAction};
 use rmk_types::fork::Fork;
-use rmk_types::keycode::KeyCode;
+use rmk_types::keycode::{HidKeyCode, KeyCode};
+use rmk_types::modifier::ModifierCombination;
 use rmk_types::morse::{Morse, MorseMode, MorseProfile};
 
 use crate::keyboard::combo::Combo;
@@ -25,6 +27,69 @@ pub struct BehaviorConfig {
     pub keyboard_macros: KeyboardMacrosConfig,
     pub mouse_key: MouseKeyConfig,
     pub auto_mouse_layer: Vec<AutoMouseLayerConfig, AUTO_MOUSE_LAYER_MAX_NUM>,
+    pub auto_shift: AutoShiftConfig,
+}
+
+/// Auto shift: a plain key in `groups` or `keys` is processed as `TH(key, SHIFTED(key), profile)`.
+/// `enabled`/`groups` change at runtime and persist.
+#[derive(Clone, Copy, Debug)]
+pub struct AutoShiftConfig {
+    pub enabled: bool,
+    /// Bit set of [`Self::ALPHA`], [`Self::NUMERIC`], [`Self::SYMBOLS`]
+    pub groups: u8,
+    /// Keys outside the groups that are auto-shifted too
+    pub keys: &'static [HidKeyCode],
+    /// Morse profile index; `u8::MAX` selects the default profile
+    pub profile: u8,
+}
+
+impl Default for AutoShiftConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            groups: 0,
+            keys: &[],
+            profile: u8::MAX,
+        }
+    }
+}
+
+impl AutoShiftConfig {
+    /// `A`–`Z`
+    pub const ALPHA: u8 = 1;
+    /// `1`–`0`
+    pub const NUMERIC: u8 = 1 << 1;
+    /// `- = [ ] \ ; ' ` , . /`
+    pub const SYMBOLS: u8 = 1 << 2;
+
+    pub fn contains(&self, key: HidKeyCode) -> bool {
+        let in_group = match key {
+            k if (HidKeyCode::A..=HidKeyCode::Z).contains(&k) => self.groups & Self::ALPHA != 0,
+            k if (HidKeyCode::Kc1..=HidKeyCode::Kc0).contains(&k) => self.groups & Self::NUMERIC != 0,
+            HidKeyCode::Minus
+            | HidKeyCode::Equal
+            | HidKeyCode::LeftBracket
+            | HidKeyCode::RightBracket
+            | HidKeyCode::Backslash
+            | HidKeyCode::Semicolon
+            | HidKeyCode::Quote
+            | HidKeyCode::Grave
+            | HidKeyCode::Comma
+            | HidKeyCode::Dot
+            | HidKeyCode::Slash => self.groups & Self::SYMBOLS != 0,
+            _ => false,
+        };
+        in_group || self.keys.contains(&key)
+    }
+
+    /// Whether `action` is an auto-shift tap-hold
+    pub fn is_tap_hold(&self, action: &KeyAction) -> bool {
+        matches!(
+            action,
+            KeyAction::TapHold(Action::Key(KeyCode::Hid(tap)), Action::KeyWithModifier(hold, m), profile)
+                if tap == hold && *m == ModifierCombination::LSHIFT && *profile == self.profile
+        )
+    }
 }
 
 /// Config for auto mouse layer behavior

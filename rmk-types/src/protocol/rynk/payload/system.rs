@@ -164,6 +164,10 @@ pub struct BehaviorConfig {
     /// Flow-tap window: a morse key pressed within this time of the previous
     /// key press is forced to its tap action.
     pub morse_prior_idle_time_ms: u16,
+    /// Runtime auto shift switch
+    pub auto_shift_enabled: bool,
+    /// Auto shift key groups: bit 0 alpha, bit 1 numeric, bit 2 symbols
+    pub auto_shift_groups: u8,
 }
 
 #[cfg(test)]
@@ -304,6 +308,8 @@ mod tests {
             )
             .with_quick_tap_timeout_ms(Some(120)),
             morse_prior_idle_time_ms: 130,
+            auto_shift_enabled: true,
+            auto_shift_groups: 0b101,
         });
 
         // Max-width case. The profile's setters top out at bit 45, so it is built
@@ -316,6 +322,8 @@ mod tests {
             tap_capslock_interval_ms: u16::MAX,
             morse_default_profile: MorseProfile::from(u64::MAX),
             morse_prior_idle_time_ms: u16::MAX,
+            auto_shift_enabled: true,
+            auto_shift_groups: u8::MAX,
         };
         round_trip(&cfg);
         assert_max_size_bound(&cfg);

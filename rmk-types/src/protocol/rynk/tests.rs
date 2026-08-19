@@ -271,6 +271,8 @@ fn exemplars() -> Exemplars {
         morse_default_profile: MorseProfile::new(Some(true), Some(MorseMode::HoldOnOtherPress), Some(90), Some(100))
             .with_quick_tap_timeout_ms(Some(110)),
         morse_prior_idle_time_ms: 120,
+        auto_shift_enabled: true,
+        auto_shift_groups: 0b111,
     };
     let connection = ConnectionStatus {
         usb: UsbState::Configured,

@@ -10,6 +10,16 @@ pub struct Behavior {
     pub forks: Option<Forks>,
     pub morse: Option<Morse>,
     pub auto_mouse_layer: Vec<AutoMouseLayer>,
+    pub auto_shift: Option<AutoShift>,
+}
+
+pub struct AutoShift {
+    pub alpha: bool,
+    pub numeric: bool,
+    pub symbols: bool,
+    /// Key names outside the groups
+    pub keys: Vec<String>,
+    pub profile: Option<String>,
 }
 
 pub struct AutoMouseLayer {
@@ -254,6 +264,41 @@ impl crate::KeyboardTomlConfig {
             })
             .collect();
 
+        let auto_shift = match toml_behavior.auto_shift {
+            Some(a) => {
+                if let Some(profile) = &a.profile
+                    && !morse.as_ref().is_some_and(|m| m.profiles.contains_key(profile))
+                {
+                    return Err(format!(
+                        "behavior.auto_shift.profile `{profile}` is not found in behavior.morse.profiles"
+                    ));
+                }
+                let names = a
+                    .keys
+                    .unwrap_or_else(|| ["alpha", "numeric", "symbols"].map(String::from).to_vec());
+                if names.is_empty() {
+                    return Err("behavior.auto_shift.keys is empty".to_string());
+                }
+                let (mut alpha, mut numeric, mut symbols, mut keys) = (false, false, false, Vec::new());
+                for name in names {
+                    match name.to_lowercase().as_str() {
+                        "alpha" => alpha = true,
+                        "numeric" => numeric = true,
+                        "symbols" => symbols = true,
+                        _ => keys.push(name),
+                    }
+                }
+                Some(AutoShift {
+                    alpha,
+                    numeric,
+                    symbols,
+                    keys,
+                    profile: a.profile,
+                })
+            }
+            None => None,
+        };
+
         Ok(Behavior {
             tri_layer,
             one_shot_timeout_ms,
@@ -263,6 +308,7 @@ impl crate::KeyboardTomlConfig {
             forks,
             morse,
             auto_mouse_layer,
+            auto_shift,
         })
     }
 }
@@ -326,15 +372,7 @@ enable_flow_tap = false
 hold_timeout = "200ms"
 "#;
 
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("rmk-config-flow-tap-{}-{}.toml", std::process::id(), unique));
-
-        fs::write(&path, toml).unwrap();
-        let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
-        let _ = fs::remove_file(&path);
-
-        let behavior = config.behavior().unwrap();
-        let morse = behavior.morse.unwrap();
+        let morse = behavior_of(toml, "flow-tap").unwrap().morse.unwrap();
         assert!(morse.enable_flow_tap);
         assert_eq!(morse.default_profile.enable_flow_tap, Some(true));
         assert_eq!(morse.profiles["flow_on"].enable_flow_tap, Some(true));
@@ -366,21 +404,63 @@ hold_timeout = "200ms"
 hold_timeout = "300ms"
 "#;
 
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "rmk-config-profile-overflow-{}-{}.toml",
-            std::process::id(),
-            unique
-        ));
+        let err = behavior_of(toml, "profile-overflow")
+            .err()
+            .expect("expected the profile-overflow error");
+        assert!(err.contains("morse_profile_max_num"), "unexpected error: {err}");
+    }
 
+    fn behavior_of(toml: &str, tag: &str) -> Result<super::Behavior, String> {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("rmk-config-{tag}-{}-{}.toml", std::process::id(), unique));
         fs::write(&path, toml).unwrap();
         let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
         let _ = fs::remove_file(&path);
+        config.behavior()
+    }
 
-        let err = match config.behavior() {
-            Ok(_) => panic!("expected the profile-overflow error"),
-            Err(e) => e,
-        };
-        assert!(err.contains("morse_profile_max_num"), "unexpected error: {err}");
+    const AUTO_SHIFT_BASE: &str = r#"
+[layout]
+rows = 1
+cols = 1
+map = "(0,0)"
+
+[keymap]
+layers = 1
+
+[[keymap.layer]]
+keys = "A"
+
+[behavior.morse.profiles.as]
+hold_timeout = "175ms"
+"#;
+
+    #[test]
+    fn auto_shift_defaults_to_all_groups() {
+        let toml = format!("{AUTO_SHIFT_BASE}\n[behavior.auto_shift]\nprofile = \"as\"\n");
+        let a = behavior_of(&toml, "auto-shift-default").unwrap().auto_shift.unwrap();
+        assert!(a.alpha && a.numeric && a.symbols);
+        assert!(a.keys.is_empty());
+        assert_eq!(a.profile.as_deref(), Some("as"));
+    }
+
+    #[test]
+    fn auto_shift_keys_split_groups_from_key_names() {
+        let toml = format!("{AUTO_SHIFT_BASE}\n[behavior.auto_shift]\nkeys = [\"Alpha\", \"Tab\", \"ent\"]\n");
+        let a = behavior_of(&toml, "auto-shift-keys").unwrap().auto_shift.unwrap();
+        assert!(a.alpha && !a.numeric && !a.symbols);
+        assert_eq!(a.keys, vec!["Tab".to_string(), "ent".to_string()]);
+        assert_eq!(a.profile, None);
+    }
+
+    #[test]
+    fn auto_shift_rejects_unknown_profile_and_empty_keys() {
+        let toml = format!("{AUTO_SHIFT_BASE}\n[behavior.auto_shift]\nprofile = \"nope\"\n");
+        let err = behavior_of(&toml, "auto-shift-profile").err().unwrap();
+        assert!(err.contains("behavior.auto_shift.profile"), "unexpected error: {err}");
+
+        let toml = format!("{AUTO_SHIFT_BASE}\n[behavior.auto_shift]\nkeys = []\n");
+        let err = behavior_of(&toml, "auto-shift-empty").err().unwrap();
+        assert!(err.contains("behavior.auto_shift.keys"), "unexpected error: {err}");
     }
 }

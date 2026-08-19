@@ -77,6 +77,9 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
                 KeyboardAction::ComboOff => 0x7c51,
                 KeyboardAction::ComboToggle => 0x7c52,
                 KeyboardAction::CapsWordToggle => 0x7c73,
+                KeyboardAction::AutoShiftOn => 0x7c13,
+                KeyboardAction::AutoShiftOff => 0x7c14,
+                KeyboardAction::AutoShiftToggle => 0x7c15,
                 _ => {
                     warn!("KeyboardAction: {:?} vial is not supported yet", c);
                     0
@@ -235,6 +238,9 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
         0x7C50 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::ComboOn)),
         0x7C51 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::ComboOff)),
         0x7C52 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::ComboToggle)),
+        0x7C13 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::AutoShiftOn)),
+        0x7C14 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::AutoShiftOff)),
+        0x7C15 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::AutoShiftToggle)),
         0x7C16 => KeyAction::Single(Action::Special(SpecialKey::GraveEscape)),
         0x7C73 => KeyAction::Single(Action::KeyboardControl(KeyboardAction::CapsWordToggle)),
         0x7C77 => KeyAction::Single(Action::TriLayerLower),
@@ -277,9 +283,9 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
             u8::MAX,
         ),
         0x7C02..=0x7C5F => {
-            // TODO: Reset/Haptic/Auto shift(AS)/Dynamic macro
+            // TODO: Reset/Haptic/Auto shift timeout (AS_DOWN/UP/RPT)/Dynamic macro
             warn!(
-                "Reset/Haptic/Auto shift(AS)/Dynamic macro not supported: {:#X}",
+                "Reset/Haptic/Auto shift timeout/Dynamic macro not supported: {:#X}",
                 via_keycode
             );
             KeyAction::No

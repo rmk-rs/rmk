@@ -5,13 +5,13 @@ use std::collections::HashMap;
 use quote::{format_ident, quote};
 use rmk_config::resolved::Behavior;
 use rmk_config::resolved::behavior::{
-    AutoMouseLayer, Combos, Forks, MacroOperation, Macros, Morse, MorseActionPair, MorseKey,
-    MorseProfile, OneShot,
+    AutoMouseLayer, AutoShift, Combos, Forks, MacroOperation, Macros, Morse, MorseActionPair,
+    MorseKey, MorseProfile, OneShot,
 };
 
 use super::action_parser::{
-    as_hid_keycode, expand_profile, expand_profile_name, get_key_with_alias, parse_action,
-    parse_key, sorted_profile_names,
+    as_hid_keycode, expand_profile, expand_profile_name, get_key_with_alias, morse_profile,
+    parse_action, parse_key, sorted_profile_names,
 };
 use super::feature::{get_rmk_features, is_feature_enabled};
 
@@ -572,6 +572,42 @@ fn expand_auto_mouse_layer(auto_mouse_layer: &[AutoMouseLayer]) -> proc_macro2::
     }
 }
 
+fn expand_auto_shift(
+    auto_shift: &Option<AutoShift>,
+    profiles: &Option<HashMap<String, MorseProfile>>,
+) -> proc_macro2::TokenStream {
+    let Some(cfg) = auto_shift else {
+        return quote! { ::core::default::Default::default() };
+    };
+    let groups = [
+        (cfg.alpha, "ALPHA"),
+        (cfg.numeric, "NUMERIC"),
+        (cfg.symbols, "SYMBOLS"),
+    ]
+    .into_iter()
+    .filter(|(on, _)| *on)
+    .map(|(_, name)| {
+        let name = format_ident!("{name}");
+        quote! { ::rmk::config::AutoShiftConfig::#name }
+    })
+    .chain([quote! { 0 }]);
+    let keys = cfg.keys.iter().map(|k| {
+        let ident = as_hid_keycode(k).unwrap_or_else(|| {
+            panic!("\n\u{274c} keyboard.toml: behavior.auto_shift.keys `{k}` is not a keycode or a group name (alpha/numeric/symbols)")
+        });
+        quote! { ::rmk::types::keycode::HidKeyCode::#ident }
+    });
+    let profile = morse_profile(cfg.profile.as_ref(), profiles);
+    quote! {
+        ::rmk::config::AutoShiftConfig {
+            enabled: true,
+            groups: #(#groups)|*,
+            keys: &[#(#keys),*],
+            profile: #profile,
+        }
+    }
+}
+
 pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenStream {
     let profiles = behavior
         .morse
@@ -587,6 +623,7 @@ pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenS
     let forks = expand_forks(&behavior.forks, &profiles);
     let morse = expand_morse(&behavior.morse);
     let auto_mouse_layer = expand_auto_mouse_layer(&behavior.auto_mouse_layer);
+    let auto_shift = expand_auto_shift(&behavior.auto_shift, &profiles);
 
     quote! {
         #[allow(clippy::needless_update)]
@@ -601,6 +638,7 @@ pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenS
             mouse_key: ::rmk::config::MouseKeyConfig::default(),
             tap: ::rmk::config::TapConfig::default(),
             auto_mouse_layer: #auto_mouse_layer,
+            auto_shift: #auto_shift,
             ..Default::default()
         };
     }

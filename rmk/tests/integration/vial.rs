@@ -215,3 +215,68 @@ fn behavior_write_survives_restart() {
             .await;
     });
 }
+
+/// Vial's exclusion flags (QSID 3) map onto RMK's inclusion groups; a write
+/// applies live, reads back in Vial's encoding, and persists.
+#[cfg(feature = "storage")]
+#[test]
+fn auto_shift_flags_round_trip_and_survive_restart() {
+    use rmk::config::{AutoShiftConfig, BehaviorConfig};
+
+    fn behavior() -> BehaviorConfig {
+        BehaviorConfig {
+            auto_shift: AutoShiftConfig {
+                enabled: true,
+                groups: AutoShiftConfig::ALPHA | AutoShiftConfig::NUMERIC | AutoShiftConfig::SYMBOLS,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+    test_block_on(async {
+        let flash = crate::simulator::flash::InMemoryFlash::new();
+        {
+            let mut keyboard = SimKeyboard::builder([[[k!(A), k!(Kc1)]]])
+                .behavior_config(behavior())
+                .build_with_flash(flash.clone())
+                .await;
+            keyboard
+                .tap(0, 0, 300)
+                .expect_keys_with_mods(0x02, [HidKeyCode::A])
+                .expect_keys([])
+                .run()
+                .await;
+            // enabled, alpha excluded
+            keyboard.set_behavior(SettingKey::AutoShift, 0b1_0001);
+            let mut request = vial(VialCommand::GetBehaviorSetting);
+            request[2..4].copy_from_slice(&(SettingKey::AutoShift as u16).to_le_bytes());
+            let mut reply = [0xFF; REPORT];
+            reply[0] = 0;
+            reply[1] = 0b1_0001;
+            keyboard.host_exchange(request, reply);
+            keyboard
+                .tap(0, 0, 300)
+                .expect_keys([HidKeyCode::A])
+                .expect_keys([])
+                .tap(0, 1, 300)
+                .expect_keys_with_mods(0x02, [HidKeyCode::Kc1])
+                .expect_keys([])
+                .wait_storage()
+                .run()
+                .await;
+        }
+        let mut keyboard = SimKeyboard::builder([[[k!(A), k!(Kc1)]]])
+            .behavior_config(behavior())
+            .build_with_flash(flash)
+            .await;
+        keyboard
+            .tap(0, 0, 300)
+            .expect_keys([HidKeyCode::A])
+            .expect_keys([])
+            .tap(0, 1, 300)
+            .expect_keys_with_mods(0x02, [HidKeyCode::Kc1])
+            .expect_keys([])
+            .run()
+            .await;
+    });
+}

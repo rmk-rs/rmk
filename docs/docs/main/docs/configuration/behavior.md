@@ -450,6 +450,26 @@ _ _     _
 
 Here `TD(0)`, `TD(1)`, and `TD(2)` reference morse dances by index, and the trailing `PN` in `LT(2, Kc9, PN)` names a morse profile (defined above). `keys` and `map` blocks hold data only.
 
+## Auto Shift
+
+With `[behavior.auto_shift]`, tapping a plain key sends it and holding it sends its shifted variant, without writing `TH(A, SHIFTED(A))` for every key. The held key stays down until you release it, so the host auto-repeats the shifted character. Pressing a key while any modifier (held, one-shot, or a home row mod that already resolved) is active skips auto shift, so `Ctrl+C` is sent immediately and never turns into `Ctrl+Shift+C`.
+
+```toml
+[behavior.auto_shift]
+keys = ["alpha", "numeric", "symbols", "Tab"]   # Optional, default = alpha + numeric + symbols
+profile = "as"                                  # Optional, default = the [behavior.morse] default profile
+
+[behavior.morse.profiles]
+as = { hold_timeout = "175ms" }
+```
+
+- `keys`: the keys to auto shift. Three group names cover the usual set — `alpha` (A–Z), `numeric` (1–0) and `symbols` (`` - = [ ] \ ; ' ` , . / ``) — and any other key is added by its keycode name or alias (`Tab`, `Enter`, `Space`, …). To leave out a single key from a group, list the keys you want instead of the group name, or give that key a different action in the keymap.
+- `profile`: the [morse profile](#profile) whose `hold_timeout` decides between tap and shifted. All other profile settings apply too: `quick_tap_timeout` lets a fast re-press repeat the unshifted key, and the decision mode is the same as for any tap-hold key (Normal mode by default: a tap resolves when the key is released, so an interrupting non-morse key goes out first). If you enable `enable_flow_tap` globally for home row mods, give auto shift its own profile with `enable_flow_tap = false`; otherwise fast typing always resolves as a tap and the shifted variant becomes unreachable mid-word.
+
+The keycodes `AutoShiftOn`, `AutoShiftOff` and `AutoShiftToggle` switch the feature at runtime. The switch and the group selection are also exposed in Vial's *QMK Settings → Auto Shift* tab (enable, and the "do not auto shift alpha / numeric / special" boxes) and in Rynk's behavior config; all three paths persist to storage, while `keys` names and `profile` are fixed at build time. Combos match and output keys as written in the keymap, so a combo on `A` still fires and a combo's output is never auto-shifted. Forks match the keymap action too: a fork whose trigger is an auto-shifted key only fires while a modifier is held (when auto shift steps aside), so list such trigger keys outside of `keys` if the fork must also fire without modifiers.
+
+This differs from QMK's Auto Shift in one way: QMK sends the pending key as soon as another key is pressed; RMK (like a ZMK `tap-preferred` hold-tap) waits for the key's own release or timeout, so the order of a fast roll into a non-auto-shift key follows the tap-hold rules of the selected profile.
+
 ## Fork
 
 In the `fork` sub-table, you can configure the keyboard's state-based key fork functionality. Forks allow you to define a trigger key and condition-dependent possible replacement keys. When the trigger key is pressed, the condition is checked by the following rule: If any of the `match_any` states are active AND none of the `match_none` states are active, the trigger key will be replaced with positive_output; otherwise, it will be replaced with the negative_output. By default, the modifiers listed in `match_any` will be suppressed (even the one-shot modifiers) for the time the replacement key action is executed. However, with `kept_modifiers` some of them can be kept instead of automatic suppression.

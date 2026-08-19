@@ -384,6 +384,44 @@ impl<'a> Keyboard<'a> {
         }
     }
 
+    /// Rewrite a plain key into its auto-shift tap-hold. Decided at press; a release
+    /// keeps the press-time action so the pair matches even if the switch or modifiers changed.
+    fn auto_shift(&self, action: KeyAction, event: KeyboardEvent) -> KeyAction {
+        let config = self.keymap.auto_shift_config();
+        if !event.pressed {
+            return match self.held_buffer.find_pos(event.pos) {
+                Some(k) if config.is_tap_hold(&k.action) => k.action,
+                _ => action,
+            };
+        }
+        if config.enabled
+            && let KeyAction::Single(Action::Key(KeyCode::Hid(key))) = action
+            && config.contains(key)
+            && self.resolve_explicit_modifiers(true).into_bits() == 0
+        {
+            return KeyAction::TapHold(
+                Action::Key(KeyCode::Hid(key)),
+                Action::KeyWithModifier(key, ModifierCombination::LSHIFT),
+                config.profile,
+            );
+        }
+        action
+    }
+
+    /// Keymap lookup with auto shift applied, see [`Self::auto_shift`]
+    fn resolve_action(&self, event: KeyboardEvent) -> KeyAction {
+        self.auto_shift(self.keymap.get_action_with_layer_cache(event), event)
+    }
+
+    /// Re-resolve a buffered key; an auto-shifted one keeps its press-time action.
+    fn resolve_held(&self, held: &HeldKey) -> KeyAction {
+        if self.keymap.auto_shift_config().is_tap_hold(&held.action) {
+            held.action
+        } else {
+            self.resolve_action(held.event)
+        }
+    }
+
     async fn process_key_action(
         &mut self,
         key_action: &KeyAction,
@@ -391,6 +429,13 @@ impl<'a> Keyboard<'a> {
         is_combo: bool,
         event_time: Instant,
     ) {
+        // Combos see keymap actions as written; auto shift applies after combo matching.
+        let key_action = &if is_combo {
+            *key_action
+        } else {
+            self.auto_shift(*key_action, event)
+        };
+
         // First, make the decision for current key and held keys
         let (decision_for_current_key, decisions) = self.make_decisions_for_keys(key_action, event);
 
@@ -411,7 +456,7 @@ impl<'a> Keyboard<'a> {
                 debug!("Clean buffer, then process current key normally");
                 let key_action = if keyboard_state_updated && !is_combo {
                     // The key_action needs to be updated due to the morse key might be triggered
-                    &self.keymap.get_action_with_layer_cache(event)
+                    &self.resolve_action(event)
                 } else {
                     key_action
                 };
@@ -437,7 +482,7 @@ impl<'a> Keyboard<'a> {
                 // Process current key normally
                 let key_action = if keyboard_state_updated && !is_combo {
                     // The key_action needs to be updated due to the morse key might be triggered
-                    &self.keymap.get_action_with_layer_cache(event)
+                    &self.resolve_action(event)
                 } else {
                     key_action
                 };
@@ -445,7 +490,7 @@ impl<'a> Keyboard<'a> {
             }
             KeyBehaviorDecision::FlowTap => {
                 let key_action = if keyboard_state_updated && !is_combo {
-                    &self.keymap.get_action_with_layer_cache(event)
+                    &self.resolve_action(event)
                 } else {
                     key_action
                 };
@@ -529,7 +574,7 @@ impl<'a> Keyboard<'a> {
                 }
                 HeldKeyDecision::PermissiveHold | HeldKeyDecision::HoldOnOtherKeyPress => {
                     if let Some(mut held_key) = self.held_buffer.remove_if(|k| k.event.pos == pos) {
-                        let action = self.keymap.get_action_with_layer_cache(held_key.event);
+                        let action = self.resolve_held(&held_key);
 
                         if action.is_morse() {
                             // Permissive hold of held key is triggered
@@ -572,7 +617,7 @@ impl<'a> Keyboard<'a> {
                         // Always re-evaluate action based on current layer state.
                         // A prior layer change (e.g. permissive hold activating a layer)
                         // may have changed what action this key maps to.
-                        let key_action = self.keymap.get_action_with_layer_cache(held_key.event);
+                        let key_action = self.resolve_held(&held_key);
                         if key_action != held_key.action {
                             keyboard_state_updated = true;
                         }
@@ -642,13 +687,10 @@ impl<'a> Keyboard<'a> {
                     if trigger_normal && let Some(held_key) = self.held_buffer.remove_if(|k| k.event.pos == pos) {
                         debug!("Cleaning buffered normal key");
                         let action = if keyboard_state_updated {
-                            self.keymap.get_action_with_layer_cache(held_key.event)
+                            self.resolve_held(&held_key)
                         } else {
                             held_key.action
                         };
-
-                        // Note: Morse like actions are not expected here.
-                        assert!(!action.is_morse());
                         debug!("Tap Key {:?} now press down, action: {:?}", held_key.event, action);
                         self.process_key_action_inner(&action, held_key.event, held_key.press_time)
                             .await;
@@ -1523,9 +1565,28 @@ impl<'a> Keyboard<'a> {
                     self.caps_word.toggle();
                 };
             }
-            KeyboardAction::ComboOn => self.combo_on = true,
-            KeyboardAction::ComboOff => self.combo_on = false,
-            KeyboardAction::ComboToggle => self.combo_on = !self.combo_on,
+            // Press only; acting on release too would undo it.
+            KeyboardAction::ComboOn if event.pressed => self.combo_on = true,
+            KeyboardAction::ComboOff if event.pressed => self.combo_on = false,
+            KeyboardAction::ComboToggle if event.pressed => self.combo_on = !self.combo_on,
+            KeyboardAction::AutoShiftOn | KeyboardAction::AutoShiftOff | KeyboardAction::AutoShiftToggle
+                if event.pressed =>
+            {
+                let config = self.keymap.auto_shift_config();
+                let enabled = match keyboard_control {
+                    KeyboardAction::AutoShiftOn => true,
+                    KeyboardAction::AutoShiftOff => false,
+                    _ => !config.enabled,
+                };
+                self.keymap.set_auto_shift(enabled, config.groups);
+                #[cfg(feature = "storage")]
+                crate::channel::FLASH_CHANNEL
+                    .send(crate::storage::FlashOperationMessage::AutoShift {
+                        auto_shift_enabled: enabled,
+                        auto_shift_groups: config.groups,
+                    })
+                    .await;
+            }
             KeyboardAction::Bootloader => {
                 // When releasing the key, process the boot action
                 if !event.pressed {
