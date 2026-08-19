@@ -155,6 +155,12 @@ dongle = [
     "trouble-host?/gatt-client-notification-queue-size-8",
 ]
 
+## Report what the dongle's link is doing — `DongleStatusEvent`, `DongleKeysEvent`
+## and the RSSI poll behind them — for a screen or a status LED to subscribe to.
+## Opt-in, and gated with `cfg` rather than a const, so a dongle that shows none
+## of it is byte-for-byte the binary it was before this existed.
+dongle_status = ["dongle"]
+
 ## Enable the storage. The storage is optional to save memory
 storage = [
     "dep:embedded-storage",

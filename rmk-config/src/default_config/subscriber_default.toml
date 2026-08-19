@@ -91,6 +91,18 @@ events = [
     { name = "led_indicator" },
 ]
 
+# Name features `rmk-types` actually has: this file is read by its build script,
+# which sees only its own `CARGO_FEATURE_*`. A key naming an `rmk`-side feature
+# never matches, so the events stay at `subs = 0` — and `subscriber()` panics on
+# the first build that tries to listen.
+[[subscriber]]
+features = ["dongle", "display"]
+events = [
+    # A dongle with a screen: whatever renders its own state subscribes to these.
+    { name = "dongle_status" },
+    { name = "dongle_keys" },
+]
+
 # --- Split-gated internal subscribers ---
 
 [[subscriber]]

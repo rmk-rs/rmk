@@ -519,6 +519,9 @@ define_event_config!(
     dfu_status,
     // Action events
     action,
+    // Dongle events
+    dongle_status,
+    dongle_keys,
 );
 
 /// The `[layout]` section: the physical key arrangement plus the rendered layout.

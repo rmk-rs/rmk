@@ -49,6 +49,8 @@ mod battery;
 mod connection;
 #[cfg(feature = "dfu")]
 mod dfu;
+#[cfg(feature = "dongle_status")]
+mod dongle;
 mod input;
 #[cfg(feature = "split")]
 mod split;
@@ -59,6 +61,8 @@ pub use battery::{BatteryAdcEvent, BatteryStatusEvent, ChargingStateEvent};
 pub use connection::{ConnectionStatus, ConnectionStatusChangeEvent, ConnectionType};
 #[cfg(feature = "dfu")]
 pub use dfu::DfuStatusEvent;
+#[cfg(feature = "dongle_status")]
+pub use dongle::{DongleKeysEvent, DongleState, DongleStatus, DongleStatusEvent};
 pub use input::{
     Axis, AxisEvent, AxisValType, KeyPos, KeyboardEvent, KeyboardEventPos, ModifierEvent, PointingEvent,
     PointingProcessorEvent, PointingSetCpiEvent, RotaryEncoderPos,

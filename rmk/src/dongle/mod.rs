@@ -18,6 +18,8 @@ mod vial_router;
 use core::cell::Cell;
 
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
+#[cfg(feature = "dongle_status")]
+use bt_hci::cmd::status::ReadRssi;
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::{AddrKind, BdAddr, LeAdvEventKind, Status};
 use embassy_futures::join::join;
@@ -25,6 +27,8 @@ use embassy_futures::select::{Either, select, select3};
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer, with_deadline, with_timeout};
+#[cfg(feature = "dongle_status")]
+use rmk_types::modifier::ModifierCombination;
 #[cfg(not(feature = "vial"))]
 use rmk_types::protocol::rynk::{RYNK_BLE_CHUNK_SIZE, RYNK_INPUT_CHAR_UUID, RYNK_OUTPUT_CHAR_UUID, RYNK_SERVICE_UUID};
 pub use router::DongleRouter;
@@ -41,12 +45,37 @@ use crate::ble::scan::{DONGLE_SCAN_WINDOW, scan_config, start_scan};
 use crate::ble::{update_ble_phy, update_conn_params, wait_for_stack_started};
 use crate::channel::send_hid_report;
 use crate::core_traits::Runnable;
+#[cfg(feature = "dongle_status")]
+use crate::event::{DongleKeysEvent, DongleState, DongleStatus, DongleStatusEvent, ModifierEvent, publish_event};
 use crate::event::{EventSubscriber, LedIndicatorEvent, SubscribableEvent};
 use crate::hid::{KeyboardReport, Report};
 use crate::{DONGLE_PAIRING_WINDOW_SECS, RawMutex};
 
 /// The dongle relays exactly one keyboard.
 const DONGLE_CONNECTIONS_MAX: usize = 1;
+
+/// Reading the link's RSSI is the one extra HCI command status reporting needs,
+/// and a trait bound is not something a `cfg` can add to a where-clause in place.
+/// So it is named here instead: without `dongle_status` it asks nothing of the
+/// controller, and a dongle that built before this existed still builds.
+#[cfg(feature = "dongle_status")]
+pub trait RssiReader: ControllerCmdSync<ReadRssi> {}
+#[cfg(feature = "dongle_status")]
+impl<C: ControllerCmdSync<ReadRssi>> RssiReader for C {}
+#[cfg(not(feature = "dongle_status"))]
+pub trait RssiReader {}
+#[cfg(not(feature = "dongle_status"))]
+impl<C> RssiReader for C {}
+
+/// Smallest RSSI move worth reporting, dBm. Below this the reading is noise and
+/// republishing it only wakes subscribers for nothing.
+#[cfg(feature = "dongle_status")]
+const RSSI_REPORT_STEP_DBM: u8 = 3;
+
+/// How often to read the link's RSSI while relaying. Advertisements, the only
+/// other source, stop once connected.
+#[cfg(feature = "dongle_status")]
+const RSSI_POLL_INTERVAL: Duration = Duration::from_secs(3);
 
 /// trouble's `CHANNELS` counts only dynamic L2CAP channels (fixed
 /// signalling/ATT/SMP are free); the dongle only talks GATT, so zero.
@@ -73,6 +102,70 @@ enum Peer {
     New,
 }
 
+/// Holds the link status and publishes a [`DongleStatusEvent`] on every change.
+/// Behind a `Cell` because the states are set from methods that only borrow
+/// `&self`; unchanged updates publish nothing, so events track real transitions.
+#[cfg(feature = "dongle_status")]
+struct StatusReporter(BlockingMutex<RawMutex, Cell<DongleStatus>>);
+
+#[cfg(feature = "dongle_status")]
+impl StatusReporter {
+    fn new() -> Self {
+        Self(BlockingMutex::new(Cell::new(DongleStatus::default())))
+    }
+
+    fn update(&self, f: impl FnOnce(&mut DongleStatus)) {
+        let Some(new) = self.0.lock(|c| {
+            let prev = c.get();
+            let mut new = prev;
+            f(&mut new);
+            if new == prev {
+                return None;
+            }
+            c.set(new);
+            Some(new)
+        }) else {
+            return;
+        };
+        publish_event(DongleStatusEvent(new));
+    }
+
+    fn set_state(&self, state: DongleState) {
+        self.update(|s| s.state = state);
+    }
+
+    /// Record a signal reading, taking only moves of at least
+    /// [`RSSI_REPORT_STEP_DBM`]: both sources report several times a second.
+    fn set_rssi(&self, rssi: i8) {
+        self.update(|s| {
+            if s.rssi.is_none_or(|prev| prev.abs_diff(rssi) >= RSSI_REPORT_STEP_DBM) {
+                s.rssi = Some(rssi);
+            }
+        });
+    }
+
+    /// Point the status at a peer. Clears the RSSI: it belongs to the previous
+    /// peer, and a stale number is worse than none.
+    fn set_peer(&self, peer: Option<BdAddr>) {
+        let peer = peer.map(bd_addr_bytes);
+        self.update(|s| {
+            if s.peer != peer {
+                s.peer = peer;
+                s.rssi = None;
+            }
+        });
+    }
+}
+
+/// `BdAddr` keeps its bytes private behind a slice accessor; the status carries
+/// them by value.
+#[cfg(feature = "dongle_status")]
+fn bd_addr_bytes(addr: BdAddr) -> [u8; 6] {
+    let mut out = [0u8; 6];
+    out.copy_from_slice(addr.raw());
+    out
+}
+
 /// What the scan handler tells [`DongleCentral`]. Inside the BLE runner it has
 /// no access to bonds or profiles, so it only reports; the dongle task decides.
 struct ScanHandler {
@@ -87,6 +180,10 @@ struct ScanHandler {
     /// The bonded keyboard asked for the dongle: a directed advertisement, or
     /// seeking again after clearing its bond. Only this triggers a connect.
     bonded_asked: Signal<RawMutex, ()>,
+    /// Reported link status. Here because both sides touch it: the dongle task
+    /// sets the state, and this handler is where RSSI is observed.
+    #[cfg(feature = "dongle_status")]
+    status: StatusReporter,
 }
 
 impl ScanHandler {
@@ -96,6 +193,16 @@ impl ScanHandler {
             seeking_keyboard: Signal::new(),
             bonded_seen: Signal::new(),
             bonded_asked: Signal::new(),
+            #[cfg(feature = "dongle_status")]
+            status: StatusReporter::new(),
+        }
+    }
+
+    /// Record the RSSI of an advertisement, if it came from the peer we track.
+    #[cfg(feature = "dongle_status")]
+    fn note_rssi(&self, addr: BdAddr, rssi: i8) {
+        if self.status.0.lock(|s| s.get().peer) == Some(bd_addr_bytes(addr)) {
+            self.status.set_rssi(rssi);
         }
     }
 }
@@ -104,6 +211,8 @@ impl EventHandler for ScanHandler {
     fn on_adv_reports(&self, mut it: LeAdvReportsIter<'_>) {
         while let Some(Ok(report)) = it.next() {
             let bonded = self.bonded_addr.lock(|addr| addr.get()) == Some(report.addr);
+            #[cfg(feature = "dongle_status")]
+            self.note_rssi(report.addr, report.rssi);
             if Adv::decode(report.data) == Some(Adv::DongleSeeking) {
                 debug!("[dongle] seeking keyboard {:?} rssi {}", report.addr, report.rssi);
                 self.seeking_keyboard
@@ -150,7 +259,8 @@ where
     C: Controller
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetScanParams>,
+        + ControllerCmdSync<LeSetScanParams>
+        + RssiReader,
 {
     async fn run(&mut self) -> ! {
         let controller = self.controller.take().expect("Dongle::run called twice");
@@ -186,7 +296,8 @@ where
     C: Controller
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetScanParams>,
+        + ControllerCmdSync<LeSetScanParams>
+        + RssiReader,
 {
     async fn run(&mut self) -> ! {
         wait_for_stack_started().await;
@@ -195,6 +306,8 @@ where
 
         let bonded = self.profiles.active_bond_info().map(|b| b.info.identity.addr);
         self.scan.bonded_addr.lock(|a| a.set(bonded.map(|addr| addr.addr)));
+        #[cfg(feature = "dongle_status")]
+        self.scan.status.set_peer(bonded.map(|addr| addr.addr));
         // The only chance to pair while a bond exists: one window at boot, so a
         // keyboard the user already set seeking can replace the bonded one.
         if bonded.is_some()
@@ -207,11 +320,15 @@ where
         loop {
             let bonded = self.profiles.active_bond_info().map(|b| b.info.identity.addr);
             self.scan.bonded_addr.lock(|a| a.set(bonded.map(|addr| addr.addr)));
+            #[cfg(feature = "dongle_status")]
+            self.scan.status.set_peer(bonded.map(|addr| addr.addr));
 
             if let Some(addr) = bonded {
                 // Connect only once the keyboard asks for the dongle; its bare address
                 // would match its host advertising too. The accept list drops other traffic.
                 self.scan.bonded_asked.reset();
+                #[cfg(feature = "dongle_status")]
+                self.scan.status.set_state(DongleState::Searching);
                 let session = start_scan(self.stack, DONGLE_SCAN_WINDOW, &[addr]).await;
                 self.scan.bonded_asked.wait().await;
                 session.stop().await;
@@ -228,6 +345,13 @@ where
     }
 
     async fn connect(&self, address: Address) -> Option<Connection<'b, DefaultPacketPool>> {
+        // Here rather than at the call sites: every route into a connection comes
+        // through this, so the reported peer cannot drift from the one being dialled.
+        #[cfg(feature = "dongle_status")]
+        {
+            self.scan.status.set_peer(Some(address.addr));
+            self.scan.status.set_state(DongleState::Connecting);
+        }
         let mut central = self.stack.central();
 
         let config = ConnectConfig {
@@ -262,6 +386,8 @@ where
     /// user before the (re)plug — that beats the automatic reconnect.
     async fn run_pairing_window(&self) -> Option<(AddrKind, BdAddr)> {
         info!("[dongle] pairing window open for {}s", DONGLE_PAIRING_WINDOW_SECS);
+        #[cfg(feature = "dongle_status")]
+        self.scan.status.set_state(DongleState::Pairing);
         self.scan.seeking_keyboard.reset();
         self.scan.bonded_seen.reset();
         let deadline = Instant::now() + Duration::from_secs(DONGLE_PAIRING_WINDOW_SECS as u64);
@@ -285,6 +411,13 @@ where
         let found = match with_deadline(deadline, select(pick, self.scan.bonded_seen.wait())).await {
             Ok(Either::First((addr, rssi))) => {
                 info!("[dongle] pairing candidate {:?} (rssi {})", addr.1, rssi);
+                // Scanning stops right after this, so `note_rssi` gets no second
+                // chance at the candidate's reading.
+                #[cfg(feature = "dongle_status")]
+                self.scan.status.update(|s| {
+                    s.peer = Some(bd_addr_bytes(addr.1));
+                    s.rssi = Some(rssi);
+                });
                 Some(addr)
             }
             Ok(Either::Second(())) => {
@@ -304,6 +437,8 @@ where
     /// One connection from start to end: secure it, relay over it, and release
     /// everything still held on the host when it drops.
     async fn run_connection(&mut self, conn: Connection<'b, DefaultPacketPool>, peer: Peer) {
+        #[cfg(feature = "dongle_status")]
+        self.scan.status.set_state(DongleState::Securing);
         if !self.secure_connection(&conn, peer).await {
             info!("[dongle] securing failed");
         } else if let Ok(client) = Client::new(self.stack, &conn).await {
@@ -320,6 +455,10 @@ where
             release_held_keys().await;
             info!("[dongle] disconnected");
         }
+        // Whatever ended the connection, the next loop turn goes back to looking
+        // for the keyboard — say so now rather than leaving the last state up.
+        #[cfg(feature = "dongle_status")]
+        self.scan.status.set_state(DongleState::Searching);
         conn.disconnect();
     }
 
@@ -408,16 +547,37 @@ where
         let mut listener = client.listen_all().ok()?;
 
         self.router.link_up();
+        #[cfg(feature = "dongle_status")]
+        self.scan.status.set_state(DongleState::Connected);
         info!("[dongle] relaying");
-        self.relay(
+        let relay = self.relay(
             #[cfg(not(feature = "vial"))]
             conn,
             client,
             &mut listener,
             &chars,
-        )
-        .await;
+        );
+        // Not a `select` in both cases: joining the poll would keep a slot for it
+        // in the relay's future even where the poll does not exist.
+        #[cfg(feature = "dongle_status")]
+        select(relay, self.poll_rssi(conn)).await;
+        #[cfg(not(feature = "dongle_status"))]
+        relay.await;
         Some(())
+    }
+
+    /// Keep the reported RSSI fresh while the link is up.
+    #[cfg(feature = "dongle_status")]
+    async fn poll_rssi(&self, conn: &Connection<'_, DefaultPacketPool>) -> ! {
+        loop {
+            Timer::after(RSSI_POLL_INTERVAL).await;
+            match conn.rssi(self.stack).await {
+                Ok(rssi) => self.scan.status.set_rssi(rssi),
+                // Reading it is a nicety; a controller that refuses just leaves
+                // the last value up.
+                Err(e) => debug!("[dongle] read rssi error: {:?}", e),
+            }
+        }
     }
 
     /// Relay both directions until this future is dropped. `NOTIF_MTU` is
@@ -437,6 +597,10 @@ where
             .min((conn.att_mtu() as usize).saturating_sub(3))
             .max(1);
 
+        // Only *changes* are worth republishing: a report crosses on every press
+        // and every release, and each event wakes every subscriber.
+        #[cfg(feature = "dongle_status")]
+        let (mut last_modifier, mut last_keycodes, mut presses) = (0u8, [0u8; 6], 0u8);
         let keyboard_to_host = async {
             loop {
                 let notification = listener.next().await;
@@ -464,6 +628,33 @@ where
                         Err(_) => warn!("[dongle] non-report-size vial notify dropped"),
                     }
                 } else if let Some(report) = chars.report(handle, data) {
+                    // The relayed report is all a dongle learns about what is
+                    // being typed; its modifier byte is exactly a `ModifierEvent`.
+                    #[cfg(feature = "dongle_status")]
+                    if let Report::KeyboardReport(kb) = &report {
+                        // Every bit and slot not set before is one press. Counted
+                        // here because a subscriber sees only where they settle.
+                        let down = (kb.modifier & !last_modifier).count_ones()
+                            + kb.keycodes
+                                .iter()
+                                .filter(|k| **k != 0 && !last_keycodes.contains(k))
+                                .count() as u32;
+                        presses = presses.wrapping_add(down as u8);
+
+                        if kb.modifier != last_modifier {
+                            last_modifier = kb.modifier;
+                            publish_event(ModifierEvent {
+                                modifier: ModifierCombination::from_bits(kb.modifier),
+                            });
+                        }
+                        if kb.keycodes != last_keycodes || down > 0 {
+                            last_keycodes = kb.keycodes;
+                            publish_event(DongleKeysEvent {
+                                keys: kb.keycodes,
+                                presses,
+                            });
+                        }
+                    }
                     send_hid_report(report).await;
                 }
             }
@@ -652,6 +843,13 @@ impl KeyboardCharacteristics {
 /// Release whatever the keyboard was holding when the link dropped, so nothing
 /// stays stuck down on the host.
 async fn release_held_keys() {
+    #[cfg(feature = "dongle_status")]
+    {
+        publish_event(ModifierEvent {
+            modifier: ModifierCombination::new(),
+        });
+        publish_event(DongleKeysEvent::default());
+    }
     for report in [
         Report::KeyboardReport(KeyboardReport::default()),
         Report::MouseReport(MouseReport {
