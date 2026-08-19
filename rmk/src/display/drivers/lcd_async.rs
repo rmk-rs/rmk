@@ -43,23 +43,15 @@ use super::super::DisplayDriver;
 /// - `BUF` — framebuffer storage of length `W * H * 2`. Typically `&'static mut [u8; W * H * 2]`.
 /// - `W` / `H` — display resolution in pixels.
 ///
-/// # Lifecycle
+/// The wrapped [`Display`] must already be initialized by [`lcd_async::Builder::init`];
+/// [`DisplayDriver::init`] is a no-op.
 ///
-/// The wrapped [`Display`] must already be initialized by [`lcd_async::Builder::init`]
-/// before being passed to [`new`](Self::new). [`DisplayDriver::init`] is therefore a no-op.
-///
-/// # Partial flush
-///
-/// Drawing through [`DrawTarget`] tracks a dirty rectangle, and
-/// [`flush`](DisplayDriver::flush) sends only that rectangle: narrow rects go
-/// out row by row (sub-width rows are not contiguous in the row-major
-/// framebuffer), wide rects as one full-width row band. When nothing was drawn
-/// since the last flush, flush is a no-op.
-///
-/// To benefit from this, a renderer must not clear the whole screen on every
-/// frame: cache the previously drawn state in the renderer and repaint only the
-/// widgets whose value changed (`fill_solid` the widget's area with the
-/// background color, then redraw it).
+/// [`flush`](DisplayDriver::flush) sends only the rectangle drawn since the
+/// last flush — gathered into whole transfers via the
+/// [`with_staging`](Self::with_staging) scratch, widened to full rows without
+/// one — and is a no-op when nothing was drawn. To benefit, renderers should
+/// repaint only the widgets whose value changed instead of clearing the whole
+/// screen each frame.
 pub struct LcdAsyncDisplay<DI, MOD, RST, BUF, const W: usize, const H: usize>
 where
     DI: Interface<Word = u8>,
@@ -71,6 +63,8 @@ where
     buffer: BUF,
     /// Union of the areas drawn since the last flush. `None` = nothing to send.
     dirty: Option<Rectangle>,
+    /// Scratch for gathering a sub-width rectangle into one contiguous transfer.
+    staging: Option<&'static mut [u8]>,
 }
 
 impl<DI, MOD, RST, BUF, const W: usize, const H: usize> LcdAsyncDisplay<DI, MOD, RST, BUF, W, H>
@@ -94,7 +88,20 @@ where
             buffer,
             // Everything is stale before the first flush.
             dirty: Some(Rectangle::new(Point::zero(), Size::new(W as u32, H as u32))),
+            staging: None,
         }
+    }
+
+    /// Lend scratch for gathering a sub-width dirty rectangle, so it goes out as
+    /// one transfer instead of widening to full rows.
+    ///
+    /// Size it for the widest rectangle a frame will dirty, `width * height * 2`
+    /// bytes, and that rectangle is sent in a single call. A smaller buffer still
+    /// works — the gather runs in as many passes as it takes — down to one row,
+    /// below which the flush widens to full rows instead.
+    pub fn with_staging(mut self, staging: &'static mut [u8]) -> Self {
+        self.staging = Some(staging);
+        self
     }
 
     /// Borrow the underlying [`Display`].
@@ -131,29 +138,56 @@ where
     async fn init(&mut self) {}
 
     async fn flush(&mut self) {
-        let Some(dirty) = self.dirty.take() else {
+        let Some(dirty) = self.dirty else {
             return;
         };
         let x0 = dirty.top_left.x as usize;
         let y0 = dirty.top_left.y as usize;
         let w = dirty.size.width as usize;
         let h = dirty.size.height as usize;
-        let buf = self.buffer.as_ref();
-        // Per-row transfers win when the skipped columns outweigh the per-call
-        // cost (address-window commands + transaction setup, tens of µs and
-        // not statically knowable), so require them to be ≥ 1/3 of the row.
-        if 3 * w < 2 * W {
-            for y in y0..y0 + h {
-                let start = (y * W + x0) * 2;
-                let _ = self
-                    .display
-                    .show_raw_data(x0 as u16, y as u16, w as u16, 1, &buf[start..start + w * 2])
-                    .await;
+
+        // A sub-width rectangle is not contiguous in a row-major framebuffer, so
+        // sending one means either a call per row or a copy. A call per row loses:
+        // each carries an address window, several bus transactions and a DMA round
+        // trip for a couple of hundred bytes of payload, and a hundred rows of that
+        // costs more than the columns it set out to save. So gather instead, as
+        // many rows at a time as the scratch holds.
+        match self.staging.as_deref_mut() {
+            Some(staging) if w < W && staging.len() >= w * 2 => {
+                let rows_per_pass = staging.len() / (w * 2);
+                let buffer = self.buffer.as_ref();
+                let mut y = y0;
+                while y < y0 + h {
+                    let count = rows_per_pass.min(y0 + h - y);
+                    for n in 0..count {
+                        let from = ((y + n) * W + x0) * 2;
+                        staging[n * w * 2..(n + 1) * w * 2].copy_from_slice(&buffer[from..from + w * 2]);
+                    }
+                    if self
+                        .display
+                        .show_raw_data(x0 as u16, y as u16, w as u16, count as u16, &staging[..count * w * 2])
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    y += count;
+                }
             }
-        } else {
-            let rows = &buf[y0 * W * 2..(y0 + h) * W * 2];
-            let _ = self.display.show_raw_data(0, y0 as u16, W as u16, h as u16, rows).await;
+            // Nowhere to gather it: widen to full rows, which are contiguous.
+            _ => {
+                let rows = &self.buffer.as_ref()[y0 * W * 2..(y0 + h) * W * 2];
+                if self
+                    .display
+                    .show_raw_data(0, y0 as u16, W as u16, h as u16, rows)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
         }
+        self.dirty = None;
     }
 }
 
