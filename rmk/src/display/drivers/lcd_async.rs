@@ -46,12 +46,9 @@ use super::super::DisplayDriver;
 /// The wrapped [`Display`] must already be initialized by [`lcd_async::Builder::init`];
 /// [`DisplayDriver::init`] is a no-op.
 ///
-/// [`flush`](DisplayDriver::flush) sends only the rectangle drawn since the
-/// last flush — gathered into whole transfers via the
-/// [`with_staging`](Self::with_staging) scratch, widened to full rows without
-/// one — and is a no-op when nothing was drawn. To benefit, renderers should
-/// repaint only the widgets whose value changed instead of clearing the whole
-/// screen each frame.
+/// [`flush`](DisplayDriver::flush) sends only the rectangle drawn since the last
+/// flush (see [`with_staging`](Self::with_staging)), so renderers should repaint
+/// only what changed rather than clearing the screen each frame.
 pub struct LcdAsyncDisplay<DI, MOD, RST, BUF, const W: usize, const H: usize>
 where
     DI: Interface<Word = u8>,
@@ -61,9 +58,9 @@ where
 {
     display: Display<DI, MOD, RST>,
     buffer: BUF,
-    /// Union of the areas drawn since the last flush. `None` = nothing to send.
+    /// Union of the areas drawn since the last flush; `None` = nothing to send.
     dirty: Option<Rectangle>,
-    /// Scratch for gathering a sub-width rectangle into one contiguous transfer.
+    /// Scratch for sending a sub-width rectangle as one contiguous transfer.
     staging: Option<&'static mut [u8]>,
 }
 
@@ -86,19 +83,15 @@ where
         Self {
             display,
             buffer,
-            // Everything is stale before the first flush.
             dirty: Some(Rectangle::new(Point::zero(), Size::new(W as u32, H as u32))),
             staging: None,
         }
     }
 
-    /// Lend scratch for gathering a sub-width dirty rectangle, so it goes out as
-    /// one transfer instead of widening to full rows.
-    ///
-    /// Size it for the widest rectangle a frame will dirty, `width * height * 2`
-    /// bytes, and that rectangle is sent in a single call. A smaller buffer still
-    /// works — the gather runs in as many passes as it takes — down to one row,
-    /// below which the flush widens to full rows instead.
+    /// Scratch for sending a sub-width dirty rectangle in one transfer instead of
+    /// widening it to full rows. `width * height * 2` bytes covers the largest
+    /// rectangle in one call; a smaller buffer takes more passes, and one too small
+    /// for a single row falls back to full rows.
     pub fn with_staging(mut self, staging: &'static mut [u8]) -> Self {
         self.staging = Some(staging);
         self
@@ -114,12 +107,11 @@ where
         let screen = Rectangle::new(Point::zero(), Size::new(W as u32, H as u32));
         let area = area.intersection(&screen);
         let Some(area_br) = area.bottom_right() else {
-            return; // Zero-sized after clipping.
+            return;
         };
         self.dirty = Some(match self.dirty {
             None => area,
-            // Tracked dirty rects are never zero-sized, so `bottom_right` is
-            // always `Some`; `unwrap_or` just keeps this panic-free.
+            // `dirty` is never zero-sized, so `unwrap_or` is only for panic-freedom.
             Some(d) => Rectangle::with_corners(
                 d.top_left.component_min(area.top_left),
                 d.bottom_right().unwrap_or(d.top_left).component_max(area_br),
@@ -146,12 +138,8 @@ where
         let w = dirty.size.width as usize;
         let h = dirty.size.height as usize;
 
-        // A sub-width rectangle is not contiguous in a row-major framebuffer, so
-        // sending one means either a call per row or a copy. A call per row loses:
-        // each carries an address window, several bus transactions and a DMA round
-        // trip for a couple of hundred bytes of payload, and a hundred rows of that
-        // costs more than the columns it set out to save. So gather instead, as
-        // many rows at a time as the scratch holds.
+        // A sub-width rectangle isn't contiguous in the framebuffer; a transfer per
+        // row costs more than the skipped columns save, so gather rows into `staging`.
         match self.staging.as_deref_mut() {
             Some(staging) if w < W && staging.len() >= w * 2 => {
                 let rows_per_pass = staging.len() / (w * 2);
@@ -174,7 +162,7 @@ where
                     y += count;
                 }
             }
-            // Nowhere to gather it: widen to full rows, which are contiguous.
+            // No staging: widen to full rows, which are contiguous.
             _ => {
                 let rows = &self.buffer.as_ref()[y0 * W * 2..(y0 + h) * W * 2];
                 if self
