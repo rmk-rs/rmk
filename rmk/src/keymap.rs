@@ -10,7 +10,7 @@ use {
     embedded_storage_async::nor_flash::NorFlash,
 };
 
-use crate::config::{BehaviorConfig, Hand, MouseKeyConfig, OneShotModifiersConfig, PositionalConfig};
+use crate::config::{AutoShiftConfig, BehaviorConfig, Hand, MouseKeyConfig, OneShotModifiersConfig, PositionalConfig};
 use crate::event::{KeyboardEvent, KeyboardEventSource, LayerChangeEvent, publish_event};
 use crate::input_device::rotary_encoder::Direction;
 use crate::keyboard::combo::Combo;
@@ -721,6 +721,16 @@ impl<'a> KeyMap<'a> {
             .get(idx as usize)
             .copied()
             .unwrap_or(morse.default_profile)
+    }
+
+    pub(crate) fn auto_shift_config(&self) -> AutoShiftConfig {
+        self.inner.borrow().behavior.auto_shift
+    }
+
+    pub(crate) fn set_auto_shift(&self, enabled: bool, groups: u8) {
+        let mut inner = self.inner.borrow_mut();
+        inner.behavior.auto_shift.enabled = enabled;
+        inner.behavior.auto_shift.groups = groups;
     }
 
     pub(crate) fn mouse_key_config(&self) -> MouseKeyConfig {

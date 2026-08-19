@@ -63,6 +63,8 @@ impl<F: AsyncNorFlash> Storage<F> {
                     behavior.one_shot.timeout = Duration::from_millis(c.one_shot_timeout as u64);
                     behavior.tap.tap_interval = c.tap_interval;
                     behavior.tap.tap_capslock_interval = c.tap_capslock_interval;
+                    behavior.auto_shift.enabled = c.auto_shift_enabled;
+                    behavior.auto_shift.groups = c.auto_shift_groups;
                 }
                 (StorageKey::Combo(idx), StorageValue::Combo(config)) => {
                     if let Some(slot) = behavior.combo.combos.get_mut(idx as usize) {

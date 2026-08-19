@@ -25,4 +25,7 @@ pub enum KeyboardAction {
     ComboToggle,
     /// Toggle Caps Word
     CapsWordToggle,
+    AutoShiftOn,
+    AutoShiftOff,
+    AutoShiftToggle,
 }

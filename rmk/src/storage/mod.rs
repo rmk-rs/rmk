@@ -311,6 +311,8 @@ pub(crate) struct BehaviorConfig {
     pub(crate) tap_interval: u16,
     // macOS treats capslock specially, so tapping it needs its own interval
     pub(crate) tap_capslock_interval: u16,
+    pub(crate) auto_shift_enabled: bool,
+    pub(crate) auto_shift_groups: u8,
 }
 
 impl From<&config::BehaviorConfig> for BehaviorConfig {
@@ -323,6 +325,8 @@ impl From<&config::BehaviorConfig> for BehaviorConfig {
             one_shot_timeout: behavior.one_shot.timeout.as_millis() as u16,
             tap_interval: behavior.tap.tap_interval,
             tap_capslock_interval: behavior.tap.tap_capslock_interval,
+            auto_shift_enabled: behavior.auto_shift.enabled,
+            auto_shift_groups: behavior.auto_shift.groups,
         }
     }
 }
