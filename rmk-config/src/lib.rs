@@ -155,10 +155,10 @@ impl KeyboardTomlConfig {
             .unwrap_or_else(|e| panic!("Deserialize {:?} error: {}", path, e))
     }
 
-    /// Load keyboard.toml with event defaults only.
+    /// Load keyboard.toml with event defaults but without chip-specific defaults.
     ///
-    /// This is used in build.rs where we only need [rmk] and [event] constants,
-    /// and should not require `[keyboard.board]`/`[keyboard.chip]`.
+    /// This is used in build.rs to resolve compile-time constants without
+    /// requiring `[keyboard.board]`/`[keyboard.chip]`.
     pub fn new_from_toml_path_with_event_defaults<P: AsRef<Path>>(config_toml_path: P) -> Self {
         let mut config = Self::parse_from_toml_path(config_toml_path, None);
         let storage = config.storage;
@@ -689,6 +689,8 @@ pub(crate) struct DfuTomlConfig {
 pub struct BleConfig {
     pub enabled: bool,
     pub battery_adc_pin: Option<String>,
+    /// User-facing description for the Battery Level characteristic.
+    pub battery_user_description: Option<String>,
     pub charge_state: Option<PinConfig>,
     pub charge_led: Option<PinConfig>,
     pub adc_divider_measured: Option<u32>,
@@ -1037,6 +1039,8 @@ pub struct SplitBoardConfig {
     pub display: Option<DisplayConfig>,
     /// Battery ADC pin for this split board
     pub battery_adc_pin: Option<String>,
+    /// User-facing description for this board's Battery Level characteristic
+    pub battery_user_description: Option<String>,
     /// ADC divider measured value for battery
     pub adc_divider_measured: Option<u32>,
     /// ADC divider total value for battery

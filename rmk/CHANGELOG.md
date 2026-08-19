@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add BLE passkey handling on the initial connection, for hosts that require pairing confirmation ([#756](https://github.com/rmk-rs/rmk/issues/756))
 - Add an option to disable the BLE battery service
 - Report the split peripheral's battery level to the central, and configure the peripheral's battery ADC from `keyboard.toml`
+- Expose battery levels from configured split peripherals through standard Battery Service instances on the central's BLE GATT server, including host-readable and notifiable levels for each peripheral
+- Add configurable `battery_user_description` values for the central and split peripheral Battery Level characteristics through `[ble]`, `[split.central]`, and `[[split.peripheral]]`, with descriptive defaults for each battery service
 - Advertise the boot keyboard protocol on the primary HID interface, so the keyboard works in BIOS/UEFI and other boot-protocol-only hosts
 - Add USB logging support for split peripherals ([#1000](https://github.com/rmk-rs/rmk/pull/1000))
 

@@ -144,6 +144,16 @@ When using the Rust API without `[[split.peripheral]]` entries in `keyboard.toml
 split_peripherals_num = 2
 ```
 
+`split_peripherals_num` only sets the number of peripherals used for split build-time sizing. It does not enable peripheral battery reporting. To use the Peripheral Battery Service from the Rust API, declare `battery_adc_pin` for the relevant peripheral in the same `keyboard.toml`, for example:
+
+```toml
+[rmk]
+split_peripherals_num = 2
+
+[[split.peripheral]]
+battery_adc_pin = "P0_02"
+```
+
 Make sure `KEYBOARD_TOML_PATH` points to this file.
 :::
 

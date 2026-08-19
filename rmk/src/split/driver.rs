@@ -91,6 +91,12 @@ pub(crate) fn set_peripheral_battery(id: usize, battery: BatteryStatus) {
     }
 }
 
+/// Latest battery status reported by peripheral `id`.
+#[cfg(feature = "_ble")]
+pub(crate) fn current_peripheral_battery_status(id: usize) -> Option<BatteryStatus> {
+    PERIPHERAL_SLOTS.lock(|slots| slots.get().get(id).map(|slot| slot.battery))
+}
+
 /// Latest snapshot for peripheral `id`, or `None` when `id` is out of range.
 #[cfg(feature = "rynk")]
 pub(crate) fn current_peripheral_status(id: usize) -> Option<PeripheralStatus> {
@@ -100,6 +106,26 @@ pub(crate) fn current_peripheral_status(id: usize) -> Option<PeripheralStatus> {
             battery: s.battery,
         })
     })
+}
+
+#[cfg(all(test, feature = "_ble"))]
+mod tests {
+    use rmk_types::battery::ChargeState;
+
+    use super::{current_peripheral_battery_status, set_peripheral_battery};
+
+    #[test]
+    fn caches_latest_peripheral_battery_status() {
+        let status = rmk_types::battery::BatteryStatus::Available {
+            charge_state: ChargeState::Discharging,
+            level: Some(73),
+        };
+
+        set_peripheral_battery(0, status);
+
+        assert_eq!(current_peripheral_battery_status(0), Some(status));
+        assert_eq!(current_peripheral_battery_status(crate::SPLIT_PERIPHERALS_NUM), None);
+    }
 }
 
 /// PeripheralManager runs in central.

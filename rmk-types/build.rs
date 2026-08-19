@@ -9,8 +9,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=KEYBOARD_TOML_PATH");
     println!("cargo:rerun-if-env-changed=VIAL_JSON_PATH");
 
-    // Build-time constants only need [rmk] + [event] + [layout], so load event
-    // defaults without requiring [keyboard.board]/[keyboard.chip].
+    // Load compile-time constants with event defaults, without requiring
+    // chip-specific defaults from [keyboard.board]/[keyboard.chip].
     let toml_path = std::env::var("KEYBOARD_TOML_PATH").ok();
     let config: KeyboardTomlConfig = if let Some(toml_path) = &toml_path {
         println!("cargo:rerun-if-changed={toml_path}");
@@ -79,6 +79,22 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     lines.push(format!(
         "pub const SPLIT_PERIPHERALS_NUM: usize = {};",
         bc.split_peripherals_num
+    ));
+    lines.push(format!(
+        "pub const CENTRAL_BATTERY_USER_DESCRIPTION: &str = {:?};",
+        bc.central_battery_user_description
+    ));
+    lines.push(format!(
+        "pub const SPLIT_BATTERY_PERIPHERALS_NUM: usize = {};",
+        bc.split_battery_peripheral_ids.len()
+    ));
+    lines.push(format!(
+        "pub const SPLIT_BATTERY_PERIPHERAL_IDS: [usize; SPLIT_BATTERY_PERIPHERALS_NUM] = {:?};",
+        bc.split_battery_peripheral_ids
+    ));
+    lines.push(format!(
+        "pub const SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS: [&str; SPLIT_BATTERY_PERIPHERALS_NUM] = {:?};",
+        bc.split_battery_peripheral_user_descriptions
     ));
     lines.push(format!("pub const NUM_BLE_PROFILE: usize = {};", bc.ble_profiles_num));
     lines.push(format!(

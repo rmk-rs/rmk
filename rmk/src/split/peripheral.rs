@@ -123,6 +123,14 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                         SplitMessage::ConnectionStatus(status) => {
                             trace!("Received central connection status: {:?}", status);
                             update_status(|c| *c = status);
+                            // The central sends this only after subscribing to split notifications.
+                            #[cfg(feature = "_ble")]
+                            self.split_driver
+                                .write(&SplitMessage::BatteryStatus(
+                                    crate::input_device::battery::current_battery_status().into(),
+                                ))
+                                .await
+                                .ok();
                         }
                         #[cfg(all(feature = "_ble", feature = "storage"))]
                         SplitMessage::ClearPeer => {

@@ -16,6 +16,8 @@ use trouble_host::prelude::*;
 
 use crate::ble::adv::{Adv, advertise};
 use crate::ble::battery_service::BleBatteryServer;
+#[cfg(feature = "split")]
+use crate::ble::battery_service::BlePeripheralBatteryServer;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
 #[cfg(feature = "host")]
@@ -417,6 +419,8 @@ pub(crate) async fn ble_task<C: Controller + ControllerCmdAsync<LeSetPhy>, P: Pa
 /// This is how we interact with read and write requests.
 async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacketPool>) -> Result<(), Error> {
     let level = server.battery_service.level;
+    #[cfg(feature = "split")]
+    let peripheral_levels = server.peripheral_battery_services.levels;
     let output_keyboard = server.hid_service.output_keyboard;
     let hid_control_point = server.hid_service.hid_control_point;
     let input_keyboard = server.hid_service.input_keyboard;
@@ -481,7 +485,17 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                             let value = server.get(&level);
                             debug!("Read GATT Event to Level: {:?}", value);
                         } else {
-                            debug!("Read GATT Event to Unknown: {:?}", event.handle());
+                            #[cfg(feature = "split")]
+                            let peripheral_level =
+                                peripheral_levels.iter().find(|level| event.handle() == level.handle);
+                            #[cfg(not(feature = "split"))]
+                            let peripheral_level: Option<&Characteristic<u8>> = None;
+                            if let Some(peripheral_level) = peripheral_level {
+                                let value = server.get(peripheral_level);
+                                debug!("Read GATT Event to Peripheral Level: {:?}", value);
+                            } else {
+                                debug!("Read GATT Event to Unknown: {:?}", event.handle());
+                            }
                         }
 
                         if conn.raw().security_level()?.encrypted() {
@@ -521,6 +535,19 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                             || event.handle() == media.cccd_handle.expect("No CCCD for media report")
                             || event.handle() == system_control.cccd_handle.expect("No CCCD for system report")
                             || event.handle() == level.cccd_handle.expect("No CCCD for battery level")
+                            || {
+                                #[cfg(feature = "split")]
+                                {
+                                    peripheral_levels.iter().any(|level| {
+                                        event.handle()
+                                            == level.cccd_handle.expect("No CCCD for peripheral battery level")
+                                    })
+                                }
+                                #[cfg(not(feature = "split"))]
+                                {
+                                    false
+                                }
+                            }
                         {
                             cccd_updated = true;
                         } else if event.handle() == hid_control_point.handle {
@@ -747,6 +774,10 @@ async fn serve_keyboard_connection<
     let mut ble_hid_server = BleHidServer::new(server, conn);
     let mut ble_led_reader = BleLedReader;
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
+    #[cfg(feature = "split")]
+    let mut ble_peripheral_battery_server = crate::SPLIT_BATTERY_PERIPHERAL_IDS
+        .first()
+        .map(|_| BlePeripheralBatteryServer::new(server, conn));
 
     // CCCD lookup uses cached bond info to avoid a cancellable flash read while
     // this future is racing other arms of an outer `select`.
@@ -773,11 +804,16 @@ async fn serve_keyboard_connection<
     };
     update_ble_phy(stack, conn.raw(), host_phy).await;
 
+    #[cfg(not(feature = "split"))]
+    let battery_task = ble_battery_server.run();
+    #[cfg(feature = "split")]
+    let battery_task = embassy_futures::join::join(ble_battery_server.run(), ble_peripheral_battery_server.run());
+
     let communication_task = async {
         if let Either3::First(e) = select3(
             gatt_events_task(server, conn),
             set_conn_params(stack, conn),
-            ble_battery_server.run(),
+            battery_task,
         )
         .await
         {
