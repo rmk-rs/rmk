@@ -293,7 +293,7 @@ pub(crate) mod subrating {
 
     use bt_hci::cmd::le::{LeSubrateRequest, LeSubrateRequestParams};
     use bt_hci::controller::ControllerCmdAsync;
-    use bt_hci::param::{ConnHandle, Duration};
+    use bt_hci::param::{ConnHandle, Duration, Error as HciError};
     use trouble_host::prelude::*;
 
     const CONN_INTERVAL_US: u32 = 7500;
@@ -361,8 +361,10 @@ pub(crate) mod subrating {
             match stack.async_command(subrate_request).await {
                 Ok(_) => return true,
                 Err(BleHostError::BleHost(Error::Hci(error))) => {
-                    if 0x3A == error.to_status().into_inner() {
-                        info!("[update_subrate_factor] HCI busy: {:?}", error);
+                    // A connection runs one link-layer control procedure at a time, and
+                    // a fresh one is still running its own.
+                    if error == HciError::CONTROLLER_BUSY || error == HciError::DIFFERENT_TRANSACTION_COLLISION {
+                        info!("[update_subrate_factor] controller busy, retrying: {:?}", error);
                         embassy_time::Timer::after_millis(100).await;
                         continue;
                     }
