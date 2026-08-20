@@ -24,27 +24,25 @@ use crate::event::{ModifierEvent, SleepStateEvent, WpmUpdateEvent};
 use crate::split::serial::SerialSplitDriver;
 use crate::state::update_status;
 
-/// Run the split peripheral service.
+/// Run the split peripheral service. On BLE builds this owns the peripheral's
+/// whole BLE stack, sized to its single link (the central) — nothing else
+/// uses it.
 ///
 /// # Arguments
 ///
 /// * `id` - (optional) The id of the peripheral
-/// * `stack` - (optional) The TrouBLE stack
+/// * `controller` - (optional) The BLE controller
+/// * `address` - (optional) The BLE address of this peripheral
 /// * `serial` - (optional) serial port used to send peripheral split message. This argument is enabled only for serial split now
-/// * `storage` - (optional) The storage to save the central address
-#[allow(clippy::extra_unused_lifetimes)]
 pub async fn run_rmk_split_peripheral<
-    'b,
-    's,
     #[cfg(feature = "_ble")] C: Controller + ControllerCmdAsync<LeSetPhy>,
     #[cfg(not(feature = "_ble"))] S: Write + Read,
 >(
     #[cfg(feature = "_ble")] id: usize,
-    #[cfg(feature = "_ble")] stack: &'b Stack<'s, C, DefaultPacketPool>,
+    #[cfg(feature = "_ble")] controller: C,
+    #[cfg(feature = "_ble")] address: [u8; 6],
     #[cfg(not(feature = "_ble"))] serial: S,
-) where
-    's: 'b,
-{
+) {
     #[cfg(not(feature = "_ble"))]
     {
         let mut peripheral = SplitPeripheral::new(SerialSplitDriver::new(serial));
@@ -54,7 +52,14 @@ pub async fn run_rmk_split_peripheral<
     }
 
     #[cfg(feature = "_ble")]
-    crate::split::ble::peripheral::initialize_nrf_ble_split_peripheral_and_run(id, stack).await;
+    {
+        // Exactly one link — the central.
+        let mut resources: HostResources<DefaultPacketPool, 1, 4> = HostResources::new();
+        let stack = trouble_host::new(controller, &mut resources)
+            .set_random_address(Address::random(address))
+            .build();
+        crate::split::ble::peripheral::initialize_nrf_ble_split_peripheral_and_run(id, &stack).await;
+    }
 }
 
 /// The split peripheral instance.
