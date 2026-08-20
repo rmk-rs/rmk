@@ -1,0 +1,19 @@
+[target.'cfg(all(any(target_arch = "riscv32", target_arch = "xtensa"), target_os = "none"))']
+runner = "espflash flash --monitor"
+
+[build]
+target = "xtensa-esp32s3-none-elf"
+rustflags = [
+  # Required to obtain backtraces (e.g. when using the "esp-backtrace" crate.)
+  # NOTE: May negatively impact performance of produced code
+  "-C", "force-frame-pointers",
+]
+
+
+[env]
+ESP_LOG = "info"
+
+# Xtensa only:
+# Needed for nightly, until llvm upstream has support for Rust Xtensa.
+[unstable]
+build-std = ["alloc", "core"]

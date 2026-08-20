@@ -1,0 +1,40 @@
+{
+    "name": "Rust Development Environment",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".",
+    },
+    "runArgs": ["--name", "rust"],
+    "remoteUser": "esp",
+    "features": {
+        "ghcr.io/devcontainers/features/common-utils:1": {
+            "configureZshAsDefaultShell": true,
+        },
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "tamasfe.even-better-toml",
+                "vadimcn.vscode-lldb",
+                "serayuzgur.crates",
+                "espressif.esp-idf-extension",
+            ],
+            "settings": {
+                "lldb.executable": "/usr/bin/lldb",
+                "rust-analyzer.cargo.buildScripts.enable": true,
+                "rust-analyzer.procMacro.enable": true,
+                "rust-analyzer.check.allTargets": false,
+                "rust-analyzer.checkOnSave.command": "clippy",
+                "rust-analyzer.cargo.targetDir": "/workspaces/esp32s3_ble_split",
+                "rust-analyzer.server.path": "/home/esp/.cargo/bin/rust-analyzer",
+                "rust-analyzer.linkedProjects": [
+                    "/workspaces/esp32s3_ble_split/Cargo.toml",
+                ],
+            },
+        },
+    },
+    "postStartCommand": "cargo install --force cargo-make",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/esp32s3_ble_split,type=bind,consistency=cached",
+    "workspaceFolder": "/workspaces/esp32s3_ble_split",
+}
