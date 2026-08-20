@@ -771,7 +771,7 @@ pub(crate) async fn set_conn_params<
         // Wait 5 seconds before each request to avoid connection drop
         embassy_time::Timer::after_secs(5).await;
 
-        // we neet to let the central sleep for long perios of time when the
+        // We need to let the central sleep for long periods of time when the
         // split connection is subrated to get the power savings.
         #[cfg(feature = "subrating")]
         let max_latency = subrating::HOST_MAX_LATENCY;

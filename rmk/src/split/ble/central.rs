@@ -272,17 +272,17 @@ pub(crate) mod subrating {
     //
     // In active mode without pressing any key, the average current is: ~600µA
     //
-    // Current draw on PERIPHERAL with subrating During Connected Sleep with
-    // subrate factor <250 and a max sleep time of 3.75s is 21µA.
+    // The current draw on the peripheral with subrating during connected sleep
+    // with a subrate factor < 250 and a max sleep time of 3.75s is 21µA.
     //
-    // During Disconnected Sleep with subrate factor set to 250 the average
-    // peripheral current draw increases to 24µA, when the internal low
-    // frequency clock is in use. Due to the long intervals the peripheral needs
+    // During disconnected sleep with the subrate factor set to 250, the average
+    // peripheral current draw increases to 24µA, when the internal low-frequency
+    // clock is in use. Due to the long intervals, the peripheral needs
     // to increase the listening window during connection events to compensate
-    // for clock drift. Therefore 125 is selected as the better tradeoff.
+    // for clock drift. Therefore, 125 is selected as the better trade-off.
     //
-    //    In active mode without pressing any key, the average current depends on the max
-    //    latency of the split connection:
+    // In active mode without pressing any key, the average current depends on the max
+    // latency of the split connection:
     //    | max_latency |  [ms] | min_timeout [ms] | avg. [µA] |
     //    |-------------+-------+------------------+-----------|
     //    |          10 |   75. |             165. |        72 |
@@ -302,7 +302,7 @@ pub(crate) mod subrating {
     const DEFAULT_MAX_LATENCY: u16 = 300;
     pub(crate) const HOST_MAX_LATENCY: u16 = 300;
 
-    // In some cases the subrate request procedure does not run through with only one continuation.
+    // In some cases, the subrate request procedure does not complete with only one continuation.
     const SLEEP_CONTINUATION_NUMBER: u16 = 2;
 
     const fn calc_max_latency(subrate_max: u16) -> u16 {
