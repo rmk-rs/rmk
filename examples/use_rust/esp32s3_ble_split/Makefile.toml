@@ -1,0 +1,84 @@
+[env]
+LIBCLANG_PATH = { script = ["sed -n 's/^export LIBCLANG_PATH=\"\\(.*\\)\"$/\\1/p' \"$HOME/export-esp.sh\""] }
+ESP_BIN_PATH = { script = ["sed -n 's/^export PATH=\"\\(.*\\):\\$PATH\"$/\\1/p' \"$HOME/export-esp.sh\""] }
+ESP_TARGET = { script = ['sed -n "/^[[:space:]]*target/s/.*\"\([^\"]*\)\".*/\1/p" .cargo/config.toml | head -n1'] }
+ESP_CHIP = { script = ['sed -n "/^[[:space:]]*target/s/.*\(esp[a-zA-Z0-9]*\).*/\1/p" .cargo/config.toml | head -n1'] }
+
+[tasks.init]
+condition = { env_set = [ "ESP_BIN_PATH", "ESP_CHIP", "ESP_TARGET"] }
+script_runner = "@shell"
+script = '''
+set -e
+
+echo "==> [LOG] Linking esp binaries for $ESP_CHIP"
+for bin_path in "$ESP_BIN_PATH"/*"$ESP_CHIP"*; do
+    trimmed_bin_path=$(echo "$bin_path" | xargs)
+
+    if [ -n "$trimmed_bin_path" ] && [ -e "$trimmed_bin_path" ]; then
+        ln -sfn "$trimmed_bin_path" "/home/esp/.cargo/bin/$(basename "$trimmed_bin_path")"
+    else
+        echo "==> Warning: Path '$trimmed_bin_path' is invalid or does not exist. Skipping."
+    fi
+done
+
+
+echo "==> [LOG] Removing past build leftovers..."
+if ! sudo rm -rf generated/ target/; then
+    echo "==> [ERROR] 'rm' command failed to execute."
+    exit 1
+fi
+
+# Verify directories were actually removed (handles permission locks)
+if [ -e generated ] || [ -e target ]; then
+    echo "==> [ERROR] Failed to clean up 'generated/' or 'target/' directories."
+    exit 1
+fi
+
+echo "==> [LOG] Ensuring bin directory exists..."
+if ! mkdir -p generated; then
+    echo "==> [ERROR] 'mkdir' command failed to execute."
+    exit 1
+fi
+
+# Verify 'generated' exists, is a directory, and has write permissions
+if [ ! -d generated ] || [ ! -w generated ]; then
+    echo "==> [ERROR] 'generated' directory is missing or not writable."
+    exit 1
+fi
+'''
+
+[tasks.build]
+dependencies = ["init"]
+command = "cargo"
+args = [
+    "+esp",
+    "build",
+    "--release"
+]
+
+[tasks.generate-central-bin]
+dependencies = ["init", "build"]
+command = "espflash"
+args = [
+    "save-image",
+    "--chip",
+    "${ESP_CHIP}",
+    "${CARGO_MAKE_WORKING_DIRECTORY}/target/${ESP_TARGET}/release/central",
+    "--merge",
+    "${CARGO_MAKE_WORKING_DIRECTORY}/generated/central.bin"
+]
+
+[tasks.generate-peripheral-bin]
+dependencies = ["init", "build"]
+command = "espflash"
+args = [
+    "save-image",
+    "--chip",
+    "${ESP_CHIP}",
+    "${CARGO_MAKE_WORKING_DIRECTORY}/target/${ESP_TARGET}/release/peripheral",
+    "--merge",
+    "${CARGO_MAKE_WORKING_DIRECTORY}/generated/peripheral.bin"
+]
+
+[tasks.all]
+dependencies = ["init", "build", "generate-central-bin", "generate-peripheral-bin"]

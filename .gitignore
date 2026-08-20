@@ -1,5 +1,6 @@
 target
 node_modules
+generated
 
 .DS_Store
 

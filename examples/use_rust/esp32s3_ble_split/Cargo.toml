@@ -1,0 +1,71 @@
+[package]
+name = "rmk-esp32s3_ble_split"
+version = "0.2.0"
+authors = ["Haobo Gu <haobogu@outlook.com>"]
+description = "Keyboard firmware written in Rust"
+homepage = "https://github.com/haobogu/rmk"
+repository = "https://github.com/haobogu/rmk"
+readme = "../../README.md"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rmk = { version = "0.8.2", default-features = false, features = [
+    "esp32s3_ble",
+    "split",
+    "log",
+    "storage",
+    "vial"
+] }
+embassy-executor = { version = "0.9" }
+esp-backtrace = { version = "0.18", features = [
+    "esp32s3",
+    "panic-handler",
+    "println",
+] }
+esp-hal = { version = "1.0", features = ["esp32s3", "unstable"] }
+esp-storage = { version = "0.8.0", features = ["esp32s3"] }
+esp-alloc = { version = "0.9.0" }
+esp-println = { version = "0.16.0", features = ["esp32s3", "log-04"] }
+esp-radio = { version = "0.17", features = ["esp32s3", "unstable", "ble"] }
+esp-rtos = { version = "0.2", features = ["esp32s3", "esp-radio", "embassy"] }
+esp-bootloader-esp-idf = { version = "0.4", features = ["esp32s3", "log-04"] }
+bt-hci = { version = "0.6" }
+rand_core = { version = "0.6", default-features = false }
+static_cell = "2"
+
+[build-dependencies]
+xz2 = "0.1.7"
+json = "0.12"
+const-gen = "1.6"
+embuild = "0.33"
+cc = "1.2.9"
+
+[[bin]]
+name = "central"
+path = "src/central.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "peripheral"
+path = "src/peripheral.rs"
+test = false
+bench = false
+
+[profile.dev.package.esp-storage]
+opt-level = 3
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1        # LLVM can perform better optimizations using a single thread
+debug = 2
+debug-assertions = false
+incremental = false
+lto = 'thin'
+opt-level = 3
+overflow-checks = false
