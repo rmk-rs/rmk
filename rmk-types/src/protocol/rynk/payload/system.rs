@@ -11,6 +11,9 @@ use crate::morse::MorseProfile;
 /// Maximum byte length of each `DeviceInfo` string field.
 pub const DEVICE_INFO_STRING_SIZE: usize = 32;
 
+/// Maximum byte length of the application-defined build label.
+pub const BUILD_INFO_STRING_SIZE: usize = 128;
+
 /// Protocol version advertised during the connection handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
@@ -23,7 +26,33 @@ pub struct ProtocolVersion {
 impl ProtocolVersion {
     /// Current protocol version for this firmware release.
     /// Now the protocol is still being developed, so the version is v0.1
+    ///
+    /// Version numbers are minted upstream (HaoboGu/rmk) only — downstream
+    /// extensions must never bump this constant, or the same number would
+    /// eventually name two different protocols. Extensions are discovered
+    /// through capability surfaces instead: [`DeviceCapabilities`] flags,
+    /// domain capability endpoints (e.g. `GetLightingCapabilities` /
+    /// `GetLightingSceneStatus`), and per-command probing — firmware answers
+    /// `UnknownCmd` for any command it does not implement.
     pub const CURRENT: Self = Self { major: 0, minor: 1 };
+}
+
+/// Human-readable identity of the firmware build.
+///
+/// Unlike [`ProtocolVersion`], this label is deliberately application-defined:
+/// it is for diagnostics and display, never compatibility decisions. RMK
+/// supplies an RMK-only default and downstream firmware may replace it with a
+/// label containing its own package, source revision, or configuration name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct BuildInfo {
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
+    pub label: String<BUILD_INFO_STRING_SIZE>,
+}
+
+impl MaxSize for BuildInfo {
+    const POSTCARD_MAX_SIZE: usize = crate::heapless_vec_max_size::<u8, BUILD_INFO_STRING_SIZE>();
 }
 
 /// Device capabilities discovered during the connection handshake.
@@ -166,6 +195,31 @@ pub struct BehaviorConfig {
     pub morse_prior_idle_time_ms: u16,
 }
 
+/// Active-mode split BLE latency policy. Values count connection events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct SplitCentralLatencyPolicy {
+    /// Maximum skipped connection events when USB power is present.
+    pub powered: u16,
+    /// Maximum skipped connection events when running on battery.
+    pub battery: u16,
+    /// Forced value for both power states; `None` restores automatic selection.
+    pub override_latency: Option<u16>,
+}
+
+/// Current split BLE latency selection and its policy inputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct SplitCentralLatencyState {
+    pub policy: SplitCentralLatencyPolicy,
+    /// Whether USB power is currently present.
+    pub powered: bool,
+    /// Value currently requested for the active split connection.
+    pub effective: u16,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,6 +304,15 @@ mod tests {
     }
 
     #[test]
+    fn round_trip_build_info() {
+        let full: String<BUILD_INFO_STRING_SIZE> =
+            String::try_from("x".repeat(BUILD_INFO_STRING_SIZE).as_str()).unwrap();
+        let info = BuildInfo { label: full };
+        round_trip(&info);
+        assert_max_size_bound(&info);
+    }
+
+    #[test]
     fn round_trip_lock_status() {
         // Locked, no attempt armed, challenge advertised.
         let mut kp = Vec::new();
@@ -319,5 +382,20 @@ mod tests {
         };
         round_trip(&cfg);
         assert_max_size_bound(&cfg);
+    }
+
+    #[test]
+    fn round_trip_split_central_latency() {
+        let policy = SplitCentralLatencyPolicy {
+            powered: 0,
+            battery: 4,
+            override_latency: Some(2),
+        };
+        round_trip(&policy);
+        round_trip(&SplitCentralLatencyState {
+            policy,
+            powered: true,
+            effective: 2,
+        });
     }
 }

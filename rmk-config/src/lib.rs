@@ -89,6 +89,9 @@ pub struct KeyboardTomlConfig {
     /// Layout config: the physical key arrangement (`map`) plus the rendered layout.
     /// For split keyboards, the total row/col is defined in this section.
     layout: Option<LayoutTomlConfig>,
+    /// Topology-aware lighting. Key geometry is always derived from
+    /// `[layout].map`; emitters add semantic identity and electrical routing.
+    lighting: Option<LightingTomlConfig>,
     /// Behavior config
     behavior: Option<BehaviorConfig>,
     /// Light config
@@ -331,6 +334,14 @@ pub(crate) struct RmkConstantsConfig {
     /// BLE Split Central sleep timeout in seconds (0 = disabled)
     #[serde_inline_default(0)]
     pub split_central_sleep_timeout_seconds: u32,
+    /// Maximum BLE peripheral latency on external power, in active connection events.
+    #[serde_inline_default(30)]
+    #[serde(deserialize_with = "check_split_central_max_latency")]
+    pub split_central_max_latency_powered: u16,
+    /// Maximum BLE peripheral latency on battery, in active connection events.
+    #[serde_inline_default(30)]
+    #[serde(deserialize_with = "check_split_central_max_latency")]
+    pub split_central_max_latency_battery: u16,
     /// Maximum macro data chunk size for protocol transfers (bytes).
     /// Smaller values reduce firmware RAM usage but require more round-trips.
     #[serde_inline_default(64)]
@@ -414,6 +425,19 @@ where
     Ok(value)
 }
 
+fn check_split_central_max_latency<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let value = Deserialize::deserialize(deserializer)?;
+    if value >= 500 {
+        return Err(de::Error::custom(format!(
+            "split_central_max_latency must be between 0 and 499, got {value}"
+        )));
+    }
+    Ok(value)
+}
+
 /// This separate Default impl is needed when `[rmk]` section is not set in keyboard.toml
 impl Default for RmkConstantsConfig {
     fn default() -> Self {
@@ -434,6 +458,8 @@ impl Default for RmkConstantsConfig {
             split_peripherals_num: 0,
             ble_profiles_num: 3,
             split_central_sleep_timeout_seconds: 0,
+            split_central_max_latency_powered: 30,
+            split_central_max_latency_battery: 30,
             protocol_macro_chunk_size: 64,
             auto_mouse_layer_max_num: None,
             rynk_buffer_size: 488,
@@ -504,6 +530,7 @@ define_event_config!(
     wpm_update,
     led_indicator,
     sleep_state,
+    lighting_changed,
     // Power events
     battery_status,
     battery_adc,
@@ -562,6 +589,224 @@ pub(crate) struct VariantToml {
     pub name: String,
     pub shapes: Option<HashMap<String, String>>,
     pub hidden: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingTomlConfig {
+    #[serde(default = "default_topology_revision")]
+    pub topology_revision: u32,
+    #[serde(default, rename = "zone")]
+    pub zones: Vec<LightingZoneTomlConfig>,
+    #[serde(default, rename = "output")]
+    pub outputs: Vec<LightingOutputTomlConfig>,
+    #[serde(default, rename = "emitter")]
+    pub emitters: Vec<LightingEmitterTomlConfig>,
+    #[serde(default, rename = "layer_scene")]
+    pub layer_scenes: Vec<LightingLayerSceneTomlConfig>,
+    #[serde(default, rename = "conditional_scene")]
+    pub conditional_scenes: Vec<LightingConditionalSceneTomlConfig>,
+    pub controls: Option<LightingControlsTomlConfig>,
+    pub background: Option<LightingBackgroundTomlConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingControlsTomlConfig {
+    pub output_toggle_user_action: Option<u8>,
+    pub output_mode_cycle_user_action: Option<u8>,
+    /// Layers that wake lighting while held. A list, since any set of layers
+    /// may wake it; the host can replace the resolved mask at runtime.
+    pub wake_layers: Option<Vec<u8>>,
+    #[serde(default)]
+    pub initial_output_mode: LightingOutputModeToml,
+    #[serde(default)]
+    pub powered_only_scope: LightingPoweredOnlyScopeToml,
+    pub output_mode_indicator: Option<LightingOutputModeIndicatorTomlConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LightingPoweredOnlyScopeToml {
+    #[default]
+    Authority,
+    Local,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LightingOutputModeToml {
+    #[default]
+    AlwaysOn,
+    AlwaysOff,
+    PoweredOnly,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingOutputModeIndicatorTomlConfig {
+    pub target: LightingTargetTomlConfig,
+    pub always_on: LightingEffectTomlConfig,
+    pub always_off: LightingEffectTomlConfig,
+    pub powered_only: LightingEffectTomlConfig,
+}
+
+fn default_topology_revision() -> u32 {
+    1
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingZoneTomlConfig {
+    pub id: u8,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingOutputTomlConfig {
+    pub node: u8,
+    pub id: u8,
+    pub pixel_count: u16,
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub sparse: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingEmitterTomlConfig {
+    pub id: u16,
+    pub key: Option<[u8; 2]>,
+    pub position: Option<[f32; 3]>,
+    #[serde(default)]
+    pub zones: Vec<u8>,
+    pub node: u8,
+    pub output: u8,
+    pub physical_index: u16,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingLayerSceneTomlConfig {
+    pub layer: u8,
+    #[serde(default, rename = "cell")]
+    pub cells: Vec<LightingSceneCellTomlConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingConditionalSceneTomlConfig {
+    pub layer: Option<LightingLayerConditionTomlConfig>,
+    pub battery: Option<LightingBatteryConditionTomlConfig>,
+    pub output_mode: Option<LightingOutputModeToml>,
+    #[serde(default, rename = "cell")]
+    pub cells: Vec<LightingSceneCellTomlConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingLayerConditionTomlConfig {
+    pub layer: u8,
+    #[serde(default = "default_true")]
+    pub active: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingBatteryConditionTomlConfig {
+    pub node: u8,
+    pub min_level: Option<u8>,
+    pub max_level: Option<u8>,
+    #[serde(default)]
+    pub charge: LightingChargeConditionToml,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LightingChargeConditionToml {
+    #[default]
+    Any,
+    Charging,
+    Discharging,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingSceneCellTomlConfig {
+    pub target: LightingTargetTomlConfig,
+    pub effect: LightingEffectTomlConfig,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum LightingTargetTomlConfig {
+    Led { led: u16 },
+    KeyId { key: u16 },
+    Key { key: [u8; 2] },
+    Zone { zone: u8 },
+    All { all: bool },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LightingEffectTomlConfig {
+    Solid {
+        color: [u8; 3],
+    },
+    Blink {
+        color: [u8; 3],
+        period_ms: u32,
+        #[serde(default)]
+        phase_ms: u32,
+        duty_percent: u8,
+    },
+    Breathe {
+        color: [u8; 3],
+        period_ms: u32,
+        #[serde(default)]
+        phase_ms: u32,
+        #[serde(default = "default_breathe_step_ms")]
+        step_ms: u16,
+    },
+}
+
+fn default_breathe_step_ms() -> u16 {
+    16
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LightingBackgroundTomlConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub hue: u8,
+    #[serde(default)]
+    pub saturation: u8,
+    #[serde(default = "default_background_value")]
+    pub value: u8,
+    #[serde(default = "default_background_speed")]
+    pub speed: u8,
+    #[serde(default)]
+    pub mode: LightingBackgroundModeToml,
+}
+
+fn default_background_value() -> u8 {
+    32
+}
+
+fn default_background_speed() -> u8 {
+    128
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LightingBackgroundModeToml {
+    #[default]
+    Solid,
+    Breathe,
 }
 
 /// The `[keymap]` section: layer count plus the per-layer key actions.
@@ -1125,6 +1370,10 @@ pub(crate) struct HostConfig {
     /// locked set, so writes also require unlock (default: false).
     #[serde_inline_default(false)]
     pub write_requires_unlock: bool,
+    /// Require the Rynk physical-presence unlock before entering either the
+    /// central or a split peripheral bootloader (default: true).
+    #[serde_inline_default(true)]
+    pub bootloader_requires_unlock: bool,
 }
 
 impl Default for HostConfig {
@@ -1135,6 +1384,7 @@ impl Default for HostConfig {
             unlock_keys: None,
             insecure: false,
             write_requires_unlock: false,
+            bootloader_requires_unlock: true,
         }
     }
 }
@@ -1471,6 +1721,10 @@ mod tests {
         assert_eq!(config.led_indicator.pubs, 2);
         assert_eq!(config.led_indicator.subs, 3);
 
+        assert_eq!(config.lighting_changed.channel_size, 1);
+        assert_eq!(config.lighting_changed.pubs, 1);
+        assert_eq!(config.lighting_changed.subs, 1);
+
         assert_eq!(config.pointing.channel_size, 8);
         assert_eq!(config.pointing.subs, 2);
 
@@ -1530,6 +1784,33 @@ fork_max_num = 255
             let err = toml::from_str::<KeyboardTomlConfig>(&toml).unwrap_err();
             assert!(err.to_string().contains(message), "{err}");
         }
+    }
+
+    #[test]
+    fn split_central_max_latency_matches_ble_limit() {
+        let ok: KeyboardTomlConfig = toml::from_str(
+            r#"
+[rmk]
+split_central_max_latency_powered = 499
+split_central_max_latency_battery = 498
+"#,
+        )
+        .unwrap();
+        assert_eq!(ok.rmk.split_central_max_latency_powered, 499);
+        assert_eq!(ok.rmk.split_central_max_latency_battery, 498);
+
+        let err = toml::from_str::<KeyboardTomlConfig>(
+            r#"
+[rmk]
+split_central_max_latency_battery = 500
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("split_central_max_latency must be between 0 and 499"),
+            "{err}"
+        );
     }
 
     #[test]

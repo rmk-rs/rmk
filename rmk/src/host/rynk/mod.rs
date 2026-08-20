@@ -5,14 +5,24 @@
 //! ([`HostLock`]) and topic subscriptions, so transports never share either.
 
 mod handlers;
+#[cfg(feature = "lighting")]
+mod lighting;
 mod topics;
 
 use embassy_futures::select::{Either, select};
 use embedded_io_async::{Read, Write};
+#[cfg(feature = "lighting")]
+pub use lighting::{
+    LightingReplicationStatus, PeripheralReplicaStatus, RYNK_LIGHTING_TRANSACTION_CAPACITY, RemoteFrame,
+    RemoteFramePort, RemoteFrameRequest, ReplicaDigests, ReplicationHealth, ReplicationMachineState,
+    RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox, RynkLightingReadback,
+    StandardRynkLightingAdapter, install_lighting_runtime_conditional_scenes, install_lighting_scenes,
+};
 use postcard::experimental::max_size::MaxSize;
 use rmk_types::constants::RYNK_BUFFER_SIZE;
 use rmk_types::protocol::rynk::{
-    Cmd, Deframer, RYNK_HEADER_SIZE, RynkError, RynkMessage, command, encode_frame, max_wire_size,
+    BuildInfo, Cmd, Deframer, FirmwareVersion, RYNK_HEADER_SIZE, RynkError, RynkMessage, command, encode_frame,
+    max_wire_size,
 };
 
 use self::handlers::{serve, serve_bulk};
@@ -25,6 +35,43 @@ use crate::keymap::KeyMap;
 /// Unlock attempts live long enough for BLE WebHID round trips.
 const RYNK_UNLOCK_WINDOW: embassy_time::Duration = embassy_time::Duration::from_millis(500);
 
+/// The `rmk` crate version baked into the firmware, so hosts can key
+/// version-specific behavior off the library release, not the user's app.
+pub const RMK_VERSION: FirmwareVersion = {
+    const fn component(s: &str) -> u8 {
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        let mut value = 0u8;
+        while i < bytes.len() {
+            value = value * 10 + (bytes[i] - b'0');
+            i += 1;
+        }
+        value
+    }
+
+    FirmwareVersion {
+        major: component(env!("CARGO_PKG_VERSION_MAJOR")),
+        minor: component(env!("CARGO_PKG_VERSION_MINOR")),
+        patch: component(env!("CARGO_PKG_VERSION_PATCH")),
+    }
+};
+
+/// String form of [`RMK_VERSION`] for application-defined build labels.
+pub const RMK_VERSION_STRING: &str = env!("CARGO_PKG_VERSION");
+
+const DEFAULT_BUILD_LABEL: &str = concat!("RMK v", env!("CARGO_PKG_VERSION"));
+
+/// Copy a string into a bounded wire value without splitting UTF-8.
+fn truncated<const N: usize>(s: &str) -> heapless::String<N> {
+    let mut out = heapless::String::new();
+    for c in s.chars() {
+        if out.push(c).is_err() {
+            break;
+        }
+    }
+    out
+}
+
 /// Transport-agnostic Rynk service.
 pub struct RynkService<'a> {
     ctx: KeyboardContext<'a>,
@@ -32,6 +79,30 @@ pub struct RynkService<'a> {
     device: DeviceConfig<'static>,
     /// Policy copied into each session's authorization gate.
     lock_config: LockConfig,
+    #[cfg(feature = "lighting")]
+    lighting: Option<RynkLightingController<'a>>,
+    /// Human-readable firmware identity served by `GetBuildInfo`.
+    build_info: BuildInfo,
+    /// Optional board-specific route to a split peripheral's bootloader.
+    peripheral_bootloader: Option<fn(u8) -> Result<(), RynkError>>,
+}
+
+/// Per-session state that has to outlive a single dispatch. The authorization
+/// gate and the topic table are locals in [`RynkService::run_session`]; the
+/// lighting overlay transaction cannot be, because it spans the
+/// Begin/Put/Commit exchange.
+struct RynkSession {
+    #[cfg(feature = "lighting")]
+    lighting: embassy_sync::mutex::Mutex<crate::RawMutex, handlers::lighting::LightingTransactionState>,
+}
+
+impl RynkSession {
+    fn new() -> Self {
+        Self {
+            #[cfg(feature = "lighting")]
+            lighting: embassy_sync::mutex::Mutex::new(handlers::lighting::LightingTransactionState::new()),
+        }
+    }
 }
 
 impl<'a> RynkService<'a> {
@@ -43,16 +114,53 @@ impl<'a> RynkService<'a> {
             ctx,
             device: config.device_config,
             lock_config: config.lock_config,
+            #[cfg(feature = "lighting")]
+            lighting: None,
+            build_info: BuildInfo {
+                label: truncated(DEFAULT_BUILD_LABEL),
+            },
+            peripheral_bootloader: None,
         }
+    }
+
+    /// Attach a concrete lighting controller. Merely compiling the lighting
+    /// feature does not advertise support: discovery turns on only after this
+    /// binding is present and its bridge task is running.
+    #[cfg(feature = "lighting")]
+    pub fn with_lighting(mut self, lighting: RynkLightingController<'a>) -> Self {
+        self.lighting = Some(lighting);
+        self
+    }
+
+    /// Replace the diagnostic build label advertised by `GetBuildInfo`.
+    ///
+    /// The label is for display and support diagnostics only. Protocol
+    /// compatibility continues to use `GetVersion`.
+    pub fn with_build_label(mut self, label: &str) -> Self {
+        self.build_info.label = truncated(label);
+        self
+    }
+
+    /// Attach a board-specific split-peripheral bootloader route.
+    pub fn with_peripheral_bootloader(mut self, route: fn(u8) -> Result<(), RynkError>) -> Self {
+        self.peripheral_bootloader = Some(route);
+        self
     }
 
     /// Whether `cmd` needs an unlocked device.
     fn requires_unlock(&self, cmd: Cmd) -> bool {
         match cmd {
-            Cmd::BootloaderJump | Cmd::StorageReset | Cmd::GetMatrixState => true,
+            Cmd::BootloaderJump | Cmd::PeripheralBootloaderJump => self.lock_config.bootloader_requires_unlock,
+            // Reading raw LED colors can expose reactive per-key effects, and
+            // therefore keystrokes, exactly like the matrix snapshot does.
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingFrame => true,
+            Cmd::StorageReset | Cmd::GetMatrixState => true,
             // Deleting a bond opens a re-pair hijack window; BLE-only command.
             #[cfg(feature = "_ble")]
             Cmd::ClearBleProfile => true,
+            #[cfg(all(feature = "_ble", feature = "split"))]
+            Cmd::SetSplitCentralLatency => self.lock_config.write_requires_unlock,
             Cmd::SetKeyAction
             | Cmd::SetDefaultLayer
             | Cmd::SetEncoderAction
@@ -64,13 +172,47 @@ impl<'a> RynkService<'a> {
             | Cmd::SetKeymapBulk
             | Cmd::SetComboBulk
             | Cmd::SetMorseBulk => self.lock_config.write_requires_unlock,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingState
+            | Cmd::SetLightingOverlay
+            | Cmd::UnsetLightingOverlay
+            | Cmd::ClearLightingOverlay
+            | Cmd::BeginLightingOverlayReplace
+            | Cmd::PutLightingOverlayChunk
+            | Cmd::CommitLightingOverlayReplace
+            | Cmd::AbortLightingOverlayReplace
+            | Cmd::SetLightingSceneCell
+            | Cmd::UnsetLightingSceneCell
+            | Cmd::SetLightingLayerPolicy
+            | Cmd::BeginLightingSceneReplace
+            | Cmd::PutLightingSceneChunk
+            | Cmd::CommitLightingSceneReplace
+            | Cmd::AbortLightingSceneReplace
+            | Cmd::SetLightingExtensionState
+            | Cmd::SetLightingExtensionLayers
+            | Cmd::SetLightingExtensionParam
+            | Cmd::SetLightingOutputMode
+            | Cmd::SetLightingWakeLayers
+            | Cmd::BeginLightingRuntimeConditionalSceneReplace
+            | Cmd::PutLightingRuntimeConditionalSceneChunk
+            | Cmd::CommitLightingRuntimeConditionalSceneReplace
+            | Cmd::AbortLightingRuntimeConditionalSceneReplace
+            | Cmd::BeginLightingExtendedRuntimeConditionalSceneReplace
+            | Cmd::PutLightingExtendedRuntimeConditionalSceneChunk
+            | Cmd::CommitLightingExtendedRuntimeConditionalSceneReplace
+            | Cmd::AbortLightingExtendedRuntimeConditionalSceneReplace => self.lock_config.write_requires_unlock,
             _ => false,
         }
     }
 
     /// Serve one inbound message: on success the reply frame replaces the
     /// payload in place; on error the caller answers with the error envelope.
-    async fn dispatch(&self, locker: &HostLock<'_>, msg: &mut RynkMessage<'_>) -> Result<(), RynkError> {
+    async fn dispatch(
+        &self,
+        locker: &HostLock<'_>,
+        #[cfg_attr(not(feature = "lighting"), allow(unused_variables))] session: &RynkSession,
+        msg: &mut RynkMessage<'_>,
+    ) -> Result<(), RynkError> {
         let cmd = msg.header().cmd;
 
         if self.requires_unlock(cmd) && !locker.is_unlocked() {
@@ -87,6 +229,8 @@ impl<'a> RynkService<'a> {
             Cmd::UnlockPoll => serve::<command::UnlockPoll, _>(locker, msg).await,
             Cmd::Lock => serve::<command::Lock, _>(locker, msg).await,
             Cmd::GetDeviceInfo => serve::<command::GetDeviceInfo, _>(self, msg).await,
+            Cmd::GetBuildInfo => serve::<command::GetBuildInfo, _>(self, msg).await,
+            Cmd::PeripheralBootloaderJump => serve::<command::PeripheralBootloaderJump, _>(self, msg).await,
 
             Cmd::GetKeyAction => serve::<command::GetKeyAction, _>(self, msg).await,
             Cmd::SetKeyAction => serve::<command::SetKeyAction, _>(self, msg).await,
@@ -123,6 +267,10 @@ impl<'a> RynkService<'a> {
             Cmd::SwitchBleProfile => serve::<command::SwitchBleProfile, _>(self, msg).await,
             #[cfg(feature = "_ble")]
             Cmd::ClearBleProfile => serve::<command::ClearBleProfile, _>(self, msg).await,
+            #[cfg(all(feature = "_ble", feature = "split"))]
+            Cmd::GetSplitCentralLatency => serve::<command::GetSplitCentralLatency, _>(self, msg).await,
+            #[cfg(all(feature = "_ble", feature = "split"))]
+            Cmd::SetSplitCentralLatency => serve::<command::SetSplitCentralLatency, _>(self, msg).await,
 
             Cmd::GetCurrentLayer => serve::<command::GetCurrentLayer, _>(self, msg).await,
             Cmd::GetMatrixState => serve::<command::GetMatrixState, _>(self, msg).await,
@@ -133,8 +281,147 @@ impl<'a> RynkService<'a> {
             Cmd::GetWpm => serve::<command::GetWpm, _>(self, msg).await,
             Cmd::GetSleepState => serve::<command::GetSleepState, _>(self, msg).await,
             Cmd::GetLedIndicator => serve::<command::GetLedIndicator, _>(self, msg).await,
+            Cmd::GetLayerState => serve::<command::GetLayerState, _>(self, msg).await,
+            Cmd::GetModifierState => serve::<command::GetModifierState, _>(self, msg).await,
 
             Cmd::GetLayout => serve::<command::GetLayout, _>(self, msg).await,
+
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingCapabilities => serve::<command::GetLightingCapabilities, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingState => serve::<command::GetLightingState, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingState => serve::<command::SetLightingState, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingOverlay => serve::<command::GetLightingOverlay, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingKeys => serve::<command::GetLightingKeys, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingPhysicalKeys => serve::<command::GetLightingPhysicalKeys, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingLeds => serve::<command::GetLightingLeds, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingZones => serve::<command::GetLightingZones, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingZoneMemberships => serve::<command::GetLightingZoneMemberships, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingOutputs => serve::<command::GetLightingOutputs, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingRoutes => serve::<command::GetLightingRoutes, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingOverlay => serve::<command::SetLightingOverlay, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::UnsetLightingOverlay => serve::<command::UnsetLightingOverlay, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::ClearLightingOverlay => serve::<command::ClearLightingOverlay, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::BeginLightingOverlayReplace => handlers::lighting::serve_begin(self, session, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::PutLightingOverlayChunk => handlers::lighting::serve_put(self, session, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::CommitLightingOverlayReplace => handlers::lighting::serve_commit(self, session, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::AbortLightingOverlayReplace => handlers::lighting::serve_abort(self, session, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingSceneStatus => serve::<command::GetLightingSceneStatus, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingScenes => serve::<command::GetLightingScenes, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingCompiledSceneStatus => serve::<command::GetLightingCompiledSceneStatus, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingCompiledScenes => serve::<command::GetLightingCompiledScenes, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingConditionalSceneStatus => {
+                serve::<command::GetLightingConditionalSceneStatus, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingConditionalScenes => serve::<command::GetLightingConditionalScenes, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingOutputMode => serve::<command::GetLightingOutputMode, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingExtension => serve::<command::GetLightingExtension, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingExtensionNames => serve::<command::GetLightingExtensionNames, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingExtensionState => serve::<command::SetLightingExtensionState, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingExtensionLayers => serve::<command::GetLightingExtensionLayers, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingExtensionLayers => serve::<command::SetLightingExtensionLayers, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingExtensionParams => serve::<command::GetLightingExtensionParams, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingExtensionParam => serve::<command::SetLightingExtensionParam, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingOutputMode => serve::<command::SetLightingOutputMode, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingWakeLayers => serve::<command::SetLightingWakeLayers, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingRuntimeConditionalSceneStatus => {
+                serve::<command::GetLightingRuntimeConditionalSceneStatus, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingRuntimeConditionalScenes => {
+                serve::<command::GetLightingRuntimeConditionalScenes, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::BeginLightingRuntimeConditionalSceneReplace => {
+                serve::<command::BeginLightingRuntimeConditionalSceneReplace, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::PutLightingRuntimeConditionalSceneChunk => {
+                serve::<command::PutLightingRuntimeConditionalSceneChunk, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::CommitLightingRuntimeConditionalSceneReplace => {
+                serve::<command::CommitLightingRuntimeConditionalSceneReplace, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::AbortLightingRuntimeConditionalSceneReplace => {
+                serve::<command::AbortLightingRuntimeConditionalSceneReplace, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingExtendedRuntimeConditionalSceneStatus => {
+                serve::<command::GetLightingExtendedRuntimeConditionalSceneStatus, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingExtendedRuntimeConditionalScenes => {
+                serve::<command::GetLightingExtendedRuntimeConditionalScenes, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingFrame => serve::<command::GetLightingFrame, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::GetLightingReplicaStatus => serve::<command::GetLightingReplicaStatus, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::BeginLightingExtendedRuntimeConditionalSceneReplace => {
+                serve::<command::BeginLightingExtendedRuntimeConditionalSceneReplace, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::PutLightingExtendedRuntimeConditionalSceneChunk => {
+                serve::<command::PutLightingExtendedRuntimeConditionalSceneChunk, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::CommitLightingExtendedRuntimeConditionalSceneReplace => {
+                serve::<command::CommitLightingExtendedRuntimeConditionalSceneReplace, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::AbortLightingExtendedRuntimeConditionalSceneReplace => {
+                serve::<command::AbortLightingExtendedRuntimeConditionalSceneReplace, _>(self, msg).await
+            }
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingSceneCell => serve::<command::SetLightingSceneCell, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::UnsetLightingSceneCell => serve::<command::UnsetLightingSceneCell, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::SetLightingLayerPolicy => serve::<command::SetLightingLayerPolicy, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::BeginLightingSceneReplace => serve::<command::BeginLightingSceneReplace, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::PutLightingSceneChunk => serve::<command::PutLightingSceneChunk, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::CommitLightingSceneReplace => serve::<command::CommitLightingSceneReplace, _>(self, msg).await,
+            #[cfg(feature = "lighting")]
+            Cmd::AbortLightingSceneReplace => serve::<command::AbortLightingSceneReplace, _>(self, msg).await,
 
             _ => Err(RynkError::UnknownCmd),
         }
@@ -151,6 +438,7 @@ impl<'a> RynkService<'a> {
             RYNK_UNLOCK_WINDOW,
         );
         let mut topics = TopicSubscribers::new();
+        let session = RynkSession::new();
         let mut buf = [0u8; RYNK_BUFFER_SIZE];
         let mut df = Deframer::new();
         // Mute topics until the client completes the version handshake.
@@ -170,7 +458,7 @@ impl<'a> RynkService<'a> {
                     // Hosts never send topic-range cmds; drop without a reply.
                     warn!("Rynk: dropping topic-range request {:?}", cmd);
                 } else {
-                    let served = self.dispatch(&locker, &mut msg).await;
+                    let served = self.dispatch(&locker, &session, &mut msg).await;
                     // The version handshake completes on GetCapabilities.
                     handshaked |= cmd == Cmd::GetCapabilities;
                     let written = match served {
@@ -348,15 +636,25 @@ mod tests {
         let keymap = block_on(KeyMap::new(&mut data, &mut behavior, &positional));
 
         const UNLOCK_KEYS: &[(u8, u8)] = &[(0, 0)];
-        let config = RmkConfig {
+        let mut config = RmkConfig {
             lock_config: LockConfig {
                 unlock_keys: UNLOCK_KEYS,
                 insecure: false,
                 write_requires_unlock: false,
+                bootloader_requires_unlock: true,
             },
             ..Default::default()
         };
         let service = RynkService::new(&keymap, &config);
+        assert!(service.requires_unlock(Cmd::BootloaderJump));
+        assert!(service.requires_unlock(Cmd::PeripheralBootloaderJump));
+
+        config.lock_config.bootloader_requires_unlock = false;
+        let deployment_service = RynkService::new(&keymap, &config);
+        assert!(!deployment_service.requires_unlock(Cmd::BootloaderJump));
+        assert!(!deployment_service.requires_unlock(Cmd::PeripheralBootloaderJump));
+        assert!(deployment_service.requires_unlock(Cmd::StorageReset));
+        assert!(deployment_service.requires_unlock(Cmd::GetMatrixState));
 
         // Hold the challenge key throughout, so only the session boundary can
         // account for the second session being locked.

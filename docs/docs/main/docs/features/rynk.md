@@ -113,10 +113,10 @@ There are three tiers:
 - **Open** — everything you normally reach for: read the keymap, change keys,
   layers, combos, macros, switch BLE profiles, reboot. These stay available so
   on-the-fly configuration is friction-free.
-- **Locked** — the dangerous ones, always gated: entering the bootloader,
-  resetting stored settings and bonds, reading the live key matrix (a keylogger
-  if left open), and clearing a BLE bond. A host tool gets a "locked" error
-  until you unlock.
+- **Locked** — the dangerous ones: entering the bootloader, resetting stored
+  settings and bonds, reading the live key matrix (a keylogger if left open),
+  and clearing a BLE bond. A host tool gets a "locked" error until you unlock.
+  Bootloader entry may be opted out separately for managed deployment setups.
 - **Config writes** — open by default, because on-the-fly configuration is the
   point. Set `write_requires_unlock = true` to move every write (keymap, macros,
   …) into the locked tier as well.
@@ -139,6 +139,17 @@ disconnect, or an explicit lock re-locks the device.
 If you leave `unlock_keys` unset, the locked operations can never be unlocked —
 a safe default, but it means a fresh config can't enter the bootloader over Rynk
 or use the matrix tester until you add the keys.
+
+For a keyboard whose host is trusted to manage firmware deployment, allow only
+central and split-peripheral bootloader entry without the physical challenge:
+
+```toml title="keyboard.toml"
+[host]
+bootloader_requires_unlock = false
+```
+
+Storage reset, matrix-state reads, and BLE bond clearing remain gated. This is
+more narrowly scoped than `insecure = true`.
 
 For local development you can bypass the gate entirely:
 

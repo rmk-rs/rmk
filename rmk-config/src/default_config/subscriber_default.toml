@@ -66,6 +66,13 @@ events = [
     { name = "connection_status_change" },
     { name = "sleep_state" },
     { name = "led_indicator" },
+    { name = "modifier" },
+]
+
+[[subscriber]]
+features = ["rynk", "lighting"]
+events = [
+    { name = "lighting_changed" },
 ]
 
 [[subscriber]]
@@ -80,6 +87,7 @@ events = [
     { name = "connection_status_change" },
     { name = "sleep_state" },
     { name = "led_indicator" },
+    { name = "modifier" },
 ]
 
 # --- Dongle firmware internal subscribers ---
@@ -89,6 +97,24 @@ features = ["dongle"]
 events = [
     # dongle/link.rs: LedIndicatorEvent::subscriber() on the one keyboard link.
     { name = "led_indicator" },
+]
+
+[[subscriber]]
+features = ["rynk", "lighting", "_ble"]
+events = [
+    # Second Rynk session slot on dual-transport boards.
+    { name = "lighting_changed" },
+]
+
+[[subscriber]]
+features = ["lighting"]
+events = [
+    # lighting/processor.rs: LightingProcessor subscribes to authoritative
+    # keyboard-state invalidations on every lighting-enabled board.
+    { name = "layer_change" },
+    { name = "connection_status_change" },
+    { name = "led_indicator" },
+    { name = "sleep_state" },
 ]
 
 # --- Split-gated internal subscribers ---

@@ -8,6 +8,12 @@ use embedded_storage_async::nor_flash::NorFlash as AsyncNorFlash;
 use postcard::experimental::max_size::MaxSize;
 use rmk_types::connection::ConnectionType;
 use rmk_types::morse::MorseProfile;
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+use rmk_types::protocol::rynk::{
+    LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE, LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE,
+    LIGHTING_EXTENSION_PARAM_CHUNK, LIGHTING_SCENE_CHUNK_SIZE, LightingConditionalSceneCell,
+    LightingExtendedConditionalSceneCell, LightingLayerPolicy, LightingSceneCell,
+};
 use sequential_storage::Error as SSError;
 use sequential_storage::cache::{Cache, Uncached};
 use sequential_storage::map::{Key, MapConfig, MapStorage, PostcardValue, SerializationError};
@@ -156,6 +162,30 @@ pub(crate) enum FlashOperationMessage {
     // The whole behavior config in one message (Rynk's SetBehaviorConfig carries
     // every field, so one store beats six read-modify-write cycles)
     BehaviorConfig(BehaviorConfig),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    // Lighting scene-table header: authoritative cell count and layer policy
+    LightingSceneTable {
+        len: u16,
+        policy: LightingLayerPolicy,
+    },
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    // One shard of the lighting scene table, in wire (stable LED id) form
+    LightingSceneShard {
+        index: u8,
+        cells: heapless::Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+    },
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneTable {
+        len: u16,
+    },
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneShard {
+        index: u8,
+        cells: heapless::Vec<LightingExtendedConditionalSceneCell, LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE>,
+    },
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    // Animated extension-band selection and the selected effect's parameters
+    LightingExtensionState(LightingExtensionRecord),
     #[cfg(feature = "_ble")]
     // Read bond info for the given slot; storage task replies via `BOND_INFO_RESPONSE`.
     ReadBleBondInfo(u8),
@@ -168,6 +198,8 @@ pub(crate) enum FlashOperationMessage {
     #[cfg(feature = "_ble")]
     // Read the persisted active BLE profile number; storage task replies via `ACTIVE_BLE_PROFILE_RESPONSE`.
     ReadActiveBleProfile,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionOverlay(LightingExtensionOverlayRecord),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -202,6 +234,22 @@ pub(crate) enum StorageKey {
     ActiveBleProfile,
     #[cfg(feature = "_ble")]
     BondInfo(u8),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneTable,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneShard(u8),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneTable,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneShard(u8),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionState,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionOverlay,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneTableV2,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneShardV2(u8),
 }
 
 impl StorageKey {
@@ -283,9 +331,88 @@ pub(crate) enum StorageData {
     BondInfo(ProfileInfo),
     #[cfg(feature = "_ble")]
     ActiveBleProfile(u8),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneTable(LightingSceneTableRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneShard(heapless::Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneTable(u16),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneShard(
+        heapless::Vec<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>,
+    ),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionState(LightingExtensionRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionOverlay(LightingExtensionOverlayRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneTableV2(u16),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneShardV2(
+        heapless::Vec<LightingExtendedConditionalSceneCell, LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE>,
+    ),
 }
 
 impl<'a> PostcardValue<'a> for StorageData {}
+
+/// Persisted lighting scene-table header. Shards beyond `len` are stale
+/// leftovers from a larger previous table and are ignored at load.
+/// Persisted animated-extension selection, plus the parameter values of the
+/// effect it names. Only the selected effect's parameters are kept: they are
+/// what a reboot has to reproduce, and a fixed-size record keeps the write
+/// cost of a single flash entry predictable.
+///
+/// Every index here is validated against the running firmware before it is
+/// applied. Effect and palette lists are compiled in, so inserting one effect
+/// shifts every later index; a record written by an older build would
+/// otherwise resurrect a selection that now names something else.
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct LightingExtensionRecord {
+    pub effect: u8,
+    pub palette: u8,
+    pub value: u8,
+    pub speed: u8,
+    /// Valid entries in `params`; the remainder is padding.
+    pub param_len: u8,
+    pub params: [u8; LIGHTING_EXTENSION_PARAM_CHUNK],
+}
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+impl LightingExtensionRecord {
+    /// The parameter values that belong to [`Self::effect`].
+    pub fn params(&self) -> &[u8] {
+        &self.params[..(self.param_len as usize).min(LIGHTING_EXTENSION_PARAM_CHUNK)]
+    }
+}
+
+/// Persisted optional second effect and the parameter row it uses. This is a
+/// separate key so the established primary-extension record remains readable
+/// across firmware upgrades.
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct LightingExtensionOverlayRecord {
+    pub effect: Option<u8>,
+    pub param_len: u8,
+    pub params: [u8; LIGHTING_EXTENSION_PARAM_CHUNK],
+}
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+impl LightingExtensionOverlayRecord {
+    pub fn params(&self) -> &[u8] {
+        &self.params[..(self.param_len as usize).min(LIGHTING_EXTENSION_PARAM_CHUNK)]
+    }
+}
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub(crate) struct LightingSceneTableRecord {
+    pub(crate) len: u16,
+    pub(crate) policy: LightingLayerPolicy,
+}
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -529,6 +656,164 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
         }
 
         Ok(())
+    }
+
+    /// Read the persisted animated-extension selection at startup, before the
+    /// storage task takes ownership. The caller validates every index against
+    /// its own compiled effect/palette lists before applying it.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub async fn read_lighting_extension_state(&mut self) -> Option<LightingExtensionRecord> {
+        match self.fetch_data(StorageKey::LightingExtensionState).await {
+            Some(StorageData::LightingExtensionState(record)) => Some(record),
+            _ => None,
+        }
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub async fn read_lighting_extension_overlay(&mut self) -> Option<LightingExtensionOverlayRecord> {
+        match self.fetch_data(StorageKey::LightingExtensionOverlay).await {
+            Some(StorageData::LightingExtensionOverlay(record)) => Some(record),
+            _ => None,
+        }
+    }
+
+    /// Read the persisted lighting scene configuration at startup, before the
+    /// storage task takes ownership. Returns the persisted layer policy, if
+    /// any, and appends up to `CAP` stored cells to `cells`.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub async fn read_lighting_scenes<const CAP: usize>(
+        &mut self,
+        cells: &mut heapless::Vec<LightingSceneCell, CAP>,
+    ) -> Option<LightingLayerPolicy> {
+        let Some(StorageData::LightingSceneTable(record)) = self.fetch_data(StorageKey::LightingSceneTable).await
+        else {
+            return None;
+        };
+        let len = (record.len as usize).min(CAP);
+        let mut index: u8 = 0;
+        'shards: while cells.len() < len {
+            let Some(StorageData::LightingSceneShard(shard)) =
+                self.fetch_data(StorageKey::LightingSceneShard(index)).await
+            else {
+                break;
+            };
+            if shard.is_empty() {
+                break;
+            }
+            for cell in shard {
+                if cells.len() == len || cells.push(cell).is_err() {
+                    break 'shards;
+                }
+            }
+            let Some(next) = index.checked_add(1) else {
+                break;
+            };
+            index = next;
+        }
+        Some(record.policy)
+    }
+
+    /// Persist the V2 runtime conditional table length, and empty the legacy
+    /// table alongside it so a firmware downgrade sees no rules rather than
+    /// stale pre-upgrade cells that were edited or deleted under V2.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    async fn store_lighting_runtime_conditional_table(&mut self, len: u16) -> Result<(), SSError<F::Error>> {
+        match self
+            .fetch_data(StorageKey::LightingRuntimeConditionalSceneTableV2)
+            .await
+        {
+            Some(StorageData::LightingRuntimeConditionalSceneTableV2(saved)) if saved == len => (),
+            _ => {
+                self.store_data(
+                    StorageKey::LightingRuntimeConditionalSceneTableV2,
+                    &StorageData::LightingRuntimeConditionalSceneTableV2(len),
+                )
+                .await?
+            }
+        }
+        if let Some(StorageData::LightingRuntimeConditionalSceneTable(saved)) =
+            self.fetch_data(StorageKey::LightingRuntimeConditionalSceneTable).await
+            && saved != 0
+        {
+            self.store_data(
+                StorageKey::LightingRuntimeConditionalSceneTable,
+                &StorageData::LightingRuntimeConditionalSceneTable(0),
+            )
+            .await?
+        }
+        Ok(())
+    }
+
+    /// Read the persisted ordered runtime conditional table at startup.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub async fn read_lighting_runtime_conditional_scenes<const CAP: usize>(
+        &mut self,
+        cells: &mut heapless::Vec<LightingExtendedConditionalSceneCell, CAP>,
+    ) {
+        if let Some(StorageData::LightingRuntimeConditionalSceneTableV2(saved_len)) = self
+            .fetch_data(StorageKey::LightingRuntimeConditionalSceneTableV2)
+            .await
+        {
+            let len = (saved_len as usize).min(CAP);
+            let mut index: u8 = 0;
+            'shards: while cells.len() < len {
+                let Some(StorageData::LightingRuntimeConditionalSceneShardV2(shard)) = self
+                    .fetch_data(StorageKey::LightingRuntimeConditionalSceneShardV2(index))
+                    .await
+                else {
+                    break;
+                };
+                if shard.is_empty() {
+                    break;
+                }
+                for cell in shard {
+                    if cells.len() == len || cells.push(cell).is_err() {
+                        break 'shards;
+                    }
+                }
+                let Some(next) = index.checked_add(1) else {
+                    break;
+                };
+                index = next;
+            }
+            return;
+        }
+
+        let Some(StorageData::LightingRuntimeConditionalSceneTable(saved_len)) =
+            self.fetch_data(StorageKey::LightingRuntimeConditionalSceneTable).await
+        else {
+            return;
+        };
+        let len = (saved_len as usize).min(CAP);
+        let mut index: u8 = 0;
+        'legacy_shards: while cells.len() < len {
+            let Some(StorageData::LightingRuntimeConditionalSceneShard(shard)) = self
+                .fetch_data(StorageKey::LightingRuntimeConditionalSceneShard(index))
+                .await
+            else {
+                break;
+            };
+            if shard.is_empty() {
+                break;
+            }
+            for cell in shard {
+                if cells.len() == len
+                    || cells
+                        .push(LightingExtendedConditionalSceneCell {
+                            cell,
+                            connection: None,
+                            effects: None,
+                        })
+                        .is_err()
+                {
+                    break 'legacy_shards;
+                }
+            }
+            let Some(next) = index.checked_add(1) else {
+                break;
+            };
+            index = next;
+        }
     }
 
     async fn initialize_storage_with_config(
@@ -819,6 +1104,82 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                     )
                     .await
                 }
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingExtensionState(record) => {
+                    // The selection changes on every RGB key press and every
+                    // host edit, so skip writes that would store what is
+                    // already there rather than spending a flash entry.
+                    match self.fetch_data(StorageKey::LightingExtensionState).await {
+                        Some(StorageData::LightingExtensionState(saved)) if saved == record => Ok(()),
+                        _ => {
+                            self.store_data(
+                                StorageKey::LightingExtensionState,
+                                &StorageData::LightingExtensionState(record),
+                            )
+                            .await
+                        }
+                    }
+                }
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingExtensionOverlay(record) => {
+                    match self.fetch_data(StorageKey::LightingExtensionOverlay).await {
+                        Some(StorageData::LightingExtensionOverlay(saved)) if saved == record => Ok(()),
+                        _ => {
+                            self.store_data(
+                                StorageKey::LightingExtensionOverlay,
+                                &StorageData::LightingExtensionOverlay(record),
+                            )
+                            .await
+                        }
+                    }
+                }
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingSceneTable { len, policy } => {
+                    // Scene persistence rewrites the whole table on every
+                    // mutation; comparing before writing keeps unchanged
+                    // records from consuming flash on single-cell edits.
+                    let record = LightingSceneTableRecord { len, policy };
+                    match self.fetch_data(StorageKey::LightingSceneTable).await {
+                        Some(StorageData::LightingSceneTable(saved)) if saved == record => Ok(()),
+                        _ => {
+                            self.store_data(StorageKey::LightingSceneTable, &StorageData::LightingSceneTable(record))
+                                .await
+                        }
+                    }
+                }
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingSceneShard { index, cells } => {
+                    match self.fetch_data(StorageKey::LightingSceneShard(index)).await {
+                        Some(StorageData::LightingSceneShard(saved)) if saved == cells => Ok(()),
+                        _ => {
+                            self.store_data(
+                                StorageKey::LightingSceneShard(index),
+                                &StorageData::LightingSceneShard(cells),
+                            )
+                            .await
+                        }
+                    }
+                }
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingRuntimeConditionalSceneTable { len } => {
+                    self.store_lighting_runtime_conditional_table(len).await
+                }
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingRuntimeConditionalSceneShard { index, cells } => {
+                    match self
+                        .fetch_data(StorageKey::LightingRuntimeConditionalSceneShardV2(index))
+                        .await
+                    {
+                        Some(StorageData::LightingRuntimeConditionalSceneShardV2(saved)) if saved == cells => Ok(()),
+                        _ => {
+                            self.store_data(
+                                StorageKey::LightingRuntimeConditionalSceneShardV2(index),
+                                &StorageData::LightingRuntimeConditionalSceneShardV2(cells),
+                            )
+                            .await
+                        }
+                    }
+                }
             };
 
             match write_result {
@@ -998,6 +1359,22 @@ mod tests {
             StorageKey::ActiveBleProfile,
             #[cfg(feature = "_ble")]
             StorageKey::BondInfo(0),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingSceneTable,
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingSceneShard(0),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingRuntimeConditionalSceneTable,
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingRuntimeConditionalSceneShard(0),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingExtensionState,
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingExtensionOverlay,
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingRuntimeConditionalSceneTableV2,
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingRuntimeConditionalSceneShardV2(0),
         ];
 
         let mut buffer = [0u8; 64];
@@ -1007,6 +1384,152 @@ mod tests {
             assert_eq!(decoded, key);
             assert_eq!(used, size);
         }
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    #[test]
+    fn legacy_runtime_conditional_records_load_without_connection_condition() {
+        block_on(async {
+            type Flash = TestFlash<16_384, 4_096, 1>;
+
+            let storage_range = (16_384 - 2 * 4_096) as u32..16_384u32;
+            let mut map =
+                MapStorage::<StorageKey, _, _>::new(Flash::new(), MapConfig::new(storage_range), Cache::new_uncached());
+            let mut buffer = [0u8; get_buffer_size()];
+            let legacy = LightingConditionalSceneCell {
+                conditions: rmk_types::protocol::rynk::LightingConditionSet {
+                    layer: Some(rmk_types::protocol::rynk::LightingLayerCondition { layer: 2, active: true }),
+                    battery: None,
+                    output_mode: None,
+                },
+                led_id: rmk_types::protocol::rynk::LightingLedId(42),
+                effect: rmk_types::protocol::rynk::LightingEffect::Solid {
+                    color: rmk_types::protocol::rynk::LightingRgb8 { r: 1, g: 2, b: 3 },
+                },
+            };
+            let mut shard = heapless::Vec::<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>::new();
+            shard.push(legacy).unwrap();
+            map.store_item(
+                &mut buffer,
+                &StorageKey::LightingRuntimeConditionalSceneTable,
+                &StorageData::LightingRuntimeConditionalSceneTable(1),
+            )
+            .await
+            .unwrap();
+            map.store_item(
+                &mut buffer,
+                &StorageKey::LightingRuntimeConditionalSceneShard(0),
+                &StorageData::LightingRuntimeConditionalSceneShard(shard),
+            )
+            .await
+            .unwrap();
+
+            let mut storage = Storage::<Flash, 0, 0, 0, 0> { flash: map, buffer };
+            let mut loaded = heapless::Vec::<LightingExtendedConditionalSceneCell, 4>::new();
+            storage.read_lighting_runtime_conditional_scenes(&mut loaded).await;
+
+            assert_eq!(loaded.len(), 1);
+            assert_eq!(loaded[0].cell, legacy);
+            assert_eq!(loaded[0].connection, None);
+        });
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    #[test]
+    fn v2_table_write_empties_the_legacy_table() {
+        block_on(async {
+            type Flash = TestFlash<16_384, 4_096, 1>;
+
+            let storage_range = (16_384 - 2 * 4_096) as u32..16_384u32;
+            let mut map =
+                MapStorage::<StorageKey, _, _>::new(Flash::new(), MapConfig::new(storage_range), Cache::new_uncached());
+            let mut buffer = [0u8; get_buffer_size()];
+            map.store_item(
+                &mut buffer,
+                &StorageKey::LightingRuntimeConditionalSceneTable,
+                &StorageData::LightingRuntimeConditionalSceneTable(3),
+            )
+            .await
+            .unwrap();
+
+            let mut storage = Storage::<Flash, 0, 0, 0, 0> { flash: map, buffer };
+            storage.store_lighting_runtime_conditional_table(1).await.unwrap();
+
+            assert!(matches!(
+                storage
+                    .fetch_data(StorageKey::LightingRuntimeConditionalSceneTableV2)
+                    .await,
+                Some(StorageData::LightingRuntimeConditionalSceneTableV2(1))
+            ));
+            assert!(
+                matches!(
+                    storage
+                        .fetch_data(StorageKey::LightingRuntimeConditionalSceneTable)
+                        .await,
+                    Some(StorageData::LightingRuntimeConditionalSceneTable(0))
+                ),
+                "a downgraded firmware must see an empty legacy table"
+            );
+        });
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    #[test]
+    fn extended_runtime_conditional_records_preserve_connection_condition() {
+        block_on(async {
+            type Flash = TestFlash<16_384, 4_096, 1>;
+
+            let storage_range = (16_384 - 2 * 4_096) as u32..16_384u32;
+            let mut map =
+                MapStorage::<StorageKey, _, _>::new(Flash::new(), MapConfig::new(storage_range), Cache::new_uncached());
+            let mut buffer = [0u8; get_buffer_size()];
+            let cell = LightingExtendedConditionalSceneCell {
+                cell: LightingConditionalSceneCell {
+                    conditions: rmk_types::protocol::rynk::LightingConditionSet {
+                        layer: None,
+                        battery: None,
+                        output_mode: None,
+                    },
+                    led_id: rmk_types::protocol::rynk::LightingLedId(7),
+                    effect: rmk_types::protocol::rynk::LightingEffect::Solid {
+                        color: rmk_types::protocol::rynk::LightingRgb8 { r: 4, g: 5, b: 6 },
+                    },
+                },
+                connection: Some(rmk_types::protocol::rynk::LightingConnectionCondition {
+                    transport: Some(rmk_types::protocol::rynk::LightingActiveTransport::Ble),
+                    profile: Some(4),
+                    ble_state: Some(rmk_types::ble::BleState::Advertising),
+                    bonded: None,
+                    usb_connected: None,
+                }),
+                effects: None,
+            };
+            let mut shard = heapless::Vec::<
+                LightingExtendedConditionalSceneCell,
+                LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE,
+            >::new();
+            shard.push(cell).unwrap();
+            map.store_item(
+                &mut buffer,
+                &StorageKey::LightingRuntimeConditionalSceneTableV2,
+                &StorageData::LightingRuntimeConditionalSceneTableV2(1),
+            )
+            .await
+            .unwrap();
+            map.store_item(
+                &mut buffer,
+                &StorageKey::LightingRuntimeConditionalSceneShardV2(0),
+                &StorageData::LightingRuntimeConditionalSceneShardV2(shard),
+            )
+            .await
+            .unwrap();
+
+            let mut storage = Storage::<Flash, 0, 0, 0, 0> { flash: map, buffer };
+            let mut loaded = heapless::Vec::<LightingExtendedConditionalSceneCell, 4>::new();
+            storage.read_lighting_runtime_conditional_scenes(&mut loaded).await;
+
+            assert_eq!(loaded.as_slice(), &[cell]);
+        });
     }
 
     #[test]

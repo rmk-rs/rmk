@@ -61,7 +61,7 @@ pub(crate) enum SplitMessage {
     #[cfg(feature = "display")]
     Modifier(u8),
     /// Sleep state from central to peripheral
-    #[cfg(feature = "display")]
+    #[cfg(feature = "_render_state")]
     SleepState(bool),
     /// Battery status, from peripheral to central
     #[cfg(feature = "_ble")]
@@ -102,6 +102,12 @@ pub(crate) enum SplitMessage {
     /// Peripheral → Central: confirm mark_updated succeeded, about to reset.
     #[cfg(feature = "dfu_split")]
     FirmwareUpdateConfirm,
+
+    /// opaque bounded application payload, central →
+    /// peripheral (see `crate::split_app`). Kept as the LAST variant so
+    /// the postcard discriminants of all existing messages stay stable across
+    /// halves flashed at different revisions.
+    Application(crate::split_app::SplitAppData),
 }
 
 // -----------------------------------------------------------------------

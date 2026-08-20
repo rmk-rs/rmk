@@ -31,6 +31,13 @@ pub enum UsbState {
     Suspended,
 }
 
+impl UsbState {
+    /// Whether VBUS is present, independent of enumeration or suspension.
+    pub const fn is_powered(self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+}
+
 /// Unified connection status: the single source of truth for transport
 /// availability and routing. The active transport is derived on demand via
 /// [`Self::decide_active`] from the input fields below.
@@ -65,7 +72,9 @@ impl Default for ConnectionStatus {
 }
 
 impl ConnectionStatus {
-    fn usb_ready(&self) -> bool {
+    /// Whether USB is plugged and routable (configured or suspended),
+    /// independent of whether it is the active transport.
+    pub fn usb_ready(&self) -> bool {
         matches!(self.usb, UsbState::Configured | UsbState::Suspended)
     }
 

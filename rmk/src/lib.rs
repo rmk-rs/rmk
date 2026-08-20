@@ -106,10 +106,16 @@ pub mod keyboard_macros;
 pub mod keymap;
 pub mod layout_macro;
 pub mod light;
+#[cfg(feature = "lighting")]
+pub mod lighting;
 pub mod matrix;
+pub mod physical_layout;
 pub mod processor;
 #[cfg(feature = "split")]
 pub mod split;
+// Bounded application-message hook for the split protocol.
+#[cfg(feature = "split")]
+pub mod split_app;
 pub mod state;
 #[cfg(feature = "storage")]
 pub mod storage;

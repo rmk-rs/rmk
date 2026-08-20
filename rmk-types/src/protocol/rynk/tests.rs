@@ -5,8 +5,8 @@
 //! one postcard-encoded exemplar per wire type; `wire_frames.snap` holds one
 //! full frame (header + payload) per protocol message. Any field reorder /
 //! type change / variant renumber / CMD renumber flips the bytes and fails
-//! CI. If the change is intentional, bump `ProtocolVersion::CURRENT` and
-//! regenerate the snapshots.
+//! CI. If the change is intentional, regenerate the snapshots and review the
+//! compatibility impact. Protocol versions are minted upstream only.
 
 extern crate alloc;
 
@@ -159,7 +159,7 @@ mod snapshot {
                 "snapshot mismatch: {}\n\
                  --- expected ---\n{}\
                  --- actual ---\n{}\
-                 If intentional, regenerate with UPDATE_SNAPSHOTS=1 and bump ProtocolVersion::CURRENT.",
+                 If intentional, regenerate with UPDATE_SNAPSHOTS=1 and review protocol compatibility.",
                 path.display(),
                 expected,
                 actual,
@@ -207,6 +207,7 @@ struct Exemplars {
     matrix: MatrixState,
     capabilities: DeviceCapabilities,
     device_info: DeviceInfo,
+    build_info: BuildInfo,
     behavior: BehaviorConfig,
     connection: ConnectionStatus,
     state_bits: StateBits,
@@ -263,6 +264,9 @@ fn exemplars() -> Exemplars {
     };
     // Quick-tap sits in the u64's high bits, so the profile also exercises a
     // long-varint encoding.
+    let build_info = BuildInfo {
+        label: heapless::String::try_from("my-firmware v4.5.6 / RMK v1.2.3").unwrap(),
+    };
     let behavior = BehaviorConfig {
         combo_timeout_ms: 50,
         oneshot_timeout_ms: 60,
@@ -326,6 +330,7 @@ fn exemplars() -> Exemplars {
         matrix,
         capabilities,
         device_info,
+        build_info,
         behavior,
         connection,
         state_bits,
@@ -344,7 +349,7 @@ fn exemplars() -> Exemplars {
 
 /// Lock down postcard's actual byte encoding for stability-critical
 /// values. A diff in this snapshot indicates wire-format drift; if
-/// intentional, regenerate the snapshot and bump `ProtocolVersion::CURRENT`.
+/// intentional, regenerate the snapshot and review protocol compatibility.
 ///
 /// One exemplar per Rynk wire type, plus every variant of the positional
 /// enums (`KeyAction`, `Action`, and the status enums) so a reordered or
@@ -369,7 +374,21 @@ fn wire_values_locked() {
         remaining_keys: 2,
         key_positions: unlock_keys,
     };
+    let layer_state = LayerState {
+        default_layer: 2,
+        active_bitmap: [0x05, 0, 0, 0, 0, 0, 0, 0x80],
+    };
     let profile = MorseProfile::new(None, Some(MorseMode::Normal), Some(200), Some(150));
+    let split_latency_policy = SplitCentralLatencyPolicy {
+        powered: 0,
+        battery: 4,
+        override_latency: Some(2),
+    };
+    let split_latency_state = SplitCentralLatencyState {
+        policy: split_latency_policy,
+        powered: true,
+        effective: 2,
+    };
 
     let entries: alloc::vec::Vec<(&str, alloc::vec::Vec<u8>)> = alloc::vec![
         // --- Response envelope + connection ---
@@ -486,9 +505,13 @@ fn wire_values_locked() {
         ("MacroData{[0x01,0x02,0x03]}", encode(&ex.macro_data)),
         // --- Status / system responses ---
         ("MatrixState{[0x05,0x00,0x20]}", encode(&ex.matrix)),
+        ("LayerState{default:2,active:[0x05,..,0x80]}", encode(&layer_state)),
         ("DeviceCapabilities{1..16}", encode(&ex.capabilities)),
         ("DeviceInfo{1.2.3,4,5,RMK,..}", encode(&ex.device_info)),
+        ("BuildInfo{my-firmware..}", encode(&ex.build_info)),
         ("BehaviorConfig{50..120}", encode(&ex.behavior)),
+        ("SplitLatencyPolicy{0,4,Some(2)}", encode(&split_latency_policy),),
+        ("SplitLatencyState{policy,true,2}", encode(&split_latency_state),),
         ("ConnectionStatus{Configured,{1,Adv},Ble}", encode(&ex.connection)),
         ("ProtocolVersion{1,0}", encode(&ProtocolVersion { major: 1, minor: 0 })),
         ("ProtocolVersion::CURRENT", encode(&ProtocolVersion::CURRENT)),
@@ -579,7 +602,7 @@ fn wire_values_locked() {
         "Wire-format TYPE snapshot",
         "# Each entry is the postcard byte encoding of one wire-type exemplar. A diff\n\
          # here means a type's payload encoding changed (field reorder, variant\n\
-         # renumber, …). If intentional, bump ProtocolVersion::CURRENT and regenerate:",
+         # renumber, …). If intentional, regenerate and review compatibility:",
         "wire_values",
         &view,
     );
@@ -590,7 +613,7 @@ fn wire_values_locked() {
 /// COBS-encoded with a trailing `0x00` delimiter — one per feature-independent
 /// protocol message: every request, its `Ok` reply, a representative `Err`
 /// reply, and every topic push. A diff means the wire format changed; if
-/// intentional, regenerate and bump `ProtocolVersion::CURRENT`.
+/// intentional, regenerate and review protocol compatibility.
 ///
 /// Requests and replies use SEQ 1 (a reply echoes its request's SEQ); topics
 /// always use SEQ 0. The `GetVersion` probe and reply are frozen across all
@@ -628,6 +651,11 @@ fn wire_frames_locked() {
         remaining_keys: 2,
         key_positions: unlock_keys,
     };
+    let layer_state = LayerState {
+        default_layer: 2,
+        active_bitmap: [0x05, 0, 0, 0, 0, 0, 0, 0x80],
+    };
+    let modifiers = ModifierCombination::LSHIFT | ModifierCombination::RALT;
 
     let entries: alloc::vec::Vec<(&str, alloc::vec::Vec<u8>)> = alloc::vec![
         // System (0x00xx).
@@ -661,6 +689,14 @@ fn wire_frames_locked() {
         (
             "BootloaderJump reply Ok(())",
             encode_frame(Cmd::BootloaderJump, SEQ, &Ok::<(), RynkError>(())),
+        ),
+        (
+            "PeripheralBootloaderJump request slot 1",
+            encode_frame(Cmd::PeripheralBootloaderJump, SEQ, &1_u8),
+        ),
+        (
+            "PeripheralBootloaderJump reply Ok(())",
+            encode_frame(Cmd::PeripheralBootloaderJump, SEQ, &Ok::<(), RynkError>(()),),
         ),
         (
             "StorageReset request StorageResetMode::Full",
@@ -701,6 +737,15 @@ fn wire_frames_locked() {
                 Cmd::GetDeviceInfo,
                 SEQ,
                 &Ok::<DeviceInfo, RynkError>(ex.device_info.clone())
+            ),
+        ),
+        ("GetBuildInfo request ()", encode_frame(Cmd::GetBuildInfo, SEQ, &())),
+        (
+            "GetBuildInfo reply Ok(BuildInfo{my-firmware..})",
+            encode_frame(
+                Cmd::GetBuildInfo,
+                SEQ,
+                &Ok::<BuildInfo, RynkError>(ex.build_info.clone())
             ),
         ),
         // Keymap / encoder (0x01xx).
@@ -940,6 +985,23 @@ fn wire_frames_locked() {
             "GetLedIndicator reply Ok(LedIndicator(Num|Scroll))",
             encode_frame(Cmd::GetLedIndicator, SEQ, &Ok::<LedIndicator, RynkError>(led)),
         ),
+        ("GetLayerState request ()", encode_frame(Cmd::GetLayerState, SEQ, &())),
+        (
+            "GetLayerState reply Ok(LayerState{default:2,active:[0x05,..,0x80]})",
+            encode_frame(Cmd::GetLayerState, SEQ, &Ok::<LayerState, RynkError>(layer_state)),
+        ),
+        (
+            "GetModifierState request ()",
+            encode_frame(Cmd::GetModifierState, SEQ, &())
+        ),
+        (
+            "GetModifierState reply Ok(ModifierCombination(LShift|RAlt))",
+            encode_frame(
+                Cmd::GetModifierState,
+                SEQ,
+                &Ok::<ModifierCombination, RynkError>(modifiers),
+            ),
+        ),
         // Connection / status rows behind `_ble` and `split`.
         ("GetBleStatus request ()", encode_frame(Cmd::GetBleStatus, SEQ, &())),
         (
@@ -1001,6 +1063,10 @@ fn wire_frames_locked() {
             "BatteryStatusChange topic Available{Discharging,85}",
             encode_frame(Cmd::BatteryStatusChange, 0, &ex.battery)
         ),
+        (
+            "ModifierChange topic ModifierCombination(LShift|RAlt)",
+            encode_frame(Cmd::ModifierChange, 0, &modifiers),
+        ),
     ];
     let view: alloc::vec::Vec<(&str, &[u8])> = entries.iter().map(|(l, b)| (*l, b.as_slice())).collect();
 
@@ -1010,11 +1076,1279 @@ fn wire_frames_locked() {
         "# Each entry is a full Rynk frame — a 3-byte header (CMD u16 LE + SEQ u8) + postcard\n\
          # payload, COBS-encoded with a trailing 0x00 delimiter — one per protocol message; the\n\
          # label names the decoded payload (`()` = empty). A diff means the header, a CMD number,\n\
-         # or a message frame changed. If intentional, bump ProtocolVersion::CURRENT and regenerate:",
+         # or a message frame changed. If intentional, regenerate and review protocol compatibility:",
         "wire_frames",
         &view,
     );
     snapshot::assert_snapshot("snapshots/wire_frames.snap", actual);
+}
+
+/// Split-BLE connection-policy commands have their own feature-gated golden
+/// file so the base snapshots remain identical for non-split builds.
+#[cfg(all(feature = "_ble", feature = "split"))]
+#[test]
+fn split_ble_wire_frames_locked() {
+    const SEQ: u8 = 1;
+    let policy = SplitCentralLatencyPolicy {
+        powered: 0,
+        battery: 4,
+        override_latency: Some(2),
+    };
+    let state = SplitCentralLatencyState {
+        policy,
+        powered: true,
+        effective: 2,
+    };
+    let entries: alloc::vec::Vec<(&str, alloc::vec::Vec<u8>)> = alloc::vec![
+        (
+            "GetSplitCentralLatency request ()",
+            encode_frame(Cmd::GetSplitCentralLatency, SEQ, &()),
+        ),
+        (
+            "GetSplitCentralLatency reply Ok(state)",
+            encode_frame(
+                Cmd::GetSplitCentralLatency,
+                SEQ,
+                &Ok::<SplitCentralLatencyState, RynkError>(state),
+            ),
+        ),
+        (
+            "SetSplitCentralLatency request policy",
+            encode_frame(Cmd::SetSplitCentralLatency, SEQ, &policy),
+        ),
+        (
+            "SetSplitCentralLatency reply Ok(state)",
+            encode_frame(
+                Cmd::SetSplitCentralLatency,
+                SEQ,
+                &Ok::<SplitCentralLatencyState, RynkError>(state),
+            ),
+        ),
+        (
+            "SetSplitCentralLatency reply Err(Invalid)",
+            encode_frame(
+                Cmd::SetSplitCentralLatency,
+                SEQ,
+                &Err::<SplitCentralLatencyState, RynkError>(RynkError::Invalid),
+            ),
+        ),
+    ];
+    let view: alloc::vec::Vec<(&str, &[u8])> = entries
+        .iter()
+        .map(|(label, bytes)| (*label, bytes.as_slice()))
+        .collect();
+    let actual = snapshot::format_value_snapshot(
+        "snapshots/split_ble_wire_frames.snap",
+        "Split BLE wire-format FRAME snapshot",
+        "# Each entry is one complete feature-gated split BLE latency-policy frame.",
+        "--features \"rynk _ble split\" split_ble_wire_frames",
+        &view,
+    );
+    snapshot::assert_snapshot("snapshots/split_ble_wire_frames.snap", actual);
+}
+
+/// Lighting has its own feature-gated golden file so the base Rynk snapshots
+/// remain identical for firmware builds that do not include lighting.
+#[cfg(feature = "lighting")]
+#[test]
+fn lighting_wire_frames_locked() {
+    const SEQ: u8 = 1;
+
+    fn one<T, const N: usize>(item: T) -> heapless::Vec<T, N> {
+        let mut items = heapless::Vec::new();
+        assert!(items.push(item).is_ok());
+        items
+    }
+
+    let matrix = LightingMatrixPosition { row: 1, col: 2 };
+    let point = LightingPoint3 { x: -128, y: 256, z: 64 };
+    let physical_key = LightingPhysicalKey {
+        matrix,
+        center: point,
+        size: LightingKeySize {
+            width: 256,
+            height: 384,
+        },
+        rotation: -750,
+    };
+    let led = LightingLed {
+        id: LightingLedId(42),
+        key: Some(matrix),
+        position: Some(point),
+        zone_start: 3,
+        zone_len: 1,
+    };
+    let zone = LightingZone {
+        id: LightingZoneId(4),
+        name: heapless::String::try_from("thumb").unwrap(),
+    };
+    let output = LightingOutput {
+        node: LightingNodeId(1),
+        id: LightingOutputId(2),
+        pixel_count: 40,
+        capabilities: LightingOutputCapabilities(
+            LightingOutputCapabilities::RGB | LightingOutputCapabilities::ADDRESSABLE,
+        ),
+        coverage: LightingOutputCoverage::Complete,
+    };
+    let route = LightingRoute {
+        led_id: led.id,
+        node: output.node,
+        output: output.id,
+        physical_index: 7,
+    };
+    let capabilities = LightingCapabilities {
+        topology_revision: 1,
+        logical_key_count: 2,
+        physical_key_count: 3,
+        led_count: 4,
+        zone_count: 5,
+        zone_membership_count: 6,
+        output_count: 7,
+        route_count: 8,
+        overlay_capacity: 9,
+        page_capacity: LIGHTING_PAGE_SIZE as u8,
+        overlay_chunk_capacity: LIGHTING_OVERLAY_CHUNK_SIZE as u8,
+        features: LightingFeatureFlags(
+            LightingFeatureFlags::PHYSICAL_GEOMETRY
+                | LightingFeatureFlags::ZONES
+                | LightingFeatureFlags::ROUTING
+                | LightingFeatureFlags::OVERLAY_TTL
+                | LightingFeatureFlags::ATOMIC_OVERLAY_REPLACE
+                | LightingFeatureFlags::LAYER_AWARE
+                | LightingFeatureFlags::OVERLAY_READBACK
+                | LightingFeatureFlags::COMPILED_LAYER_SCENES
+                | LightingFeatureFlags::OUTPUT_MODE
+                | LightingFeatureFlags::RUNTIME_CONDITIONAL_SCENES
+                | LightingFeatureFlags::RUNTIME_CONNECTION_CONDITIONS,
+        ),
+        effects: LightingEffectFlags(
+            LightingEffectFlags::SOLID | LightingEffectFlags::BLINK | LightingEffectFlags::BREATHE,
+        ),
+    };
+    let background = LightingBackgroundState {
+        enabled: true,
+        hue: 10,
+        saturation: 20,
+        value: 30,
+        speed: 40,
+        mode: LightingBackgroundMode::Breathe,
+    };
+    let state = LightingState {
+        revision: 9,
+        output_enabled: true,
+        output_brightness: 200,
+        background,
+        overlay_len: 1,
+    };
+    let mutable_state = LightingMutableState {
+        output_enabled: state.output_enabled,
+        output_brightness: state.output_brightness,
+        background,
+    };
+    let page_request = LightingPageRequest {
+        topology_revision: capabilities.topology_revision,
+        offset: 0,
+    };
+    let keys_page = LightingPhysicalKeysPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(physical_key),
+    };
+    let logical_keys_page = LightingKeysPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(matrix),
+    };
+    let leds_page = LightingLedsPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(led),
+    };
+    let zones_page = LightingZonesPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(zone),
+    };
+    let memberships_page = LightingZoneMembershipsPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(LightingZoneId(4)),
+    };
+    let outputs_page = LightingOutputsPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(output),
+    };
+    let routes_page = LightingRoutesPage {
+        topology_revision: 1,
+        total_count: 1,
+        items: one(route),
+    };
+    let overlay_cell = LightingOverlayCell {
+        led_id: led.id,
+        effect: LightingEffect::Blink {
+            color: LightingRgb8 { r: 1, g: 2, b: 3 },
+            period_ms: 1000,
+            phase_ms: 250,
+            duty: 50,
+        },
+        ttl_ms: Some(5000),
+    };
+    let overlay_page_request = LightingOverlayPageRequest {
+        revision: state.revision,
+        offset: 0,
+    };
+    let overlay_page = LightingOverlayPage {
+        revision: state.revision,
+        total_count: 1,
+        items: one(overlay_cell),
+    };
+    let set_state = SetLightingStateRequest {
+        expected_revision: 8,
+        state: mutable_state,
+    };
+    let set_overlay = SetLightingOverlayRequest {
+        expected_revision: 9,
+        cell: overlay_cell,
+    };
+    let unset_overlay = UnsetLightingOverlayRequest {
+        expected_revision: 10,
+        led_id: led.id,
+    };
+    let clear_overlay = ClearLightingOverlayRequest { expected_revision: 11 };
+    let begin = BeginLightingOverlayReplaceRequest {
+        expected_revision: 12,
+        cell_count: 1,
+    };
+    let transaction = LightingOverlayTransaction { id: 13, cell_count: 1 };
+    let put = PutLightingOverlayChunkRequest {
+        transaction_id: transaction.id,
+        offset: 0,
+        cells: one(overlay_cell),
+    };
+    let commit = CommitLightingOverlayReplaceRequest {
+        transaction_id: transaction.id,
+    };
+    let abort = AbortLightingOverlayReplaceRequest {
+        transaction_id: transaction.id,
+    };
+    let scene_cell = LightingSceneCell {
+        layer: 2,
+        led_id: led.id,
+        effect: LightingEffect::Solid {
+            color: LightingRgb8 { r: 7, g: 8, b: 9 },
+        },
+    };
+    let scene_status = LightingSceneStatus {
+        revision: state.revision,
+        capacity: 256,
+        scene_len: 1,
+        policy: LightingLayerPolicy::ActiveStack,
+        chunk_capacity: LIGHTING_SCENE_CHUNK_SIZE as u8,
+    };
+    let scene_page_request = LightingScenePageRequest {
+        revision: state.revision,
+        offset: 0,
+    };
+    let scenes_page = LightingScenesPage {
+        revision: state.revision,
+        total_count: 1,
+        items: one(scene_cell),
+    };
+    let compiled_scene_status = LightingCompiledSceneStatus {
+        topology_revision: capabilities.topology_revision,
+        scene_len: 1,
+        policy: LightingLayerPolicy::EffectiveOnly,
+        chunk_capacity: LIGHTING_SCENE_CHUNK_SIZE as u8,
+    };
+    let compiled_scenes_page = LightingCompiledScenesPage {
+        topology_revision: capabilities.topology_revision,
+        total_count: 1,
+        items: one(scene_cell),
+    };
+    let set_scene_cell = SetLightingSceneCellRequest {
+        expected_revision: 9,
+        cell: scene_cell,
+    };
+    let unset_scene_cell = UnsetLightingSceneCellRequest {
+        expected_revision: 10,
+        layer: scene_cell.layer,
+        led_id: led.id,
+    };
+    let set_layer_policy = SetLightingLayerPolicyRequest {
+        expected_revision: 11,
+        policy: LightingLayerPolicy::EffectiveOnly,
+    };
+    let scene_begin = BeginLightingSceneReplaceRequest {
+        expected_revision: 12,
+        cell_count: 1,
+    };
+    let scene_transaction = LightingSceneTransaction { id: 21, cell_count: 1 };
+    let scene_put = PutLightingSceneChunkRequest {
+        transaction_id: scene_transaction.id,
+        offset: 0,
+        cells: one(scene_cell),
+    };
+    let scene_commit = CommitLightingSceneReplaceRequest {
+        transaction_id: scene_transaction.id,
+    };
+    let scene_abort = AbortLightingSceneReplaceRequest {
+        transaction_id: scene_transaction.id,
+    };
+    let extension = LightingExtension {
+        revision: state.revision,
+        effect_count: 6,
+        palette_count: 16,
+        state: LightingExtensionState {
+            effect: 1,
+            palette: 2,
+            value: 3,
+            speed: 4,
+        },
+    };
+    let extension_names_request = LightingExtensionNamesRequest {
+        kind: LightingExtensionNameKind::Palettes,
+        offset: LIGHTING_EXTENSION_NAME_CHUNK as u8,
+    };
+    let extension_names_page = LightingExtensionNamesPage {
+        total: 16,
+        items: one(heapless::String::try_from("Ocean").unwrap()),
+    };
+    let set_extension_state = SetLightingExtensionStateRequest {
+        expected_revision: state.revision,
+        state: extension.state,
+    };
+    let extension_layers = LightingExtensionLayers {
+        revision: state.revision,
+        overlay: Some(5),
+    };
+    let set_extension_layers = SetLightingExtensionLayersRequest {
+        expected_revision: state.revision,
+        overlay: Some(5),
+    };
+    let extension_params_request = LightingExtensionParamsRequest { effect: 1, offset: 0 };
+    let extension_params_page = LightingExtensionParamsPage {
+        revision: state.revision,
+        total: 2,
+        items: one(LightingExtensionParam {
+            name: heapless::String::try_from("Density").unwrap(),
+            min: 1,
+            max: 8,
+            default: 3,
+            value: 5,
+        }),
+    };
+    let set_extension_param = SetLightingExtensionParamRequest {
+        expected_revision: state.revision,
+        effect: 1,
+        index: 0,
+        value: 5,
+    };
+    let output_mode = LightingOutputModeState {
+        mode: LightingOutputMode::PoweredOnly,
+        powered: true,
+        wake_active: false,
+        effective_enabled: true,
+        powered_only_scope: LightingPoweredOnlyScope::Local,
+        cycle_user_action: Some(13),
+        wake_layers: 1 << 2,
+        indicator: Some(LightingOutputModeIndicator {
+            led_id: led.id,
+            always_on: LightingEffect::Solid {
+                color: LightingRgb8 { r: 0, g: 9, b: 0 },
+            },
+            always_off: LightingEffect::Solid {
+                color: LightingRgb8 { r: 9, g: 0, b: 0 },
+            },
+            powered_only: LightingEffect::Solid {
+                color: LightingRgb8 { r: 0, g: 0, b: 9 },
+            },
+        }),
+    };
+    let set_output_mode = SetLightingOutputModeRequest {
+        expected_revision: state.revision,
+        mode: LightingOutputMode::AlwaysOff,
+    };
+    let conditional_cell = LightingConditionalSceneCell {
+        conditions: LightingConditionSet {
+            layer: Some(LightingLayerCondition { layer: 2, active: true }),
+            battery: Some(LightingBatteryCondition {
+                node: LightingNodeId(1),
+                min_level: Some(20),
+                max_level: Some(80),
+                charge: LightingChargeCondition::Discharging,
+            }),
+            output_mode: None,
+        },
+        led_id: led.id,
+        effect: scene_cell.effect,
+    };
+    let runtime_conditional_status = LightingRuntimeConditionalSceneStatus {
+        revision: state.revision,
+        capacity: 64,
+        cell_len: 1,
+        chunk_capacity: LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE as u8,
+    };
+    let runtime_conditional_page_request = LightingRuntimeConditionalScenePageRequest {
+        revision: state.revision,
+        offset: 0,
+    };
+    let runtime_conditional_page = LightingRuntimeConditionalScenesPage {
+        revision: state.revision,
+        total_count: 1,
+        items: one(conditional_cell),
+    };
+    let runtime_conditional_begin = BeginLightingRuntimeConditionalSceneReplaceRequest {
+        expected_revision: state.revision,
+        cell_count: 1,
+    };
+    let runtime_conditional_transaction = LightingRuntimeConditionalSceneTransaction { id: 31, cell_count: 1 };
+    let runtime_conditional_put = PutLightingRuntimeConditionalSceneChunkRequest {
+        transaction_id: runtime_conditional_transaction.id,
+        offset: 0,
+        cells: one(conditional_cell),
+    };
+    let runtime_conditional_commit = CommitLightingRuntimeConditionalSceneReplaceRequest {
+        transaction_id: runtime_conditional_transaction.id,
+    };
+    let runtime_conditional_abort = AbortLightingRuntimeConditionalSceneReplaceRequest {
+        transaction_id: runtime_conditional_transaction.id,
+    };
+    let extended_runtime_conditional_status = LightingRuntimeConditionalSceneStatus {
+        chunk_capacity: LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE as u8,
+        ..runtime_conditional_status
+    };
+    let extended_conditional_cell = LightingExtendedConditionalSceneCell {
+        cell: conditional_cell,
+        connection: Some(LightingConnectionCondition {
+            transport: Some(LightingActiveTransport::Ble),
+            profile: Some(3),
+            ble_state: Some(BleState::Connected),
+            bonded: Some(LightingBondedSlotCondition { slot: 2, bonded: true }),
+            usb_connected: Some(true),
+        }),
+        effects: Some(LightingEffectsCondition { enabled: true }),
+    };
+    let extended_runtime_conditional_page = LightingExtendedRuntimeConditionalScenesPage {
+        revision: state.revision,
+        total_count: 1,
+        items: one(extended_conditional_cell),
+    };
+    let extended_runtime_conditional_put = PutLightingExtendedRuntimeConditionalSceneChunkRequest {
+        transaction_id: runtime_conditional_transaction.id,
+        offset: 0,
+        cells: one(extended_conditional_cell),
+    };
+    let frame_request = LightingFrameRequest {
+        node: LightingNodeId(1),
+        offset: 24,
+    };
+    let frame_page = LightingFramePage {
+        node: frame_request.node,
+        revision: Some(state.revision),
+        total_leds: 80,
+        start: frame_request.offset,
+        age_ms: 37,
+        cells: one(LightingRgb8 { r: 1, g: 2, b: 3 }),
+    };
+    let replica_status = LightingReplicaStatus {
+        central: LightingCentralReplicaState {
+            revision: state.revision,
+            presented_revision: Some(state.revision - 1),
+            effective_layer: 2,
+            default_layer: 1,
+            active_bits: 0b110,
+            powered: true,
+            wake_active: false,
+            effective_output_enabled: true,
+        },
+        replication: Some(LightingReplicationMachine {
+            last_acked_revision: Some(state.revision - 2),
+            awaiting_ack: true,
+            generation: 4,
+            link_up: true,
+            durable_dirty: true,
+            context_dirty: false,
+            health: LightingReplicationHealth::Resynchronizing,
+            expected_digests: Some(LightingReplicaDigests {
+                schema: LIGHTING_REPLICA_DIGEST_SCHEMA_V1,
+                revision: state.revision - 2,
+                settings: 11,
+                overlay: 12,
+                scenes: 13,
+                conditional_scenes: 14,
+            }),
+            last_attested_age_ms: Some(125),
+            mismatch_count: 1,
+        }),
+        peripheral: Some(LightingPeripheralReplicaState {
+            node: frame_request.node,
+            applied_revision: Some(state.revision - 3),
+            engine_revision: 5,
+            effective_layer: 1,
+            default_layer: 1,
+            active_bits: 0b10,
+            powered: false,
+            wake_active: true,
+            effective_output_enabled: false,
+            age_ms: 250,
+            digests: Some(LightingReplicaDigests {
+                schema: LIGHTING_REPLICA_DIGEST_SCHEMA_V1,
+                revision: state.revision - 3,
+                settings: 21,
+                overlay: 22,
+                scenes: 23,
+                conditional_scenes: 24,
+            }),
+        }),
+    };
+
+    let entries: alloc::vec::Vec<(&str, alloc::vec::Vec<u8>)> = alloc::vec![
+        (
+            "GetLightingCapabilities request",
+            encode_frame(Cmd::GetLightingCapabilities, SEQ, &())
+        ),
+        (
+            "GetLightingCapabilities reply",
+            encode_frame(
+                Cmd::GetLightingCapabilities,
+                SEQ,
+                &Ok::<LightingCapabilitiesResult, RynkError>(Ok(capabilities))
+            )
+        ),
+        (
+            "GetLightingState request",
+            encode_frame(Cmd::GetLightingState, SEQ, &())
+        ),
+        (
+            "GetLightingState reply",
+            encode_frame(
+                Cmd::GetLightingState,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "SetLightingState request",
+            encode_frame(Cmd::SetLightingState, SEQ, &set_state)
+        ),
+        (
+            "SetLightingState reply",
+            encode_frame(
+                Cmd::SetLightingState,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "GetLightingOutputMode request",
+            encode_frame(Cmd::GetLightingOutputMode, SEQ, &())
+        ),
+        (
+            "GetLightingOutputMode reply",
+            encode_frame(
+                Cmd::GetLightingOutputMode,
+                SEQ,
+                &Ok::<LightingOutputModeStateResult, RynkError>(Ok(output_mode))
+            )
+        ),
+        (
+            "SetLightingOutputMode request",
+            encode_frame(Cmd::SetLightingOutputMode, SEQ, &set_output_mode)
+        ),
+        (
+            "SetLightingOutputMode reply",
+            encode_frame(
+                Cmd::SetLightingOutputMode,
+                SEQ,
+                &Ok::<LightingOutputModeStateResult, RynkError>(Ok(output_mode))
+            )
+        ),
+        (
+            "GetLightingRuntimeConditionalSceneStatus request",
+            encode_frame(Cmd::GetLightingRuntimeConditionalSceneStatus, SEQ, &())
+        ),
+        (
+            "GetLightingRuntimeConditionalSceneStatus reply",
+            encode_frame(
+                Cmd::GetLightingRuntimeConditionalSceneStatus,
+                SEQ,
+                &Ok::<LightingRuntimeConditionalSceneStatusResult, RynkError>(Ok(runtime_conditional_status))
+            )
+        ),
+        (
+            "GetLightingRuntimeConditionalScenes request",
+            encode_frame(
+                Cmd::GetLightingRuntimeConditionalScenes,
+                SEQ,
+                &runtime_conditional_page_request
+            )
+        ),
+        (
+            "GetLightingRuntimeConditionalScenes reply",
+            encode_frame(
+                Cmd::GetLightingRuntimeConditionalScenes,
+                SEQ,
+                &Ok::<LightingRuntimeConditionalScenesPageResult, RynkError>(Ok(runtime_conditional_page))
+            )
+        ),
+        (
+            "BeginLightingRuntimeConditionalSceneReplace request",
+            encode_frame(
+                Cmd::BeginLightingRuntimeConditionalSceneReplace,
+                SEQ,
+                &runtime_conditional_begin
+            )
+        ),
+        (
+            "BeginLightingRuntimeConditionalSceneReplace reply",
+            encode_frame(
+                Cmd::BeginLightingRuntimeConditionalSceneReplace,
+                SEQ,
+                &Ok::<LightingRuntimeConditionalSceneTransactionResult, RynkError>(Ok(runtime_conditional_transaction))
+            )
+        ),
+        (
+            "PutLightingRuntimeConditionalSceneChunk request",
+            encode_frame(
+                Cmd::PutLightingRuntimeConditionalSceneChunk,
+                SEQ,
+                &runtime_conditional_put
+            )
+        ),
+        (
+            "PutLightingRuntimeConditionalSceneChunk reply",
+            encode_frame(
+                Cmd::PutLightingRuntimeConditionalSceneChunk,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Ok(()))
+            )
+        ),
+        (
+            "CommitLightingRuntimeConditionalSceneReplace request",
+            encode_frame(
+                Cmd::CommitLightingRuntimeConditionalSceneReplace,
+                SEQ,
+                &runtime_conditional_commit
+            )
+        ),
+        (
+            "CommitLightingRuntimeConditionalSceneReplace reply",
+            encode_frame(
+                Cmd::CommitLightingRuntimeConditionalSceneReplace,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "AbortLightingRuntimeConditionalSceneReplace request",
+            encode_frame(
+                Cmd::AbortLightingRuntimeConditionalSceneReplace,
+                SEQ,
+                &runtime_conditional_abort
+            )
+        ),
+        (
+            "AbortLightingRuntimeConditionalSceneReplace reply",
+            encode_frame(
+                Cmd::AbortLightingRuntimeConditionalSceneReplace,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Ok(()))
+            )
+        ),
+        (
+            "GetLightingExtendedRuntimeConditionalSceneStatus request",
+            encode_frame(Cmd::GetLightingExtendedRuntimeConditionalSceneStatus, SEQ, &())
+        ),
+        (
+            "GetLightingExtendedRuntimeConditionalSceneStatus reply",
+            encode_frame(
+                Cmd::GetLightingExtendedRuntimeConditionalSceneStatus,
+                SEQ,
+                &Ok::<LightingRuntimeConditionalSceneStatusResult, RynkError>(Ok(extended_runtime_conditional_status))
+            )
+        ),
+        (
+            "GetLightingExtendedRuntimeConditionalScenes request",
+            encode_frame(
+                Cmd::GetLightingExtendedRuntimeConditionalScenes,
+                SEQ,
+                &runtime_conditional_page_request
+            )
+        ),
+        (
+            "GetLightingExtendedRuntimeConditionalScenes reply",
+            encode_frame(
+                Cmd::GetLightingExtendedRuntimeConditionalScenes,
+                SEQ,
+                &Ok::<LightingExtendedRuntimeConditionalScenesPageResult, RynkError>(Ok(
+                    extended_runtime_conditional_page
+                ))
+            )
+        ),
+        (
+            "BeginLightingExtendedRuntimeConditionalSceneReplace request",
+            encode_frame(
+                Cmd::BeginLightingExtendedRuntimeConditionalSceneReplace,
+                SEQ,
+                &runtime_conditional_begin
+            )
+        ),
+        (
+            "BeginLightingExtendedRuntimeConditionalSceneReplace reply",
+            encode_frame(
+                Cmd::BeginLightingExtendedRuntimeConditionalSceneReplace,
+                SEQ,
+                &Ok::<LightingRuntimeConditionalSceneTransactionResult, RynkError>(Ok(runtime_conditional_transaction))
+            )
+        ),
+        (
+            "PutLightingExtendedRuntimeConditionalSceneChunk request",
+            encode_frame(
+                Cmd::PutLightingExtendedRuntimeConditionalSceneChunk,
+                SEQ,
+                &extended_runtime_conditional_put
+            )
+        ),
+        (
+            "PutLightingExtendedRuntimeConditionalSceneChunk reply",
+            encode_frame(
+                Cmd::PutLightingExtendedRuntimeConditionalSceneChunk,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Ok(()))
+            )
+        ),
+        (
+            "CommitLightingExtendedRuntimeConditionalSceneReplace request",
+            encode_frame(
+                Cmd::CommitLightingExtendedRuntimeConditionalSceneReplace,
+                SEQ,
+                &runtime_conditional_commit
+            )
+        ),
+        (
+            "CommitLightingExtendedRuntimeConditionalSceneReplace reply",
+            encode_frame(
+                Cmd::CommitLightingExtendedRuntimeConditionalSceneReplace,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "AbortLightingExtendedRuntimeConditionalSceneReplace request",
+            encode_frame(
+                Cmd::AbortLightingExtendedRuntimeConditionalSceneReplace,
+                SEQ,
+                &runtime_conditional_abort
+            )
+        ),
+        (
+            "AbortLightingExtendedRuntimeConditionalSceneReplace reply",
+            encode_frame(
+                Cmd::AbortLightingExtendedRuntimeConditionalSceneReplace,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Ok(()))
+            )
+        ),
+        (
+            "GetLightingPhysicalKeys request",
+            encode_frame(Cmd::GetLightingPhysicalKeys, SEQ, &page_request)
+        ),
+        (
+            "GetLightingPhysicalKeys reply",
+            encode_frame(
+                Cmd::GetLightingPhysicalKeys,
+                SEQ,
+                &Ok::<LightingPhysicalKeysPageResult, RynkError>(Ok(keys_page))
+            )
+        ),
+        (
+            "GetLightingKeys request",
+            encode_frame(Cmd::GetLightingKeys, SEQ, &page_request)
+        ),
+        (
+            "GetLightingKeys reply",
+            encode_frame(
+                Cmd::GetLightingKeys,
+                SEQ,
+                &Ok::<LightingKeysPageResult, RynkError>(Ok(logical_keys_page))
+            )
+        ),
+        (
+            "GetLightingLeds request",
+            encode_frame(Cmd::GetLightingLeds, SEQ, &page_request)
+        ),
+        (
+            "GetLightingLeds reply",
+            encode_frame(
+                Cmd::GetLightingLeds,
+                SEQ,
+                &Ok::<LightingLedsPageResult, RynkError>(Ok(leds_page))
+            )
+        ),
+        (
+            "GetLightingZones request",
+            encode_frame(Cmd::GetLightingZones, SEQ, &page_request)
+        ),
+        (
+            "GetLightingZones reply",
+            encode_frame(
+                Cmd::GetLightingZones,
+                SEQ,
+                &Ok::<LightingZonesPageResult, RynkError>(Ok(zones_page))
+            )
+        ),
+        (
+            "GetLightingZoneMemberships request",
+            encode_frame(Cmd::GetLightingZoneMemberships, SEQ, &page_request)
+        ),
+        (
+            "GetLightingZoneMemberships reply",
+            encode_frame(
+                Cmd::GetLightingZoneMemberships,
+                SEQ,
+                &Ok::<LightingZoneMembershipsPageResult, RynkError>(Ok(memberships_page))
+            )
+        ),
+        (
+            "GetLightingOutputs request",
+            encode_frame(Cmd::GetLightingOutputs, SEQ, &page_request)
+        ),
+        (
+            "GetLightingOutputs reply",
+            encode_frame(
+                Cmd::GetLightingOutputs,
+                SEQ,
+                &Ok::<LightingOutputsPageResult, RynkError>(Ok(outputs_page))
+            )
+        ),
+        (
+            "GetLightingRoutes request",
+            encode_frame(Cmd::GetLightingRoutes, SEQ, &page_request)
+        ),
+        (
+            "GetLightingRoutes reply",
+            encode_frame(
+                Cmd::GetLightingRoutes,
+                SEQ,
+                &Ok::<LightingRoutesPageResult, RynkError>(Ok(routes_page))
+            )
+        ),
+        (
+            "GetLightingOverlay request",
+            encode_frame(Cmd::GetLightingOverlay, SEQ, &overlay_page_request)
+        ),
+        (
+            "GetLightingOverlay reply",
+            encode_frame(
+                Cmd::GetLightingOverlay,
+                SEQ,
+                &Ok::<LightingOverlayPageResult, RynkError>(Ok(overlay_page))
+            )
+        ),
+        (
+            "SetLightingOverlay request",
+            encode_frame(Cmd::SetLightingOverlay, SEQ, &set_overlay)
+        ),
+        (
+            "SetLightingOverlay reply",
+            encode_frame(
+                Cmd::SetLightingOverlay,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "UnsetLightingOverlay request",
+            encode_frame(Cmd::UnsetLightingOverlay, SEQ, &unset_overlay)
+        ),
+        (
+            "UnsetLightingOverlay reply",
+            encode_frame(
+                Cmd::UnsetLightingOverlay,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "ClearLightingOverlay request",
+            encode_frame(Cmd::ClearLightingOverlay, SEQ, &clear_overlay)
+        ),
+        (
+            "ClearLightingOverlay reply",
+            encode_frame(
+                Cmd::ClearLightingOverlay,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "BeginLightingOverlayReplace request",
+            encode_frame(Cmd::BeginLightingOverlayReplace, SEQ, &begin)
+        ),
+        (
+            "BeginLightingOverlayReplace reply",
+            encode_frame(
+                Cmd::BeginLightingOverlayReplace,
+                SEQ,
+                &Ok::<LightingOverlayTransactionResult, RynkError>(Ok(transaction))
+            )
+        ),
+        (
+            "PutLightingOverlayChunk request",
+            encode_frame(Cmd::PutLightingOverlayChunk, SEQ, &put)
+        ),
+        (
+            "PutLightingOverlayChunk reply",
+            encode_frame(
+                Cmd::PutLightingOverlayChunk,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Ok(()))
+            )
+        ),
+        (
+            "CommitLightingOverlayReplace request",
+            encode_frame(Cmd::CommitLightingOverlayReplace, SEQ, &commit)
+        ),
+        (
+            "CommitLightingOverlayReplace reply",
+            encode_frame(
+                Cmd::CommitLightingOverlayReplace,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "AbortLightingOverlayReplace request",
+            encode_frame(Cmd::AbortLightingOverlayReplace, SEQ, &abort)
+        ),
+        (
+            "AbortLightingOverlayReplace reply",
+            encode_frame(
+                Cmd::AbortLightingOverlayReplace,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Ok(()))
+            )
+        ),
+        (
+            "SetLightingOverlay inner Err(UnknownLed)",
+            encode_frame(
+                Cmd::SetLightingOverlay,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Err(LightingError::UnknownLed {
+                    led_id: LightingLedId(999)
+                }))
+            )
+        ),
+        (
+            "SetLightingOverlay outer Err(Locked)",
+            encode_frame(
+                Cmd::SetLightingOverlay,
+                SEQ,
+                &Err::<LightingStateResult, RynkError>(RynkError::Locked)
+            )
+        ),
+        (
+            "PutLightingOverlayChunk inner Err(TransactionExpired)",
+            encode_frame(
+                Cmd::PutLightingOverlayChunk,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Err(LightingError::TransactionExpired))
+            )
+        ),
+        (
+            "GetLightingSceneStatus request",
+            encode_frame(Cmd::GetLightingSceneStatus, SEQ, &())
+        ),
+        (
+            "GetLightingSceneStatus reply",
+            encode_frame(
+                Cmd::GetLightingSceneStatus,
+                SEQ,
+                &Ok::<LightingSceneStatusResult, RynkError>(Ok(scene_status))
+            )
+        ),
+        (
+            "GetLightingScenes request",
+            encode_frame(Cmd::GetLightingScenes, SEQ, &scene_page_request)
+        ),
+        (
+            "GetLightingScenes reply",
+            encode_frame(
+                Cmd::GetLightingScenes,
+                SEQ,
+                &Ok::<LightingScenesPageResult, RynkError>(Ok(scenes_page))
+            )
+        ),
+        (
+            "GetLightingCompiledSceneStatus request",
+            encode_frame(Cmd::GetLightingCompiledSceneStatus, SEQ, &())
+        ),
+        (
+            "GetLightingCompiledSceneStatus reply",
+            encode_frame(
+                Cmd::GetLightingCompiledSceneStatus,
+                SEQ,
+                &Ok::<LightingCompiledSceneStatusResult, RynkError>(Ok(compiled_scene_status))
+            )
+        ),
+        (
+            "GetLightingCompiledScenes request",
+            encode_frame(Cmd::GetLightingCompiledScenes, SEQ, &page_request)
+        ),
+        (
+            "GetLightingCompiledScenes reply",
+            encode_frame(
+                Cmd::GetLightingCompiledScenes,
+                SEQ,
+                &Ok::<LightingCompiledScenesPageResult, RynkError>(Ok(compiled_scenes_page))
+            )
+        ),
+        (
+            "SetLightingSceneCell request",
+            encode_frame(Cmd::SetLightingSceneCell, SEQ, &set_scene_cell)
+        ),
+        (
+            "SetLightingSceneCell reply",
+            encode_frame(
+                Cmd::SetLightingSceneCell,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "UnsetLightingSceneCell request",
+            encode_frame(Cmd::UnsetLightingSceneCell, SEQ, &unset_scene_cell)
+        ),
+        (
+            "UnsetLightingSceneCell reply",
+            encode_frame(
+                Cmd::UnsetLightingSceneCell,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "SetLightingLayerPolicy request",
+            encode_frame(Cmd::SetLightingLayerPolicy, SEQ, &set_layer_policy)
+        ),
+        (
+            "SetLightingLayerPolicy reply",
+            encode_frame(
+                Cmd::SetLightingLayerPolicy,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "BeginLightingSceneReplace request",
+            encode_frame(Cmd::BeginLightingSceneReplace, SEQ, &scene_begin)
+        ),
+        (
+            "BeginLightingSceneReplace reply",
+            encode_frame(
+                Cmd::BeginLightingSceneReplace,
+                SEQ,
+                &Ok::<LightingSceneTransactionResult, RynkError>(Ok(scene_transaction))
+            )
+        ),
+        (
+            "PutLightingSceneChunk request",
+            encode_frame(Cmd::PutLightingSceneChunk, SEQ, &scene_put)
+        ),
+        (
+            "PutLightingSceneChunk reply",
+            encode_frame(
+                Cmd::PutLightingSceneChunk,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Ok(()))
+            )
+        ),
+        (
+            "CommitLightingSceneReplace request",
+            encode_frame(Cmd::CommitLightingSceneReplace, SEQ, &scene_commit)
+        ),
+        (
+            "CommitLightingSceneReplace reply",
+            encode_frame(
+                Cmd::CommitLightingSceneReplace,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "AbortLightingSceneReplace request",
+            encode_frame(Cmd::AbortLightingSceneReplace, SEQ, &scene_abort)
+        ),
+        (
+            "AbortLightingSceneReplace reply",
+            encode_frame(
+                Cmd::AbortLightingSceneReplace,
+                SEQ,
+                &Ok::<LightingUnitResult, RynkError>(Ok(()))
+            )
+        ),
+        (
+            "SetLightingSceneCell inner Err(UnknownLayer)",
+            encode_frame(
+                Cmd::SetLightingSceneCell,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Err(LightingError::UnknownLayer { layer: 200 }))
+            )
+        ),
+        (
+            "SetLightingSceneCell inner Err(SceneFull)",
+            encode_frame(
+                Cmd::SetLightingSceneCell,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Err(LightingError::SceneFull { capacity: 256 }))
+            )
+        ),
+        (
+            "GetLightingExtension request",
+            encode_frame(Cmd::GetLightingExtension, SEQ, &())
+        ),
+        (
+            "GetLightingExtension reply",
+            encode_frame(
+                Cmd::GetLightingExtension,
+                SEQ,
+                &Ok::<LightingExtensionResult, RynkError>(Ok(extension))
+            )
+        ),
+        (
+            "GetLightingExtension inner Err(Unsupported)",
+            encode_frame(
+                Cmd::GetLightingExtension,
+                SEQ,
+                &Ok::<LightingExtensionResult, RynkError>(Err(LightingError::Unsupported))
+            )
+        ),
+        (
+            "GetLightingExtensionNames request",
+            encode_frame(Cmd::GetLightingExtensionNames, SEQ, &extension_names_request)
+        ),
+        (
+            "GetLightingExtensionNames reply",
+            encode_frame(
+                Cmd::GetLightingExtensionNames,
+                SEQ,
+                &Ok::<LightingExtensionNamesPageResult, RynkError>(Ok(extension_names_page))
+            )
+        ),
+        (
+            "SetLightingExtensionState request",
+            encode_frame(Cmd::SetLightingExtensionState, SEQ, &set_extension_state)
+        ),
+        (
+            "SetLightingExtensionState reply",
+            encode_frame(
+                Cmd::SetLightingExtensionState,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "GetLightingExtensionLayers request",
+            encode_frame(Cmd::GetLightingExtensionLayers, SEQ, &())
+        ),
+        (
+            "GetLightingExtensionLayers reply",
+            encode_frame(
+                Cmd::GetLightingExtensionLayers,
+                SEQ,
+                &Ok::<LightingExtensionLayersResult, RynkError>(Ok(extension_layers))
+            )
+        ),
+        (
+            "SetLightingExtensionLayers request",
+            encode_frame(Cmd::SetLightingExtensionLayers, SEQ, &set_extension_layers)
+        ),
+        (
+            "SetLightingExtensionLayers reply",
+            encode_frame(
+                Cmd::SetLightingExtensionLayers,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "GetLightingExtensionParams request",
+            encode_frame(Cmd::GetLightingExtensionParams, SEQ, &extension_params_request)
+        ),
+        (
+            "GetLightingExtensionParams reply",
+            encode_frame(
+                Cmd::GetLightingExtensionParams,
+                SEQ,
+                &Ok::<LightingExtensionParamsPageResult, RynkError>(Ok(extension_params_page))
+            )
+        ),
+        (
+            "SetLightingExtensionParam request",
+            encode_frame(Cmd::SetLightingExtensionParam, SEQ, &set_extension_param)
+        ),
+        (
+            "SetLightingExtensionParam reply",
+            encode_frame(
+                Cmd::SetLightingExtensionParam,
+                SEQ,
+                &Ok::<LightingStateResult, RynkError>(Ok(state))
+            )
+        ),
+        (
+            "GetLightingFrame request",
+            encode_frame(Cmd::GetLightingFrame, SEQ, &frame_request)
+        ),
+        (
+            "GetLightingFrame reply",
+            encode_frame(
+                Cmd::GetLightingFrame,
+                SEQ,
+                &Ok::<LightingFramePageResult, RynkError>(Ok(frame_page))
+            )
+        ),
+        (
+            "GetLightingFrame reply Err(NodeUnavailable)",
+            encode_frame(
+                Cmd::GetLightingFrame,
+                SEQ,
+                &Ok::<LightingFramePageResult, RynkError>(Err(LightingError::NodeUnavailable {
+                    node: frame_request.node
+                }))
+            )
+        ),
+        (
+            "GetLightingReplicaStatus request",
+            encode_frame(Cmd::GetLightingReplicaStatus, SEQ, &())
+        ),
+        (
+            "GetLightingReplicaStatus reply",
+            encode_frame(
+                Cmd::GetLightingReplicaStatus,
+                SEQ,
+                &Ok::<LightingReplicaStatusResult, RynkError>(Ok(replica_status))
+            )
+        ),
+        (
+            "LightingChange topic",
+            encode_frame(Cmd::LightingChange, 0, &LightingChanged)
+        ),
+    ];
+    let view: alloc::vec::Vec<(&str, &[u8])> = entries
+        .iter()
+        .map(|(label, bytes)| (*label, bytes.as_slice()))
+        .collect();
+    let actual = snapshot::format_value_snapshot(
+        "snapshots/lighting_wire_frames.snap",
+        "Lighting wire-format FRAME snapshot",
+        "# Each entry is one complete feature-gated lighting Rynk frame. The nested\n\
+         # Ok/Err exemplars pin the outer Rynk result and inner lighting result.",
+        "--features lighting lighting_wire_frames",
+        &view,
+    );
+    snapshot::assert_snapshot("snapshots/lighting_wire_frames.snap", actual);
 }
 
 /// The human-readable protocol reference under `docs/`, rendered from the
@@ -1093,7 +2427,7 @@ mod protocol_reference {
     /// Pull the doc text (Notes) and `cfg` feature out of a row's stringified
     /// attributes. `///` docs stringify as raw strings `#[doc = r"…"]`, wrapping
     /// after `doc =` when long — hence the whitespace skip and raw-delimiter scan.
-    fn parse_attrs(attrs: &str) -> (String, Option<&str>) {
+    fn parse_attrs(attrs: &str) -> (String, Vec<String>) {
         let mut notes = String::new();
         let mut rest = attrs;
         while let Some(i) = rest.find("doc =") {
@@ -1113,11 +2447,20 @@ mod protocol_reference {
         }
         // Rustdoc intra-links render as broken md links; keep just the code span.
         let notes = notes.replace("[`", "`").replace("`]", "`");
-        let feature = attrs.find("feature = \"").and_then(|i| {
-            let s = &attrs[i + 11..];
-            s.find('"').map(|end| &s[..end])
-        });
-        (notes, feature)
+        let mut features = Vec::new();
+        let mut feature_attrs = attrs;
+        while let Some(i) = feature_attrs.find("feature = \"") {
+            let s = &feature_attrs[i + 11..];
+            let Some(end) = s.find('"') else {
+                break;
+            };
+            let feature = String::from(&s[..end]);
+            if !features.contains(&feature) {
+                features.push(feature);
+            }
+            feature_attrs = &s[end + 1..];
+        }
+        (notes, features)
     }
 
     /// Render `rows` as a column-aligned GFM table.
@@ -1156,7 +2499,7 @@ mod protocol_reference {
                      attrs,
                  }| {
                     let (notes, feature) = parse_attrs(attrs);
-                    let feature = feature.map(|f| format!("`{f}`")).unwrap_or_default();
+                    let feature = feature.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(" + ");
                     alloc::vec![
                         format!("`0x{cmd:04X}`"),
                         format!("`{name}`"),
@@ -1185,7 +2528,7 @@ mod protocol_reference {
                         format!("`0x{cmd:04X}`"),
                         format!("`{name}`"),
                         format!("`{payload}`"),
-                        feature.map(|f| format!("`{f}`")).unwrap_or_default(),
+                        feature.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(" + "),
                         notes,
                     ]
                 },
@@ -1209,6 +2552,7 @@ mod protocol_reference {
              ```\n\n\
              On the wire the whole frame is COBS-encoded and terminated by a single `0x00` delimiter, so the byte stream is self-synchronizing.\n\n\
              - **Requests** use CMD `0x0000..=0x7FFF`. The response echoes CMD and SEQ and wraps its payload in postcard `Result<T, RynkError>` (`T = ()` for `Set*`).\n\
+             - **Lighting responses** use a `Lighting*Result` as `T`, preserving domain-specific `LightingError` detail inside the outer Rynk result.\n\
              - **Topics** use CMD `0x8000..=0xFFFF` (server → host push, SEQ `0`, bare payload).\n\n\
              Which commands a firmware answers depends on the RMK Cargo features it was built with: a row with no **Feature** is present once `rynk` is on, and the rest need their feature (`_ble`, `split`, …) compiled in. A command the firmware wasn't built with answers `UnknownCmd`.\n\n\
              ## Transports\n\n\
@@ -1229,7 +2573,12 @@ mod protocol_reference {
              {endpoints}\n\
              ## Topics\n\n\
              Topics are best-effort pushes; the `Get*` endpoints above mirror their payloads so a host can recover a missed push.\n\n\
-             {topics}",
+             {topics}\n\
+             ## Compatibility\n\n\
+             - `GetVersion` (`0x0001`) and its `Result<ProtocolVersion, RynkError>` reply are frozen across all versions.\n\
+             - Within a major version, adding a CMD or topic is a `minor` bump: old firmware answers `UnknownCmd`, old hosts ignore unknown topics.\n\
+             - Reshaping an existing request/response — including appending a field — is a `major` bump.\n\
+             - Version numbers are minted upstream only. Downstream extensions never bump `ProtocolVersion`; hosts discover them through capability surfaces (`DeviceCapabilities`, `LightingCapabilities.features`, `GetLightingSceneStatus`) and per-command probing (an unsupported command answers `UnknownCmd`), never by comparing `minor`.\n",
             header = "<!-- GENERATED — do not edit. Rendered from the `endpoints!`/`topics!` tables in\n     rmk-types/src/protocol/rynk/command.rs by the template in rmk-types/src/protocol/rynk/tests.rs.\n     Regenerate from the rmk-types/ directory with:\n     UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features rynk protocol_reference -->",
             major = v.major,
             minor = v.minor,

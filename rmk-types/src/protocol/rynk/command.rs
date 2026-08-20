@@ -14,11 +14,11 @@ use serde::de::DeserializeOwned;
 
 use super::message::{RynkHeader, encode_frame};
 use super::{
-    BehaviorConfig, DeviceCapabilities, DeviceInfo, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest,
-    GetKeymapBulkRequest, GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse,
-    KeyPosition, LayoutChunk, LockStatus, MacroData, MatrixState, ProtocolVersion, RynkError, SetComboBulkRequest,
-    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest,
-    SetMorseBulkRequest, SetMorseRequest, StorageResetMode,
+    BehaviorConfig, BuildInfo, DeviceCapabilities, DeviceInfo, GetComboBulkRequest, GetComboBulkResponse,
+    GetEncoderRequest, GetKeymapBulkRequest, GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest,
+    GetMorseBulkResponse, KeyPosition, LayerState, LayoutChunk, LockStatus, MacroData, MatrixState, ProtocolVersion,
+    RynkError, SetComboBulkRequest, SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest,
+    SetKeymapBulkRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest, StorageResetMode,
 };
 use crate::action::{EncoderAction, KeyAction};
 #[cfg(feature = "_ble")]
@@ -29,9 +29,36 @@ use crate::combo::Combo;
 use crate::connection::{ConnectionStatus, ConnectionType};
 use crate::fork::Fork;
 use crate::led_indicator::LedIndicator;
+use crate::modifier::ModifierCombination;
 use crate::morse::Morse;
 #[cfg(feature = "split")]
 use crate::protocol::rynk::PeripheralStatus;
+#[cfg(feature = "lighting")]
+use crate::protocol::rynk::{
+    AbortLightingOverlayReplaceRequest, AbortLightingRuntimeConditionalSceneReplaceRequest,
+    AbortLightingSceneReplaceRequest, BeginLightingOverlayReplaceRequest,
+    BeginLightingRuntimeConditionalSceneReplaceRequest, BeginLightingSceneReplaceRequest, ClearLightingOverlayRequest,
+    CommitLightingOverlayReplaceRequest, CommitLightingRuntimeConditionalSceneReplaceRequest,
+    CommitLightingSceneReplaceRequest, LightingCapabilitiesResult, LightingChanged, LightingCompiledSceneStatusResult,
+    LightingCompiledScenesPageResult, LightingConditionalSceneStatusResult, LightingConditionalScenesPageResult,
+    LightingExtendedRuntimeConditionalScenesPageResult, LightingExtensionLayersResult,
+    LightingExtensionNamesPageResult, LightingExtensionNamesRequest, LightingExtensionParamsPageResult,
+    LightingExtensionParamsRequest, LightingExtensionResult, LightingFramePageResult, LightingFrameRequest,
+    LightingKeysPageResult, LightingLedsPageResult, LightingOutputModeStateResult, LightingOutputsPageResult,
+    LightingOverlayPageRequest, LightingOverlayPageResult, LightingOverlayTransactionResult, LightingPageRequest,
+    LightingPhysicalKeysPageResult, LightingReplicaStatusResult, LightingRoutesPageResult,
+    LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatusResult,
+    LightingRuntimeConditionalSceneTransactionResult, LightingRuntimeConditionalScenesPageResult,
+    LightingScenePageRequest, LightingSceneStatusResult, LightingSceneTransactionResult, LightingScenesPageResult,
+    LightingStateResult, LightingUnitResult, LightingZoneMembershipsPageResult, LightingZonesPageResult,
+    PutLightingExtendedRuntimeConditionalSceneChunkRequest, PutLightingOverlayChunkRequest,
+    PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest, SetLightingExtensionLayersRequest,
+    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest,
+    SetLightingOutputModeRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
+    SetLightingWakeLayersRequest, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest,
+};
+#[cfg(all(feature = "_ble", feature = "split"))]
+use crate::protocol::rynk::{SplitCentralLatencyPolicy, SplitCentralLatencyState};
 
 /// CMD high bit marking a topic (server → host push).
 const RYNK_TOPIC_BIT: u16 = 0x8000;
@@ -278,6 +305,10 @@ endpoints! {
     GetLayout = 0x0009: u32 => LayoutChunk;
     /// Identity strings and USB ids; feature gating stays in `GetCapabilities`.
     GetDeviceInfo = 0x000A: () => DeviceInfo;
+    /// Application-defined diagnostic build label; never used for compatibility.
+    GetBuildInfo = 0x000B: () => BuildInfo;
+    /// Ask the application to route a bootloader jump to one split peripheral.
+    PeripheralBootloaderJump = 0x000C: u8 => ();
 
     // Keymap (0x01xx) — includes encoder.
     GetKeyAction = 0x0101: KeyPosition => KeyAction;
@@ -323,6 +354,12 @@ endpoints! {
     SwitchBleProfile = 0x0704: u8 => ();
     #[cfg(feature = "_ble")]
     ClearBleProfile = 0x0705: u8 => ();
+    #[cfg(all(feature = "_ble", feature = "split"))]
+    /// Read the volatile active-mode policy, current USB-power selection, and effective value.
+    GetSplitCentralLatency = 0x0706: () => SplitCentralLatencyState;
+    #[cfg(all(feature = "_ble", feature = "split"))]
+    /// Replace the volatile policy. Each connection-event count must be `0..=499`.
+    SetSplitCentralLatency = 0x0707: SplitCentralLatencyPolicy => SplitCentralLatencyState;
 
     // Status (0x08xx).
     GetCurrentLayer = 0x0801: () => u8;
@@ -337,8 +374,164 @@ endpoints! {
     GetSleepState = 0x0806: () => bool;
     /// Latest HID LED bitmap, sourced from the `LedIndicatorChange` topic snapshot.
     GetLedIndicator = 0x0807: () => LedIndicator;
+    /// Default layer and complete active-layer bitmap.
+    GetLayerState = 0x0808: () => LayerState;
+    /// Final resolved modifier bitmap used by the HID keyboard report.
+    GetModifierState = 0x0809: () => ModifierCombination;
 
-    // 0x09xx is reserved for a relay to answer for itself; nothing needs it yet.
+    // Lighting (0x09xx). Lighting-domain errors are nested inside Rynk's
+    // outer protocol result so hosts retain precise rejection reasons.
+    #[cfg(feature = "lighting")]
+    GetLightingCapabilities = 0x0901: () => LightingCapabilitiesResult;
+    #[cfg(feature = "lighting")]
+    GetLightingState = 0x0902: () => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    SetLightingState = 0x0903: SetLightingStateRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    GetLightingPhysicalKeys = 0x0904: LightingPageRequest => LightingPhysicalKeysPageResult;
+    #[cfg(feature = "lighting")]
+    GetLightingLeds = 0x0905: LightingPageRequest => LightingLedsPageResult;
+    #[cfg(feature = "lighting")]
+    GetLightingZones = 0x0906: LightingPageRequest => LightingZonesPageResult;
+    #[cfg(feature = "lighting")]
+    GetLightingZoneMemberships = 0x0907: LightingPageRequest => LightingZoneMembershipsPageResult;
+    #[cfg(feature = "lighting")]
+    GetLightingOutputs = 0x0908: LightingPageRequest => LightingOutputsPageResult;
+    #[cfg(feature = "lighting")]
+    GetLightingRoutes = 0x0909: LightingPageRequest => LightingRoutesPageResult;
+    #[cfg(feature = "lighting")]
+    SetLightingOverlay = 0x090A: SetLightingOverlayRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    UnsetLightingOverlay = 0x090B: UnsetLightingOverlayRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    ClearLightingOverlay = 0x090C: ClearLightingOverlayRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    BeginLightingOverlayReplace = 0x090D: BeginLightingOverlayReplaceRequest => LightingOverlayTransactionResult;
+    #[cfg(feature = "lighting")]
+    PutLightingOverlayChunk = 0x090E: PutLightingOverlayChunkRequest => LightingUnitResult;
+    #[cfg(feature = "lighting")]
+    CommitLightingOverlayReplace = 0x090F: CommitLightingOverlayReplaceRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    AbortLightingOverlayReplace = 0x0910: AbortLightingOverlayReplaceRequest => LightingUnitResult;
+    /// Logical matrix keys are distinct from optional physical geometry.
+    #[cfg(feature = "lighting")]
+    GetLightingKeys = 0x0911: LightingPageRequest => LightingKeysPageResult;
+    /// Scene discovery lives outside `LightingCapabilities`/`LightingState`
+    /// so their postcard layout stays stable for existing hosts.
+    #[cfg(feature = "lighting")]
+    GetLightingSceneStatus = 0x0912: () => LightingSceneStatusResult;
+    /// Scene pages are pinned to `LightingState.revision` for consistency.
+    #[cfg(feature = "lighting")]
+    GetLightingScenes = 0x0913: LightingScenePageRequest => LightingScenesPageResult;
+    #[cfg(feature = "lighting")]
+    SetLightingSceneCell = 0x0914: SetLightingSceneCellRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    UnsetLightingSceneCell = 0x0915: UnsetLightingSceneCellRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    BeginLightingSceneReplace = 0x0916: BeginLightingSceneReplaceRequest => LightingSceneTransactionResult;
+    #[cfg(feature = "lighting")]
+    PutLightingSceneChunk = 0x0917: PutLightingSceneChunkRequest => LightingUnitResult;
+    #[cfg(feature = "lighting")]
+    CommitLightingSceneReplace = 0x0918: CommitLightingSceneReplaceRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    AbortLightingSceneReplace = 0x0919: AbortLightingSceneReplaceRequest => LightingUnitResult;
+    #[cfg(feature = "lighting")]
+    SetLightingLayerPolicy = 0x091A: SetLightingLayerPolicyRequest => LightingStateResult;
+    /// Overlay pages are pinned to `LightingState.revision` for consistency.
+    #[cfg(feature = "lighting")]
+    GetLightingOverlay = 0x091B: LightingOverlayPageRequest => LightingOverlayPageResult;
+    /// Discover the immutable board-compiled layer-scene source.
+    #[cfg(feature = "lighting")]
+    GetLightingCompiledSceneStatus = 0x091C: () => LightingCompiledSceneStatusResult;
+    /// Compiled-scene pages are pinned to the firmware topology revision.
+    #[cfg(feature = "lighting")]
+    GetLightingCompiledScenes = 0x091D: LightingPageRequest => LightingCompiledScenesPageResult;
+    /// Discover immutable conditional lighting compiled from board config.
+    #[cfg(feature = "lighting")]
+    GetLightingConditionalSceneStatus = 0x091E: () => LightingConditionalSceneStatusResult;
+    /// Conditional-scene pages are pinned to the firmware topology revision.
+    #[cfg(feature = "lighting")]
+    GetLightingConditionalScenes = 0x091F: LightingPageRequest => LightingConditionalScenesPageResult;
+    /// Read the configured three-state output policy and its live state.
+    #[cfg(feature = "lighting")]
+    GetLightingOutputMode = 0x0920: () => LightingOutputModeStateResult;
+    /// Discover the animated extension band: name-list sizes and selection.
+    #[cfg(feature = "lighting")]
+    GetLightingExtension = 0x0921: () => LightingExtensionResult;
+    /// Extension names are static per firmware build; page until `total`.
+    #[cfg(feature = "lighting")]
+    GetLightingExtensionNames = 0x0922: LightingExtensionNamesRequest => LightingExtensionNamesPageResult;
+    /// Replace the extension selection when the state revision matches.
+    #[cfg(feature = "lighting")]
+    SetLightingExtensionState = 0x0923: SetLightingExtensionStateRequest => LightingStateResult;
+    /// Set the three-state output policy with optimistic concurrency.
+    #[cfg(feature = "lighting")]
+    SetLightingOutputMode = 0x0924: SetLightingOutputModeRequest => LightingOutputModeStateResult;
+    /// Discover the mutable ordered conditional-scene table.
+    #[cfg(feature = "lighting")]
+    GetLightingRuntimeConditionalSceneStatus = 0x0925: () => LightingRuntimeConditionalSceneStatusResult;
+    /// Runtime conditional pages are pinned to `LightingState.revision`.
+    /// Connection predicates are omitted; use the extended read command when
+    /// `RUNTIME_CONNECTION_CONDITIONS` is advertised. A read-modify-write
+    /// cycle performed entirely through the legacy commands therefore drops
+    /// every stored connection predicate.
+    #[cfg(feature = "lighting")]
+    GetLightingRuntimeConditionalScenes = 0x0926: LightingRuntimeConditionalScenePageRequest => LightingRuntimeConditionalScenesPageResult;
+    #[cfg(feature = "lighting")]
+    BeginLightingRuntimeConditionalSceneReplace = 0x0927: BeginLightingRuntimeConditionalSceneReplaceRequest => LightingRuntimeConditionalSceneTransactionResult;
+    #[cfg(feature = "lighting")]
+    /// Cells written through this legacy endpoint have no connection predicate.
+    PutLightingRuntimeConditionalSceneChunk = 0x0928: PutLightingRuntimeConditionalSceneChunkRequest => LightingUnitResult;
+    #[cfg(feature = "lighting")]
+    CommitLightingRuntimeConditionalSceneReplace = 0x0929: CommitLightingRuntimeConditionalSceneReplaceRequest => LightingStateResult;
+    #[cfg(feature = "lighting")]
+    AbortLightingRuntimeConditionalSceneReplace = 0x092A: AbortLightingRuntimeConditionalSceneReplaceRequest => LightingUnitResult;
+    /// Per-effect tunable parameters: descriptors plus live values, pinned to
+    /// `LightingState.revision`. Page until `total`.
+    #[cfg(feature = "lighting")]
+    GetLightingExtensionParams = 0x092B: LightingExtensionParamsRequest => LightingExtensionParamsPageResult;
+    /// Set one effect parameter when the state revision matches.
+    #[cfg(feature = "lighting")]
+    SetLightingExtensionParam = 0x092C: SetLightingExtensionParamRequest => LightingStateResult;
+    /// Replace the wake-layer mask. Policy rather than lighting content, but
+    /// dynamic so which layers wake lighting is not a firmware rebuild.
+    #[cfg(feature = "lighting")]
+    SetLightingWakeLayers = 0x092D: SetLightingWakeLayersRequest => LightingOutputModeStateResult;
+    /// Read the optional second effect layered over the primary extension.
+    #[cfg(feature = "lighting")]
+    GetLightingExtensionLayers = 0x092E: () => LightingExtensionLayersResult;
+    /// Replace the optional second effect when the state revision matches.
+    #[cfg(feature = "lighting")]
+    SetLightingExtensionLayers = 0x092F: SetLightingExtensionLayersRequest => LightingStateResult;
+    /// Discover connection-aware runtime conditional limits and occupancy.
+    #[cfg(feature = "lighting")]
+    GetLightingExtendedRuntimeConditionalSceneStatus = 0x0930: () => LightingRuntimeConditionalSceneStatusResult;
+    /// Read connection-aware runtime conditional cells under a pinned state revision.
+    #[cfg(feature = "lighting")]
+    GetLightingExtendedRuntimeConditionalScenes = 0x0931: LightingRuntimeConditionalScenePageRequest => LightingExtendedRuntimeConditionalScenesPageResult;
+    /// Begin an atomic replacement using extended conditional cells.
+    #[cfg(feature = "lighting")]
+    BeginLightingExtendedRuntimeConditionalSceneReplace = 0x0932: BeginLightingRuntimeConditionalSceneReplaceRequest => LightingRuntimeConditionalSceneTransactionResult;
+    /// Stage connection-aware cells for an extended replacement.
+    #[cfg(feature = "lighting")]
+    PutLightingExtendedRuntimeConditionalSceneChunk = 0x0933: PutLightingExtendedRuntimeConditionalSceneChunkRequest => LightingUnitResult;
+    /// Publish a complete extended conditional-table replacement.
+    #[cfg(feature = "lighting")]
+    CommitLightingExtendedRuntimeConditionalSceneReplace = 0x0934: CommitLightingRuntimeConditionalSceneReplaceRequest => LightingStateResult;
+    /// Discard an extended conditional-table replacement.
+    #[cfg(feature = "lighting")]
+    AbortLightingExtendedRuntimeConditionalSceneReplace = 0x0935: AbortLightingRuntimeConditionalSceneReplaceRequest => LightingUnitResult;
+    /// Read back what one lighting node last presented to its LEDs, paged.
+    /// `LightingFeatureFlags` has no bits left, so support is discovered by
+    /// probing: firmware without it answers `UnknownCmd`.
+    #[cfg(feature = "lighting")]
+    GetLightingFrame = 0x0936: LightingFrameRequest => LightingFramePageResult;
+    /// Read both sides of the split lighting replication handshake. Probed
+    /// like `GetLightingFrame`. Boards may use a read to trigger a coalesced
+    /// background refresh; reread after one bounded link round trip when a
+    /// fresh peripheral report is required.
+    #[cfg(feature = "lighting")]
+    GetLightingReplicaStatus = 0x0937: () => LightingReplicaStatusResult;
 }
 
 // Define topics: `Name = value: Payload;`
@@ -351,6 +544,10 @@ topics! {
     LedIndicatorChange = 0x8005: LedIndicator;
     #[cfg(feature = "_ble")]
     BatteryStatusChange = 0x8006: BatteryStatus;
+    #[cfg(feature = "lighting")]
+    LightingChange = 0x8007: LightingChanged;
+    // Final resolved modifier bitmap changed.
+    ModifierChange = 0x8008: ModifierCombination;
 }
 
 /// The payload budget advertised to hosts must cover the largest payload

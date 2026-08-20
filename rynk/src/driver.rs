@@ -36,7 +36,8 @@ use embassy_sync::signal::Signal;
 use embedded_io_async::{Error as _, ErrorKind, Read, Write};
 use rmk_types::protocol::rynk::command::Endpoint;
 use rmk_types::protocol::rynk::{
-    Cmd, Deframer, DeviceCapabilities, RYNK_HEADER_SIZE, RynkError, RynkHeader, TopicEvent, encode_frame, max_wire_size,
+    Cmd, Deframer, DeviceCapabilities, LightingError, RYNK_HEADER_SIZE, RynkError, RynkHeader, TopicEvent,
+    encode_frame, max_wire_size,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -87,6 +88,10 @@ pub enum RynkHostError {
     /// The firmware received the request but answered with an error.
     #[error("device rejected {0:?}")]
     Rejected(RynkError),
+    /// Rynk framing succeeded, but the lighting service rejected the command
+    /// with domain-specific detail.
+    #[error("lighting command rejected: {0:?}")]
+    LightingRejected(LightingError),
     /// The request failed to encode or exceeds the device's advertised
     /// `max_payload_size`.
     #[error("request {0:?} does not fit the device buffer (or failed to encode)")]
@@ -99,6 +104,11 @@ pub enum RynkHostError {
     Layout(String),
     #[error("response for {cmd:?} had trailing bytes")]
     TrailingBytes { cmd: Cmd },
+    /// A typed response decoded successfully but its pagination metadata was
+    /// internally inconsistent, so returning a partial snapshot would be
+    /// unsafe.
+    #[error("inconsistent response for {cmd:?}: {reason}")]
+    InconsistentResponse { cmd: Cmd, reason: &'static str },
     #[error("response cmd mismatch: sent {sent:?}, got {got:?}")]
     CmdMismatch { sent: Cmd, got: Cmd },
     /// The device's capabilities lack this command, so nothing was sent.
@@ -116,12 +126,14 @@ impl From<RynkHostError> for wasm_bindgen::JsValue {
             RynkHostError::Io(_) | RynkHostError::Transport(..) => "TransportError",
             RynkHostError::DeviceNotFound(_) => "DeviceNotFound",
             RynkHostError::Rejected(_) => "Rejected",
+            RynkHostError::LightingRejected(_) => "LightingRejected",
             RynkHostError::Unsupported(..) => "Unsupported",
             RynkHostError::VersionMismatch { .. } => "VersionMismatch",
             RynkHostError::Encode(_) => "RequestEncodeError",
             RynkHostError::Deserialize { .. } => "ResponseDecodeError",
             RynkHostError::Layout(_) => "LayoutDecodeError",
             RynkHostError::TrailingBytes { .. } => "ResponseTrailingBytes",
+            RynkHostError::InconsistentResponse { .. } => "InconsistentResponse",
             RynkHostError::CmdMismatch { .. } => "ResponseCommandMismatch",
         };
         let err = js_sys::Error::new(&e.to_string());

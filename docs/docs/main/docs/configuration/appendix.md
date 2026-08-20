@@ -406,6 +406,9 @@ split_peripherals_num = 0
 ble_profiles_num = 3
 # BLE Split Central sleep timeout in seconds (0 = disabled)
 split_central_sleep_timeout_seconds = 0
+# Maximum skipped split connection events while active (0 = lowest latency)
+split_central_max_latency_powered = 30
+split_central_max_latency_battery = 30
 # Maximum macro data bytes in one Rynk macro request or response
 protocol_macro_chunk_size = 64
 # Rynk RX/TX buffer size in bytes. 488 bytes = 2*BLE maximum packet size
@@ -586,6 +589,8 @@ unlock_keys = [[0, 0], [0, 1]]
 insecure = false
 # Rynk only: move config writes into the locked tier (default: false).
 write_requires_unlock = false
+# Require physical unlock before central or split-peripheral bootloader entry.
+bootloader_requires_unlock = true
 
 # Chip-specific configuration
 # To use the default configuration, ignore this section completely

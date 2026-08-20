@@ -1,8 +1,12 @@
+use core::cell::Cell;
+
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use embassy_futures::select::{Either, Either3, select, select3};
+use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
+use embassy_sync::pubsub::PubSubChannel;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer, with_timeout};
 use trouble_host::prelude::*;
@@ -36,6 +40,126 @@ enum SlotState {
 const SPLIT_SERVICE_UUID: u128 = 0x4dd5fbaa_18e5_4b07_bf0a_353698659946;
 const MESSAGE_TO_CENTRAL_UUID: u128 = 0x0e6313e3_bd0b_45c2_8d2e_37a2e8128bc3;
 const MESSAGE_TO_PERIPHERAL_UUID: u128 = 0x4b3514fb_cae4_4d38_a097_3a2a3d1c3b9c;
+
+/// Runtime active-mode split BLE latency policy.
+///
+/// Changes are volatile and take effect on connected peripherals immediately.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LatencyPolicy {
+    pub powered: u16,
+    pub battery: u16,
+    pub override_latency: Option<u16>,
+}
+
+/// Current policy inputs and selected active-mode latency.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LatencyState {
+    pub policy: LatencyPolicy,
+    pub powered: bool,
+    pub effective: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidLatency;
+
+impl LatencyPolicy {
+    fn effective(self, powered: bool) -> u16 {
+        self.override_latency
+            .unwrap_or(if powered { self.powered } else { self.battery })
+    }
+
+    fn is_valid(self) -> bool {
+        self.powered < 500 && self.battery < 500 && self.override_latency.is_none_or(|value| value < 500)
+    }
+}
+
+static LATENCY_POLICY: BlockingMutex<crate::RawMutex, Cell<LatencyPolicy>> =
+    BlockingMutex::new(Cell::new(LatencyPolicy {
+        powered: crate::SPLIT_CENTRAL_MAX_LATENCY_POWERED,
+        battery: crate::SPLIT_CENTRAL_MAX_LATENCY_BATTERY,
+        override_latency: None,
+    }));
+static LATENCY_CHANGED: PubSubChannel<crate::RawMutex, (), 1, 8, 1> = PubSubChannel::new();
+
+fn externally_powered() -> bool {
+    crate::state::current_usb_state() != rmk_types::connection::UsbState::Disabled
+}
+
+pub fn latency_state() -> LatencyState {
+    let policy = LATENCY_POLICY.lock(Cell::get);
+    let powered = externally_powered();
+    let effective = policy.effective(powered);
+    LatencyState {
+        policy,
+        powered,
+        effective,
+    }
+}
+
+/// Replace the volatile latency policy and update live split connections.
+pub fn set_latency_policy(policy: LatencyPolicy) -> Result<(), InvalidLatency> {
+    if !policy.is_valid() {
+        return Err(InvalidLatency);
+    }
+    LATENCY_POLICY.lock(|current| current.set(policy));
+    LATENCY_CHANGED.immediate_publisher().publish_immediate(());
+    Ok(())
+}
+
+pub(crate) fn power_source_changed() {
+    LATENCY_CHANGED.immediate_publisher().publish_immediate(());
+}
+
+#[cfg(test)]
+mod latency_tests {
+    use super::*;
+
+    #[test]
+    fn policy_selects_power_source_unless_overridden() {
+        let policy = LatencyPolicy {
+            powered: 0,
+            battery: 4,
+            override_latency: None,
+        };
+        assert_eq!(policy.effective(true), 0);
+        assert_eq!(policy.effective(false), 4);
+        assert_eq!(
+            LatencyPolicy {
+                override_latency: Some(2),
+                ..policy
+            }
+            .effective(true),
+            2
+        );
+        assert_eq!(
+            LatencyPolicy {
+                override_latency: Some(2),
+                ..policy
+            }
+            .effective(false),
+            2
+        );
+    }
+
+    #[test]
+    fn policy_rejects_values_outside_the_ble_limit() {
+        let valid = LatencyPolicy {
+            powered: 499,
+            battery: 499,
+            override_latency: Some(499),
+        };
+        assert!(valid.is_valid());
+        assert!(!LatencyPolicy { powered: 500, ..valid }.is_valid());
+        assert!(!LatencyPolicy { battery: 500, ..valid }.is_valid());
+        assert!(
+            !LatencyPolicy {
+                override_latency: Some(500),
+                ..valid
+            }
+            .is_valid()
+        );
+    }
+}
 
 /// Scan for peripheral addresses, connect them, and hand each connection to
 /// that slot's session; sessions report back on `ended`.
@@ -200,11 +324,18 @@ pub(crate) async fn run_peripheral_session<
 }
 
 fn default_central_conn_param() -> RequestedConnParams {
+    let max_latency = latency_state().effective;
+    // Supervision must exceed the longest legal radio silence,
+    // interval * (1 + latency). Keep three such periods of margin, with a 2 s
+    // floor: a powered-off peripheral is only rediscovered after the dead
+    // connection times out, so this bounds reconnect latency for fast
+    // off/on cycles.
+    let latency_period_us = 7_500 * (1 + max_latency as u64);
     RequestedConnParams {
         min_connection_interval: Duration::from_micros(7500),
         max_connection_interval: Duration::from_micros(7500),
-        max_latency: 10, // 75ms
-        supervision_timeout: Duration::from_secs(5),
+        max_latency,
+        supervision_timeout: Duration::from_micros((3 * latency_period_us).max(2_000_000)),
         ..Default::default()
     }
 }
@@ -380,6 +511,9 @@ async fn follow_sleep_state<
     conn: &Connection<'b, P>,
 ) -> Result<(), BleHostError<C::Error>> {
     let mut sleep_events = SleepStateEvent::subscriber();
+    let mut latency_changes = LATENCY_CHANGED
+        .subscriber()
+        .expect("split latency policy supports eight peripheral managers");
 
     // A peripheral coming up is activity in its own right: it needs the fast
     // parameters for service discovery, and waking the whole keyboard keeps
@@ -392,10 +526,16 @@ async fn follow_sleep_state<
     // the wrong interval until it reconnects.
     let mut applied = false;
     loop {
-        let sleeping = sleep_events.next_event().await.0;
-        if sleeping == applied {
-            continue;
-        }
+        let sleeping = match select(sleep_events.next_event(), latency_changes.next_message_pure()).await {
+            Either::First(event) => {
+                let sleeping = event.0;
+                if sleeping == applied {
+                    continue;
+                }
+                sleeping
+            }
+            Either::Second(()) => applied,
+        };
         let params = if sleeping {
             sleep_central_conn_param()
         } else {

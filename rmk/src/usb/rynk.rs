@@ -1,11 +1,19 @@
-//! Rynk over a vendor-specific USB bulk interface.
+//! Rynk over USB HID.
+//!
+//! Rynk frames are fragmented into the same fixed 32-byte reports used by
+//! Rynk's BLE WebHID transport. Report padding is zero bytes, which the COBS
+//! deframer inside `RynkService` treats as inter-frame delimiters.
 
-use embassy_usb::driver::{Driver, Endpoint, EndpointError, EndpointIn, EndpointOut};
-use embassy_usb::{Builder, msos};
+use embassy_usb::Builder;
+use embassy_usb::class::hid::{HidReader, HidWriter};
+use embassy_usb::driver::Driver;
 use embedded_io_async::{ErrorType, Read, Write};
-use rmk_types::protocol::rynk::{RYNK_USB_INTERFACE_CLASS, RYNK_USB_INTERFACE_PROTOCOL, RYNK_USB_INTERFACE_SUBCLASS};
+use rmk_types::protocol::rynk::RYNK_HID_REPORT_SIZE;
 
 use super::HostSession;
+use crate::hid::RynkHidReport;
+use crate::host::transport::HostTransportError;
+use crate::usb::add_usb_reader_writer;
 
 #[cfg(feature = "rynk")]
 impl HostSession for crate::host::rynk::RynkService<'_> {
@@ -21,131 +29,98 @@ impl HostSession for crate::dongle::DongleRouter {
     }
 }
 
-#[cfg(feature = "_usb_high_speed")]
-const RYNK_USB_MAX_PACKET_SIZE: usize = 512;
-#[cfg(not(feature = "_usb_high_speed"))]
-const RYNK_USB_MAX_PACKET_SIZE: usize = 64;
+pub(crate) type HostUsbReader<D> = HidReader<'static, D, RYNK_HID_REPORT_SIZE>;
+pub(crate) type HostUsbWriter<D> = HidWriter<'static, D, RYNK_HID_REPORT_SIZE>;
 
-/// bRequest value Windows sends to fetch the MS OS 2.0 descriptor set.
-const MSOS_VENDOR_CODE: u8 = 0x52;
-
-/// GUID WinUSB registers the Rynk interface under; Windows hosts open the
-/// device node by it.
-const DEVICE_INTERFACE_GUID: &str = "{CE60F742-A8DB-43C4-8B97-7C41B43CD4AA}";
-
-pub(crate) struct HostUsbReader<D: Driver<'static>> {
-    ep: D::EndpointOut,
-    buf: [u8; RYNK_USB_MAX_PACKET_SIZE],
-    pos: usize,
-    len: usize,
-}
-
-/// Writer half of the Rynk USB transport.
-pub(crate) struct HostUsbWriter<D: Driver<'static>> {
-    ep: D::EndpointIn,
-}
-
-/// Build the Rynk vendor bulk interface and its WinUSB binding.
+/// Build the Rynk vendor-HID interface.
 pub(crate) fn build_host_usb<D: Driver<'static>>(
     builder: &mut Builder<'static, D>,
 ) -> (HostUsbReader<D>, HostUsbWriter<D>) {
-    builder.msos_descriptor(msos::windows_version::WIN8_1, MSOS_VENDOR_CODE);
-    let mut function = builder.function(
-        RYNK_USB_INTERFACE_CLASS,
-        RYNK_USB_INTERFACE_SUBCLASS,
-        RYNK_USB_INTERFACE_PROTOCOL,
-    );
-    function.msos_feature(msos::CompatibleIdFeatureDescriptor::new("WINUSB", ""));
-    function.msos_feature(msos::RegistryPropertyFeatureDescriptor::new(
-        "DeviceInterfaceGUIDs",
-        msos::PropertyData::RegMultiSz(&[DEVICE_INTERFACE_GUID]),
-    ));
-    let mut interface = function.interface();
-    let mut alt = interface.alt_setting(
-        RYNK_USB_INTERFACE_CLASS,
-        RYNK_USB_INTERFACE_SUBCLASS,
-        RYNK_USB_INTERFACE_PROTOCOL,
-        None,
-    );
-    let ep_out = alt.endpoint_bulk_out(None, RYNK_USB_MAX_PACKET_SIZE as u16);
-    let ep_in = alt.endpoint_bulk_in(None, RYNK_USB_MAX_PACKET_SIZE as u16);
-    (
-        HostUsbReader {
-            ep: ep_out,
-            buf: [0; RYNK_USB_MAX_PACKET_SIZE],
-            pos: 0,
-            len: 0,
-        },
-        HostUsbWriter { ep: ep_in },
-    )
+    add_usb_reader_writer!(builder, RynkHidReport, RYNK_HID_REPORT_SIZE, RYNK_HID_REPORT_SIZE, 32).split()
 }
 
-/// Rynk session loop
+/// Run one Rynk session for each USB connection.
 pub(crate) async fn run_host_usb<D: Driver<'static>, S: HostSession>(
-    receiver: &mut HostUsbReader<D>,
-    sender: &mut HostUsbWriter<D>,
+    reader: &mut HostUsbReader<D>,
+    writer: &mut HostUsbWriter<D>,
     service: &S,
 ) -> ! {
     loop {
-        receiver.ep.wait_enabled().await;
-        // A bus reset voids any half-consumed packet from the last session.
-        receiver.pos = 0;
-        receiver.len = 0;
-        service.serve(receiver, sender).await;
+        reader.ready().await;
+        let mut rx = RynkUsbRx::new(&mut *reader);
+        let mut tx = RynkUsbTx { writer: &mut *writer };
+        service.serve(&mut rx, &mut tx).await;
     }
 }
 
-impl<D: Driver<'static>> ErrorType for HostUsbReader<D> {
-    type Error = EndpointError;
+struct RynkUsbRx<'a, D: Driver<'static>> {
+    reader: &'a mut HostUsbReader<D>,
+    report: [u8; RYNK_HID_REPORT_SIZE],
+    pos: usize,
+    end: usize,
 }
 
-impl<D: Driver<'static>> Read for HostUsbReader<D> {
+impl<'a, D: Driver<'static>> RynkUsbRx<'a, D> {
+    fn new(reader: &'a mut HostUsbReader<D>) -> Self {
+        Self {
+            reader,
+            report: [0; RYNK_HID_REPORT_SIZE],
+            pos: 0,
+            end: 0,
+        }
+    }
+}
+
+impl<D: Driver<'static>> ErrorType for RynkUsbRx<'_, D> {
+    type Error = HostTransportError;
+}
+
+impl<D: Driver<'static>> Read for RynkUsbRx<'_, D> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         if buf.is_empty() {
             return Ok(0);
         }
         loop {
-            if self.pos < self.len {
-                let n = (self.len - self.pos).min(buf.len());
-                buf[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
+            if self.pos < self.end {
+                let n = (self.end - self.pos).min(buf.len());
+                buf[..n].copy_from_slice(&self.report[self.pos..self.pos + n]);
                 self.pos += n;
                 return Ok(n);
             }
-            // Zero-length packets are transfer delimiters, not data — and not
-            // EOF, which is what returning `Ok(0)` would mean. Read on.
-            if buf.len() >= RYNK_USB_MAX_PACKET_SIZE {
-                let n = self.ep.read(buf).await?;
-                if n > 0 {
-                    return Ok(n);
-                }
-            } else {
-                self.pos = 0;
-                self.len = self.ep.read(&mut self.buf).await?;
-            }
+
+            let n = self
+                .reader
+                .read(&mut self.report)
+                .await
+                .map_err(|_| HostTransportError)?;
+            self.pos = 0;
+            self.end = n;
         }
     }
 }
 
-impl<D: Driver<'static>> ErrorType for HostUsbWriter<D> {
-    type Error = EndpointError;
+struct RynkUsbTx<'a, D: Driver<'static>> {
+    writer: &'a mut HostUsbWriter<D>,
 }
 
-/// A bulk-IN transfer completes on the host only at a short packet, so a write
-/// that's a multiple of the max packet size is terminated with a zero-length
-/// packet — otherwise the host read hangs (hit at Full-Speed's 64 bytes).
-impl<D: Driver<'static>> Write for HostUsbWriter<D> {
+impl<D: Driver<'static>> ErrorType for RynkUsbTx<'_, D> {
+    type Error = HostTransportError;
+}
+
+impl<D: Driver<'static>> Write for RynkUsbTx<'_, D> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        for packet in buf.chunks(RYNK_USB_MAX_PACKET_SIZE) {
-            self.ep.write(packet).await?;
+        if buf.is_empty() {
+            return Ok(0);
         }
-        if !buf.is_empty() && buf.len().is_multiple_of(RYNK_USB_MAX_PACKET_SIZE) {
-            self.ep.write(&[]).await?;
+        for chunk in buf.chunks(RYNK_HID_REPORT_SIZE) {
+            let mut report = [0u8; RYNK_HID_REPORT_SIZE];
+            report[..chunk.len()].copy_from_slice(chunk);
+            self.writer.write(&report).await.map_err(|_| HostTransportError)?;
         }
         Ok(buf.len())
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        // `write` hands packets straight to the endpoint; nothing is buffered.
         Ok(())
     }
 }

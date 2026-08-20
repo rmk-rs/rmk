@@ -100,6 +100,9 @@ use crate::processor::Processor;
 /// corresponding features in their `Cargo.toml` dependency on `rmk`,
 /// and guard access with matching `#[cfg]` attributes.
 pub struct RenderContext {
+    /// Board-global key geometry generated from the same physical-layout
+    /// source used by lighting and host layout readback.
+    pub physical_layout: crate::physical_layout::PhysicalLayout<'static>,
     /// Current active layer index.
     pub layer: u8,
     /// Current words-per-minute estimate.
@@ -138,6 +141,7 @@ pub struct RenderContext {
 impl Default for RenderContext {
     fn default() -> Self {
         Self {
+            physical_layout: crate::physical_layout::PhysicalLayout::default(),
             layer: 0,
             wpm: 0,
             caps_lock: false,
@@ -291,6 +295,13 @@ where
         self
     }
 
+    /// Provide the keyboard's generated board-global key geometry to custom
+    /// renderers. This does not force built-in renderers to draw a keyboard.
+    pub fn with_physical_layout(mut self, physical_layout: crate::physical_layout::PhysicalLayout<'static>) -> Self {
+        self.ctx.physical_layout = physical_layout;
+        self
+    }
+
     /// Set the minimum time between event-driven renders.
     ///
     /// When events arrive faster than this interval, redraws are coalesced
@@ -420,6 +431,10 @@ where
 
         // Prime from current state after subscribing, so the first render
         // reflects state that was set before the processor started.
+        self.ctx.sleeping = crate::state::current_sleeping();
+        let indicators = crate::keyboard::current_led_indicator();
+        self.ctx.caps_lock = indicators.caps_lock();
+        self.ctx.num_lock = indicators.num_lock();
         #[cfg(feature = "_ble")]
         {
             self.ctx.ble_status = crate::state::current_ble_status();
