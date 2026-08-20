@@ -31,7 +31,7 @@ panic-probe = { version = "1", features = ["print-defmt"] }
 cyw43 = { version = "0.7", features = ["defmt", "firmware-logs", "bluetooth"] }
 cyw43-pio = { version = "0.10.0", features = ["defmt"] }
 static_cell = "2"
-bt-hci = { version = "0.9", features = ["defmt"] }
+bt-hci = { version = "0.10", features = ["defmt"] }
 
 
 [features]
@@ -70,21 +70,21 @@ opt-level = "z"         # optimize for binary size
 overflow-checks = false
 lto = "fat"
 
-# cyw43 needs bt-hci 0.9, which is only available from embassy git (crates.io cyw43
+# cyw43 needs bt-hci 0.10, which is only available from embassy git (crates.io cyw43
 # 0.7.0 still depends on an older bt-hci). Pin the whole embassy graph to the same
 # rev so there's a single copy of each embassy crate (otherwise the git and crates.io
 # `embassy-time` native libs collide via `links`, and shared types diverge).
 [patch.crates-io]
-cyw43 = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
-cyw43-pio = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
-embassy-rp = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
-embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
-embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
-embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
-embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
-embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
-embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", rev = "e372d1e1e624032ddc5ea932ac4c368b28ccb0dd" }
+cyw43 = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+cyw43-pio = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+embassy-rp = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }

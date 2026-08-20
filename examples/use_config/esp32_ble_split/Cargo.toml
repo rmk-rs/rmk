@@ -51,7 +51,7 @@ esp-println = { version = "0.17", features = ["log-04"] }
 esp-radio = { version = "0.18", features = ["ble", "unstable"] }
 esp-rtos = { version = "0.3", features = ["esp-radio", "embassy"]}
 esp-bootloader-esp-idf = { version = "0.5", features = ["log-04"] }
-bt-hci = { version = "0.9" }
+bt-hci = { version = "0.10" }
 
 [build-dependencies]
 xz2 = "0.1.7"

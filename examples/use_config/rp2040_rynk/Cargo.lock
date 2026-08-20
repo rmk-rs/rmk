@@ -172,18 +172,30 @@ dependencies = [
 
 [[package]]
 name = "bt-hci"
-version = "0.9.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f3c66fd0a41a3b3a5906847b1bf5516048ce083e24fa9341a0fa31d3b4cd73d"
+checksum = "f63b3d6f0ef006d9b87a075705d6c142b03681ad34090659647f0e227c1c667f"
 dependencies = [
+ "bt-hci-transport",
  "btuuid",
  "defmt 1.1.1",
  "embassy-sync",
  "embedded-io 0.7.1",
  "embedded-io-async 0.7.0",
  "futures-intrusive",
- "heapless 0.9.3",
+ "heapless 0.8.0",
  "serde",
+]
+
+[[package]]
+name = "bt-hci-transport"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ffb9819c69cf88877f5eebc8c5ade0ab50f2bf9475bbb3eb714d66c55b0cb64"
+dependencies = [
+ "defmt 1.1.1",
+ "embedded-io 0.7.1",
+ "embedded-io-async 0.7.0",
 ]
 
 [[package]]
@@ -2616,8 +2628,8 @@ dependencies = [
 
 [[package]]
 name = "trouble-host"
-version = "0.7.0"
-source = "git+https://github.com/embassy-rs/trouble?rev=088e09c451177d5db50cf3e58c68d05512265ba0#088e09c451177d5db50cf3e58c68d05512265ba0"
+version = "0.8.0"
+source = "git+https://github.com/embassy-rs/trouble?rev=07d36dfc144751bad44d4750196334b40ff8cbc9#07d36dfc144751bad44d4750196334b40ff8cbc9"
 dependencies = [
  "aes",
  "bt-hci",
@@ -2641,8 +2653,8 @@ dependencies = [
 
 [[package]]
 name = "trouble-host-macros"
-version = "0.5.0"
-source = "git+https://github.com/embassy-rs/trouble?rev=088e09c451177d5db50cf3e58c68d05512265ba0#088e09c451177d5db50cf3e58c68d05512265ba0"
+version = "0.6.0"
+source = "git+https://github.com/embassy-rs/trouble?rev=07d36dfc144751bad44d4750196334b40ff8cbc9#07d36dfc144751bad44d4750196334b40ff8cbc9"
 dependencies = [
  "convert_case 0.8.0",
  "darling 0.20.11",

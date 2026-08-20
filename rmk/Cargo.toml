@@ -57,7 +57,7 @@ display-interface-i2c = { version = "0.5", optional = true }
 
 # Optional dependencies
 # BLE dependencies
-trouble-host = { git = "https://github.com/embassy-rs/trouble", rev = "088e09c451177d5db50cf3e58c68d05512265ba0", features = [
+trouble-host = { git = "https://github.com/embassy-rs/trouble", rev = "07d36dfc144751bad44d4750196334b40ff8cbc9", features = [
     "gatt",
     "scan",
     "derive",
@@ -65,7 +65,7 @@ trouble-host = { git = "https://github.com/embassy-rs/trouble", rev = "088e09c45
     "serde",
     "default-packet-pool-size-32",
 ], optional = true }
-bt-hci = { version = "0.9", optional = true }
+bt-hci = { version = "0.10", optional = true }
 
 # nRF dependencies
 embassy-nrf = { version = "0.11", features = [

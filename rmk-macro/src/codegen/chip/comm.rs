@@ -73,9 +73,9 @@ pub(crate) fn usb_config_default(hardware: &Hardware) -> TokenStream2 {
                 let dm = format_ident!("{}", usb_info.dm);
                 quote! {
                     static mut EP_MEMORY: [u8; 1024] = [0; 1024];
-                    let usb = ::esp_hal::otg_fs::Usb::new(p.#peripheral_name, p.#dp, p.#dm);
-                    let usb_config = ::esp_hal::otg_fs::embassy_usb_device::Config::default();
-                    let driver = ::esp_hal::otg_fs::embassy_usb_device::Driver::new(usb, unsafe { &mut *core::ptr::addr_of_mut!(EP_MEMORY) }, usb_config);
+                    let usb = ::esp_hal::usb::otg::Usb::new_fs(p.#peripheral_name, p.#dp, p.#dm);
+                    let usb_config = ::esp_hal::usb::otg::embassy_usb_device::Config::default();
+                    let driver = ::esp_hal::usb::otg::embassy_usb_device::Driver::new(usb, unsafe { &mut *core::ptr::addr_of_mut!(EP_MEMORY) }, usb_config);
                 }
             }
         }

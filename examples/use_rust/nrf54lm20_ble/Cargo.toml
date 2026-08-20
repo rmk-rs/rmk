@@ -18,19 +18,19 @@ rmk = { path = "../../../rmk", default-features = false, features = [
     "defmt",
     "watchdog",
 ] }
-nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "f54b6389ffa2750d4d3a4f5435660cb66b47e51a", default-features = false, features = [
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "1a6e661155cdd1d6a86f3ae7b7fb117343781533", default-features = false, features = [
     "defmt",
     "peripheral",
     "central",
     "nrf54lm20-app-s",
 ] }
-# nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "f54b6389ffa2750d4d3a4f5435660cb66b47e51a", default-features = false, features = [
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "f54b6389ffa2750d4d3a4f5435660cb66b47e51a", default-features = false, features = [
+# nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "1a6e661155cdd1d6a86f3ae7b7fb117343781533", default-features = false, features = [
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "1a6e661155cdd1d6a86f3ae7b7fb117343781533", default-features = false, features = [
     "defmt",
     "critical-section-impl",
     "nrf54lm20-app-s",
 ] }
-bt-hci = { version = "0.9", features = ["defmt"] }
+bt-hci = { version = "0.10", features = ["defmt"] }
 
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.5"
