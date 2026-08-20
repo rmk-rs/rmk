@@ -1,5 +1,9 @@
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
+#[cfg(feature = "subrating")]
+use bt_hci::cmd::le::{LeSubrateRequest, LeSubrateRequestParams};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
+#[cfg(feature = "subrating")]
+use bt_hci::param::ConnHandle;
 use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
@@ -11,6 +15,8 @@ use super::GattSplitMessage;
 use crate::ble::adv::Adv;
 use crate::ble::scan::{SPLIT_CENTRAL_SCAN_WINDOW, scan_config, start_scan};
 use crate::ble::sleep::report_activity;
+#[cfg(feature = "subrating")]
+use crate::ble::update_subrate_factor;
 use crate::ble::{update_ble_phy, update_conn_params, wait_for_stack_started};
 use crate::channel::FLASH_CHANNEL;
 use crate::event::{EventSubscriber, SleepStateEvent, SubscribableEvent};
@@ -172,7 +178,15 @@ impl EventHandler for ScanHandler {
 /// report back so the radio reconnects or rediscovers the peripheral.
 pub(crate) async fn run_peripheral_session<
     'a,
-    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(not(feature = "subrating"))] C: Controller
+        + ControllerCmdSync<LeSetScanParams>
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(feature = "subrating")] C: Controller
+        + ControllerCmdSync<LeSetScanParams>
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>
+        + ControllerCmdAsync<LeSubrateRequest>,
 >(
     id: usize,
     conns: &Channel<NoopRawMutex, Connection<'a, DefaultPacketPool>, 1>,
@@ -203,9 +217,21 @@ fn default_central_conn_param() -> RequestedConnParams {
     RequestedConnParams {
         min_connection_interval: Duration::from_micros(7500),
         max_connection_interval: Duration::from_micros(7500),
-        max_latency: 10, // 75ms
+        max_latency: 300, // 2250ms
         supervision_timeout: Duration::from_secs(5),
         ..Default::default()
+    }
+}
+
+#[cfg(feature = "subrating")]
+fn default_central_subrate_params(handle: ConnHandle) -> LeSubrateRequestParams {
+    LeSubrateRequestParams {
+        handle,
+        subrate_min: 1,
+        subrate_max: 1,
+        max_latency: 300, // 2250ms
+        continuation_number: 0,
+        supervision_timeout: ::bt_hci::param::Duration::from_secs(5),
     }
 }
 
@@ -235,10 +261,39 @@ fn sleep_central_conn_param() -> RequestedConnParams {
     }
 }
 
+#[cfg(feature = "subrating")]
+fn sleep_central_subrate_params(handle: ConnHandle) -> LeSubrateRequestParams {
+    if crate::state::active_transport().is_some() {
+        // Host connected — short subrate so key presses arrive quickly
+        LeSubrateRequestParams {
+            handle,
+            subrate_min: 60, // 450ms effective interval → 457.5ms key press latency
+            subrate_max: 60,
+            max_latency: 7,         // 3.6s sleep for peripheral
+            continuation_number: 2, // assure low-latency reset of subrate factor
+            supervision_timeout: ::bt_hci::param::Duration::from_secs(8),
+        }
+    } else {
+        // No host — very long interval, peripheral will be unresponsive for ~2s after reconnect
+        LeSubrateRequestParams {
+            handle,
+            subrate_min: 249, // 1867.5ms effective interval
+            subrate_max: 249,
+            max_latency: 1,         // 3.6s sleep for peripheral
+            continuation_number: 2, // assure low-latency reset of subrate factor
+            supervision_timeout: ::bt_hci::param::Duration::from_secs(8),
+        }
+    }
+}
+
 async fn run_central_manager_task<
     'b,
     's: 'b,
-    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(not(feature = "subrating"))] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(feature = "subrating")] C: Controller
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>
+        + ControllerCmdAsync<LeSubrateRequest>,
     P: PacketPool,
 >(
     id: usize,
@@ -373,7 +428,8 @@ impl<'a, 'b, 'c, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool> Sp
 async fn follow_sleep_state<
     'b,
     's: 'b,
-    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(not(feature = "subrating"))] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(feature = "subrating")] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdAsync<LeSubrateRequest>,
     P: PacketPool,
 >(
     stack: &'b Stack<'s, C, P>,
@@ -396,13 +452,28 @@ async fn follow_sleep_state<
         if sleeping == applied {
             continue;
         }
-        let params = if sleeping {
-            sleep_central_conn_param()
-        } else {
-            default_central_conn_param()
-        };
-        if update_conn_params(stack, conn, &params).await {
-            applied = sleeping;
+        #[cfg(not(feature = "subrating"))]
+        {
+            let params = if sleeping {
+                sleep_central_conn_param()
+            } else {
+                default_central_conn_param()
+            };
+            if update_conn_params(stack, conn, &params).await {
+                applied = sleeping;
+            }
+        }
+
+        #[cfg(feature = "subrating")]
+        {
+            let params = if sleeping {
+                sleep_central_subrate_params(conn.handle())
+            } else {
+                default_central_subrate_params(conn.handle())
+            };
+            if update_subrate_factor(stack, params).await {
+                applied = sleeping;
+            }
         }
     }
 }

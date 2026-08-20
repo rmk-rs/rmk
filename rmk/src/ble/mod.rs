@@ -1,4 +1,6 @@
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
+#[cfg(feature = "subrating")]
+use bt_hci::cmd::le::{LeSetHostFeature, LeSubrateRequest, LeSubrateRequestParams};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
 use embassy_futures::join::join3;
@@ -52,6 +54,9 @@ pub(crate) mod profile;
 #[cfg(any(feature = "split", feature = "dongle"))]
 pub(crate) mod scan;
 pub(crate) mod sleep;
+
+#[cfg(all(feature = "subrating", feature = "_no_subrating"))]
+compile_error!("You may not enable feature `subrating` on unsupported platforms!");
 
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
 /// own — see [`crate::dongle::Dongle`].
@@ -148,12 +153,19 @@ where
 }
 
 #[cfg(feature = "split")]
-impl<'a, C> Runnable for BleTransport<'a, C>
-where
-    C: Controller
+impl<
+    'a,
+    #[cfg(not(feature = "subrating"))] C: Controller
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>,
+    #[cfg(feature = "subrating")] C: Controller
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>
+        + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>
+        + ControllerCmdSync<LeSetHostFeature>
+        + ControllerCmdAsync<LeSubrateRequest>,
+> Runnable for BleTransport<'a, C>
 {
     async fn run(&mut self) -> ! {
         // Load the preferred connection from storage
@@ -195,15 +207,19 @@ where
 
 /// Owns the GATT server and the profile manager, and advertises→connects→
 /// serves forever, joined with the stack runner and the sleep manager.
-async fn run_ble_keyboard<#[cfg(feature = "host")] 'r, C>(
+async fn run_ble_keyboard<
+    #[cfg(feature = "host")] 'r,
+    #[cfg(not(feature = "subrating"))] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(feature = "subrating")] C: Controller
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>
+        + ControllerCmdSync<LeSetHostFeature>,
+>(
     stack: &Stack<'_, C, DefaultPacketPool>,
     device_config: &DeviceConfig<'static>,
     config: &BleBatteryConfig<'static>,
     #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
-) -> !
-where
-    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
-{
+) -> ! {
     let product_name = device_config.product_name;
     #[cfg(feature = "_nrf_ble")]
     let serial_number = crate::ble::nrf::get_serial_number();
@@ -261,6 +277,12 @@ where
     let profile_manager = &mut profile_manager;
 
     let connection_loop = async {
+        // Subrating: set host feature flag BEFORE ANY CONNECTIONS
+        // This must run concurrently with the ble_task runner (which processes HCI commands).
+        #[cfg(feature = "subrating")]
+        init_subrating_host_feature(stack).await;
+        STACK_STARTED.signal(());
+
         loop {
             // On the dongle slot, advertise directed to the bonded dongle or
             // as a seeking broadcast; on the normal profiles, plain HID.
@@ -380,6 +402,23 @@ where
     unreachable!("BleTransport sub-tasks must run forever")
 }
 
+/// Initialize subrating host support.
+///
+/// **Must** be called concurrently with `ble_task()` (the runner processes the
+/// HCI command) and **before** any advertising, scanning or connecting, because
+/// the controller only applies the feature flag to connections established after
+/// it is set.
+#[cfg(feature = "subrating")]
+pub(crate) async fn init_subrating_host_feature<C: Controller + ControllerCmdSync<LeSetHostFeature>>(
+    stack: &Stack<'_, C, impl PacketPool>,
+) {
+    const CONN_SUBRATING_HOST_BIT: u8 = 38;
+    let cmd = LeSetHostFeature::new(CONN_SUBRATING_HOST_BIT, 1);
+    if let Err(e) = stack.command(cmd).await {
+        error!("[Host] error setting subrating host feature flag: {:?}", e);
+    }
+}
+
 /// NoopHandler is used on the device which never scans,
 /// such as a split peripheral or a normal keyboard.
 pub(crate) struct NoopHandler;
@@ -400,11 +439,7 @@ pub(crate) async fn wait_for_stack_started() {
 }
 
 /// This is a background task that is required to run forever alongside any other BLE tasks.
-pub(crate) async fn ble_task<C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool, E: EventHandler>(
-    mut runner: Runner<'_, C, P>,
-    handler: &E,
-) {
-    STACK_STARTED.signal(());
+pub(crate) async fn ble_task<C: Controller, P: PacketPool, E: EventHandler>(mut runner: Runner<'_, C, P>, handler: &E) {
     loop {
         if let Err(e) = runner.run_with_handler(handler).await {
             error!("[ble_task] runner error: {:?}", e);
@@ -733,13 +768,19 @@ pub(crate) async fn set_conn_params<
     for interval in [Duration::from_millis(15), Duration::from_micros(7500)] {
         // Wait 5 seconds before each request to avoid connection drop
         embassy_time::Timer::after_secs(5).await;
+        let max_latency = if cfg!(feature = "subrating") {
+            // Set Central sleep for up to 2.25s to save power when the keyboard is asleep
+            (Duration::from_millis(2250).as_micros() / interval.as_micros()) as u16
+        } else {
+            30
+        };
         update_conn_params(
             stack,
             conn.raw(),
             &RequestedConnParams {
                 min_connection_interval: interval,
                 max_connection_interval: interval,
-                max_latency: 30,
+                max_latency,
                 supervision_timeout: Duration::from_secs(10),
                 ..Default::default()
             },
@@ -922,6 +963,40 @@ pub(crate) async fn update_conn_params<
         }
     }
     warn!("[update_conn_params] controller stayed busy, giving up");
+    false
+}
+
+/// Update the subrate factor.
+///
+/// Returns whether the request reached the controller, so callers that mirror
+/// the parameters in their own state don't record params that never landed.
+#[cfg(feature = "subrating")]
+pub(crate) async fn update_subrate_factor<C: Controller + ControllerCmdAsync<LeSubrateRequest>, P: PacketPool>(
+    stack: &Stack<'_, C, P>,
+    params: LeSubrateRequestParams,
+) -> bool {
+    for _ in 0..10 {
+        let subrate_request = LeSubrateRequest::from(params);
+        match stack.async_command(subrate_request).await {
+            Ok(_) => return true,
+            Err(BleHostError::BleHost(Error::Hci(error))) => {
+                if 0x3A == error.to_status().into_inner() {
+                    info!("[update_subrate_factor] HCI busy: {:?}", error);
+                    embassy_time::Timer::after_millis(100).await;
+                    continue;
+                }
+                error!("[update_subrate_factor] HCI error: {:?}", error);
+                return false;
+            }
+            Err(e) => {
+                #[cfg(feature = "defmt")]
+                let e = defmt::Debug2Format(&e);
+                error!("[update_subrate_factor] BLE host error: {:?}", e);
+                return false;
+            }
+        }
+    }
+    warn!("[update_subrate_factor] controller stayed busy, giving up");
     false
 }
 

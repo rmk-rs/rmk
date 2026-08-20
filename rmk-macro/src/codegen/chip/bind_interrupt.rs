@@ -176,6 +176,11 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
             };
 
             let ble_config = communication.get_ble_config().unwrap();
+            let support_subrating = if is_feature_enabled(&get_rmk_features(), "subrating") {
+                quote! { .support_connection_subrating_central() }
+            } else {
+                quote! {}
+            };
             let tx_power = if let Some(pwr) = ble_config.default_tx_power {
                 quote! { .default_tx_power(#pwr)?  }
             } else {
@@ -201,6 +206,7 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
                         .support_dle_central()
                         .support_phy_update_central()
                         .support_phy_update_peripheral()
+                        #support_subrating
                         #use_2m_phy
                         #tx_power
                         .central_count(#num_peri)?
@@ -215,6 +221,7 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
                     .support_peripheral()
                     .support_dle_peripheral()
                     .support_phy_update_peripheral()
+                    #support_subrating
                     #use_2m_phy
                     #tx_power
                     .peripheral_count(1)?
