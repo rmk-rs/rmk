@@ -254,12 +254,13 @@ impl KeyMapInner<'_> {
     fn pop_layer_from_cache(&mut self, pos: KeyboardEventPos) -> u8 {
         match pos {
             KeyboardEventPos::Key(key_pos) => {
-                let row = key_pos.row as usize;
-                let col = key_pos.col as usize;
-                let ci = self.cache_index(row, col);
-                let layer = self.layer_cache[ci];
-                self.layer_cache[ci] = self.behavior.default_layer;
-                layer
+                let ci = self.cache_index(key_pos.row as usize, key_pos.col as usize);
+                if let Some(cache) = self.layer_cache.get_mut(ci) {
+                    let layer = *cache;
+                    *cache = self.behavior.default_layer;
+                    return layer;
+                }
+                self.behavior.default_layer
             }
             KeyboardEventPos::RotaryEncoder(encoder_pos) => {
                 if encoder_pos.direction != Direction::None {
@@ -278,10 +279,10 @@ impl KeyMapInner<'_> {
     fn save_layer_cache(&mut self, pos: KeyboardEventPos, layer_num: u8) {
         match pos {
             KeyboardEventPos::Key(key_pos) => {
-                let row = key_pos.row as usize;
-                let col = key_pos.col as usize;
-                let ci = self.cache_index(row, col);
-                self.layer_cache[ci] = layer_num;
+                let ci = self.cache_index(key_pos.row as usize, key_pos.col as usize);
+                if let Some(cache) = self.layer_cache.get_mut(ci) {
+                    *cache = layer_num;
+                }
             }
             KeyboardEventPos::RotaryEncoder(encoder_pos) => {
                 if encoder_pos.direction != Direction::None {
@@ -943,5 +944,42 @@ mod test {
         // the wrapped slot.
         keymap.set_action_at(KeyboardEventPos::key_pos(0, 1), 0, k!(C));
         assert_eq!(keymap.get_action_at(KeyboardEventPos::key_pos(0, 0), 1), k!(B));
+    }
+
+    #[test]
+    fn out_of_range_events_do_not_panic_in_layer_cache() {
+        use rmk_types::action::KeyAction;
+
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::event::KeyboardEvent;
+        use crate::keymap::{KeyMap, KeymapData};
+
+        // One key per layer: layer 0 holds A, layer 1 holds B.
+        let mut data = KeymapData::<1, 1, 2>::new([[[k!(A)]], [[k!(B)]]]);
+        let mut behavior = BehaviorConfig::default();
+        let positional = PositionalConfig::<1, 1>::default();
+        let keymap = KeyMap::build(&mut data, &mut behavior, &positional);
+
+        // Press and release at an out-of-range col: the flat cache index would
+        // be out of bounds. Both directions must resolve to No without panicking.
+        assert_eq!(
+            keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 1, true)),
+            KeyAction::No
+        );
+        assert_eq!(
+            keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 1, false)),
+            KeyAction::No
+        );
+
+        // The cache entry for the valid position is untouched by the
+        // out-of-range events.
+        assert_eq!(
+            keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 0, true)),
+            k!(A)
+        );
+        assert_eq!(
+            keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 0, false)),
+            k!(A)
+        );
     }
 }
