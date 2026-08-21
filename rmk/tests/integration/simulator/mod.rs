@@ -394,11 +394,6 @@ impl SimKeyboard {
             "leak after buffer cleanup, buffer contains {:?}",
             self.keyboard.held_buffer
         );
-        assert!(
-            self.keyboard.unprocessed_events.is_empty(),
-            "simulator ended with unprocessed keyboard events: {:?}",
-            self.keyboard.unprocessed_events
-        );
     }
 }
 
