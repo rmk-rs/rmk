@@ -156,6 +156,11 @@ jobs:
         run: |
           rustup target add ${{ matrix.target }}
           cargo install flip-link 2>/dev/null || true
+      # RMK builds trouble's P-256 assembly on nRF, and cc-rs compiles it with
+      # the ARM cross compiler — it has no clang fallback for -none-eabi.
+      - name: Install ARM GCC
+        if: contains(matrix.dir, 'nrf')
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
       - name: Build
         working-directory: ${{ matrix.dir }}
         run: |

@@ -69,6 +69,11 @@ jobs:
       - uses: cargo-bins/cargo-binstall@main
       - name: Install rmkit, flip-link and cargo-make
         run: cargo binstall cargo-make rmkit flip-link -y
+      # RMK builds trouble's P-256 assembly on nRF, and cc-rs compiles it with
+      # the ARM cross compiler — it has no clang fallback for -none-eabi.
+      - name: Install ARM GCC (nRF)
+        if: ${{ startsWith(needs.get_chip_name.outputs.chip_name, 'nrf') }}
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
       # esp32s3 is the only Xtensa esp chip RMK builds, so it alone needs the
       # espup toolchain. RISC-V esp32 chips (c3/c6/h2) build with the standard
       # toolchain and let cargo-make pull cargo-espflash on demand.
