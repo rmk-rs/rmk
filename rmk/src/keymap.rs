@@ -167,6 +167,11 @@ impl KeyMapInner<'_> {
             KeyboardEventPos::Key(key_pos) => {
                 let row = key_pos.row as usize;
                 let col = key_pos.col as usize;
+                if row >= self.row || col >= self.col || layer_num >= self.num_layer {
+                    // Positions may come from remote split peers; never panic on them.
+                    warn!("Key position ({}, {}) out of range on layer {}", row, col, layer_num);
+                    return KeyAction::No;
+                }
                 self.layers[self.layer_index(layer_num, row, col)]
             }
             KeyboardEventPos::RotaryEncoder(encoder_pos) => {
@@ -192,6 +197,10 @@ impl KeyMapInner<'_> {
             KeyboardEventPos::Key(key_pos) => {
                 let row = key_pos.row as usize;
                 let col = key_pos.col as usize;
+                if row >= self.row || col >= self.col || layer_num >= self.num_layer {
+                    warn!("Key position ({}, {}) out of range on layer {}", row, col, layer_num);
+                    return;
+                }
                 let idx = self.layer_index(layer_num, row, col);
                 self.layers[idx] = action;
             }
@@ -245,12 +254,13 @@ impl KeyMapInner<'_> {
     fn pop_layer_from_cache(&mut self, pos: KeyboardEventPos) -> u8 {
         match pos {
             KeyboardEventPos::Key(key_pos) => {
-                let row = key_pos.row as usize;
-                let col = key_pos.col as usize;
-                let ci = self.cache_index(row, col);
-                let layer = self.layer_cache[ci];
-                self.layer_cache[ci] = self.behavior.default_layer;
-                layer
+                let ci = self.cache_index(key_pos.row as usize, key_pos.col as usize);
+                if let Some(cache) = self.layer_cache.get_mut(ci) {
+                    let layer = *cache;
+                    *cache = self.behavior.default_layer;
+                    return layer;
+                }
+                self.behavior.default_layer
             }
             KeyboardEventPos::RotaryEncoder(encoder_pos) => {
                 if encoder_pos.direction != Direction::None {
@@ -269,10 +279,10 @@ impl KeyMapInner<'_> {
     fn save_layer_cache(&mut self, pos: KeyboardEventPos, layer_num: u8) {
         match pos {
             KeyboardEventPos::Key(key_pos) => {
-                let row = key_pos.row as usize;
-                let col = key_pos.col as usize;
-                let ci = self.cache_index(row, col);
-                self.layer_cache[ci] = layer_num;
+                let ci = self.cache_index(key_pos.row as usize, key_pos.col as usize);
+                if let Some(cache) = self.layer_cache.get_mut(ci) {
+                    *cache = layer_num;
+                }
             }
             KeyboardEventPos::RotaryEncoder(encoder_pos) => {
                 if encoder_pos.direction != Direction::None {
@@ -903,5 +913,73 @@ mod test {
         assert!(!(self_activated && !keymap.is_layer_active(2)));
         keymap.deactivate_layer_if_active(2);
         assert!(self_activated && !keymap.is_layer_active(2));
+    }
+
+    #[test]
+    fn out_of_range_positions_do_not_panic_or_wrap() {
+        use rmk_types::action::KeyAction;
+
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::event::KeyboardEventPos;
+        use crate::keymap::{KeyMap, KeymapData};
+
+        // One key per layer: layer 0 holds A, layer 1 holds B.
+        let mut data = KeymapData::<1, 1, 2>::new([[[k!(A)]], [[k!(B)]]]);
+        let mut behavior = BehaviorConfig::default();
+        let positional = PositionalConfig::<1, 1>::default();
+        let keymap = KeyMap::build(&mut data, &mut behavior, &positional);
+
+        // Positive control: a valid position resolves normally.
+        assert_eq!(keymap.get_action_at(KeyboardEventPos::key_pos(0, 0), 0), k!(A));
+
+        // Out-of-range col and layer read as No instead of panicking.
+        assert_eq!(keymap.get_action_at(KeyboardEventPos::key_pos(1, 0), 0), KeyAction::No);
+        assert_eq!(keymap.get_action_at(KeyboardEventPos::key_pos(0, 0), 2), KeyAction::No);
+
+        // Out-of-range row: the flat index would wrap into layer 1's [0][0],
+        // which holds B. The bounds check must return No, not the wrapped action.
+        assert_eq!(keymap.get_action_at(KeyboardEventPos::key_pos(0, 1), 0), KeyAction::No);
+
+        // Out-of-range writes are dropped without panicking or corrupting
+        // the wrapped slot.
+        keymap.set_action_at(KeyboardEventPos::key_pos(0, 1), 0, k!(C));
+        assert_eq!(keymap.get_action_at(KeyboardEventPos::key_pos(0, 0), 1), k!(B));
+    }
+
+    #[test]
+    fn out_of_range_events_do_not_panic_in_layer_cache() {
+        use rmk_types::action::KeyAction;
+
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::event::KeyboardEvent;
+        use crate::keymap::{KeyMap, KeymapData};
+
+        // One key per layer: layer 0 holds A, layer 1 holds B.
+        let mut data = KeymapData::<1, 1, 2>::new([[[k!(A)]], [[k!(B)]]]);
+        let mut behavior = BehaviorConfig::default();
+        let positional = PositionalConfig::<1, 1>::default();
+        let keymap = KeyMap::build(&mut data, &mut behavior, &positional);
+
+        // Press and release at an out-of-range col: the flat cache index would
+        // be out of bounds. Both directions must resolve to No without panicking.
+        assert_eq!(
+            keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 1, true)),
+            KeyAction::No
+        );
+        assert_eq!(
+            keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 1, false)),
+            KeyAction::No
+        );
+
+        // The cache entry for the valid position is untouched by the
+        // out-of-range events.
+        assert_eq!(
+            keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 0, true)),
+            k!(A)
+        );
+        assert_eq!(
+            keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 0, false)),
+            k!(A)
+        );
     }
 }
