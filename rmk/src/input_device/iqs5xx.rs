@@ -227,24 +227,18 @@ where
         let x_resolution = u16::from(channels[0].saturating_sub(1)) * 256;
         let y_resolution = u16::from(channels[1].saturating_sub(1)) * 256;
 
-        let i2c_timeout_ms;
-        let active_interval_ms;
-        let system_config_0;
-        let system_config_1;
-        match &mut self.window_detection {
+        
+        
+        
+        
+        let (system_config_0, system_config_1, i2c_timeout_ms, active_interval_ms) = match &mut self.window_detection {
             WindowDetection::Rdy(_) => {
-                system_config_0 = 0b01100100; // §8.10.9:  !MANUAL_CONTROL | SETUP_COMPLETE | WDT | REATI
-                system_config_1 = 0b00001111; // §8.10.10: REATI_EVENT | TP_EVENT | GESTURE_EVENT | EVENT_MODE
-                i2c_timeout_ms = 30;
-                active_interval_ms = 9;
+                (0b01100100, 0b00001111, 30, 9)
             }
             WindowDetection::Poll { interval_ms, .. } => {
-                system_config_0 = 0b11100100; // §8.10.9: MANUAL_CONTROL | SETUP_COMPLETE | WDT | REATI
-                system_config_1 = 0; // §8.10.10: !EVENT_MODE
-                i2c_timeout_ms = 100;
-                active_interval_ms = *interval_ms;
+                (0b11100100, 0, 100, *interval_ms)
             }
-        }
+        };
         // I2C timeout register at 0x058A; §8.6.
         let i2c_timeout = [0x05, 0x8A, i2c_timeout_ms];
         #[rustfmt::skip]
