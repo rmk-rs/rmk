@@ -18,14 +18,14 @@ rmk = { path = "../../../rmk", default-features = false, features = [
     "defmt",
     "watchdog",
 ] }
-nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "1a6e661155cdd1d6a86f3ae7b7fb117343781533", default-features = false, features = [
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "cd1bbabf5f890b1d2f96ad23a79f234d571a9860", default-features = false, features = [
     "defmt",
     "peripheral",
     "central",
     "nrf54lm20-app-s",
 ] }
-# nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "1a6e661155cdd1d6a86f3ae7b7fb117343781533", default-features = false, features = [
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "1a6e661155cdd1d6a86f3ae7b7fb117343781533", default-features = false, features = [
+# nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "cd1bbabf5f890b1d2f96ad23a79f234d571a9860", default-features = false, features = [
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "cd1bbabf5f890b1d2f96ad23a79f234d571a9860", default-features = false, features = [
     "defmt",
     "critical-section-impl",
     "nrf54lm20-app-s",
