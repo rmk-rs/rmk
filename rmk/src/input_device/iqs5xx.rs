@@ -227,17 +227,9 @@ where
         let x_resolution = u16::from(channels[0].saturating_sub(1)) * 256;
         let y_resolution = u16::from(channels[1].saturating_sub(1)) * 256;
 
-        
-        
-        
-        
         let (system_config_0, system_config_1, i2c_timeout_ms, active_interval_ms) = match &mut self.window_detection {
-            WindowDetection::Rdy(_) => {
-                (0b01100100, 0b00001111, 30, 9)
-            }
-            WindowDetection::Poll { interval_ms, .. } => {
-                (0b11100100, 0, 100, *interval_ms)
-            }
+            WindowDetection::Rdy(_) => (0b01100100, 0b00001111, 30, 9),
+            WindowDetection::Poll { interval_ms, .. } => (0b11100100, 0, 100, *interval_ms),
         };
         // I2C timeout register at 0x058A; §8.6.
         let i2c_timeout = [0x05, 0x8A, i2c_timeout_ms];
