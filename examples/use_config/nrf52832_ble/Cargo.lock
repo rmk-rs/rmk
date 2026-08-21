@@ -1522,8 +1522,9 @@ dependencies = [
 
 [[package]]
 name = "nrf-mpsl"
-version = "0.3.0"
-source = "git+https://github.com/alexmoon/nrf-sdc?rev=cd1bbabf5f890b1d2f96ad23a79f234d571a9860#cd1bbabf5f890b1d2f96ad23a79f234d571a9860"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61c3fae25579f57d60d5cbc9b1838bc0c7f13539a5ede1667dc2e27fc0f539d2"
 dependencies = [
  "cfg-if",
  "cortex-m",
@@ -1539,8 +1540,9 @@ dependencies = [
 
 [[package]]
 name = "nrf-mpsl-sys"
-version = "0.2.1"
-source = "git+https://github.com/alexmoon/nrf-sdc?rev=cd1bbabf5f890b1d2f96ad23a79f234d571a9860#cd1bbabf5f890b1d2f96ad23a79f234d571a9860"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7e0f91bc35e6d8192106f8d2c24be600e97769024e82f1babc6b4fd5b7b8995"
 dependencies = [
  "bindgen",
  "doxygen-rs",
@@ -1559,7 +1561,8 @@ dependencies = [
 [[package]]
 name = "nrf-sdc"
 version = "0.4.0"
-source = "git+https://github.com/alexmoon/nrf-sdc?rev=cd1bbabf5f890b1d2f96ad23a79f234d571a9860#cd1bbabf5f890b1d2f96ad23a79f234d571a9860"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5916d1521376d6876d0b0e3353e9affa03ce55daa9346188a5815db1c2eb84d"
 dependencies = [
  "bt-hci",
  "bt-hci-transport",
@@ -1576,8 +1579,9 @@ dependencies = [
 
 [[package]]
 name = "nrf-sdc-sys"
-version = "0.2.1"
-source = "git+https://github.com/alexmoon/nrf-sdc?rev=cd1bbabf5f890b1d2f96ad23a79f234d571a9860#cd1bbabf5f890b1d2f96ad23a79f234d571a9860"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "974a5010cc3a61b43e82ee6f9a2bfd80d894c8720dad08b87376f8a3048c1ecf"
 dependencies = [
  "bindgen",
  "doxygen-rs",
@@ -2477,7 +2481,7 @@ dependencies = [
 [[package]]
 name = "trouble-host"
 version = "0.8.0"
-source = "git+https://github.com/embassy-rs/trouble?rev=07d36dfc144751bad44d4750196334b40ff8cbc9#07d36dfc144751bad44d4750196334b40ff8cbc9"
+source = "git+https://github.com/embassy-rs/trouble?rev=6969eac961fb90689894db57696141e48167d703#6969eac961fb90689894db57696141e48167d703"
 dependencies = [
  "aes",
  "bt-hci",
@@ -2503,7 +2507,7 @@ dependencies = [
 [[package]]
 name = "trouble-host-macros"
 version = "0.6.0"
-source = "git+https://github.com/embassy-rs/trouble?rev=07d36dfc144751bad44d4750196334b40ff8cbc9#07d36dfc144751bad44d4750196334b40ff8cbc9"
+source = "git+https://github.com/embassy-rs/trouble?rev=6969eac961fb90689894db57696141e48167d703#6969eac961fb90689894db57696141e48167d703"
 dependencies = [
  "convert_case 0.8.0",
  "darling 0.20.11",

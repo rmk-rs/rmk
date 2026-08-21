@@ -30,13 +30,13 @@ embassy-nrf = { version = "0.11", features = [
     "time",
 ] }
 embassy-boot = { version = "0.7", default-features = false }
-nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "cd1bbabf5f890b1d2f96ad23a79f234d571a9860", features = [
+nrf-sdc = { version = "0.4.0", features = [
     "defmt",
     "peripheral",
     "central",
     "nrf52840",
 ] }
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "cd1bbabf5f890b1d2f96ad23a79f234d571a9860", features = [
+nrf-mpsl = { version = "0.4.0", features = [
     "defmt",
     "nrf52840",
 ] }

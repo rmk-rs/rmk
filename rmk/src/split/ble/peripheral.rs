@@ -90,16 +90,26 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitReader for BleSplitPeripheralDrive
                     conn_interval,
                     peripheral_latency,
                     supervision_timeout,
-                } => {
-                    info!(
-                        "Connection parameters updated: {:?}ms, {:?}, {:?}ms",
-                        conn_interval.as_millis(),
-                        peripheral_latency,
-                        supervision_timeout.as_millis()
-                    );
-                }
+                } => info!(
+                    "[split] params updated: interval {:?}us, latency {:?}, timeout {:?}ms",
+                    conn_interval.as_micros(),
+                    peripheral_latency,
+                    supervision_timeout.as_millis()
+                ),
+                GattConnectionEvent::SubratingParamsUpdated {
+                    subrate_factor,
+                    peripheral_latency,
+                    continuation_number,
+                    supervision_timeout,
+                } => info!(
+                    "[split] subrating updated: subrate {:?}, latency {:?}, continuation {:?}, timeout {:?}ms",
+                    subrate_factor,
+                    peripheral_latency,
+                    continuation_number,
+                    supervision_timeout.as_millis()
+                ),
                 GattConnectionEvent::PhyUpdated { tx_phy, rx_phy } => {
-                    info!("PHY updated: {:?}, {:?}", tx_phy, rx_phy);
+                    info!("[split] PHY updated: {:?}, {:?}", tx_phy, rx_phy)
                 }
                 _ => (),
             }
@@ -111,7 +121,7 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitReader for BleSplitPeripheralDrive
 impl<'stack, 'server, 'c, P: PacketPool> SplitWriter for BleSplitPeripheralDriver<'stack, 'server, 'c, P> {
     async fn write(&mut self, message: &SplitMessage) -> Result<usize, SplitDriverError> {
         let gatt_msg = GattSplitMessage::try_from(message)?;
-        info!("Writing split message to central: {:?}", message);
+        debug!("Writing split message to central: {:?}", message);
         self.message_to_central
             .notify(self.conn, &gatt_msg, true)
             .await
