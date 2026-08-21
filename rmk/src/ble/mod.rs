@@ -1,6 +1,6 @@
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 #[cfg(feature = "subrating")]
-use bt_hci::cmd::le::{LeSetHostFeature, LeSubrateRequest, LeSubrateRequestParams};
+use bt_hci::cmd::le::{LeSetHostFeature, LeSubrateRequest};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
 use embassy_futures::join::join3;
@@ -36,6 +36,8 @@ use crate::event::SubscribableEvent;
 use crate::hid::{HidWriterTrait, run_led_reader};
 #[cfg(feature = "split")]
 use crate::split::PeripheralMatrixConfig;
+#[cfg(feature = "subrating")]
+use crate::split::ble::central::subrating;
 #[cfg(feature = "split")]
 use crate::split::ble::central::{run_peripheral_session, scan_and_connect_peripherals};
 use crate::state::set_ble_state;
@@ -768,12 +770,15 @@ pub(crate) async fn set_conn_params<
     for interval in [Duration::from_millis(15), Duration::from_micros(7500)] {
         // Wait 5 seconds before each request to avoid connection drop
         embassy_time::Timer::after_secs(5).await;
-        let max_latency = if cfg!(feature = "subrating") {
-            // Set Central sleep for up to 2.25s to save power when the keyboard is asleep
-            (Duration::from_millis(2250).as_micros() / interval.as_micros()) as u16
-        } else {
-            30
-        };
+
+        // We need to let the central sleep for long periods of time when the
+        // split connection is subrated to get the power savings.
+        #[cfg(feature = "subrating")]
+        let max_latency = subrating::HOST_MAX_LATENCY;
+
+        #[cfg(not(feature = "subrating"))]
+        let max_latency = 30;
+
         update_conn_params(
             stack,
             conn.raw(),
@@ -963,40 +968,6 @@ pub(crate) async fn update_conn_params<
         }
     }
     warn!("[update_conn_params] controller stayed busy, giving up");
-    false
-}
-
-/// Update the subrate factor.
-///
-/// Returns whether the request reached the controller, so callers that mirror
-/// the parameters in their own state don't record params that never landed.
-#[cfg(feature = "subrating")]
-pub(crate) async fn update_subrate_factor<C: Controller + ControllerCmdAsync<LeSubrateRequest>, P: PacketPool>(
-    stack: &Stack<'_, C, P>,
-    params: LeSubrateRequestParams,
-) -> bool {
-    for _ in 0..10 {
-        let subrate_request = LeSubrateRequest::from(params);
-        match stack.async_command(subrate_request).await {
-            Ok(_) => return true,
-            Err(BleHostError::BleHost(Error::Hci(error))) => {
-                if 0x3A == error.to_status().into_inner() {
-                    info!("[update_subrate_factor] HCI busy: {:?}", error);
-                    embassy_time::Timer::after_millis(100).await;
-                    continue;
-                }
-                error!("[update_subrate_factor] HCI error: {:?}", error);
-                return false;
-            }
-            Err(e) => {
-                #[cfg(feature = "defmt")]
-                let e = defmt::Debug2Format(&e);
-                error!("[update_subrate_factor] BLE host error: {:?}", e);
-                return false;
-            }
-        }
-    }
-    warn!("[update_subrate_factor] controller stayed busy, giving up");
     false
 }
 

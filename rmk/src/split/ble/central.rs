@@ -1,9 +1,7 @@
+#[cfg(feature = "subrating")]
+use bt_hci::cmd::le::LeSubrateRequest;
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
-#[cfg(feature = "subrating")]
-use bt_hci::cmd::le::{LeSubrateRequest, LeSubrateRequestParams};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
-#[cfg(feature = "subrating")]
-use bt_hci::param::ConnHandle;
 use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
@@ -15,8 +13,6 @@ use super::GattSplitMessage;
 use crate::ble::adv::Adv;
 use crate::ble::scan::{SPLIT_CENTRAL_SCAN_WINDOW, scan_config, start_scan};
 use crate::ble::sleep::report_activity;
-#[cfg(feature = "subrating")]
-use crate::ble::update_subrate_factor;
 use crate::ble::{update_ble_phy, update_conn_params, wait_for_stack_started};
 use crate::channel::FLASH_CHANNEL;
 use crate::event::{EventSubscriber, SleepStateEvent, SubscribableEvent};
@@ -223,18 +219,6 @@ fn default_central_conn_param() -> RequestedConnParams {
     }
 }
 
-#[cfg(feature = "subrating")]
-fn default_central_subrate_params(handle: ConnHandle) -> LeSubrateRequestParams {
-    LeSubrateRequestParams {
-        handle,
-        subrate_min: 1,
-        subrate_max: 1,
-        max_latency: 300, // 2250ms
-        continuation_number: 0,
-        supervision_timeout: ::bt_hci::param::Duration::from_secs(5),
-    }
-}
-
 /// Parameters for the central -> peripheral link while the central sleeps.
 ///
 /// With a host connected, the central's radio is busy serving the host link
@@ -262,27 +246,141 @@ fn sleep_central_conn_param() -> RequestedConnParams {
 }
 
 #[cfg(feature = "subrating")]
-fn sleep_central_subrate_params(handle: ConnHandle) -> LeSubrateRequestParams {
-    if crate::state::active_transport().is_some() {
-        // Host connected — short subrate so key presses arrive quickly
+pub(crate) mod subrating {
+    // Measurements on nrf52840 for subrate request parameters:
+    //    |   HCL | [ms] |  SF | [ms] | IC [µA] |  KPL [ms]  | IP [µA] |
+    //    |-------+------+-----+------+---------+------------|---------|
+    //    |    60 |  450 |  10 |   75 |      80 |  41 /   82 |      21 |
+    //    |    30 |  225 |  30 |  225 |      75 | 116 /  232 |      21 |
+    //    |    60 |  450 |  30 |  225 |      59 | 116 /  232 |      21 |
+    //    |   180 | 1350 |  30 |  225 |      48 | 116 /  232 |      21 |
+    //    |   300 | 2250 |  30 |  225 |      48 | 116 /  232 |      21 |
+    //    |    30 |  225 |  60 |  450 |      63 | 228 /  457 |      21 |
+    //    |    60 |  450 |  60 |  450 |      48 | 228 /  457 |      21 |
+    //    |   180 | 1350 |  60 |  450 |      39 | 228 /  457 |      21 |
+    // ==>|   300 | 2250 |  60 |  450 |      34 | 228 /  457 |      21 |<== Connected Sleep
+    //    |   300 | 2250 | 120 |  900 |      32 | 453 /  907 |      21 |
+    //    | no HC |      | 100 |  750 |      24 | 378 /  757 |      21 |
+    // ==>| no HC |      | 125 |  937 |      22 | 472 /  945 |      21 |<== Disconnected Sleep
+    //    | no HC |      | 250 | 1875 |      21 | 941 / 1882 |      24 |
+    //    |-------+------+-----+------+---------+------------|---------|
+    //    HCL .. Host Connection max latency
+    //    SF ... Subrate Factor split connection
+    //    IC ... Central average current
+    //    KPL .. Key Press latency (mean/worst)
+    //    IP ... Peripheral average current
+    //
+    // In active mode without pressing any key, the average current is: ~600µA
+    //
+    // The current draw on the peripheral with subrating during connected sleep
+    // with a subrate factor < 250 and a max sleep time of 3.75s is 21µA.
+    //
+    // During disconnected sleep with the subrate factor set to 250, the average
+    // peripheral current draw increases to 24µA, when the internal low-frequency
+    // clock is in use. Due to the long intervals, the peripheral needs
+    // to increase the listening window during connection events to compensate
+    // for clock drift. Therefore, 125 is selected as the better trade-off.
+    //
+    // In active mode without pressing any key, the average current depends on the max
+    // latency of the split connection:
+    //    | max_latency |  [ms] | min_timeout [ms] | avg. [µA] |
+    //    |-------------+-------+------------------+-----------|
+    //    |          10 |   75. |             165. |        72 |
+    //    |          30 |  225. |             465. |        38 |
+    //    |          60 |  450. |             915. |        30 |
+    // ==>|         300 | 2250. |            4515. |        21 |<== Default Params
+    //    |-------------+-------+------------------+-----------|
+
+    use bt_hci::cmd::le::{LeSubrateRequest, LeSubrateRequestParams};
+    use bt_hci::controller::ControllerCmdAsync;
+    use bt_hci::param::{ConnHandle, Duration, Error as HciError};
+    use trouble_host::prelude::*;
+
+    const CONN_INTERVAL_US: u32 = 7500;
+    const SLEEP_HOST_CONN_SUBRATE: u16 = 60;
+    const SLEEP_NO_HOST_SUBRATE: u16 = 125;
+    const DEFAULT_MAX_LATENCY: u16 = 300;
+    pub(crate) const HOST_MAX_LATENCY: u16 = 300;
+
+    // In some cases, the subrate request procedure does not complete with only one continuation.
+    const SLEEP_CONTINUATION_NUMBER: u16 = 2;
+
+    const fn calc_max_latency(subrate_max: u16) -> u16 {
+        // BLE spec requires: Subrate_Max * (Max_Latency + 1) <= 500
+        (500 / subrate_max) - 1
+    }
+
+    const fn calc_min_timeout_ms(max_latency: u16, subrate_factor: u16) -> u32 {
+        // BLE spec requires: Connection Interval × Subrate_Max × (Max_Latency + 1) ≤ Supervision_Timeout ÷ 2
+        let effective_interval_us = (subrate_factor as u32) * CONN_INTERVAL_US;
+        let required_timeout_us = 2 * (1 + max_latency as u32) * effective_interval_us;
+        (required_timeout_us + CONN_INTERVAL_US * 2) / 1_000 // add two connection intervals to ensure ≤ holds!
+    }
+
+    pub(super) fn default_central_subrate_params(handle: ConnHandle) -> LeSubrateRequestParams {
+        let subrate = 1;
+        let max_latency = DEFAULT_MAX_LATENCY;
+        let supervision_timeout = Duration::from_millis(calc_min_timeout_ms(max_latency, subrate));
+
         LeSubrateRequestParams {
             handle,
-            subrate_min: 60, // 450ms effective interval → 457.5ms key press latency
-            subrate_max: 60,
-            max_latency: 7,         // 3.6s sleep for peripheral
-            continuation_number: 2, // assure low-latency reset of subrate factor
-            supervision_timeout: ::bt_hci::param::Duration::from_secs(8),
+            subrate_min: subrate,
+            subrate_max: subrate,
+            max_latency,
+            continuation_number: 0,
+            supervision_timeout,
         }
-    } else {
-        // No host — very long interval, peripheral will be unresponsive for ~2s after reconnect
+    }
+
+    pub(super) fn sleep_central_subrate_params(handle: ConnHandle) -> LeSubrateRequestParams {
+        let subrate = if crate::state::active_transport().is_some() {
+            SLEEP_HOST_CONN_SUBRATE
+        } else {
+            SLEEP_NO_HOST_SUBRATE
+        };
+
+        let max_latency = calc_max_latency(subrate);
+        let supervision_timeout = Duration::from_millis(calc_min_timeout_ms(max_latency, subrate));
+
         LeSubrateRequestParams {
             handle,
-            subrate_min: 249, // 1867.5ms effective interval
-            subrate_max: 249,
-            max_latency: 1,         // 3.6s sleep for peripheral
-            continuation_number: 2, // assure low-latency reset of subrate factor
-            supervision_timeout: ::bt_hci::param::Duration::from_secs(8),
+            subrate_min: subrate,
+            subrate_max: subrate,
+            max_latency,
+            continuation_number: SLEEP_CONTINUATION_NUMBER,
+            supervision_timeout,
         }
+    }
+
+    pub(crate) async fn update_subrate_factor<C: Controller + ControllerCmdAsync<LeSubrateRequest>, P: PacketPool>(
+        stack: &Stack<'_, C, P>,
+        params: LeSubrateRequestParams,
+    ) -> bool {
+        for _ in 0..10 {
+            let subrate_request = LeSubrateRequest::from(params);
+            match stack.async_command(subrate_request).await {
+                Ok(_) => return true,
+                Err(BleHostError::BleHost(Error::Hci(error))) => {
+                    // A connection runs one link-layer control procedure at a time, and
+                    // a fresh one is still running its own.
+                    if error == HciError::CONTROLLER_BUSY || error == HciError::DIFFERENT_TRANSACTION_COLLISION {
+                        info!("[update_subrate_factor] controller busy, retrying: {:?}", error);
+                        embassy_time::Timer::after_millis(100).await;
+                        continue;
+                    }
+                    error!("[update_subrate_factor] HCI error: {:?}", error);
+                    return false;
+                }
+                Err(e) => {
+                    #[cfg(feature = "defmt")]
+                    let e = defmt::Debug2Format(&e);
+                    error!("[update_subrate_factor] BLE host error: {:?}", e);
+                    return false;
+                }
+            }
+        }
+        warn!("[update_subrate_factor] controller stayed busy, giving up");
+        false
     }
 }
 
@@ -467,11 +565,11 @@ async fn follow_sleep_state<
         #[cfg(feature = "subrating")]
         {
             let params = if sleeping {
-                sleep_central_subrate_params(conn.handle())
+                subrating::sleep_central_subrate_params(conn.handle())
             } else {
-                default_central_subrate_params(conn.handle())
+                subrating::default_central_subrate_params(conn.handle())
             };
-            if update_subrate_factor(stack, params).await {
+            if subrating::update_subrate_factor(stack, params).await {
                 applied = sleeping;
             }
         }

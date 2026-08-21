@@ -67,18 +67,18 @@ Two related behaviors are always on:
 - When BLE advertising times out without a connection (after 5 minutes), the keyboard sleeps immediately and waits for a key or pointing event before it advertises again.
 - `NrfAdc` takes a `light_sleep` interval as its last argument. When the analog inputs have been idle for more than 1.2 seconds, the ADC polls at that interval instead of `polling_interval`. A joystick configured in `keyboard.toml` uses 350ms.
 
-### Split central sleep using BLE Connection Subrating (nrf52840 only)
+### Split central sleep using BLE Connection Subrating (tested on nrf52840 only)
 
 To improve central power usage and decrease peripheral latency problems during wake-up you can activate the `subrating` feature in your `Cargo.toml`.
 This enables BLE Connection Subrating which lets the central sleep for longer intervals, while allowing for a quick switch back to the fast connection intervals.
 
-The mean perihperal latency is ~450ms for the first keypress only. The keyboard instantly switches to the active connection settings after that. Depending on your layout and habits this allows to use the sleep feature more agressively. Try to reduce the timeout to get lower battery usage, e.g.:
+The maximum peripheral latency is ~450ms for the first keypress; the mean latency is roughly half (~225ms). The keyboard instantly switches to the active connection settings after that. Depending on your layout and habits this allows to use the sleep feature more aggressively. Try to reduce the timeout to get lower battery usage, e.g.:
 ```toml
 [rmk]
 split_central_sleep_timeout_seconds = 60
 ```
 
-If the central is not connected to a host, the latency is further increased to ~1867ms which reduces the power consumption of the central to ~20µA, barely more then the peripheral.
+If the central is not connected to a host, the mean latency is further increased to ~472ms which reduces the power consumption of the central to ~22µA, nearly the same as the peripheral (~21µA).
 
 ## External VCC
 
