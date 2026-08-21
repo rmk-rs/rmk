@@ -49,38 +49,58 @@ impl quote::ToTokens for ModifierCombinationMacro {
 
 /// Get modifier combination, in types of mod1 | mod2 | ...
 fn parse_modifiers(modifiers_str: &str) -> ModifierCombinationMacro {
+    type ModifierSetter = fn(&mut ModifierCombinationMacro);
+    const MODIFIERS: &[(&str, ModifierSetter)] = &[
+        ("LShift", |c| c.shift = true),
+        ("LCtrl", |c| c.ctrl = true),
+        ("LAlt", |c| c.alt = true),
+        ("LGui", |c| c.gui = true),
+        ("RShift", |c| {
+            c.right = true;
+            c.shift = true;
+        }),
+        ("RCtrl", |c| {
+            c.right = true;
+            c.ctrl = true;
+        }),
+        ("RAlt", |c| {
+            c.right = true;
+            c.alt = true;
+        }),
+        ("RGui", |c| {
+            c.right = true;
+            c.gui = true;
+        }),
+    ];
+
     let mut combination = ModifierCombinationMacro::new();
+    let mut unknown_modifiers = Vec::new();
     let tokens = modifiers_str.split_terminator("|");
     tokens.for_each(|w| {
         let w = w.trim();
-        let key = match KEYCODE_ALIAS.get(w.to_lowercase().as_str()) {
-            Some(k) => *k,
-            None => w,
-        };
-        match key {
-            "LShift" => combination.shift = true,
-            "LCtrl" => combination.ctrl = true,
-            "LAlt" => combination.alt = true,
-            "LGui" => combination.gui = true,
-            "RShift" => {
-                combination.right = true;
-                combination.shift = true;
-            }
-            "RCtrl" => {
-                combination.right = true;
-                combination.ctrl = true;
-            }
-            "RAlt" => {
-                combination.right = true;
-                combination.alt = true;
-            }
-            "RGui" => {
-                combination.right = true;
-                combination.gui = true;
-            }
-            _ => (),
+        let key = KEYCODE_ALIAS
+            .get(w.to_lowercase().as_str())
+            .copied()
+            .unwrap_or(w);
+        match MODIFIERS.iter().find(|(name, _)| *name == key) {
+            Some((_, set)) => set(&mut combination),
+            None => unknown_modifiers.push(w.to_string()),
         }
     });
+
+    if !unknown_modifiers.is_empty() {
+        panic!(
+            "\n❌ keyboard.toml: unknown modifier(s) [{}] in modifier combination '{}'. Expected one of: {}.",
+            unknown_modifiers.join(", "),
+            modifiers_str.trim(),
+            MODIFIERS
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
     combination
 }
 
@@ -221,7 +241,7 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
         let modifiers = parse_modifiers(strip_call(key));
         if modifiers.is_empty() {
             panic!(
-                "\n\u{274c} keyboard.toml: modifier in MOD(modifier) is not valid! Please check the documentation: https://rmk.rs/docs/features/configuration/layout.html"
+                "\n\u{274c} keyboard.toml: modifier in MOD(modifier) is not valid!"
             );
         }
         return quote! { ::rmk::types::action::Action::Modifier(#modifiers) };
@@ -229,14 +249,14 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
         let keys = split_top_level(strip_call(key));
         if keys.len() != 2 {
             panic!(
-                "\n\u{274c} keyboard.toml: WM(key, modifier) invalid, please check the documentation: https://rmk.rs/docs/features/configuration/layout.html"
+                "\n\u{274c} keyboard.toml: WM(key, modifier) invalid"
             );
         }
         let ident = get_key_with_alias(keys[0].clone());
         let modifiers = parse_modifiers(&keys[1]);
         if modifiers.is_empty() {
             panic!(
-                "\n\u{274c} keyboard.toml: modifier in WM(key, modifier) is not valid! Please check the documentation: https://rmk.rs/docs/features/configuration/layout.html"
+                "\n\u{274c} keyboard.toml: modifier in WM(key, modifier) is not valid!"
             );
         }
         return quote! {
@@ -249,7 +269,7 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
         let modifiers = parse_modifiers(strip_call(key));
         if modifiers.is_empty() {
             panic!(
-                "\n\u{274c} keyboard.toml: modifier in OSM(modifier) is not valid! Please check the documentation: https://rmk.rs/docs/features/configuration/layout.html"
+                "\n\u{274c} keyboard.toml: modifier in OSM(modifier) is not valid!"
             );
         }
         return quote! { ::rmk::types::action::Action::OneShotModifier(#modifiers) };
@@ -257,14 +277,14 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
         let keys = split_top_level(strip_call(key));
         if keys.len() != 2 {
             panic!(
-                "\n\u{274c} keyboard.toml: LM(layer, modifier) invalid, please check the documentation: https://rmk.rs/docs/features/configuration/layout.html"
+                "\n\u{274c} keyboard.toml: LM(layer, modifier) invalid"
             );
         }
         let layer = keys[0].parse::<u8>().unwrap();
         let modifiers = parse_modifiers(&keys[1]);
         if modifiers.is_empty() {
             panic!(
-                "\n\u{274c} keyboard.toml: modifier in LM(layer, modifier) is not valid! Please check the documentation: https://rmk.rs/docs/features/configuration/layout.html"
+                "\n\u{274c} keyboard.toml: modifier in LM(layer, modifier) is not valid!"
             );
         }
         return quote! { ::rmk::types::action::Action::LayerOnWithModifier(#layer, #modifiers) };
@@ -293,7 +313,7 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
         let internal = strip_call(key);
         if internal.is_empty() {
             panic!(
-                "\n\u{274c} keyboard.toml: SHIFTED(key) invalid, please check the documentation: https://rmk.rs/docs/features/configuration/layout.html"
+                "\n\u{274c} keyboard.toml: SHIFTED(key) invalid"
             );
         }
         let ident = get_key_with_alias(internal.to_string());
@@ -324,7 +344,7 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
         let number = number_str.parse::<u8>().unwrap_or(255);
         if number > 31 {
             panic!(
-                "\n\u{274c} keyboard.toml: {} is not a valid user key! User keys are numbered 0-31. Please check the documentation: https://rmk.rs/docs/features/configuration/layout.html",
+                "\n\u{274c} keyboard.toml: {} is not a valid user key! User keys are numbered 0-31.",
                 key
             );
         }
@@ -401,14 +421,14 @@ pub(crate) fn parse_key(
         let keys = split_top_level(strip_call(&key));
         if keys.len() < 2 || keys.len() > 3 {
             panic!(
-                "\n\u{274c} keyboard.toml: MT(key, modifier) invalid, please check the documentation: https://rmk.rs/docs/features/configuration/layout.html"
+                "\n\u{274c} keyboard.toml: MT(key, modifier) invalid"
             );
         }
         let tap = parse_action(&keys[0]);
         let modifiers = parse_modifiers(&keys[1]);
         if modifiers.is_empty() {
             panic!(
-                "\n\u{274c} keyboard.toml: modifier in MT(key, modifier) is not valid! Please check the documentation: https://rmk.rs/docs/features/configuration/layout.html"
+                "\n\u{274c} keyboard.toml: modifier in MT(key, modifier) is not valid!"
             );
         }
         let profile = morse_profile(keys.get(2), profiles);
@@ -419,7 +439,7 @@ pub(crate) fn parse_key(
         let keys = split_top_level(strip_call(&key));
         if keys.len() < 2 || keys.len() > 3 {
             panic!(
-                "\n\u{274c} keyboard.toml: TH(key_tap, key_hold) invalid, please check the documentation: https://rmk.rs/docs/features/configuration/layout.html"
+                "\n\u{274c} keyboard.toml: TH(key_tap, key_hold) invalid"
             );
         }
         let tap = parse_action(&keys[0]);
@@ -430,7 +450,7 @@ pub(crate) fn parse_key(
         let keys = split_top_level(strip_call(&key));
         if keys.len() < 2 || keys.len() > 3 {
             panic!(
-                "\n\u{274c} keyboard.toml: LT(layer, key) invalid, please check the documentation: https://rmk.rs/docs/features/configuration/layout.html"
+                "\n\u{274c} keyboard.toml: LT(layer, key) invalid"
             );
         }
         let layer = keys[0].parse::<u8>().unwrap();
@@ -668,5 +688,21 @@ mod tests {
                 .contains("TapHold(::rmk::types::action::Action::Key")
         );
         assert!(squash(&expand("LT(2, Enter)")).contains("Action::LayerOn(2u8)"));
+    }
+
+    #[test]
+    fn parse_modifiers_resolves_canonical_and_alias_names() {
+        let m = parse_modifiers("LCtrl | lcmd | algr");
+        assert!(m.ctrl);
+        assert!(m.gui);
+        assert!(m.alt);
+        assert!(m.right);
+        assert!(!m.shift);
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown modifier(s) [LCtrol]")]
+    fn parse_modifiers_rejects_unknown_name_in_list() {
+        let _ = parse_modifiers("LShift | LCtrol");
     }
 }
