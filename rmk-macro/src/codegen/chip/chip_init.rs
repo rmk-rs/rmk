@@ -123,7 +123,9 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                         source: ::nrf_sdc::mpsl::raw::MPSL_CLOCK_LF_SRC_RC as u8,
                         rc_ctiv: ::nrf_sdc::mpsl::raw::MPSL_RECOMMENDED_RC_CTIV as u8,
                         rc_temp_ctiv: ::nrf_sdc::mpsl::raw::MPSL_RECOMMENDED_RC_TEMP_CTIV as u8,
-                        accuracy_ppm: ::nrf_sdc::mpsl::raw::MPSL_DEFAULT_CLOCK_ACCURACY_PPM as u16,
+                        // nRF52 LFRC is +/-500 ppm after calibration (PS 5.4.4.4); the 250 ppm
+                        // MPSL default understates it and narrows the receive window on the peer.
+                        accuracy_ppm: 500,
                         skip_wait_lfclk_started: ::nrf_sdc::mpsl::raw::MPSL_DEFAULT_SKIP_WAIT_LFCLK_STARTED != 0,
                     };
                     static MPSL: ::static_cell::StaticCell<::nrf_sdc::mpsl::MultiprotocolServiceLayer> = ::static_cell::StaticCell::new();
