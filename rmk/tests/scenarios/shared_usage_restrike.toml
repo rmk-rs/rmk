@@ -1,0 +1,293 @@
+# Two matrix positions can map to the same HID usage: `<` and its `SHIFTED()`
+# twin `>`, or simply one keycode bound twice. Each press takes its own report
+# slot, but the report collapses held keycodes to one usage, so a roll from one
+# to the other leaves the usage continuously down and the host — which emits a
+# character on the absent→present transition — sees one keystroke for two.
+#
+# The usage must also stay down while any owner holds it, so the two halves have
+# to hold at once: exactly one extra report per re-strike, carrying every other
+# held usage and every held modifier.
+#
+# Layer 0 row 0 pairs `<` with `>` and binds `Kc7` twice; row 1 is six distinct
+# keycodes to fill the report array; row 2 re-binds `Kc1` for the full-array
+# case and carries the two real modifiers.
+#
+# The decision is taken by comparing how many slots hold the usage on behalf of
+# a registered key event, before and after registration. That is an observation
+# of what registration did rather than a prediction of what it would do, so a
+# press finding no free slot synthesises nothing, and any path that gives the
+# usage a new owner strikes it however the slot came to hold it.
+
+[layout]
+rows = 3
+cols = 6
+map = """
+(0,0)  (0,1)  (0,2)  (0,3)  (0,4)  (0,5)
+(1,0)  (1,1)  (1,2)  (1,3)  (1,4)  (1,5)
+(2,0)  (2,1)  (2,2)  (2,3)  (2,4)  (2,5)
+"""
+
+[[keymap.layer]]
+keys = """
+NonusBackslash  SHIFTED(NonusBackslash)  Kc7  Kc7  No      No
+Kc1             Kc2                      Kc3  Kc4  Kc5     Kc6
+Kc1             No                       No   No   LShift  RShift
+"""
+
+# The report in #809: `<` rolled into `>` must type both. On the unmodified
+# base the second press only adds a modifier to a usage already down, so the
+# host receives one `<` and no `>`.
+[[test]]
+name = "rolled_shared_usage_types_both_keys"
+steps = [
+  { press = [0, 0] },   # <
+  { press = [0, 1] },   # > while < is still held
+  { release = [0, 0] },
+  { release = [0, 1] },
+]
+expect = [
+  ["NonusBackslash"],
+  ["LShift"],
+  ["LShift", "NonusBackslash"],
+  ["LShift", "NonusBackslash"],
+  [],
+]
+
+# The same roll with no modifier anywhere: one keycode bound at two positions.
+# Detection keys on which position owns the slot, not on the modifier set.
+[[test]]
+name = "rolled_same_keycode_two_positions_types_twice"
+steps = [
+  { press = [0, 2] },
+  { press = [0, 3] },
+  { release = [0, 2] },
+  { release = [0, 3] },
+]
+expect = [
+  ["Kc7"],
+  [],
+  ["Kc7"],
+  ["Kc7"],
+  [],
+]
+
+# Press `>` first and roll back to `<`. The re-strike is symmetric.
+[[test]]
+name = "reverse_roll_shifted_first"
+steps = [
+  { press = [0, 1] },   # >
+  { press = [0, 0] },   # <
+  { release = [0, 1] },
+  { release = [0, 0] },
+]
+expect = [
+  ["LShift", "NonusBackslash"],
+  [],
+  ["NonusBackslash"],
+  ["NonusBackslash"],
+  [],
+]
+
+# Holding a usage and tapping a real Shift is one activation plus an
+# independent modifier, not two activations. No transition report.
+[[test]]
+name = "held_key_plus_tapped_real_shift_types_once"
+steps = [
+  { press = [0, 0] },
+  { press = [2, 4] },   # real LShift
+  { release = [2, 4] },
+  { release = [0, 0] },
+]
+expect = [
+  ["NonusBackslash"],
+  ["LShift", "NonusBackslash"],
+  ["NonusBackslash"],
+  [],
+]
+
+# A second modifier arriving and leaving while a usage is held changes the
+# modifier byte and nothing else.
+[[test]]
+name = "modifier_only_change_sends_no_transition"
+steps = [
+  { press = [0, 0] },
+  { press = [2, 4] },   # LShift
+  { press = [2, 5] },   # RShift
+  { release = [2, 5] },
+  { release = [2, 4] },
+  { release = [0, 0] },
+]
+expect = [
+  ["NonusBackslash"],
+  ["LShift", "NonusBackslash"],
+  ["LShift", "RShift", "NonusBackslash"],
+  ["LShift", "NonusBackslash"],
+  ["NonusBackslash"],
+  [],
+]
+
+# The half this must not break: with two owners holding one usage, releasing
+# the first keeps it down, and releasing the last clears it. Both orders.
+[[test]]
+name = "shared_usage_survives_first_release"
+steps = [
+  { press = [0, 2] },
+  { press = [0, 3] },
+  { release = [0, 3] },   # release the second owner first
+  { release = [0, 2] },
+]
+expect = [
+  ["Kc7"],
+  [],
+  ["Kc7"],
+  ["Kc7"],
+  [],
+]
+
+# The transition report clears only the re-struck usage. Everything else that
+# is down stays down.
+[[test]]
+name = "transition_preserves_other_held_keys"
+steps = [
+  { press = [1, 0] },   # Kc1
+  { press = [1, 1] },   # Kc2
+  { press = [0, 0] },   # <
+  { press = [0, 1] },   # >
+  { release = [0, 1] },
+  { release = [0, 0] },
+  { release = [1, 1] },
+  { release = [1, 0] },
+]
+expect = [
+  ["Kc1"],
+  ["Kc1", "Kc2"],
+  ["Kc1", "Kc2", "NonusBackslash"],
+  ["LShift", "Kc1", "Kc2"],
+  ["LShift", "Kc1", "Kc2", "NonusBackslash"],
+  # `>` carried the shift, so releasing it takes the modifier with it while
+  # `<` keeps the usage down. Both halves of that are unchanged here.
+  ["Kc1", "Kc2", "NonusBackslash"],
+  ["Kc1", "Kc2"],
+  ["Kc1"],
+  [],
+]
+
+# A physically held modifier is present in every report, the transition
+# included. Dropping it there would break a chorded shortcut.
+[[test]]
+name = "transition_preserves_held_modifiers"
+steps = [
+  { press = [2, 5] },   # RShift, physically held throughout
+  { press = [0, 2] },
+  { press = [0, 3] },
+  { release = [0, 3] },
+  { release = [0, 2] },
+  { release = [2, 5] },
+]
+expect = [
+  ["RShift"],
+  ["RShift", "Kc7"],
+  ["RShift"],
+  ["RShift", "Kc7"],
+  ["RShift", "Kc7"],
+  ["RShift"],
+  [],
+]
+
+# The already-correct stream from the report: press and release each key fully
+# and nothing changes. Three makes, three characters, no extra reports.
+[[test]]
+name = "sequential_typing_is_unchanged"
+steps = [
+  { press = [0, 0] },
+  { release = [0, 0] },
+  { press = [0, 1] },
+  { release = [0, 1] },
+  { press = [0, 0] },
+  { release = [0, 0] },
+]
+expect = [
+  ["NonusBackslash"],
+  [],
+  ["LShift", "NonusBackslash"],
+  [],
+  ["NonusBackslash"],
+  [],
+]
+
+# One key held sends exactly one make and one break, so host auto-repeat is
+# not chopped by a spurious lift.
+[[test]]
+name = "held_key_sends_no_extra_reports"
+steps = [
+  { press = [0, 0] },
+  { delay = 200 },
+  { release = [0, 0] },
+]
+expect = [
+  ["NonusBackslash"],
+  [],
+]
+
+# With the six-key array full a seventh press registers nothing, so it gains no
+# ownership and must synthesise nothing: the usage was already down and stays
+# down, exactly as it does on any other over-capacity press. Releasing the
+# original owner then clears it while the seventh key is still physically held,
+# which is this firmware's established rollover behaviour and is unchanged here.
+[[test]]
+name = "an_unregistered_seventh_press_synthesises_no_stroke"
+steps = [
+  { press = [1, 0] },   # Kc1
+  { press = [1, 1] },   # Kc2
+  { press = [1, 2] },   # Kc3
+  { press = [1, 3] },   # Kc4
+  { press = [1, 4] },   # Kc5
+  { press = [1, 5] },   # Kc6 - six owners, array full
+  { press = [2, 0] },   # Kc1 again: no free slot, so no new owner
+  { release = [1, 0] },
+  { release = [2, 0] },
+  { release = [1, 5] },
+  { release = [1, 4] },
+  { release = [1, 3] },
+  { release = [1, 2] },
+  { release = [1, 1] },
+]
+expect = [
+  ["Kc1"],
+  ["Kc1", "Kc2"],
+  ["Kc1", "Kc2", "Kc3"],
+  ["Kc1", "Kc2", "Kc3", "Kc4"],
+  ["Kc1", "Kc2", "Kc3", "Kc4", "Kc5"],
+  ["Kc1", "Kc2", "Kc3", "Kc4", "Kc5", "Kc6"],
+  ["Kc1", "Kc2", "Kc3", "Kc4", "Kc5", "Kc6"],
+  ["Kc2", "Kc3", "Kc4", "Kc5", "Kc6"],
+  ["Kc2", "Kc3", "Kc4", "Kc5", "Kc6"],
+  ["Kc2", "Kc3", "Kc4", "Kc5"],
+  ["Kc2", "Kc3", "Kc4"],
+  ["Kc2", "Kc3"],
+  ["Kc2"],
+  [],
+]
+
+# The plain-keycode pair with an unrelated usage held across the roll: the
+# transition drops only the re-struck usage, with no modifier anywhere in the
+# stream to make it look like a shift artefact.
+[[test]]
+name = "plain_keycode_restrike_preserves_an_unrelated_held_key"
+steps = [
+  { press = [0, 2] },   # Kc7 at one position
+  { press = [1, 0] },   # Kc1 at another
+  { press = [0, 3] },   # Kc7 again from a third position
+  { release = [0, 3] },
+  { release = [1, 0] },
+  { release = [0, 2] },
+]
+expect = [
+  ["Kc7"],
+  ["Kc7", "Kc1"],
+  ["Kc1"],
+  ["Kc7", "Kc1"],
+  ["Kc7", "Kc1"],
+  ["Kc7"],
+  [],
+]

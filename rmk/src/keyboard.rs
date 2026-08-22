@@ -1486,13 +1486,49 @@ impl<'a> Keyboard<'a> {
             return;
         }
 
+        // Count owners before and after, so what follows depends on what the
+        // registration actually did rather than on what it was expected to do.
+        let owners_before = self.usage_owners(key);
+
         if event.pressed {
             self.register_key(key, event);
         } else {
             self.unregister_key(key, event);
         }
 
+        // A press that gives an already-held usage an additional owner needs a
+        // report without that usage before the ordinary one, or the host never
+        // sees the absent->present transition that produces a character.
+        if event.pressed && owners_before > 0 && self.usage_owners(key) > owners_before {
+            self.send_keyboard_report_suppressing(event.pressed, key).await;
+        }
+
         self.send_keyboard_report_with_resolved_modifiers(event.pressed).await;
+    }
+
+    /// How many report slots are holding `key`.
+    ///
+    /// Two matrix positions can map to the same HID usage - `<` and `>` on a
+    /// board where `>` is the shifted form of `<`, or simply the same keycode
+    /// bound twice. Each gets its own slot, but the report collapses them to
+    /// one usage, so rolling from one to the other would otherwise leave the
+    /// usage continuously down and the second key would produce nothing.
+    ///
+    /// Comparing this count across the registration keys the decision on
+    /// ownership actually changing. Two positions bound to the same plain
+    /// keycode roll into two characters; a real modifier never enters
+    /// `held_keycodes` so it cannot re-strike anything; and a press that finds
+    /// no free slot registers nothing and so synthesises nothing, leaving the
+    /// established rollover behaviour alone.
+    ///
+    /// Counted over `held_keycodes` alone, because that is the array the
+    /// outgoing report is built from: this measures what the host is about to
+    /// see rather than a bookkeeping view of it.
+    fn usage_owners(&self, key: HidKeyCode) -> usize {
+        if key == HidKeyCode::No {
+            return 0;
+        }
+        self.held_keycodes.iter().filter(|&&held| held == key).count()
     }
 
     // Process action special keys
@@ -1876,6 +1912,17 @@ impl<'a> Keyboard<'a> {
     /// that holds them. This keeps the shared usage down until the last holder
     /// releases it.
     pub(crate) fn build_keyboard_report(&mut self, pressed: bool) -> KeyboardReport {
+        // `HidKeyCode::No` is never present in a report, so suppressing it is
+        // exactly the unmodified behaviour every existing caller relies on.
+        self.build_keyboard_report_suppressing(pressed, HidKeyCode::No)
+    }
+
+    /// `build_keyboard_report`, with one usage held out of the keycode array.
+    ///
+    /// Used once per re-strike to give the host the absent->present transition
+    /// a shared usage would otherwise never show. Every other held usage and
+    /// every held modifier stay present: this is not an all-clear report.
+    fn build_keyboard_report_suppressing(&mut self, pressed: bool, suppressed: HidKeyCode) -> KeyboardReport {
         let modifiers = self.resolve_modifiers(pressed);
         info!(
             "Sending keyboard report, modifiers: {:?}, keycodes: {:?}",
@@ -1885,7 +1932,7 @@ impl<'a> Keyboard<'a> {
         let mut n = 0;
         for k in self.held_keycodes {
             let code = k as u8;
-            if code != 0 && !keycodes[..n].contains(&code) {
+            if code != 0 && k != suppressed && !keycodes[..n].contains(&code) {
                 keycodes[n] = code;
                 n += 1;
             }
@@ -1901,6 +1948,15 @@ impl<'a> Keyboard<'a> {
     /// Send the keyboard report with resolved modifiers to the host.
     pub(crate) async fn send_keyboard_report_with_resolved_modifiers(&mut self, pressed: bool) {
         let report = self.build_keyboard_report(pressed);
+        self.send_report(Report::KeyboardReport(report)).await;
+
+        // Yield once after sending the report to channel
+        yield_now().await;
+    }
+
+    /// Send one report with `suppressed` held out, through the ordinary channel.
+    async fn send_keyboard_report_suppressing(&mut self, pressed: bool, suppressed: HidKeyCode) {
+        let report = self.build_keyboard_report_suppressing(pressed, suppressed);
         self.send_report(Report::KeyboardReport(report)).await;
 
         // Yield once after sending the report to channel
