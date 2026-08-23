@@ -759,14 +759,6 @@ pub(crate) async fn set_conn_params<
     stack: &Stack<'_, C, P>,
     conn: &GattConnection<'a, 'b, P>,
 ) {
-    // On the dongle slot the dongle (our own central) owns the link
-    // parameters; the Apple-tuned requests below would push supervision back
-    // to 10 s and slow down reconnect after a dongle power-cycle.
-    #[cfg(feature = "dongle")]
-    if crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE {
-        core::future::pending::<()>().await;
-    }
-
     // Apple rejects 7.5ms outright, so ask for the 15ms its guidelines allow
     // first and only then for 7.5ms: platforms that take it end up at the best
     // interval, and Apple keeps the 15ms it already granted.
