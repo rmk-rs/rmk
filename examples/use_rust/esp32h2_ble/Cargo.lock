@@ -3024,7 +3024,7 @@ dependencies = [
 [[package]]
 name = "trouble-host"
 version = "0.8.0"
-source = "git+https://github.com/embassy-rs/trouble?rev=6969eac961fb90689894db57696141e48167d703#6969eac961fb90689894db57696141e48167d703"
+source = "git+https://github.com/embassy-rs/trouble?rev=dfc4bec8f90fda849f2915a9263a0f131c466b50#dfc4bec8f90fda849f2915a9263a0f131c466b50"
 dependencies = [
  "aes",
  "bt-hci 0.10.1",
@@ -3049,7 +3049,7 @@ dependencies = [
 [[package]]
 name = "trouble-host-macros"
 version = "0.6.0"
-source = "git+https://github.com/embassy-rs/trouble?rev=6969eac961fb90689894db57696141e48167d703#6969eac961fb90689894db57696141e48167d703"
+source = "git+https://github.com/embassy-rs/trouble?rev=dfc4bec8f90fda849f2915a9263a0f131c466b50#dfc4bec8f90fda849f2915a9263a0f131c466b50"
 dependencies = [
  "convert_case 0.8.0",
  "darling 0.20.11",
