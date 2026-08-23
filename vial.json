@@ -1,0 +1,175 @@
+{
+    "name": "Cygnus-M",
+    "vendorId": "0x4C4B",
+    "productId": "0x4643",
+    "lighting": "none",
+    "matrix": {
+        "rows": 4,
+        "cols": 13
+    },
+    "customKeycodes": [
+        {
+            "name": "BT0",
+            "title": "Bluetooth Channel 0",
+            "shortName": "BT0"
+        },
+        {
+            "name": "BT1",
+            "title": "Bluetooth Channel 1",
+            "shortName": "BT1"
+        },
+        {
+            "name": "BT2",
+            "title": "Bluetooth Channel 2",
+            "shortName": "BT2"
+        },
+        {
+            "name": "BT3",
+            "title": "Bluetooth Channel 3",
+            "shortName": "BT3"
+        },
+        {
+            "name": "BT4",
+            "title": "Bluetooth Channel 4",
+            "shortName": "BT4"
+        },
+        {
+            "name": "NEXT_BT",
+            "title": "Switch to the next Bluetooth channel",
+            "shortName": "Next\nBT"
+        },
+        {
+            "name": "PREV_BT",
+            "title": "Switch to the previous Bluetooth channel",
+            "shortName": "Prev\nBT"
+        },
+        {
+            "name": "CLR_BT",
+            "title": "Clear bond info for current channel",
+            "shortName": "Clear\nBT"
+        },
+        {
+            "name": "SWITCH",
+            "title": "Switch default output mode between USB/BLE",
+            "shortName": "Switch\nOutput"
+        },
+        {
+            "name": "CLR_PEER",
+            "title": "Forget the bonded split peer (hold for 5 seconds)",
+            "shortName": "Clear\nPeer"
+        }
+    ],
+    "layouts": {
+        "keymap": [
+            [
+                { "y": 0.37 },
+                "0,6",
+                "0,0",
+                { "y": -0.25 },
+                "0,1",
+                { "y": -0.12 },
+                "0,2",
+                { "y": 0.12 },
+                "0,3",
+                { "y": 0.12 },
+                "0,4",
+                { "x": 4 },
+                "0,7",
+                { "y": -0.12 },
+                "0,8",
+                { "y": -0.12 },
+                "0,9",
+                { "y": 0.12 },
+                "0,10",
+                { "y": 0.25 },
+                "0,11",
+                "0,12"
+            ],
+            [
+                "1,6",
+                "1,0",
+                { "y": -0.25 },
+                "1,1",
+                { "y": -0.12 },
+                "1,2",
+                { "y": 0.12 },
+                "1,3",
+                { "y": 0.12 },
+                "1,4",
+                { "y": 0.13 },
+                "1,5",
+                { "x": 2 },
+                "3,7",
+                { "y": -0.13 },
+                "1,7",
+                { "y": -0.12 },
+                "1,8",
+                { "y": -0.12 },
+                "1,9",
+                { "y": 0.12 },
+                "1,10",
+                { "y": 0.25 },
+                "1,11",
+                "1,12"
+            ],
+            [
+                "2,6",
+                "2,0",
+                { "y": -0.25 },
+                "2,1",
+                { "y": -0.12 },
+                "2,2",
+                { "y": 0.12 },
+                "2,3",
+                { "y": 0.12 },
+                "2,4",
+                { "y": 0.13 },
+                "2,5",
+                { "x": 2 },
+                "3,8",
+                { "y": -0.13 },
+                "2,7",
+                { "y": -0.12 },
+                "2,8",
+                { "y": -0.12 },
+                "2,9",
+                { "y": 0.12 },
+                "2,10",
+                { "y": 0.25 },
+                "2,11",
+                "2,12"
+            ],
+            [
+                "3,6",
+                "3,0",
+                { "y": -0.25 },
+                "3,1",
+                { "y": -0.12 },
+                "3,2",
+                { "x": 0.25, "y": 0.27 },
+                "3,3"
+            ],
+            [
+                { "r": 10, "rx": 4.27, "ry": 3.25, "x": 1 },
+                "3,4"
+            ],
+            [
+                { "r": 20, "rx": 5.40, "ry": 3.42, "x": 1 },
+                "3,5"
+            ],
+            [
+                { "r": -20, "rx": 7.50, "ry": 4.42, "x": 1 },
+                "3,9"
+            ],
+            [
+                { "r": -10, "rx": 8.63, "ry": 3.85, "x": 1 },
+                "3,10"
+            ],
+            [
+                { "r": 0, "rx": 0, "ry": 0, "x": 14, "y": 3.37 },
+                "3,11",
+                "3,12"
+            ]
+        ]
+    }
+}
