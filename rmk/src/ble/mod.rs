@@ -36,8 +36,6 @@ use crate::event::SubscribableEvent;
 use crate::hid::{HidWriterTrait, run_led_reader};
 #[cfg(feature = "split")]
 use crate::split::PeripheralMatrixConfig;
-#[cfg(feature = "subrating")]
-use crate::split::ble::central::subrating;
 #[cfg(feature = "split")]
 use crate::split::ble::central::{run_peripheral_session, scan_and_connect_peripherals};
 use crate::state::set_ble_state;
@@ -59,6 +57,12 @@ pub(crate) mod sleep;
 
 #[cfg(all(feature = "subrating", feature = "_no_subrating"))]
 compile_error!("You may not enable feature `subrating` on unsupported platforms!");
+
+// Maximum connection latency between the host and the central.
+#[cfg(feature = "subrating")]
+const HOST_MAX_LATENCY: u16 = 300; // 2257.5ms @7.5ms, 4515ms @15ms
+#[cfg(not(feature = "subrating"))]
+const HOST_MAX_LATENCY: u16 = 30; // 232.5ms @7.5ms, 465ms @15ms
 
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
 /// own — see [`crate::dongle::Dongle`].
@@ -771,21 +775,13 @@ pub(crate) async fn set_conn_params<
         // Wait 5 seconds before each request to avoid connection drop
         embassy_time::Timer::after_secs(5).await;
 
-        // We need to let the central sleep for long periods of time when the
-        // split connection is subrated to get the power savings.
-        #[cfg(feature = "subrating")]
-        let max_latency = subrating::HOST_MAX_LATENCY;
-
-        #[cfg(not(feature = "subrating"))]
-        let max_latency = 30;
-
         update_conn_params(
             stack,
             conn.raw(),
             &RequestedConnParams {
                 min_connection_interval: interval,
                 max_connection_interval: interval,
-                max_latency,
+                max_latency: HOST_MAX_LATENCY,
                 supervision_timeout: Duration::from_secs(10),
                 ..Default::default()
             },
