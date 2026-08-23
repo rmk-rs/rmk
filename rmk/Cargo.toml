@@ -276,7 +276,7 @@ _usb_high_speed = []
 _no_saadc = []
 
 ## Enable BLE connection subrating for split Connections
-subrating = []
+subrating = ["split"]
 ## Internal feature that indicates that subrating is not supported, this will be auto-activated for some chips
 _no_subrating = []
 

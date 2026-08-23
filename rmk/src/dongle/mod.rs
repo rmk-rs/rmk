@@ -38,7 +38,7 @@ use vial_router as router;
 use crate::ble::adv::Adv;
 use crate::ble::profile::{ProfileInfo, ProfileManager};
 use crate::ble::scan::{DONGLE_SCAN_WINDOW, scan_config, start_scan};
-use crate::ble::{update_ble_phy, update_conn_params, wait_for_stack_started};
+use crate::ble::wait_for_stack_started;
 use crate::channel::send_hid_report;
 use crate::core_traits::Runnable;
 use crate::event::{EventSubscriber, LedIndicatorEvent, SubscribableEvent};
@@ -231,12 +231,12 @@ where
         let mut central = self.stack.central();
 
         let config = ConnectConfig {
-            // Relay interval, but zero latency and a longer supervision timeout
-            // while pairing and discovery run; the relay settings come after.
             connect_params: RequestedConnParams {
+                min_connection_interval: Duration::from_micros(7500),
+                max_connection_interval: Duration::from_micros(7500),
                 max_latency: 0,
                 supervision_timeout: Duration::from_secs(30),
-                ..relay_conn_params()
+                ..Default::default()
             },
             scan_config: ScanConfig {
                 filter_accept_list: &[address],
@@ -312,7 +312,11 @@ where
             select3(
                 client.task(),
                 self.watch_connection(&conn),
-                self.discover_and_relay(&conn, &client),
+                self.discover_and_relay(
+                    #[cfg(not(feature = "vial"))]
+                    &conn,
+                    &client,
+                ),
             )
             .await;
 
@@ -395,13 +399,13 @@ where
         }
     }
 
-    /// Tune the link, discover and subscribe, then relay. `None` means setup
-    /// failed, which ends the connection.
-    async fn discover_and_relay(&self, conn: &Connection<'_, DefaultPacketPool>, client: &Client<'_, C>) -> Option<()> {
-        // Same latency setup as a split link: 2M PHY + 7.5 ms interval.
-        update_ble_phy(self.stack, conn, PhyKind::Le2M).await;
-        update_conn_params(self.stack, conn, &relay_conn_params()).await;
-
+    /// Discover and subscribe, then relay. `None` means setup failed, which
+    /// ends the connection.
+    async fn discover_and_relay(
+        &self,
+        #[cfg(not(feature = "vial"))] conn: &Connection<'_, DefaultPacketPool>,
+        client: &Client<'_, C>,
+    ) -> Option<()> {
         let chars = KeyboardCharacteristics::discover(client).await?;
         chars.subscribe(client).await?;
         // One catch-all listener for every subscription — one queue, routed by handle.
@@ -505,20 +509,6 @@ where
         // Three independent loops, not one combined one: an LED update must not
         // wait behind a config write, or the other way around.
         select3(keyboard_to_host, led_to_keyboard, request_to_keyboard).await;
-    }
-}
-
-/// Link parameters while relaying: 7.5 ms interval, the same latency budget as
-/// a split link. The long supervision timeout favors surviving radio noise over
-/// a fast reconnect after a dongle power-cycle (rare): the keyboard starts its
-/// directed reconnect advertising only after this timeout runs out.
-fn relay_conn_params() -> RequestedConnParams {
-    RequestedConnParams {
-        min_connection_interval: Duration::from_micros(7500),
-        max_connection_interval: Duration::from_micros(7500),
-        max_latency: 30,
-        supervision_timeout: Duration::from_secs(10),
-        ..Default::default()
     }
 }
 

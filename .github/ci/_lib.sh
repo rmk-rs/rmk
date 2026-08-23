@@ -49,6 +49,7 @@ RMK_FEATURESETS=(
     "split,vial,storage,passkey_entry"
     "vial,storage,steno"
     "split,vial,storage,async_matrix,_ble,steno"
+    "split,vial,storage,async_matrix,_ble,subrating"
     "rynk,_ble,split,storage,async_matrix"
     "rynk,storage"
     "rynk"
