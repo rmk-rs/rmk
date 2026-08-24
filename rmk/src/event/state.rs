@@ -1,11 +1,13 @@
 //! Keyboard state events
 
+use postcard::experimental::max_size::MaxSize;
 use rmk_macro::event;
 use rmk_types::led_indicator::LedIndicator;
+use serde::{Deserialize, Serialize};
 
 /// Active layer changed event
 #[event(channel_size = crate::LAYER_CHANGE_EVENT_CHANNEL_SIZE, pubs = crate::LAYER_CHANGE_EVENT_PUB_SIZE, subs = crate::LAYER_CHANGE_EVENT_SUB_SIZE)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct LayerChangeEvent(pub u8);
 
@@ -19,7 +21,7 @@ impl_payload_wrapper!(LayerChangeEvent, u8);
 
 /// WPM updated event
 #[event(channel_size = crate::WPM_UPDATE_EVENT_CHANNEL_SIZE, pubs = crate::WPM_UPDATE_EVENT_PUB_SIZE, subs = crate::WPM_UPDATE_EVENT_SUB_SIZE)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct WpmUpdateEvent(pub u16);
 
@@ -47,7 +49,7 @@ impl_payload_wrapper!(LedIndicatorEvent, LedIndicator);
 
 /// Sleep state changed event
 #[event(channel_size = crate::SLEEP_STATE_EVENT_CHANNEL_SIZE, pubs = crate::SLEEP_STATE_EVENT_PUB_SIZE, subs = crate::SLEEP_STATE_EVENT_SUB_SIZE)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SleepStateEvent(pub bool);
 

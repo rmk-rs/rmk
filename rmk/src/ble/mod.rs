@@ -3,7 +3,7 @@ use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::cmd::le::{LeSetHostFeature, LeSubrateRequest};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
-use embassy_futures::join::join3;
+use embassy_futures::join::{join3, join4};
 use embassy_futures::select::{Either, Either3, select, select3};
 #[cfg(feature = "split")]
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -787,11 +787,6 @@ pub(crate) async fn set_conn_params<
 }
 
 /// Serve one host keyboard connection.
-///
-/// Returns when the GATT events task ends (i.e. the connection drops).
-/// `writer_task`, `led_task`, and `host_task` are all infinite, so the outer
-/// `select(communication_task, inner)` cancels them as a side-effect of
-/// `communication_task` returning. `inner` itself never completes.
 async fn serve_keyboard_connection<
     'a,
     'b,
@@ -881,7 +876,18 @@ async fn serve_keyboard_connection<
     #[cfg(not(feature = "host"))]
     let host_task = core::future::pending::<()>();
 
-    let inner = join3(writer_task, led_task, host_task);
+    // When dongle feature is enabled, send `DongleEvent` to the dongle.
+    #[cfg(all(feature = "dongle", feature = "host"))]
+    let dongle_event_task = async {
+        if !dongle_link {
+            core::future::pending::<()>().await;
+        }
+        crate::dongle::event::run(server, conn).await;
+    };
+    #[cfg(not(all(feature = "dongle", feature = "host")))]
+    let dongle_event_task = core::future::pending::<()>();
+
+    let inner = join4(writer_task, led_task, host_task, dongle_event_task);
     select(communication_task, inner).await;
 }
 
