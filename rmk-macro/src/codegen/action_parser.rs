@@ -375,31 +375,19 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
         return quote! { ::rmk::types::action::Action::TriggerMacro(#index) };
     }
 
-    // Check if it's a keyboard control, light control, or special key action (case-insensitive).
-    // Use strum::VariantNames to automatically get all enum variants.
-    if let Some(action) = rmk_types::action::KeyboardAction::VARIANTS
-        .iter()
-        .find(|&&a| a.to_lowercase() == lower)
-    {
-        let action_ident = format_ident!("{}", action);
+    // Check if it's a keyboard control, light control, or special key action
+    // (case-insensitive), matching against each enum's variant names.
+    if let Some(action_ident) = match_variant(rmk_types::action::KeyboardAction::VARIANTS, &lower) {
         return quote! {
             ::rmk::types::action::Action::KeyboardControl(::rmk::types::action::KeyboardAction::#action_ident)
         };
     }
-    if let Some(action) = rmk_types::action::LightAction::VARIANTS
-        .iter()
-        .find(|&&a| a.to_lowercase() == lower)
-    {
-        let action_ident = format_ident!("{}", action);
+    if let Some(action_ident) = match_variant(rmk_types::action::LightAction::VARIANTS, &lower) {
         return quote! {
             ::rmk::types::action::Action::Light(::rmk::types::action::LightAction::#action_ident)
         };
     }
-    if let Some(special_key) = rmk_types::keycode::SpecialKey::VARIANTS
-        .iter()
-        .find(|&&k| k.to_lowercase() == lower)
-    {
-        let key_ident = format_ident!("{}", special_key);
+    if let Some(key_ident) = match_variant(rmk_types::keycode::SpecialKey::VARIANTS, &lower) {
         return quote! {
             ::rmk::types::action::Action::Special(::rmk::types::keycode::SpecialKey::#key_ident)
         };
@@ -531,8 +519,37 @@ fn parse_layer(key: &str) -> u8 {
     strip_call(key).trim().parse::<u8>().unwrap()
 }
 
+/// Case-insensitively match a token against an enum's variant names,
+/// expanding the match to that variant's identifier.
+fn match_variant(names: &[&str], lower: &str) -> Option<Ident> {
+    names
+        .iter()
+        .find(|&&v| v.to_lowercase() == lower)
+        .map(|v| format_ident!("{v}"))
+}
+
 pub(crate) fn get_key_with_alias(key: String) -> Ident {
-    format_ident!("{}", resolve_alias(&key))
+    match as_hid_keycode(&key) {
+        Some(ident) => ident,
+        None => unknown_key_panic(&key),
+    }
+}
+
+/// Panic for a key token matching no known form, suggesting the nearest valid
+/// name from any vocabulary. Everything reaching this used to emit an
+/// identifier that only failed deep inside the generated code.
+fn unknown_key_panic(key: &str) -> ! {
+    let names = rmk_types::action::KeyboardAction::VARIANTS
+        .iter()
+        .chain(rmk_types::action::LightAction::VARIANTS.iter())
+        .chain(rmk_types::keycode::SpecialKey::VARIANTS.iter())
+        .chain(rmk_types::keycode::HidKeyCode::VARIANTS.iter())
+        .copied();
+    let hint = match closest_name(key, names) {
+        Some(s) => format!(" (did you mean {s}?)"),
+        None => String::new(),
+    };
+    panic!("\n\u{274c} keyboard.toml: unknown key '{key}'{hint}")
 }
 
 /// The `HidKeyCode` variant a key string names, or `None` when it names a richer
@@ -723,6 +740,40 @@ mod tests {
     fn morse_profile_suggests_closest_defined_profile() {
         let profiles = Some(HashMap::from([("home_row".to_string(), profile(None))]));
         let _ = parse_key("TH(Space, Enter, home_roww)".to_string(), &profiles);
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown key 'Spacee' (did you mean Space?)")]
+    fn unknown_keycode_suggests_closest_key() {
+        let _ = expand("Spacee");
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown key 'Bootloade' (did you mean Bootloader?)")]
+    fn unknown_action_suggests_closest_action() {
+        let _ = expand("Bootloade");
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown key 'Spacee'")]
+    fn composite_action_tap_slot_validates_its_key() {
+        let _ = expand("WM(Spacee, RAlt)");
+    }
+
+    #[test]
+    fn far_off_key_gets_no_hint() {
+        let msg = std::panic::catch_unwind(|| expand("ZqZqZq99"))
+            .unwrap_err()
+            .downcast::<String>()
+            .unwrap();
+        assert!(msg.contains("unknown key 'ZqZqZq99'"), "{msg}");
+        // Nothing within the cutoff, so no fabricated suggestion.
+        assert!(!msg.contains("did you mean"), "{msg}");
+    }
+
+    #[test]
+    fn alias_resolution_survives_validated_lookup() {
+        assert!(squash(&expand("lcmd")).contains("HidKeyCode::LGui"));
     }
 
     #[test]
