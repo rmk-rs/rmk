@@ -1,6 +1,6 @@
-use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 #[cfg(feature = "subrating")]
-use bt_hci::cmd::le::{LeSetHostFeature, LeSubrateRequest};
+use bt_hci::cmd::le::LeSubrateRequest;
+use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
 use embassy_futures::join::{join3, join4};
@@ -57,12 +57,6 @@ pub(crate) mod sleep;
 
 #[cfg(all(feature = "subrating", feature = "_no_subrating"))]
 compile_error!("You may not enable feature `subrating` on unsupported platforms!");
-
-// Maximum connection latency between the host and the central.
-#[cfg(feature = "subrating")]
-const HOST_MAX_LATENCY: u16 = 300; // 2257.5ms @7.5ms, 4515ms @15ms
-#[cfg(not(feature = "subrating"))]
-const HOST_MAX_LATENCY: u16 = 30; // 232.5ms @7.5ms, 465ms @15ms
 
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
 /// own — see [`crate::dongle::Dongle`].
@@ -169,7 +163,6 @@ impl<
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>
-        + ControllerCmdSync<LeSetHostFeature>
         + ControllerCmdAsync<LeSubrateRequest>,
 > Runnable for BleTransport<'a, C>
 {
@@ -215,11 +208,7 @@ impl<
 /// serves forever, joined with the stack runner and the sleep manager.
 async fn run_ble_keyboard<
     #[cfg(feature = "host")] 'r,
-    #[cfg(not(feature = "subrating"))] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
-    #[cfg(feature = "subrating")] C: Controller
-        + ControllerCmdAsync<LeSetPhy>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetHostFeature>,
+    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 >(
     stack: &Stack<'_, C, DefaultPacketPool>,
     device_config: &DeviceConfig<'static>,
@@ -283,11 +272,6 @@ async fn run_ble_keyboard<
     let profile_manager = &mut profile_manager;
 
     let connection_loop = async {
-        // Subrating: set host feature flag BEFORE ANY CONNECTIONS
-        // This must run concurrently with the ble_task runner (which processes HCI commands).
-        #[cfg(feature = "subrating")]
-        init_subrating_host_feature(stack).await;
-
         loop {
             // On the dongle slot, advertise directed to the bonded dongle or
             // as a seeking broadcast; on the normal profiles, plain HID.
@@ -405,23 +389,6 @@ async fn run_ble_keyboard<
     )
     .await;
     unreachable!("BleTransport sub-tasks must run forever")
-}
-
-/// Initialize subrating host support.
-///
-/// **Must** be called concurrently with `ble_task()` (the runner processes the
-/// HCI command) and **before** any advertising, scanning or connecting, because
-/// the controller only applies the feature flag to connections established after
-/// it is set.
-#[cfg(feature = "subrating")]
-pub(crate) async fn init_subrating_host_feature<C: Controller + ControllerCmdSync<LeSetHostFeature>>(
-    stack: &Stack<'_, C, impl PacketPool>,
-) {
-    const CONN_SUBRATING_HOST_BIT: u8 = 38;
-    let cmd = LeSetHostFeature::new(CONN_SUBRATING_HOST_BIT, 1);
-    if let Err(e) = stack.command(cmd).await {
-        error!("[Host] error setting subrating host feature flag: {:?}", e);
-    }
 }
 
 /// NoopHandler is used on the device which never scans,
@@ -750,6 +717,7 @@ async fn disconnect(conn: &GattConnection<'_, '_, DefaultPacketPool>) {
     while !matches!(conn.next().await, GattConnectionEvent::Disconnected { .. }) {}
 }
 
+/// Set keyboard <-> host connection parameters
 pub(crate) async fn set_conn_params<
     'a,
     'b,
@@ -759,11 +727,15 @@ pub(crate) async fn set_conn_params<
     stack: &Stack<'_, C, P>,
     conn: &GattConnection<'a, 'b, P>,
 ) {
-    // Apple rejects 7.5ms outright, so ask for the 15ms its guidelines allow
-    // first and only then for 7.5ms: platforms that take it end up at the best
-    // interval, and Apple keeps the 15ms it already granted.
-    // Reference: https://developer.apple.com/accessories/Accessory-Design-Guidelines.pdf
-    for interval in [Duration::from_millis(15), Duration::from_micros(7500)] {
+    let requests = [
+        // The first request is what Apple devices accept:
+        // https://developer.apple.com/accessories/Accessory-Design-Guidelines.pdf
+        (Duration::from_millis(15), 30, Duration::from_secs(6)),
+        // The second request is for best performance
+        (Duration::from_micros(7500), 60, Duration::from_secs(6)),
+    ];
+
+    for (interval, max_latency, supervision_timeout) in requests {
         // Wait 5 seconds before each request to avoid connection drop
         embassy_time::Timer::after_secs(5).await;
 
@@ -773,8 +745,8 @@ pub(crate) async fn set_conn_params<
             &RequestedConnParams {
                 min_connection_interval: interval,
                 max_connection_interval: interval,
-                max_latency: HOST_MAX_LATENCY,
-                supervision_timeout: Duration::from_secs(10),
+                max_latency,
+                supervision_timeout,
                 ..Default::default()
             },
         )

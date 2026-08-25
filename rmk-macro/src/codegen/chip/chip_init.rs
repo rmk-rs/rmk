@@ -94,7 +94,8 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
             const SDC_MEM_SUBRATING_PER_PERIPHERAL: usize = 56;
             const SDC_MEM_SUBRATING_PER_EXTRA_PERIPHERAL: usize = 8;
 
-            let subrating_enabled = is_feature_enabled(&get_rmk_features(), "subrating");
+            let subrating_enabled =
+                peri_num > 0 && is_feature_enabled(&get_rmk_features(), "subrating");
 
             let sdc_mem_size = if peripheral_id.is_none() && peri_num > 0 {
                 // Split central
