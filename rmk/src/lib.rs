@@ -110,6 +110,8 @@ pub mod matrix;
 pub mod processor;
 #[cfg(feature = "split")]
 pub mod split;
+#[cfg(feature = "split")]
+pub mod split_app;
 pub mod state;
 #[cfg(feature = "storage")]
 pub mod storage;

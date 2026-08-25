@@ -102,6 +102,11 @@ pub(crate) enum SplitMessage {
     /// Peripheral → Central: confirm mark_updated succeeded, about to reset.
     #[cfg(feature = "dfu_split")]
     FirmwareUpdateConfirm,
+
+    /// Opaque application payload, either direction (see `crate::split_app`).
+    /// Kept as the last variant so the postcard discriminants of existing
+    /// messages stay stable across halves flashed at different revisions.
+    Application(crate::split_app::SplitAppData),
 }
 
 // -----------------------------------------------------------------------
