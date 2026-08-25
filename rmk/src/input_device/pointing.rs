@@ -125,10 +125,6 @@ impl<S: PointingDriver> PointingDevice<S> {
     }
 
     async fn poll_once(&mut self) {
-        if self.init_state != InitState::Ready && !self.try_init().await {
-            return;
-        }
-
         if !self.sensor.motion_pending() {
             return;
         }
@@ -202,6 +198,12 @@ impl<S: PointingDriver> PointingDevice<S> {
     async fn read_pointing_event(&mut self) -> PointingEvent {
         use embassy_futures::select::{Either, select};
 
+        while self.init_state != InitState::Ready {
+            if !self.try_init().await && self.init_state == InitState::Failed {
+                pending::<()>().await;
+            }
+        }
+
         if self.last_poll == Instant::MIN {
             self.last_poll = Instant::now();
         }
@@ -210,13 +212,6 @@ impl<S: PointingDriver> PointingDevice<S> {
         }
 
         loop {
-            // A sensor that used up its init retries never reports again, and an
-            // unpopulated motion pin can sit low — `wait_for_low` would then return
-            // instantly and spin this loop at full speed, starving the executor.
-            if self.init_state == InitState::Failed {
-                pending::<()>().await;
-            }
-
             let poll_wait = async {
                 if let Some(gpio) = self.sensor.motion_gpio() {
                     let _ = gpio.wait_for_low().await;
