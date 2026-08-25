@@ -139,6 +139,7 @@ impl crate::KeyboardTomlConfig {
                     }
                 }
                 behavior.morse = behavior.morse.or(default.morse);
+                behavior.auto_shift = behavior.auto_shift.or(default.auto_shift);
                 if let Some(morse) = &behavior.morse
                     && let Some(morses) = &morse.morses
                     && morses.len() > self.rmk.morse_max_num

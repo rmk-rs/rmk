@@ -789,6 +789,18 @@ pub(crate) struct BehaviorConfig {
     pub fork: Option<ForksConfig>,
     pub morse: Option<MorsesConfig>,
     pub auto_mouse_layer: Option<Vec<AutoMouseLayerConfig>>,
+    pub auto_shift: Option<AutoShiftConfig>,
+}
+
+/// Auto shift: tapping a listed key sends it, holding it sends it shifted.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AutoShiftConfig {
+    /// Group names `alpha`, `numeric`, `symbols` and/or single key names.
+    /// Omitted = all three groups.
+    pub keys: Option<Vec<String>>,
+    /// Name of a `[behavior.morse.profiles]` entry; omitted = the default profile
+    pub profile: Option<String>,
 }
 
 /// Configurations for auto mouse layer

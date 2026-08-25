@@ -298,6 +298,9 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `ComboOff`       |         | Disable combos                                                        |
 | `ComboToggle`    |         | Toggle combos                                                         |
 | `CapsWordToggle` |         | Toggle [Caps Word](./special_keys#caps-word)                          |
+| `AutoShiftOn`    |         | Enable [Auto Shift](../behavior#auto-shift)                           |
+| `AutoShiftOff`   |         | Disable Auto Shift                                                    |
+| `AutoShiftToggle` |         | Toggle Auto Shift                                                     |
 
 ## User keys
 

@@ -4,7 +4,7 @@ use rmk_types::constants::{COMBO_MAX_LENGTH, COMBO_MAX_NUM, MORSE_MAX_NUM};
 use rmk_types::morse::{DOUBLE_TAP, HOLD, HOLD_AFTER_TAP, Morse, MorseMode, TAP};
 use rmk_types::protocol::vial::{SettingKey, VIAL_EP_SIZE, VIAL_PROTOCOL_VERSION, VialCommand, VialDynamic};
 
-use crate::config::VialConfig;
+use crate::config::{AutoShiftConfig, VialConfig};
 use crate::hid::ViaReport;
 use crate::host::context::KeyboardContext;
 use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
@@ -100,15 +100,16 @@ pub(crate) async fn process_vial<'a>(
             let value = u16::from_le_bytes([report.output_data[2], report.output_data[3]]);
             if value <= 8 {
                 LittleEndian::write_u16(&mut report.input_data[0..2], 0x02);
-                LittleEndian::write_u16(&mut report.input_data[2..4], 0x06);
-                LittleEndian::write_u16(&mut report.input_data[4..6], 0x07);
-                LittleEndian::write_u16(&mut report.input_data[6..8], 0x12);
-                LittleEndian::write_u16(&mut report.input_data[8..10], 0x13);
-                LittleEndian::write_u16(&mut report.input_data[10..12], 0x16);
-                LittleEndian::write_u16(&mut report.input_data[12..14], 0x17);
-                LittleEndian::write_u16(&mut report.input_data[14..16], 0x19);
-                LittleEndian::write_u16(&mut report.input_data[16..18], 0x1A);
-                LittleEndian::write_u16(&mut report.input_data[18..20], 0x1B);
+                LittleEndian::write_u16(&mut report.input_data[2..4], 0x03);
+                LittleEndian::write_u16(&mut report.input_data[4..6], 0x06);
+                LittleEndian::write_u16(&mut report.input_data[6..8], 0x07);
+                LittleEndian::write_u16(&mut report.input_data[8..10], 0x12);
+                LittleEndian::write_u16(&mut report.input_data[10..12], 0x13);
+                LittleEndian::write_u16(&mut report.input_data[12..14], 0x16);
+                LittleEndian::write_u16(&mut report.input_data[14..16], 0x17);
+                LittleEndian::write_u16(&mut report.input_data[16..18], 0x19);
+                LittleEndian::write_u16(&mut report.input_data[18..20], 0x1A);
+                LittleEndian::write_u16(&mut report.input_data[20..22], 0x1B);
             }
         }
         VialCommand::GetBehaviorSetting => {
@@ -120,6 +121,15 @@ pub(crate) async fn process_vial<'a>(
                 SettingKey::ComboTimeout => {
                     let combo_timeout = ctx.combo_timeout().as_millis() as u16;
                     LittleEndian::write_u16(&mut report.input_data[1..3], combo_timeout);
+                }
+                SettingKey::AutoShift => {
+                    // Vial's flags are exclusions; RMK's groups are inclusions.
+                    let cfg = ctx.auto_shift_config();
+                    let excluded = |bit: u8, group: u8| if cfg.groups & group == 0 { 1 << bit } else { 0 };
+                    report.input_data[1] = cfg.enabled as u8
+                        | excluded(2, AutoShiftConfig::SYMBOLS)
+                        | excluded(3, AutoShiftConfig::NUMERIC)
+                        | excluded(4, AutoShiftConfig::ALPHA);
                 }
                 SettingKey::MorseTimeout => {
                     let tapping_term = ctx.morse_default_profile().hold_timeout_ms().unwrap_or(250);
@@ -180,6 +190,17 @@ pub(crate) async fn process_vial<'a>(
                 SettingKey::ComboTimeout => {
                     let combo_timeout = u16::from_le_bytes([report.output_data[4], report.output_data[5]]);
                     ctx.set_combo_timeout(combo_timeout).await;
+                }
+                SettingKey::AutoShift => {
+                    let flags = report.output_data[4];
+                    let included = |bit: u8, group: u8| if flags & (1 << bit) == 0 { group } else { 0 };
+                    ctx.set_auto_shift(
+                        flags & 1 != 0,
+                        included(2, AutoShiftConfig::SYMBOLS)
+                            | included(3, AutoShiftConfig::NUMERIC)
+                            | included(4, AutoShiftConfig::ALPHA),
+                    )
+                    .await;
                 }
                 SettingKey::MorseTimeout => {
                     let timeout_time = u16::from_le_bytes([report.output_data[4], report.output_data[5]]);

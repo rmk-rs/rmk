@@ -1,0 +1,208 @@
+# Auto shift: plain keys in `[behavior.auto_shift]` act as TH(key, SHIFTED(key)).
+# Own keyboard because the shared board has few plain keycodes. The `as` profile
+# is 175 ms Normal mode: a tap resolves on release, so an interrupting non-morse
+# key goes out first (see morse_normal::mt_2).
+
+[layout]
+rows = 4
+cols = 4
+map = """
+(0,0)  (0,1)  (0,2)  (0,3)
+(1,0)  (1,1)  (1,2)  (1,3)
+(2,0)  (2,1)  (2,2)  (2,3)
+(3,0)  (3,1)  (3,2)  (3,3)
+"""
+
+[[keymap.layer]]
+keys = """
+A              S           Kc1              Comma
+Space          LCtrl       AutoShiftToggle  Tab
+MT(F, LShift)  OSM(LCtrl)  MO(1)            Enter
+V              B           No               No
+"""
+
+[[keymap.layer]]
+keys = """
+D   _   _   _
+_   _   _   _
+_   _   _   _
+_   _   _   _
+"""
+
+[behavior.morse.profiles]
+as = { hold_timeout = "175ms" }
+
+[behavior.auto_shift]
+profile = "as"
+
+[behavior.combo]
+timeout = "50ms"
+combos = [{ actions = ["V", "B"], output = "Escape" }]
+
+[[test]]
+name = "tap_sends_the_key"
+steps = [{ tap = { pos = [0, 0], duration = 50 } }]
+expect = [["A"], []]
+
+[[test]]
+name = "hold_sends_shifted_and_keeps_it_down"
+steps = [
+  { press = [0, 0] },
+  { no_report = 150 },
+  { delay = 50 },
+  { release = [0, 0] },
+]
+expect = [["LShift", "A"], []]
+
+[[test]]
+name = "each_group_shifts"
+steps = [
+  { tap = { pos = [0, 1], duration = 200 } },
+  { tap = { pos = [0, 2], duration = 200 } },
+  { tap = { pos = [0, 3], duration = 200 } },
+]
+expect = [["LShift", "S"], [], ["LShift", "Kc1"], [], ["LShift", "Comma"], []]
+
+[[test]]
+name = "keys_outside_the_groups_are_plain"
+steps = [
+  { tap = { pos = [1, 3], duration = 200 } },
+  { tap = { pos = [2, 3], duration = 200 } },
+]
+expect = [["Tab"], [], ["Enter"], []]
+
+[[test]]
+name = "keys_narrows_the_groups_and_adds_names"
+behavior.auto_shift = { keys = ["alpha", "Tab"] }
+steps = [
+  { tap = { pos = [0, 2], duration = 200 } },
+  { tap = { pos = [1, 3], duration = 200 } },
+  { tap = { pos = [0, 0], duration = 200 } },
+]
+expect = [["Kc1"], [], ["LShift", "Tab"], [], ["LShift", "A"], []]
+
+[[test]]
+name = "rolling_two_auto_shift_keys"
+steps = [
+  { press = [0, 0] },
+  { press = [0, 1] },
+  { release = [0, 0] },
+  { release = [0, 1] },
+]
+expect = [["A"], [], ["S"], []]
+
+[[test]]
+name = "rolling_into_a_plain_key"
+steps = [
+  { press = [0, 0] },
+  { press = [1, 0] },
+  { release = [0, 0] },
+  { release = [1, 0] },
+]
+expect = [["Space"], ["Space", "A"], ["Space"], []]
+
+[[test]]
+name = "held_modifier_skips_auto_shift"
+steps = [
+  { press = [1, 1] },
+  { tap = { pos = [0, 0], duration = 300 } },
+  { release = [1, 1] },
+]
+expect = [["LCtrl"], ["LCtrl", "A"], ["LCtrl"], []]
+
+[[test]]
+name = "one_shot_modifier_skips_auto_shift"
+steps = [
+  { tap = { pos = [2, 1], duration = 10 } },
+  { tap = { pos = [0, 0], duration = 300 } },
+]
+expect = [["LCtrl", "A"], []]
+
+[[test]]
+name = "home_row_mod_hold_skips_auto_shift"
+steps = [
+  { press = [2, 0] },
+  { delay = 300 },
+  { tap = { pos = [0, 0], duration = 300 } },
+  { release = [2, 0] },
+]
+expect = [["LShift"], ["LShift", "A"], ["LShift"], []]
+
+[[test]]
+name = "modifier_pressed_after_the_key"
+steps = [
+  { press = [0, 0] },
+  { press = [1, 1] },
+  { release = [0, 0] },
+  { release = [1, 1] },
+]
+expect = [["LCtrl"], ["LCtrl", "A"], ["LCtrl"], []]
+
+[[test]]
+name = "toggle_off_and_on"
+steps = [
+  { tap = { pos = [1, 2], duration = 10 } },
+  { tap = { pos = [0, 0], duration = 300 } },
+  { tap = { pos = [1, 2], duration = 10 } },
+  { tap = { pos = [0, 0], duration = 300 } },
+]
+expect = [["A"], [], ["LShift", "A"], []]
+
+[[test]]
+name = "toggle_while_the_key_is_down"
+steps = [
+  { press = [0, 0] },
+  { tap = { pos = [1, 2], duration = 10 } },
+  { release = [0, 0] },
+  { tap = { pos = [0, 0], duration = 300 } },
+]
+expect = [["A"], [], ["A"], []]
+
+[[test]]
+name = "quick_tap_repeats_the_plain_key"
+behavior.morse.profiles.as = { quick_tap_timeout = "100ms" }
+steps = [
+  { tap = { pos = [0, 0], duration = 50 } },
+  { press = [0, 0] },
+  { delay = 300 },
+  { release = [0, 0] },
+]
+expect = [["A"], [], ["A"], []]
+
+[[test]]
+name = "combo_still_matches_the_plain_keys"
+steps = [
+  { press = [3, 0] },
+  { press = [3, 1] },
+  { delay = 100 },
+  { release = [3, 0] },
+  { release = [3, 1] },
+]
+expect = [["Escape"], []]
+
+[[test]]
+name = "combo_key_tapped_alone_still_auto_shifts"
+steps = [
+  { tap = { pos = [3, 0], duration = 300 } },
+  { tap = { pos = [3, 0], duration = 20 } },
+]
+expect = [["LShift", "V"], [], ["V"], []]
+
+[[test]]
+name = "applies_on_other_layers"
+steps = [
+  { press = [2, 2] },
+  { tap = { pos = [0, 0], duration = 300 } },
+  { release = [2, 2] },
+]
+expect = [["LShift", "D"], []]
+
+[[test]]
+name = "permissive_hold_profile_resolves_on_nested_tap"
+behavior.morse.profiles.as = { permissive_hold = true }
+steps = [
+  { press = [0, 0] },
+  { tap = { pos = [1, 0], duration = 20 } },
+  { release = [0, 0] },
+]
+expect = [["LShift", "A"], ["LShift", "A", "Space"], ["LShift", "A"], []]

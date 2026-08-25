@@ -22,4 +22,7 @@ pub enum KeyboardAction {
     ComboOff,
     ComboToggle,
     CapsWordToggle,
+    AutoShiftOn,
+    AutoShiftOff,
+    AutoShiftToggle,
 }

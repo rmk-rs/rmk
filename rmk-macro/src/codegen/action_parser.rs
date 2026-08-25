@@ -470,7 +470,7 @@ pub(crate) fn sorted_profile_names(
 /// morse profile table index. When omitted, emit `u8::MAX`: an index with no
 /// table entry falls back to the default profile at runtime (the table
 /// capacity is validated to be ≤ 255, so `u8::MAX` is always vacant).
-fn morse_profile(
+pub(crate) fn morse_profile(
     profile_name: Option<&String>,
     profiles: &Option<HashMap<String, MorseProfile>>,
 ) -> TokenStream2 {

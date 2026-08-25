@@ -152,6 +152,11 @@ pub(crate) enum FlashOperationMessage {
     PriorIdleTime(u16),
     // Default morse profile containing all morse/tap-hold settings (mode, timeouts, unilateral_tap)
     MorseDefaultProfile(MorseProfile),
+    // Auto shift switch and key groups
+    AutoShift {
+        auto_shift_enabled: bool,
+        auto_shift_groups: u8,
+    },
     #[cfg(feature = "rynk")]
     // The whole behavior config in one message (Rynk's SetBehaviorConfig carries
     // every field, so one store beats six read-modify-write cycles)
@@ -318,6 +323,8 @@ pub(crate) struct BehaviorConfig {
     // Interval for tapping capslock.
     // macOS has special processing of capslock, when tapping capslock, the tap interval should be another value
     pub(crate) tap_capslock_interval: u16,
+    pub(crate) auto_shift_enabled: bool,
+    pub(crate) auto_shift_groups: u8,
 }
 
 impl From<LocalStorageConfig> for StorageData {
@@ -342,6 +349,8 @@ impl From<&config::BehaviorConfig> for StorageData {
             one_shot_timeout: behavior.one_shot.timeout.as_millis() as u16,
             tap_interval: behavior.tap.tap_interval,
             tap_capslock_interval: behavior.tap.tap_capslock_interval,
+            auto_shift_enabled: behavior.auto_shift.enabled,
+            auto_shift_groups: behavior.auto_shift.groups,
         })
     }
 }
@@ -386,10 +395,10 @@ pub struct Storage<
 /// Read out storage config, update and then save back.
 /// This macro applies to only some of the configs.
 macro_rules! update_storage_field {
-    ($f: expr, $buf: expr, $key:ident, $field:ident) => {{
+    ($f: expr, $buf: expr, $key:ident, $($field:ident),+) => {{
         let key = StorageKey::$key;
         if let Ok(Some(StorageData::$key(mut saved))) = $f.fetch_item($buf, &key).await {
-            saved.$field = $field;
+            $(saved.$field = $field;)+
             $f.store_item($buf, &key, &StorageData::$key(saved)).await
         } else {
             Ok(())
@@ -526,6 +535,8 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
             behavior_config.one_shot.timeout = Duration::from_millis(c.one_shot_timeout as u64);
             behavior_config.tap.tap_interval = c.tap_interval;
             behavior_config.tap.tap_capslock_interval = c.tap_capslock_interval;
+            behavior_config.auto_shift.enabled = c.auto_shift_enabled;
+            behavior_config.auto_shift.groups = c.auto_shift_groups;
         }
 
         Ok(())
@@ -810,6 +821,18 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                 }
                 FlashOperationMessage::MorseDefaultProfile(morse_default_profile) => {
                     update_storage_field!(&mut self.flash, &mut self.buffer, BehaviorConfig, morse_default_profile)
+                }
+                FlashOperationMessage::AutoShift {
+                    auto_shift_enabled,
+                    auto_shift_groups,
+                } => {
+                    update_storage_field!(
+                        &mut self.flash,
+                        &mut self.buffer,
+                        BehaviorConfig,
+                        auto_shift_enabled,
+                        auto_shift_groups
+                    )
                 }
                 #[cfg(feature = "rynk")]
                 FlashOperationMessage::BehaviorConfig(behavior_config) => {
