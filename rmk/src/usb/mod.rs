@@ -3,7 +3,7 @@ use embassy_futures::select::{Either, select};
 use embassy_sync::signal::Signal;
 #[cfg(feature = "usb_log")]
 use embassy_usb::class::cdc_acm::CdcAcmClass;
-use embassy_usb::class::hid::{HidReader, HidWriter, ReportId, RequestHandler};
+use embassy_usb::class::hid::{HidReader, HidReaderWriter, HidWriter, ReportId, RequestHandler};
 use embassy_usb::control::OutResponse;
 use embassy_usb::driver::{Driver, EndpointError};
 use embassy_usb::{Builder, Handler, UsbDevice};
@@ -160,7 +160,29 @@ impl<'d, D: Driver<'d>> HidWriterTrait for UsbKeyboardWriter<'_, 'd, D> {
     }
 }
 
-pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: DeviceConfig<'d>) -> Builder<'d, D> {
+/// Extra interfaces (usb_log, steno, dfu, rynk) overflow the 128-byte buffer.
+const DEFAULT_CONFIG_DESC_SIZE: usize = if cfg!(any(
+    feature = "usb_log",
+    feature = "steno",
+    feature = "dfu",
+    feature = "rynk",
+    all(feature = "dongle", not(feature = "vial"))
+)) {
+    256
+} else {
+    128
+};
+
+fn default_config_descriptor() -> &'static mut [u8] {
+    static CONFIG_DESC: StaticCell<[u8; DEFAULT_CONFIG_DESC_SIZE]> = StaticCell::new();
+    &mut CONFIG_DESC.init([0; DEFAULT_CONFIG_DESC_SIZE])[..]
+}
+
+pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(
+    driver: D,
+    keyboard_config: DeviceConfig<'d>,
+    config_descriptor: &'d mut [u8],
+) -> Builder<'d, D> {
     let mut usb_config = embassy_usb::Config::new(keyboard_config.vid, keyboard_config.pid);
     usb_config.manufacturer = Some(keyboard_config.manufacturer);
     usb_config.product = Some(keyboard_config.product_name);
@@ -187,21 +209,11 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
     usb_config.device_protocol = 0x01;
     usb_config.composite_with_iads = true;
 
-    // Extra interfaces (usb_log, steno, dfu, rynk) overflow the 128-byte config descriptor buffer.
-    const EXTRA_INTERFACES: bool = cfg!(any(
-        feature = "usb_log",
-        feature = "steno",
-        feature = "dfu",
-        feature = "rynk",
-        all(feature = "dongle", not(feature = "vial"))
-    ));
-    const USB_BUF_SIZE: usize = if EXTRA_INTERFACES { 256 } else { 128 };
-
     // Control buffer must be large enough for the largest DFU transfer block.
     #[cfg(feature = "dfu")]
     const CONTROL_BUF_SIZE: usize = crate::dfu::BLOCK_SIZE_DFU;
     #[cfg(not(feature = "dfu"))]
-    const CONTROL_BUF_SIZE: usize = USB_BUF_SIZE;
+    const CONTROL_BUF_SIZE: usize = DEFAULT_CONFIG_DESC_SIZE;
 
     // The rynk MS OS 2.0 descriptor set (WinUSB binding) takes ~178 bytes, and
     // its BOS platform capability another 28 on top of the 5-byte BOS header.
@@ -209,7 +221,6 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
     const BOS_BUF_SIZE: usize = if RYNK_INTERFACE { 64 } else { 16 };
     const MSOS_BUF_SIZE: usize = if RYNK_INTERFACE { 256 } else { 16 };
 
-    static CONFIG_DESC: StaticCell<[u8; USB_BUF_SIZE]> = StaticCell::new();
     static BOS_DESC: StaticCell<[u8; BOS_BUF_SIZE]> = StaticCell::new();
     static MSOS_DESC: StaticCell<[u8; MSOS_BUF_SIZE]> = StaticCell::new();
     static CONTROL_BUF: StaticCell<[u8; CONTROL_BUF_SIZE]> = StaticCell::new();
@@ -217,7 +228,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(driver: D, keyboard_config: Dev
     let mut builder = Builder::new(
         driver,
         usb_config,
-        &mut CONFIG_DESC.init([0; USB_BUF_SIZE])[..],
+        config_descriptor,
         &mut BOS_DESC.init([0; BOS_BUF_SIZE])[..],
         &mut MSOS_DESC.init([0; MSOS_BUF_SIZE])[..],
         &mut CONTROL_BUF.init([0; CONTROL_BUF_SIZE])[..],
@@ -255,6 +266,44 @@ pub struct UsbTransport<'a, D: Driver<'static>, S = ()> {
 
 impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
     pub fn new(driver: D, device_config: DeviceConfig<'static>) -> Self {
+        UsbTransportBuilder::new(driver, device_config, default_config_descriptor()).build()
+    }
+
+    /// Start a USB stack the caller finishes, for binaries serving USB classes of
+    /// their own alongside the keyboard.
+    ///
+    /// ```rust,ignore
+    /// let mut builder = UsbTransport::builder(driver, device_config);
+    /// let mut cdc = CdcAcmClass::new(builder.usb_builder(), CDC_STATE.init(State::new()), 64);
+    /// let mut usb_transport = builder.build().with_host_service(&host_service);
+    /// ```
+    pub fn builder(driver: D, device_config: DeviceConfig<'static>) -> UsbTransportBuilder<D> {
+        // A CDC ACM function costs ~66 descriptor bytes, an extra HID interface ~40.
+        const SIZE: usize = DEFAULT_CONFIG_DESC_SIZE + 256;
+        static CONFIG_DESC: StaticCell<[u8; SIZE]> = StaticCell::new();
+        UsbTransportBuilder::new(driver, device_config, &mut CONFIG_DESC.init([0; SIZE])[..])
+    }
+}
+
+/// A [`UsbTransport`] mid-construction. See [`UsbTransport::builder`].
+pub struct UsbTransportBuilder<D: Driver<'static>> {
+    builder: Builder<'static, D>,
+    keyboard_rw: HidReaderWriter<'static, D, 1, 8>,
+    other_writer: HidWriter<'static, D, 9>,
+    #[cfg(feature = "steno")]
+    steno_writer: HidWriter<'static, D, 9>,
+    #[cfg(feature = "usb_log")]
+    logger: CdcAcmClass<'static, D>,
+    #[cfg(any(feature = "host", feature = "dongle"))]
+    host_reader: host_usb::HostUsbReader<D>,
+    #[cfg(any(feature = "host", feature = "dongle"))]
+    host_writer: host_usb::HostUsbWriter<D>,
+}
+
+impl<D: Driver<'static>> UsbTransportBuilder<D> {
+    // Without `always`, opt-level="z" moves the whole struct between the two: +300 bytes.
+    #[inline(always)]
+    fn new(driver: D, device_config: DeviceConfig<'static>, config_descriptor: &'static mut [u8]) -> Self {
         // nRF chips don't have a stable USB serial number unless one is derived
         // from the FICR. Override here so user code doesn't have to know.
         #[cfg(feature = "_nrf_ble")]
@@ -263,7 +312,7 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
             device_config.serial_number = crate::ble::nrf::get_serial_number();
             device_config
         };
-        let mut builder: Builder<'static, D> = new_usb_builder(driver, device_config);
+        let mut builder: Builder<'static, D> = new_usb_builder(driver, device_config, config_descriptor);
         // Linux's usbhid driver auto-enables power/wakeup when it probes a
         // boot-protocol keyboard, so advertise Boot/Keyboard on the primary
         // HID interface.
@@ -280,7 +329,7 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
         #[cfg(feature = "steno")]
         let steno_writer = add_usb_writer!(&mut builder, StenoReport, 9, 16);
         #[cfg(feature = "usb_log")]
-        let logger = Some(add_usb_logger!(&mut builder));
+        let logger = add_usb_logger!(&mut builder);
 
         #[cfg(any(feature = "dfu_rp", feature = "dfu_nrf"))]
         if let Some(mgr) = crate::dfu::get_manager() {
@@ -296,13 +345,9 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
         #[cfg(any(feature = "host", feature = "dongle"))]
         let (host_reader, host_writer) = host_usb::build_host_usb(&mut builder);
 
-        let (keyboard_reader, keyboard_writer) = keyboard_rw.split();
-        let device = builder.build();
-
         Self {
-            device,
-            keyboard_reader,
-            keyboard_writer,
+            builder,
+            keyboard_rw,
             other_writer,
             #[cfg(feature = "steno")]
             steno_writer,
@@ -312,6 +357,31 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
             host_reader,
             #[cfg(any(feature = "host", feature = "dongle"))]
             host_writer,
+        }
+    }
+
+    /// RMK's interfaces are already registered, so the keyboard keeps interface 0.
+    pub fn usb_builder(&mut self) -> &mut Builder<'static, D> {
+        &mut self.builder
+    }
+
+    #[inline(always)]
+    pub fn build<'a>(self) -> UsbTransport<'a, D> {
+        let (keyboard_reader, keyboard_writer) = self.keyboard_rw.split();
+
+        UsbTransport {
+            device: self.builder.build(),
+            keyboard_reader,
+            keyboard_writer,
+            other_writer: self.other_writer,
+            #[cfg(feature = "steno")]
+            steno_writer: self.steno_writer,
+            #[cfg(feature = "usb_log")]
+            logger: Some(self.logger),
+            #[cfg(any(feature = "host", feature = "dongle"))]
+            host_reader: self.host_reader,
+            #[cfg(any(feature = "host", feature = "dongle"))]
+            host_writer: self.host_writer,
             session: &(),
         }
     }
@@ -435,7 +505,7 @@ async fn run_usb_logger<D: Driver<'static>>(logger_class: CdcAcmClass<'static, D
 
 #[cfg(any(feature = "usb_log", feature = "dfu_nrf", feature = "dfu_rp"))]
 pub async fn run_peripheral_usb<D: Driver<'static>>(driver: D, config: DeviceConfig<'static>) {
-    let mut builder = new_usb_builder(driver, config);
+    let mut builder = new_usb_builder(driver, config, default_config_descriptor());
 
     #[cfg(feature = "usb_log")]
     let logger_fut = run_usb_logger(add_usb_logger!(&mut builder));
