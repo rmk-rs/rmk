@@ -301,7 +301,7 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
         if keys.len() != 2 {
             panic!("\n\u{274c} keyboard.toml: LM(layer, modifier) invalid");
         }
-        let layer = keys[0].parse::<u8>().unwrap();
+        let layer = parse_numeric_arg(&keys[0], "layer");
         let modifiers = parse_modifiers(&keys[1]);
         return quote! { ::rmk::types::action::Action::LayerOnWithModifier(#layer, #modifiers) };
     } else if lower.starts_with("mo(") {
@@ -323,7 +323,7 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
         let layer = parse_layer(key);
         return quote! { ::rmk::types::action::Action::DefaultLayer(#layer) };
     } else if lower.starts_with("macro(") {
-        let index = strip_call(key).trim().parse::<u8>().unwrap();
+        let index = parse_numeric_arg(strip_call(key), "macro");
         return quote! { ::rmk::types::action::Action::TriggerMacro(#index) };
     } else if lower.starts_with("shifted(") {
         let internal = strip_call(key);
@@ -371,7 +371,7 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
             .unwrap_or(false)
     {
         // Support Macro0, Macro1, Macro2, etc.
-        let index = key[5..].parse::<u8>().unwrap();
+        let index = parse_numeric_arg(&key[5..], "macro");
         return quote! { ::rmk::types::action::Action::TriggerMacro(#index) };
     }
 
@@ -444,7 +444,7 @@ pub(crate) fn parse_key(
         if keys.len() < 2 || keys.len() > 3 {
             panic!("\n\u{274c} keyboard.toml: LT(layer, key) invalid");
         }
-        let layer = keys[0].parse::<u8>().unwrap();
+        let layer = parse_numeric_arg(&keys[0], "layer");
         let tap = parse_action(&keys[1]);
         let profile = morse_profile(keys.get(2), profiles);
         quote! {
@@ -454,7 +454,7 @@ pub(crate) fn parse_key(
         let layer = parse_layer(&key);
         quote! { ::rmk::tt!(#layer) }
     } else if lower.starts_with("td(") || lower.starts_with("morse(") {
-        let index = strip_call(&key).trim().parse::<u8>().unwrap();
+        let index = parse_numeric_arg(strip_call(&key), "morse");
         quote! { ::rmk::types::action::KeyAction::Morse(#index) }
     } else {
         let action = parse_action(&key);
@@ -516,7 +516,15 @@ fn panic_unknown_profile<'a>(name: &str, known: impl Iterator<Item = &'a str>) -
 
 /// Parse the single layer-index argument of a call-form layer action, e.g. `MO(1)`.
 fn parse_layer(key: &str) -> u8 {
-    strip_call(key).trim().parse::<u8>().unwrap()
+    parse_numeric_arg(strip_call(key), "layer")
+}
+
+/// Parse a numeric action argument (layer or macro/morse index), rejecting
+/// malformed values with context instead of an opaque ParseIntError.
+fn parse_numeric_arg(raw: &str, kind: &str) -> u8 {
+    raw.trim().parse::<u8>().unwrap_or_else(|_| {
+        panic!("\n\u{274c} keyboard.toml: {kind} index must be a number, got '{raw}'")
+    })
 }
 
 /// Case-insensitively match a token against an enum's variant names,
@@ -774,6 +782,24 @@ mod tests {
     #[test]
     fn alias_resolution_survives_validated_lookup() {
         assert!(squash(&expand("lcmd")).contains("HidKeyCode::LGui"));
+    }
+
+    #[test]
+    #[should_panic(expected = "layer index must be a number, got 'two'")]
+    fn invalid_layer_index_is_reported_in_context() {
+        let _ = expand("MO(two)");
+    }
+
+    #[test]
+    #[should_panic(expected = "morse index must be a number, got 'x'")]
+    fn invalid_morse_index_is_reported_in_context() {
+        let _ = expand("TD(x)");
+    }
+
+    #[test]
+    #[should_panic(expected = "macro index must be a number, got '9x'")]
+    fn invalid_macro_number_form_is_reported_in_context() {
+        let _ = expand("Macro9x");
     }
 
     #[test]
