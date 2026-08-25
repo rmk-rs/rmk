@@ -28,9 +28,6 @@ impl ModifierCombinationMacro {
             ctrl: false,
         }
     }
-    fn is_empty(&self) -> bool {
-        !(self.gui || self.alt || self.shift || self.ctrl)
-    }
 }
 // Allows to use `#modifiers` in the quote
 impl quote::ToTokens for ModifierCombinationMacro {
@@ -75,9 +72,13 @@ fn parse_modifiers(modifiers_str: &str) -> ModifierCombinationMacro {
 
     let mut combination = ModifierCombinationMacro::new();
     let mut unknown_modifiers = Vec::new();
-    let tokens = modifiers_str.split_terminator("|");
-    tokens.for_each(|w| {
+    let mut has_empty_segment = false;
+    modifiers_str.split("|").for_each(|w| {
         let w = w.trim();
+        if w.is_empty() {
+            has_empty_segment = true;
+            return;
+        }
         let key = KEYCODE_ALIAS
             .get(w.to_lowercase().as_str())
             .copied()
@@ -90,7 +91,7 @@ fn parse_modifiers(modifiers_str: &str) -> ModifierCombinationMacro {
 
     if !unknown_modifiers.is_empty() {
         panic!(
-            "\n❌ keyboard.toml: unknown modifier(s) [{}] in modifier combination '{}'. Expected one of: {}.",
+            "\n❌ keyboard.toml: unknown modifier(s) [{}] in modifier combination '{}'. Expected one of: {}",
             unknown_modifiers.join(", "),
             modifiers_str.trim(),
             MODIFIERS
@@ -98,6 +99,13 @@ fn parse_modifiers(modifiers_str: &str) -> ModifierCombinationMacro {
                 .map(|(name, _)| *name)
                 .collect::<Vec<_>>()
                 .join(", ")
+        );
+    }
+
+    if has_empty_segment {
+        panic!(
+            "\n❌ keyboard.toml: modifier combination '{}' contains empty segments between '|' separators",
+            modifiers_str.trim()
         );
     }
 
@@ -239,26 +247,14 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
         return quote! { ::rmk::types::action::Action::No };
     } else if lower.starts_with("mod(") {
         let modifiers = parse_modifiers(strip_call(key));
-        if modifiers.is_empty() {
-            panic!(
-                "\n\u{274c} keyboard.toml: modifier in MOD(modifier) is not valid!"
-            );
-        }
         return quote! { ::rmk::types::action::Action::Modifier(#modifiers) };
     } else if lower.starts_with("wm(") {
         let keys = split_top_level(strip_call(key));
         if keys.len() != 2 {
-            panic!(
-                "\n\u{274c} keyboard.toml: WM(key, modifier) invalid"
-            );
+            panic!("\n\u{274c} keyboard.toml: WM(key, modifier) invalid");
         }
         let ident = get_key_with_alias(keys[0].clone());
         let modifiers = parse_modifiers(&keys[1]);
-        if modifiers.is_empty() {
-            panic!(
-                "\n\u{274c} keyboard.toml: modifier in WM(key, modifier) is not valid!"
-            );
-        }
         return quote! {
             ::rmk::types::action::Action::KeyWithModifier(
                 ::rmk::types::keycode::HidKeyCode::#ident,
@@ -267,26 +263,14 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
         };
     } else if lower.starts_with("osm(") {
         let modifiers = parse_modifiers(strip_call(key));
-        if modifiers.is_empty() {
-            panic!(
-                "\n\u{274c} keyboard.toml: modifier in OSM(modifier) is not valid!"
-            );
-        }
         return quote! { ::rmk::types::action::Action::OneShotModifier(#modifiers) };
     } else if lower.starts_with("lm(") {
         let keys = split_top_level(strip_call(key));
         if keys.len() != 2 {
-            panic!(
-                "\n\u{274c} keyboard.toml: LM(layer, modifier) invalid"
-            );
+            panic!("\n\u{274c} keyboard.toml: LM(layer, modifier) invalid");
         }
         let layer = keys[0].parse::<u8>().unwrap();
         let modifiers = parse_modifiers(&keys[1]);
-        if modifiers.is_empty() {
-            panic!(
-                "\n\u{274c} keyboard.toml: modifier in LM(layer, modifier) is not valid!"
-            );
-        }
         return quote! { ::rmk::types::action::Action::LayerOnWithModifier(#layer, #modifiers) };
     } else if lower.starts_with("mo(") {
         let layer = parse_layer(key);
@@ -312,9 +296,7 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
     } else if lower.starts_with("shifted(") {
         let internal = strip_call(key);
         if internal.is_empty() {
-            panic!(
-                "\n\u{274c} keyboard.toml: SHIFTED(key) invalid"
-            );
+            panic!("\n\u{274c} keyboard.toml: SHIFTED(key) invalid");
         }
         let ident = get_key_with_alias(internal.to_string());
         return quote! {
@@ -420,17 +402,10 @@ pub(crate) fn parse_key(
     if lower.starts_with("mt(") {
         let keys = split_top_level(strip_call(&key));
         if keys.len() < 2 || keys.len() > 3 {
-            panic!(
-                "\n\u{274c} keyboard.toml: MT(key, modifier) invalid"
-            );
+            panic!("\n\u{274c} keyboard.toml: MT(key, modifier) invalid");
         }
         let tap = parse_action(&keys[0]);
         let modifiers = parse_modifiers(&keys[1]);
-        if modifiers.is_empty() {
-            panic!(
-                "\n\u{274c} keyboard.toml: modifier in MT(key, modifier) is not valid!"
-            );
-        }
         let profile = morse_profile(keys.get(2), profiles);
         quote! {
             ::rmk::types::action::KeyAction::TapHold(#tap, ::rmk::types::action::Action::Modifier(#modifiers), #profile)
@@ -438,9 +413,7 @@ pub(crate) fn parse_key(
     } else if lower.starts_with("th(") {
         let keys = split_top_level(strip_call(&key));
         if keys.len() < 2 || keys.len() > 3 {
-            panic!(
-                "\n\u{274c} keyboard.toml: TH(key_tap, key_hold) invalid"
-            );
+            panic!("\n\u{274c} keyboard.toml: TH(key_tap, key_hold) invalid");
         }
         let tap = parse_action(&keys[0]);
         let hold = parse_action(&keys[1]);
@@ -449,9 +422,7 @@ pub(crate) fn parse_key(
     } else if lower.starts_with("lt(") {
         let keys = split_top_level(strip_call(&key));
         if keys.len() < 2 || keys.len() > 3 {
-            panic!(
-                "\n\u{274c} keyboard.toml: LT(layer, key) invalid"
-            );
+            panic!("\n\u{274c} keyboard.toml: LT(layer, key) invalid");
         }
         let layer = keys[0].parse::<u8>().unwrap();
         let tap = parse_action(&keys[1]);
@@ -704,5 +675,17 @@ mod tests {
     #[should_panic(expected = "unknown modifier(s) [LCtrol]")]
     fn parse_modifiers_rejects_unknown_name_in_list() {
         let _ = parse_modifiers("LShift | LCtrol");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty segment")]
+    fn parse_modifiers_rejects_trailing_separator() {
+        let _ = parse_modifiers("LShift |");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty segment")]
+    fn parse_modifiers_rejects_doubled_separator() {
+        let _ = parse_modifiers("LShift || LCtrl");
     }
 }

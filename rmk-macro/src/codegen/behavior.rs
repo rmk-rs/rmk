@@ -489,9 +489,13 @@ fn parse_state_combination(states_str: &str) -> StateBitsMacro {
 
     let mut combination = StateBitsMacro::default();
     let mut unknown_states = Vec::new();
-    let tokens = states_str.split_terminator("|");
-    tokens.for_each(|w| {
+    let mut has_empty_segment = false;
+    states_str.split("|").for_each(|w| {
         let w = w.trim();
+        if w.is_empty() {
+            has_empty_segment = true;
+            return;
+        }
         match STATES.iter().find(|(name, _)| *name == w) {
             Some((_, set)) => set(&mut combination),
             None => unknown_states.push(w.to_string()),
@@ -500,7 +504,7 @@ fn parse_state_combination(states_str: &str) -> StateBitsMacro {
 
     if !unknown_states.is_empty() {
         panic!(
-            "\n❌ keyboard.toml: unknown state(s) [{}] in fork state '{}'. Expected one of: {}.",
+            "\n❌ keyboard.toml: unknown state(s) [{}] in fork state '{}'. Expected one of: {}",
             unknown_states.join(", "),
             states_str.trim(),
             STATES
@@ -508,6 +512,13 @@ fn parse_state_combination(states_str: &str) -> StateBitsMacro {
                 .map(|(name, _)| *name)
                 .collect::<Vec<_>>()
                 .join(", ")
+        );
+    }
+
+    if has_empty_segment {
+        panic!(
+            "\n❌ keyboard.toml: fork state '{}' contains empty segments between '|' separators.",
+            states_str.trim()
         );
     }
 
@@ -640,5 +651,17 @@ mod tests {
     #[should_panic(expected = "unknown state(s) [NumLok]")]
     fn parse_state_combination_rejects_unknown_state() {
         let _ = parse_state_combination("NumLok | LShift");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty segment")]
+    fn parse_state_combination_rejects_trailing_separator() {
+        let _ = parse_state_combination("LShift|");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty segment")]
+    fn parse_state_combination_rejects_doubled_separator() {
+        let _ = parse_state_combination("CapsLock || MouseBtn1");
     }
 }
