@@ -81,7 +81,7 @@ pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + ControllerC
             let targets: heapless::Vec<Address, { crate::SPLIT_PERIPHERALS_NUM }> =
                 pending.iter().map(|(_, addr)| Address::random(*addr)).collect();
             let config = ConnectConfig {
-                connect_params: default_central_conn_param(),
+                connect_params: default_split_conn_params(),
                 scan_config: ScanConfig {
                     filter_accept_list: &targets,
                     ..scan_config(SPLIT_CENTRAL_SCAN_WINDOW)
@@ -233,37 +233,33 @@ pub(crate) async fn run_peripheral_session<
     }
 }
 
-fn default_central_conn_param() -> RequestedConnParams {
+/// Default connection parameters for the central <-> peripheral connection.
+fn default_split_conn_params() -> RequestedConnParams {
     RequestedConnParams {
         min_connection_interval: Duration::from_micros(7500),
         max_connection_interval: Duration::from_micros(7500),
-        max_latency: 300, // 2250ms
-        supervision_timeout: Duration::from_secs(5),
+        max_latency: 30, // 232.5ms, same as the awake subrate params
+        supervision_timeout: Duration::from_secs(6),
         ..Default::default()
     }
 }
 
-/// Parameters for the central -> peripheral link while the central sleeps.
-///
-/// With a host connected, the central's radio is busy serving the host link
-/// anyway, so keep a short interval — the first key after wake-up arrives
-/// quickly, and the peripheral still saves power through its latency. With no
-/// host, a long interval also cuts the central-side radio wakeups.
-fn sleep_central_conn_param() -> RequestedConnParams {
+/// Connection parameters for the central <-> peripheral connection while the central sleeps.
+fn sleep_split_conn_params() -> RequestedConnParams {
     if crate::state::active_transport().is_some() {
         RequestedConnParams {
             min_connection_interval: Duration::from_millis(20),
             max_connection_interval: Duration::from_millis(20),
             max_latency: 200, // 4s
-            supervision_timeout: Duration::from_secs(9),
+            supervision_timeout: Duration::from_secs(15),
             ..Default::default()
         }
     } else {
         RequestedConnParams {
             min_connection_interval: Duration::from_millis(200),
             max_connection_interval: Duration::from_millis(200),
-            max_latency: 25, // 5s
-            supervision_timeout: Duration::from_secs(11),
+            max_latency: 20, // ~4s
+            supervision_timeout: Duration::from_secs(15),
             ..Default::default()
         }
     }
@@ -272,6 +268,7 @@ fn sleep_central_conn_param() -> RequestedConnParams {
 #[cfg(feature = "subrating")]
 pub(crate) mod subrating {
     // Measurements on nrf52840 for subrate request parameters:
+    //    |-------+------+-----+------+---------+------------|---------|
     //    |   HCL | [ms] |  SF | [ms] | IC [µA] |  KPL [ms]  | IP [µA] |
     //    |-------+------+-----+------+---------+------------|---------|
     //    |    60 |  450 |  10 |   75 |      80 |  41 /   82 |      21 |
@@ -280,40 +277,30 @@ pub(crate) mod subrating {
     //    |   180 | 1350 |  30 |  225 |      48 | 116 /  232 |      21 |
     //    |   300 | 2250 |  30 |  225 |      48 | 116 /  232 |      21 |
     //    |    30 |  225 |  60 |  450 |      63 | 228 /  457 |      21 |
-    //    |    60 |  450 |  60 |  450 |      48 | 228 /  457 |      21 |
+    // ==>|    60 |  450 |  60 |  450 |      48 | 228 /  457 |      21 |<== Connected Sleep
     //    |   180 | 1350 |  60 |  450 |      39 | 228 /  457 |      21 |
-    // ==>|   300 | 2250 |  60 |  450 |      34 | 228 /  457 |      21 |<== Connected Sleep
+    //    |   300 | 2250 |  60 |  450 |      34 | 228 /  457 |      21 |
     //    |   300 | 2250 | 120 |  900 |      32 | 453 /  907 |      21 |
     //    | no HC |      | 100 |  750 |      24 | 378 /  757 |      21 |
     // ==>| no HC |      | 125 |  937 |      22 | 472 /  945 |      21 |<== Disconnected Sleep
     //    | no HC |      | 250 | 1875 |      21 | 941 / 1882 |      24 |
     //    |-------+------+-----+------+---------+------------|---------|
-    //    HCL .. Host Connection max latency (`HOST_MAX_LATENCY` in `ble/mod.rs`; [ms] assumes a 7.5ms host interval)
+    //    HCL .. Host Connection max latency (host <-> central, assumes 7.5ms interval)
     //    SF ... Subrate Factor split connection
     //    IC ... Central average current
     //    KPL .. Key Press latency (mean/worst)
     //    IP ... Peripheral average current
     //
-    // In active mode without pressing any key, the average current is: ~600µA
     //
-    // The current draw on the peripheral with subrating during connected sleep
-    // with a subrate factor < 250 and a max sleep time of 3.75s is 21µA.
-    //
-    // During disconnected sleep with the subrate factor set to 250, the average
-    // peripheral current draw increases to 24µA, when the internal low-frequency
-    // clock is in use. Due to the long intervals, the peripheral needs
-    // to increase the listening window during connection events to compensate
-    // for clock drift. Therefore, 125 is selected as the better trade-off.
-    //
-    // In active mode without pressing any key, the average current depends on the max
+    // In active mode without pressing any key, the peripheral current depends on the max
     // latency of the split connection:
-    //    | max_latency |  [ms] | min_timeout [ms] | avg. [µA] |
-    //    |-------------+-------+------------------+-----------|
-    //    |          10 |   75. |             165. |        72 |
-    //    |          30 |  225. |             465. |        38 |
-    //    |          60 |  450. |             915. |        30 |
-    // ==>|         300 | 2250. |            4515. |        21 |<== Default Params
-    //    |-------------+-------+------------------+-----------|
+    //    | max_latency |  [ms] | min_timeout [ms] | IP [µA] |
+    //    |-------------+-------+------------------+---------|
+    //    |          10 |    75 |              165 |      72 |
+    // ==>|          30 |   225 |              465 |      38 |<== Default Params
+    //    |          60 |   450 |              915 |      30 |
+    //    |         300 |  2250 |             4515 |      21 |
+    //    |-------------+-------+------------------+---------|
 
     use bt_hci::cmd::le::{LeSubrateRequest, LeSubrateRequestParams};
     use bt_hci::controller::ControllerCmdAsync;
@@ -322,7 +309,6 @@ pub(crate) mod subrating {
 
     const SLEEP_HOST_CONN_SUBRATE: u16 = 60;
     const SLEEP_NO_HOST_SUBRATE: u16 = 125;
-    const DEFAULT_MAX_LATENCY: u16 = 300;
 
     // In some cases, the subrate request procedure does not complete with only one continuation.
     const SLEEP_CONTINUATION_NUMBER: u16 = 2;
@@ -332,19 +318,19 @@ pub(crate) mod subrating {
         (500 / subrate_max) - 1
     }
 
-    /// Awake, the `Default Params` row above.
-    pub(super) fn default_central_subrate_params(handle: ConnHandle) -> LeSubrateRequestParams {
+    /// Default subrating params when the central is awake.
+    pub(super) fn default_split_subrating_params(handle: ConnHandle) -> LeSubrateRequestParams {
         LeSubrateRequestParams {
             handle,
             subrate_min: 1,
             subrate_max: 1,
-            max_latency: DEFAULT_MAX_LATENCY, // answers every 2250ms
+            max_latency: 30,
             continuation_number: 0,
-            supervision_timeout: Duration::from_millis(9_000),
+            supervision_timeout: Duration::from_secs(6),
         }
     }
 
-    pub(super) fn sleep_central_subrate_params(handle: ConnHandle) -> LeSubrateRequestParams {
+    pub(super) fn sleep_split_subrating_params(handle: ConnHandle) -> LeSubrateRequestParams {
         let subrate = if crate::state::active_transport().is_some() {
             SLEEP_HOST_CONN_SUBRATE
         } else {
@@ -417,7 +403,7 @@ async fn run_central_manager_task<
     update_ble_phy(stack, conn, PhyKind::Le2M).await;
 
     info!("Updating connection parameters for peripheral");
-    update_conn_params(stack, conn, &default_central_conn_param()).await;
+    update_conn_params(stack, conn, &default_split_conn_params()).await;
 
     let (Either3::First(e) | Either3::Second(e) | Either3::Third(e)) = select3(
         ble_central_task(&client, conn),
@@ -558,9 +544,9 @@ async fn update_conn_params_on_sleep_change<
             #[cfg(not(feature = "subrating"))]
             let sent = {
                 let params = if sleeping {
-                    sleep_central_conn_param()
+                    sleep_split_conn_params()
                 } else {
-                    default_central_conn_param()
+                    default_split_conn_params()
                 };
                 update_conn_params(stack, conn, &params).await
             };
@@ -568,9 +554,9 @@ async fn update_conn_params_on_sleep_change<
             #[cfg(feature = "subrating")]
             let sent = {
                 let params = if sleeping {
-                    subrating::sleep_central_subrate_params(conn.handle())
+                    subrating::sleep_split_subrating_params(conn.handle())
                 } else {
-                    subrating::default_central_subrate_params(conn.handle())
+                    subrating::default_split_subrating_params(conn.handle())
                 };
                 subrating::update_subrate_factor(stack, params).await
             };
