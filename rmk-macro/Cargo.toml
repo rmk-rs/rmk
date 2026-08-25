@@ -18,6 +18,7 @@ proc-macro2 = "1.0"
 darling = "0.23"
 cargo_toml = "1"
 strum = { version = "0.28", default-features = false, features = ["derive"] }
+strsim = "0.11"
 # Simulator scenario parsing only (`_simulator`). Rynk payloads are handed to
 # the test as JSON, so the request type is named once, in the test crate.
 toml = { version = "1", optional = true }

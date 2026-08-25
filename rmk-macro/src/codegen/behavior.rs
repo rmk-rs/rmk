@@ -10,8 +10,8 @@ use rmk_config::resolved::behavior::{
 };
 
 use super::action_parser::{
-    as_hid_keycode, expand_profile, expand_profile_name, get_key_with_alias, parse_action,
-    parse_key, sorted_profile_names,
+    as_hid_keycode, closest_name, expand_profile, expand_profile_name, get_key_with_alias,
+    parse_action, parse_key, sorted_profile_names,
 };
 use super::feature::{get_rmk_features, is_feature_enabled};
 
@@ -503,15 +503,20 @@ fn parse_state_combination(states_str: &str) -> StateBitsMacro {
     });
 
     if !unknown_states.is_empty() {
+        let unknown = unknown_states
+            .iter()
+            .map(
+                |u| match closest_name(u, STATES.iter().map(|(name, _)| *name)) {
+                    Some(s) => format!("{u} (did you mean {s}?)"),
+                    None => u.clone(),
+                },
+            )
+            .collect::<Vec<_>>()
+            .join(", ");
         panic!(
-            "\n❌ keyboard.toml: unknown state(s) [{}] in fork state '{}'. Expected one of: {}",
-            unknown_states.join(", "),
-            states_str.trim(),
-            STATES
-                .iter()
-                .map(|(name, _)| *name)
-                .collect::<Vec<_>>()
-                .join(", ")
+            "\n❌ keyboard.toml: unknown state(s) [{}] in fork state '{}'",
+            unknown,
+            states_str.trim()
         );
     }
 
@@ -648,9 +653,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "unknown state(s) [NumLok]")]
+    #[should_panic(expected = "unknown state(s) [NumLok (did you mean NumLock?)]")]
     fn parse_state_combination_rejects_unknown_state() {
         let _ = parse_state_combination("NumLok | LShift");
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown state(s) [capslock (did you mean CapsLock?)]")]
+    fn parse_state_combination_suggests_canonical_casing() {
+        let _ = parse_state_combination("capslock | LShift");
     }
 
     #[test]

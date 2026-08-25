@@ -1776,6 +1776,7 @@ dependencies = [
  "quote",
  "rmk-config",
  "rmk-types",
+ "strsim",
  "strum",
  "syn 2.0.118",
 ]

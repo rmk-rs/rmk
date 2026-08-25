@@ -1354,6 +1354,7 @@ dependencies = [
  "quote",
  "rmk-config",
  "rmk-types",
+ "strsim",
  "strum",
  "syn",
 ]

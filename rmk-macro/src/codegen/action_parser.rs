@@ -90,15 +90,20 @@ fn parse_modifiers(modifiers_str: &str) -> ModifierCombinationMacro {
     });
 
     if !unknown_modifiers.is_empty() {
+        let unknown = unknown_modifiers
+            .iter()
+            .map(
+                |u| match closest_name(u, MODIFIERS.iter().map(|(name, _)| *name)) {
+                    Some(s) => format!("{u} (did you mean {s}?)"),
+                    None => u.clone(),
+                },
+            )
+            .collect::<Vec<_>>()
+            .join(", ");
         panic!(
-            "\n❌ keyboard.toml: unknown modifier(s) [{}] in modifier combination '{}'. Expected one of: {}",
-            unknown_modifiers.join(", "),
-            modifiers_str.trim(),
-            MODIFIERS
-                .iter()
-                .map(|(name, _)| *name)
-                .collect::<Vec<_>>()
-                .join(", ")
+            "\n❌ keyboard.toml: unknown modifier(s) [{}] in modifier combination '{}'",
+            unknown,
+            modifiers_str.trim()
         );
     }
 
@@ -110,6 +115,20 @@ fn parse_modifiers(modifiers_str: &str) -> ModifierCombinationMacro {
     }
 
     combination
+}
+
+/// Suggest the most similar valid name for an unrecognized token, or `None`
+/// when nothing is close enough to be a plausible typo of it.
+pub(crate) fn closest_name<'a>(
+    input: &str,
+    names: impl Iterator<Item = &'a str>,
+) -> Option<&'a str> {
+    let lowercased = input.to_lowercase();
+    let (distance, name) = names
+        .map(|name| (strsim::levenshtein(&lowercased, &name.to_lowercase()), name))
+        .min_by_key(|&(distance, _)| distance)?;
+    // rustc-style cutoff: allow roughly one edit per three characters
+    (distance <= 1 + input.len() / 3).then_some(name)
 }
 
 pub(crate) fn expand_profile(profile: &MorseProfile) -> proc_macro2::TokenStream {
@@ -181,10 +200,7 @@ pub(crate) fn expand_profile_name(
             let morse_profile = expand_profile(profile);
             quote! { #morse_profile }
         } else {
-            panic!(
-                "\n\u{274c} `{:?}` profile name is not found in behavior.morse.profiles",
-                profile_name
-            );
+            panic_unknown_profile(profile_name, profiles.keys().map(String::as_str));
         }
     } else {
         panic!(
@@ -473,12 +489,25 @@ fn morse_profile(
         .position(|n| n == name)
     {
         Some(pos) => pos as u8,
-        None => panic!(
-            "\n\u{274c} `{:?}` profile name is not found in behavior.morse.profiles",
-            name
+        None => panic_unknown_profile(
+            name,
+            sorted_profile_names(profiles).iter().map(String::as_str),
         ),
     };
     quote! { #idx }
+}
+
+/// Panic for a failed morse-profile lookup, suggesting the nearest defined
+/// name when one plausibly matches.
+fn panic_unknown_profile<'a>(name: &str, known: impl Iterator<Item = &'a str>) -> ! {
+    let hint = match closest_name(name, known) {
+        Some(s) => format!(" (did you mean {s}?)"),
+        None => String::new(),
+    };
+    panic!(
+        "\n\u{274c} keyboard.toml: `{:?}` profile name is not found in behavior.morse.profiles{hint}",
+        name
+    )
 }
 
 /// Parse the single layer-index argument of a call-form layer action, e.g. `MO(1)`.
@@ -672,7 +701,16 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "unknown modifier(s) [LCtrol]")]
+    #[should_panic(
+        expected = "`\"home_roww\"` profile name is not found in behavior.morse.profiles (did you mean home_row?)"
+    )]
+    fn morse_profile_suggests_closest_defined_profile() {
+        let profiles = Some(HashMap::from([("home_row".to_string(), profile(None))]));
+        let _ = parse_key("TH(Space, Enter, home_roww)".to_string(), &profiles);
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown modifier(s) [LCtrol (did you mean LCtrl?)]")]
     fn parse_modifiers_rejects_unknown_name_in_list() {
         let _ = parse_modifiers("LShift | LCtrol");
     }
