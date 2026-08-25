@@ -11,23 +11,13 @@ use rmk_config::resolved::KEYCODE_ALIAS;
 use rmk_config::resolved::behavior::MorseProfile;
 use strum::VariantNames;
 
+#[derive(Default)]
 struct ModifierCombinationMacro {
     right: bool,
     gui: bool,
     alt: bool,
     shift: bool,
     ctrl: bool,
-}
-impl ModifierCombinationMacro {
-    fn new() -> Self {
-        Self {
-            right: false,
-            gui: false,
-            alt: false,
-            shift: false,
-            ctrl: false,
-        }
-    }
 }
 // Allows to use `#modifiers` in the quote
 impl quote::ToTokens for ModifierCombinationMacro {
@@ -46,8 +36,7 @@ impl quote::ToTokens for ModifierCombinationMacro {
 
 /// Get modifier combination, in types of mod1 | mod2 | ...
 fn parse_modifiers(modifiers_str: &str) -> ModifierCombinationMacro {
-    type ModifierSetter = fn(&mut ModifierCombinationMacro);
-    const MODIFIERS: &[(&str, ModifierSetter)] = &[
+    const MODIFIERS: &SetterTable<ModifierCombinationMacro> = &[
         ("LShift", |c| c.shift = true),
         ("LCtrl", |c| c.ctrl = true),
         ("LAlt", |c| c.alt = true),
@@ -70,30 +59,57 @@ fn parse_modifiers(modifiers_str: &str) -> ModifierCombinationMacro {
         }),
     ];
 
-    let mut combination = ModifierCombinationMacro::new();
-    let mut unknown_modifiers = Vec::new();
+    parse_name_list(
+        modifiers_str,
+        "modifier",
+        "modifier combination",
+        MODIFIERS,
+        |w| {
+            KEYCODE_ALIAS
+                .get(w.to_lowercase().as_str())
+                .copied()
+                .unwrap_or(w)
+        },
+    )
+}
+
+/// A name -> setter lookup table for [`parse_name_list`]: each entry maps a
+/// `|`-separated token to a setter applied to the accumulated value.
+pub(crate) type SetterTable<T> = [(&'static str, fn(&mut T))];
+
+/// Resolve each `|`-separated token of `input` against a name->setter table,
+/// applying every match to the returned value. Panics on unknown tokens
+/// (with closest-name hints) and on empty segments between separators.
+pub(crate) fn parse_name_list<T>(
+    input: &str,
+    item: &str,
+    kind: &str,
+    table: &SetterTable<T>,
+    resolve_alias: impl Fn(&str) -> &str,
+) -> T
+where
+    T: Default,
+{
+    let mut value = T::default();
+    let mut unknown_tokens = Vec::new();
     let mut has_empty_segment = false;
-    modifiers_str.split("|").for_each(|w| {
+    input.split("|").for_each(|w| {
         let w = w.trim();
         if w.is_empty() {
             has_empty_segment = true;
             return;
         }
-        let key = KEYCODE_ALIAS
-            .get(w.to_lowercase().as_str())
-            .copied()
-            .unwrap_or(w);
-        match MODIFIERS.iter().find(|(name, _)| *name == key) {
-            Some((_, set)) => set(&mut combination),
-            None => unknown_modifiers.push(w.to_string()),
+        match table.iter().find(|(name, _)| *name == resolve_alias(w)) {
+            Some((_, set)) => set(&mut value),
+            None => unknown_tokens.push(w.to_string()),
         }
     });
 
-    if !unknown_modifiers.is_empty() {
-        let unknown = unknown_modifiers
+    if !unknown_tokens.is_empty() {
+        let unknown = unknown_tokens
             .iter()
             .map(
-                |u| match closest_name(u, MODIFIERS.iter().map(|(name, _)| *name)) {
+                |u| match closest_name(u, table.iter().map(|(name, _)| *name)) {
                     Some(s) => format!("{u} (did you mean {s}?)"),
                     None => u.clone(),
                 },
@@ -101,20 +117,20 @@ fn parse_modifiers(modifiers_str: &str) -> ModifierCombinationMacro {
             .collect::<Vec<_>>()
             .join(", ");
         panic!(
-            "\n❌ keyboard.toml: unknown modifier(s) [{}] in modifier combination '{}'",
+            "\n❌ keyboard.toml: unknown {item}(s) [{}] in {kind} '{}'",
             unknown,
-            modifiers_str.trim()
+            input.trim()
         );
     }
 
     if has_empty_segment {
         panic!(
-            "\n❌ keyboard.toml: modifier combination '{}' contains empty segments between '|' separators",
-            modifiers_str.trim()
+            "\n❌ keyboard.toml: {kind} '{}' contains empty segments between '|' separators",
+            input.trim()
         );
     }
 
-    combination
+    value
 }
 
 /// Suggest the most similar valid name for an unrecognized token, or `None`

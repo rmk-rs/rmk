@@ -10,8 +10,8 @@ use rmk_config::resolved::behavior::{
 };
 
 use super::action_parser::{
-    as_hid_keycode, closest_name, expand_profile, expand_profile_name, get_key_with_alias,
-    parse_action, parse_key, sorted_profile_names,
+    SetterTable, as_hid_keycode, expand_profile, expand_profile_name, get_key_with_alias,
+    parse_action, parse_key, parse_name_list, sorted_profile_names,
 };
 use super::feature::{get_rmk_features, is_feature_enabled};
 
@@ -462,8 +462,7 @@ impl quote::ToTokens for StateBitsMacro {
 
 /// Get modifier combination, in types of mod1 | mod2 | ...
 fn parse_state_combination(states_str: &str) -> StateBitsMacro {
-    type StateBitsSetter = fn(&mut StateBitsMacro);
-    const STATES: &[(&str, StateBitsSetter)] = &[
+    const STATES: &SetterTable<StateBitsMacro> = &[
         ("LCtrl", |c| c.modifiers_left_ctrl = true),
         ("LShift", |c| c.modifiers_left_shift = true),
         ("LAlt", |c| c.modifiers_left_alt = true),
@@ -487,47 +486,7 @@ fn parse_state_combination(states_str: &str) -> StateBitsMacro {
         ("MouseBtn8", |c| c.mouse_button8 = true),
     ];
 
-    let mut combination = StateBitsMacro::default();
-    let mut unknown_states = Vec::new();
-    let mut has_empty_segment = false;
-    states_str.split("|").for_each(|w| {
-        let w = w.trim();
-        if w.is_empty() {
-            has_empty_segment = true;
-            return;
-        }
-        match STATES.iter().find(|(name, _)| *name == w) {
-            Some((_, set)) => set(&mut combination),
-            None => unknown_states.push(w.to_string()),
-        }
-    });
-
-    if !unknown_states.is_empty() {
-        let unknown = unknown_states
-            .iter()
-            .map(
-                |u| match closest_name(u, STATES.iter().map(|(name, _)| *name)) {
-                    Some(s) => format!("{u} (did you mean {s}?)"),
-                    None => u.clone(),
-                },
-            )
-            .collect::<Vec<_>>()
-            .join(", ");
-        panic!(
-            "\n❌ keyboard.toml: unknown state(s) [{}] in fork state '{}'",
-            unknown,
-            states_str.trim()
-        );
-    }
-
-    if has_empty_segment {
-        panic!(
-            "\n❌ keyboard.toml: fork state '{}' contains empty segments between '|' separators.",
-            states_str.trim()
-        );
-    }
-
-    combination
+    parse_name_list(states_str, "state", "fork state", STATES, |w| w)
 }
 
 fn expand_forks(
