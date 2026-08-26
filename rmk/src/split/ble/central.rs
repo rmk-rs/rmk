@@ -314,8 +314,9 @@ pub(crate) mod subrating {
     const SLEEP_CONTINUATION_NUMBER: u16 = 2;
 
     const fn calc_max_latency(subrate_max: u16) -> u16 {
-        // BLE spec requires: Subrate_Max * (Max_Latency + 1) <= 500
-        (500 / subrate_max) - 1
+        // BLE spec requires: Subrate_Max * (Max_Latency + 1) <= 500.
+        // We use 250 here to tolerant clock drift(max 500 ppm).
+        (250 / subrate_max) - 1
     }
 
     /// Default subrating params when the central is awake.
