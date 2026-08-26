@@ -71,16 +71,16 @@ lto = "fat"
 # rev so there's a single copy of each embassy crate (otherwise the git and crates.io
 # `embassy-time` native libs collide via `links`, and shared types diverge).
 [patch.crates-io]
-cyw43 = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
-cyw43-pio = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
-embassy-rp = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
-embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
-embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
-embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
-embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
-embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
-embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", rev = "3cd51e6d8eb6aff8b0d64d9e56a75a538bcfc65a" }
+cyw43 = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+cyw43-pio = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-rp = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
