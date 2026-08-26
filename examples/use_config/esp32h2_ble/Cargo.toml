@@ -23,7 +23,7 @@ esp-backtrace = { version = "0.19", features = [
     "println",
 ] }
 esp-storage = { version = "0.9", features = ["embedded-storage", "esp32h2"] }
-esp-hal = { version = "1.1", features = ["esp32h2", "unstable"] }
+esp-hal = { version = "1.2.0-rc.0", features = ["esp32h2", "unstable"] }
 esp-alloc = { version = "0.10" }
 esp-println = { version = "0.17", features = ["esp32h2", "log-04"] }
 esp-radio = { version = "1.0.0-beta.0", features = ["esp32h2", "unstable", "ble"] }
@@ -60,16 +60,15 @@ lto = 'thin'
 opt-level = 3
 overflow-checks = false
 
-# esp-radio (crates.io 0.18) still pins bt-hci 0.8, but rmk/trouble-host need bt-hci 0.10.
-# Pin the esp-hal graph to the embassy-rs/esp-hal fork (esp-radio 1.0.0-beta.0 + bt-hci 0.10) —
-# the same rev trouble's own esp CI uses. Drop once esp-radio ships bt-hci 0.10.
+# Released esp-radio (1.0.0-beta.0) pins bt-hci 0.8, which predates the shared
+# bt-hci-transport trait rmk/trouble-host need. Pin the whole esp graph to esp-rs/esp-hal
+# main, which pairs esp-hal 1.2.0-rc.0 with an esp-radio that speaks bt-hci-transport.
 [patch.crates-io]
-esp-alloc = { git = "https://github.com/embassy-rs/esp-hal.git", rev = "7af0919e56e8298a7cb429da7f078757e350d842" }
-esp-backtrace = { git = "https://github.com/embassy-rs/esp-hal.git", rev = "7af0919e56e8298a7cb429da7f078757e350d842" }
-esp-bootloader-esp-idf = { git = "https://github.com/embassy-rs/esp-hal.git", rev = "7af0919e56e8298a7cb429da7f078757e350d842" }
-esp-hal = { git = "https://github.com/embassy-rs/esp-hal.git", rev = "7af0919e56e8298a7cb429da7f078757e350d842" }
-esp-println = { git = "https://github.com/embassy-rs/esp-hal.git", rev = "7af0919e56e8298a7cb429da7f078757e350d842" }
-esp-radio = { git = "https://github.com/embassy-rs/esp-hal.git", rev = "7af0919e56e8298a7cb429da7f078757e350d842" }
-esp-rtos = { git = "https://github.com/embassy-rs/esp-hal.git", rev = "7af0919e56e8298a7cb429da7f078757e350d842" }
-esp-storage = { git = "https://github.com/embassy-rs/esp-hal.git", rev = "7af0919e56e8298a7cb429da7f078757e350d842" }
-embassy-executor = { git = "https://github.com/embassy-rs/embassy.git", rev = "1d3c3dec8edbf37450d0174b312f8d3d6cc0bf12" }
+esp-alloc = { git = "https://github.com/esp-rs/esp-hal.git", rev = "7f5538294626536cfc9ec8b8a2b3adbc2685bbb2" }
+esp-backtrace = { git = "https://github.com/esp-rs/esp-hal.git", rev = "7f5538294626536cfc9ec8b8a2b3adbc2685bbb2" }
+esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal.git", rev = "7f5538294626536cfc9ec8b8a2b3adbc2685bbb2" }
+esp-hal = { git = "https://github.com/esp-rs/esp-hal.git", rev = "7f5538294626536cfc9ec8b8a2b3adbc2685bbb2" }
+esp-println = { git = "https://github.com/esp-rs/esp-hal.git", rev = "7f5538294626536cfc9ec8b8a2b3adbc2685bbb2" }
+esp-radio = { git = "https://github.com/esp-rs/esp-hal.git", rev = "7f5538294626536cfc9ec8b8a2b3adbc2685bbb2" }
+esp-rtos = { git = "https://github.com/esp-rs/esp-hal.git", rev = "7f5538294626536cfc9ec8b8a2b3adbc2685bbb2" }
+esp-storage = { git = "https://github.com/esp-rs/esp-hal.git", rev = "7f5538294626536cfc9ec8b8a2b3adbc2685bbb2" }
