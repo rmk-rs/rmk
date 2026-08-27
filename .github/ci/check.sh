@@ -16,6 +16,7 @@ emit_batch_args() {
             printf -- '--- %s --manifest-path rmk/Cargo.toml --no-default-features --features %s\n' "$cmd" "$feats"
         fi
     done
+    printf -- '--- %s --manifest-path rmk/Cargo.toml\n' "$cmd"
     printf -- '--- %s --manifest-path rmk-config/Cargo.toml\n' "$cmd"
     printf -- '--- %s --manifest-path rmk-macro/Cargo.toml\n' "$cmd"
     printf -- '--- %s --manifest-path rmk-types/Cargo.toml\n' "$cmd"

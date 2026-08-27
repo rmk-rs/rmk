@@ -141,3 +141,66 @@ get_example_target() {
         }
     ' "$config"
 }
+
+# Publish order. A crate's `=X.Y.Z` pins are resolved from crates.io, so
+# everything it depends on has to be published before it.
+RELEASE_CRATES=(
+    rmk-config rmk-types rmk-macro rmk
+    rynk rynk-usb rynk-ble rynk-kle rynk-wasm
+)
+
+# The crates a release can bump. The four rynk members are absent because they
+# inherit `version.workspace` from rynk.
+RELEASE_BUMPABLE=(rmk-config rmk-types rmk-macro rmk rynk)
+
+# The rynk host crates sit under rynk/; every other crate is a top-level
+# directory named after itself.
+crate_manifest() {
+    case "$1" in
+        rynk-*) printf 'rynk/%s/Cargo.toml\n' "$1" ;;
+        *) printf '%s/Cargo.toml\n' "$1" ;;
+    esac
+}
+
+# A package's own version is the only `version = "..."` at column 0. In
+# rynk/Cargo.toml that is the one under [workspace.package].
+crate_version() {
+    local manifest
+    case "$1" in
+        rynk-*) manifest=rynk/Cargo.toml ;;
+        *) manifest="$(crate_manifest "$1")" ;;
+    esac
+    awk -F'"' '/^version = "/ { print $2; exit }' "$manifest"
+}
+
+# A crate's sparse-index URL. crates.io groups names by length: 1, 2, first
+# letter, then the first two pairs of letters.
+crate_index_url() {
+    local name="$1"
+    case "${#name}" in
+        1) printf 'https://index.crates.io/1/%s\n' "$name" ;;
+        2) printf 'https://index.crates.io/2/%s\n' "$name" ;;
+        3) printf 'https://index.crates.io/3/%s/%s\n' "${name:0:1}" "$name" ;;
+        *) printf 'https://index.crates.io/%s/%s/%s\n' "${name:0:2}" "${name:2:2}" "$name" ;;
+    esac
+}
+
+# Succeeds when this exact version is live on crates.io.
+crate_published() {
+    curl -sf "$(crate_index_url "$1")" | grep -qF "\"vers\":\"$2\""
+}
+
+# The index lags a publish by up to a few minutes, and the next crate cannot
+# resolve its pin until it catches up.
+wait_for_index() {
+    local name="$1" version="$2" waited=0
+    until crate_published "$name" "$version"; do
+        if (( waited >= 600 )); then
+            echo "timed out after ${waited}s waiting for $name $version" >&2
+            return 1
+        fi
+        sleep 15
+        waited=$(( waited + 15 ))
+        printf 'waiting for %s %s on crates.io (%ss)\n' "$name" "$version" "$waited"
+    done
+}

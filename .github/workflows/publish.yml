@@ -1,0 +1,76 @@
+name: Publish
+
+on:
+  # Merging a release PR publishes what it bumped. Dispatch re-runs a release
+  # that failed partway.
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two runs would interleave their index waits and publish out of order.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Needs no token and no approval, so what you approve below is a checked plan
+  # rather than a promise.
+  plan:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged &&
+       github.event.pull_request.head.ref == 'release/prepare')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+      - name: Summarise what will be published
+        run: |
+          source .github/ci/_lib.sh
+          {
+            printf '| crate | version | action |\n|---|---|---|\n'
+            for name in "${RELEASE_CRATES[@]}"; do
+              version="$(crate_version "$name")"
+              if crate_published "$name" "$version"; then
+                printf '| %s | %s | already on crates.io |\n' "$name" "$version"
+              else
+                printf '| %s | %s | **publish** |\n' "$name" "$version"
+              fi
+            done
+            printf '\nApprove the `crates-io` deployment to publish.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: plan
+    runs-on: ubuntu-latest
+    # Required reviewers on this environment hold the job here, and crates.io
+    # only issues a token to a run that got past them.
+    environment: crates-io
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: publish
+
+      - id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish, tag, release
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
+        run: .github/ci/publish.sh

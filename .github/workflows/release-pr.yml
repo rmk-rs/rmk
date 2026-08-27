@@ -1,0 +1,51 @@
+name: Release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Bump level"
+        type: choice
+        options: [minor, patch, major]
+        default: minor
+      crates:
+        description: "Crates to bump, space separated. Empty bumps all of them."
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Prepare the release
+        env:
+          # Free text, so pass it as an env var. Interpolating `${{ }}` straight
+          # into the script below would be shell injection.
+          CRATES: ${{ inputs.crates }}
+        # shellcheck disable=SC2086 # space-separated crate names, split on purpose
+        run: .github/ci/prepare-release.sh "${{ inputs.bump }}" $CRATES
+
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          # A PR opened with GITHUB_TOKEN does not start CI. RELEASE_PAT (scopes
+          # `repo` + `workflow`) gets the release PR checked like any other.
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+          branch: release/prepare
+          title: "chore(release): prepare next release"
+          commit-message: "chore(release): bump versions and refresh lockfiles"
+          body: |
+            Review the rolled CHANGELOG section before merging.
+
+            Merging this starts the **Publish** workflow, which publishes every
+            crate whose version changed once you approve the `crates-io`
+            deployment on its run.
