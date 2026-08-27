@@ -11,6 +11,7 @@
 //! - `ble_task`: the trouble runner, with the scan handler below;
 //! - [`DongleCentral::run`]: find a keyboard, connect, secure, relay, repeat.
 
+pub(crate) mod event;
 #[cfg(not(feature = "vial"))]
 mod router;
 #[cfg(feature = "vial")]
@@ -38,10 +39,11 @@ use vial_router as router;
 use crate::ble::adv::Adv;
 use crate::ble::profile::{ProfileInfo, ProfileManager};
 use crate::ble::scan::{DONGLE_SCAN_WINDOW, scan_config, start_scan};
-use crate::ble::{update_ble_phy, update_conn_params, wait_for_stack_started};
+use crate::ble::wait_for_stack_started;
 use crate::channel::send_hid_report;
 use crate::core_traits::Runnable;
-use crate::event::{EventSubscriber, LedIndicatorEvent, SubscribableEvent};
+use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_SERVICE_UUID, DongleEvent};
+use crate::event::{EventSubscriber, LedIndicatorEvent, SubscribableEvent, publish_event};
 use crate::hid::{KeyboardReport, Report};
 use crate::{DONGLE_PAIRING_WINDOW_SECS, RawMutex};
 
@@ -57,9 +59,12 @@ const DONGLE_L2CAP_CHANNELS_MAX: usize = 0;
 /// briefly holds two — one slot would lose the new bond on reboot.
 type DongleBleResources = HostResources<DefaultPacketPool, DONGLE_CONNECTIONS_MAX, DONGLE_L2CAP_CHANNELS_MAX, 1, 2>;
 
-/// What the 3 covers: the 0x1812 query matches both the report service and the
-/// host-protocol HID service (rynk's or vial's), plus rynk's custom service.
-type Client<'a, C> = GattClient<'a, C, DefaultPacketPool, 3>;
+/// What the 4 covers:
+/// - the keyboard report service
+/// - the host-protocol(rynk or vial) HID service
+/// - rynk's custom service
+/// - the dongle event service
+type Client<'a, C> = GattClient<'a, C, DefaultPacketPool, 4>;
 
 const BOND_SLOT: u8 = 0;
 
@@ -231,12 +236,12 @@ where
         let mut central = self.stack.central();
 
         let config = ConnectConfig {
-            // Relay interval, but zero latency and a longer supervision timeout
-            // while pairing and discovery run; the relay settings come after.
             connect_params: RequestedConnParams {
+                min_connection_interval: Duration::from_micros(7500),
+                max_connection_interval: Duration::from_micros(7500),
                 max_latency: 0,
                 supervision_timeout: Duration::from_secs(30),
-                ..relay_conn_params()
+                ..Default::default()
             },
             scan_config: ScanConfig {
                 filter_accept_list: &[address],
@@ -312,7 +317,11 @@ where
             select3(
                 client.task(),
                 self.watch_connection(&conn),
-                self.discover_and_relay(&conn, &client),
+                self.discover_and_relay(
+                    #[cfg(not(feature = "vial"))]
+                    &conn,
+                    &client,
+                ),
             )
             .await;
 
@@ -395,13 +404,13 @@ where
         }
     }
 
-    /// Tune the link, discover and subscribe, then relay. `None` means setup
-    /// failed, which ends the connection.
-    async fn discover_and_relay(&self, conn: &Connection<'_, DefaultPacketPool>, client: &Client<'_, C>) -> Option<()> {
-        // Same latency setup as a split link: 2M PHY + 7.5 ms interval.
-        update_ble_phy(self.stack, conn, PhyKind::Le2M).await;
-        update_conn_params(self.stack, conn, &relay_conn_params()).await;
-
+    /// Discover and subscribe, then relay. `None` means setup failed, which
+    /// ends the connection.
+    async fn discover_and_relay(
+        &self,
+        #[cfg(not(feature = "vial"))] conn: &Connection<'_, DefaultPacketPool>,
+        client: &Client<'_, C>,
+    ) -> Option<()> {
         let chars = KeyboardCharacteristics::discover(client).await?;
         chars.subscribe(client).await?;
         // One catch-all listener for every subscription — one queue, routed by handle.
@@ -463,6 +472,12 @@ where
                         }
                         Err(_) => warn!("[dongle] non-report-size vial notify dropped"),
                     }
+                } else if chars.event.as_ref().is_some_and(|ch| ch.handle == handle) {
+                    // One notification is one whole event, so there is nothing to reassemble.
+                    match postcard::from_bytes::<DongleEvent>(data) {
+                        Ok(event) => publish_event(event),
+                        Err(_) => warn!("[dongle] undecodable event notify dropped"),
+                    }
                 } else if let Some(report) = chars.report(handle, data) {
                     send_hid_report(report).await;
                 }
@@ -508,20 +523,6 @@ where
     }
 }
 
-/// Link parameters while relaying: 7.5 ms interval, the same latency budget as
-/// a split link. The long supervision timeout favors surviving radio noise over
-/// a fast reconnect after a dongle power-cycle (rare): the keyboard starts its
-/// directed reconnect advertising only after this timeout runs out.
-fn relay_conn_params() -> RequestedConnParams {
-    RequestedConnParams {
-        min_connection_interval: Duration::from_micros(7500),
-        max_connection_interval: Duration::from_micros(7500),
-        max_latency: 30,
-        supervision_timeout: Duration::from_secs(10),
-        ..Default::default()
-    }
-}
-
 /// The characteristics the relay needs on the keyboard.
 struct KeyboardCharacteristics {
     keyboard_input: Characteristic<[u8]>,
@@ -533,6 +534,9 @@ struct KeyboardCharacteristics {
     /// report characteristics of vial's own HID service.
     config_input: Characteristic<[u8]>,
     config_output: Characteristic<[u8]>,
+    /// `None` on a keyboard whose firmware has no event service; the relay
+    /// works without it, there is just nothing to publish.
+    event: Option<Characteristic<[u8]>>,
 }
 
 impl KeyboardCharacteristics {
@@ -592,6 +596,16 @@ impl KeyboardCharacteristics {
             (reports.next()?, reports.next()?)
         };
 
+        let mut event = None;
+        if let Ok(services) = client.services_by_uuid(&DONGLE_EVENT_SERVICE_UUID.into()).await
+            && let Some(service) = services.into_iter().next()
+        {
+            event = client
+                .characteristic_by_uuid::<[u8]>(&service, &DONGLE_EVENT_CHAR_UUID.into())
+                .await
+                .ok();
+        }
+
         Some(Self {
             keyboard_input,
             keyboard_output,
@@ -600,6 +614,7 @@ impl KeyboardCharacteristics {
             system,
             config_input,
             config_output,
+            event,
         })
     }
 
@@ -611,7 +626,10 @@ impl KeyboardCharacteristics {
             &self.media,
             &self.system,
             &self.config_input,
-        ] {
+        ]
+        .into_iter()
+        .chain(self.event.as_ref())
+        {
             if let Some(cccd) = ch.cccd_handle {
                 client.write_handle(cccd, &[0x01, 0x00]).await.ok()?;
             }

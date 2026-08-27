@@ -11,9 +11,9 @@ use defmt::{info, unwrap};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nrf::config::{ClockSpeed, Config as NrfConfig, HfclkSource, LfclkSource};
-use embassy_nrf::gpio::{Flex, Input, Level, Output, OutputDrive, Pull};
+use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::mode::Blocking;
-use embassy_nrf::peripherals::{SERIAL30, USBHS};
+use embassy_nrf::peripherals::{SERIAL22, USBHS};
 use embassy_nrf::spim::{self, Spim};
 use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
 use embassy_nrf::usb::{self, Driver};
@@ -28,10 +28,8 @@ use rmk::ble::BleTransport;
 use rmk::config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::host::HostService;
-use rmk::input_device::battery::{BatteryProcessor, ChargingStateReader};
-use rmk::input_device::pmw3610::{BitBangSpiBus, Pmw3610, Pmw3610Config};
+use rmk::input_device::pmw3610::{Pmw3610, Pmw3610Config};
 use rmk::input_device::pointing::{PointingDevice, PointingProcessor, PointingProcessorConfig};
-use rmk::input_device::rotary_encoder::RotaryEncoder;
 use rmk::keyboard::Keyboard;
 use rmk::matrix::Matrix;
 use rmk::processor::builtin::wpm::WpmProcessor;
@@ -51,6 +49,7 @@ bind_interrupts!(struct Irqs {
     RADIO_0 => nrf_sdc::mpsl::HighPrioInterruptHandler;
     TIMER10 => nrf_sdc::mpsl::HighPrioInterruptHandler;
     GRTC_3 => nrf_sdc::mpsl::HighPrioInterruptHandler;
+    SERIAL22 => spim::InterruptHandler<SERIAL22>;
 });
 
 #[embassy_executor::task]
@@ -268,19 +267,45 @@ async fn main(spawner: Spawner) {
     let mut ble_transport = BleTransport::new(sdc, ble_addr(), rmk_config).with_host_service(&host_service);
     let mut wpm_processor = WpmProcessor::new();
 
+    // PMW3610 trackball: SCK P1.17, SDIO P1.16, CS P1.15, MOTION P1.18.
+    let mut trackball_spi_config = spim::Config::default();
+    trackball_spi_config.frequency = spim::Frequency::M2;
+    trackball_spi_config.mode = spim::MODE_3;
+    // The read phase clocks ORC out onto the shared line; idle it high.
+    trackball_spi_config.orc = 0xFF;
+    let trackball_sdio = p.P1_16;
+    let trackball_sdio_mosi = unsafe { trackball_sdio.clone_unchecked() };
+    let trackball_spi = Spim::new(
+        p.SERIAL22,
+        Irqs,
+        p.P1_17,
+        trackball_sdio,
+        trackball_sdio_mosi,
+        trackball_spi_config,
+    );
+
+    let trackball_cs = Output::new(p.P1_15, Level::High, OutputDrive::Standard);
+    let trackball_motion = Some(Input::new(p.P1_18, Pull::Up));
+    let trackball_config = Pmw3610Config {
+        res_cpi: 800,
+        smart_mode: true,
+        // Flipped in the sensor's RES_STEP register, so it costs nothing at runtime.
+        invert_x: true,
+        ..Default::default()
+    };
+    let mut trackball =
+        PointingDevice::<Pmw3610<_, _, _>>::new(0, trackball_spi, trackball_cs, trackball_motion, trackball_config);
+    let mut trackball_processor = PointingProcessor::new(&keymap, PointingProcessorConfig::default());
+
     run_all!(
         matrix,
-        encoder,
-        trackball,
-        charging_reader,
         storage,
         usb_transport,
         ble_transport,
-        pointing_processor,
-        battery_processor,
         wpm_processor,
-        rgb,
-        keyboard
+        keyboard,
+        trackball,
+        trackball_processor
     )
     .await;
 }

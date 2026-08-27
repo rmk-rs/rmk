@@ -191,11 +191,11 @@ If you have more sectors available in your internal flash, you can increase `num
 Generally, the behavior you'll see is that ZMK is not outputting any keys or and isn't broadcasting a bluetooth connection. If you have other symptoms, something else is likely wrong.
 :::
 
-For nRF boards (i.e. the `nice!nano` or `XIAO BLE`), ZMK uses a legacy SoftDevice Bluetooth stack. RMK uses a more recent version which is not compatible. To get ZMK working again, you must disable SoftDevice in the firmware; see below. All future firmwares for the ZMK board should be built with SoftDevice disabled.
+Some nRF boards (i.e. the `nice!nano` or `XIAO BLE`) ship a bootloader that comes with a SoftDevice. RMK reclaims the flash region the SoftDevice occupies, while ZMK reserves it. So if you flash ZMK after RMK, the firmware might not work. To get ZMK working again, build it without the SoftDevice reservation; see below. All future firmwares for the ZMK board should be built the same way.
 
-A more permanent solution would be to re-flash the bootloader with SoftDevice support. Unfortunately, the stock `XIAO BLE` bootloader does not seem to be published anywhere, so this is not an easy option.
+A more permanent solution would be to restore the SoftDevice by re-flashing the bootloader package that bundles it. Unfortunately, the stock `XIAO BLE` bootloader does not seem to be published anywhere, so this is not an easy option.
 
-#### Disable SoftDevice for a cloud build
+#### Build ZMK without the SoftDevice (cloud build)
 Add the `nrf52840-nosd` (for the nRF82840) or `nrf52833-nosd` (for the nRF52833) snippet to your `build.yaml`, i.e.
 
 ```yaml
@@ -212,7 +212,7 @@ You may also need to perform a [settings reset](https://zmk.dev/docs/troubleshoo
     shield: settings_reset
 ```
 
-#### Disable SoftDevice for a local build
+#### Build ZMK without the SoftDevice (local build)
 
 Build with the `nrf52840-nosd` or `rnf52833-nosd` snippet (depending on your chip) by adding `--snippet nrf52840-nosd` (or `--snippet rnf52833-nosd`) to the `west build` command.
 

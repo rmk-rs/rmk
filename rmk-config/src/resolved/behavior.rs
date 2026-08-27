@@ -181,8 +181,10 @@ impl crate::KeyboardTomlConfig {
                 })
                 .unwrap_or_default();
 
+            // Seeded rather than left `None` so the switch is stored and read
+            // back over Rynk like the profile's other fields.
             let default_profile = MorseProfile {
-                enable_flow_tap: None,
+                enable_flow_tap: Some(m.enable_flow_tap.unwrap_or(false)),
                 unilateral_tap: m.unilateral_tap,
                 permissive_hold: m.permissive_hold,
                 hold_on_other_press: m.hold_on_other_press,
@@ -334,7 +336,7 @@ hold_timeout = "200ms"
         let behavior = config.behavior().unwrap();
         let morse = behavior.morse.unwrap();
         assert!(morse.enable_flow_tap);
-        assert_eq!(morse.default_profile.enable_flow_tap, None);
+        assert_eq!(morse.default_profile.enable_flow_tap, Some(true));
         assert_eq!(morse.profiles["flow_on"].enable_flow_tap, Some(true));
         assert_eq!(morse.profiles["flow_off"].enable_flow_tap, Some(false));
         assert_eq!(morse.profiles["inherit"].enable_flow_tap, None);

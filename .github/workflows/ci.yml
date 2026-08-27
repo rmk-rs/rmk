@@ -156,6 +156,11 @@ jobs:
         run: |
           rustup target add ${{ matrix.target }}
           cargo install flip-link 2>/dev/null || true
+      # RMK builds trouble's P-256 assembly on nRF, and cc-rs compiles it with
+      # the ARM cross compiler — it has no clang fallback for -none-eabi.
+      - name: Install ARM GCC
+        if: contains(matrix.dir, 'nrf')
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
       - name: Build
         working-directory: ${{ matrix.dir }}
         run: |
@@ -235,12 +240,13 @@ jobs:
 
             # cargo size for HEAD — extract text/data/bss/total
             # RUSTFLAGS must match the Build step so cargo reuses the existing binary.
-            RUSTFLAGS="$head_remap" cargo size --release $bin_flag 2>/dev/null > "$outdir/size-head${bin_suffix}.txt"
+            # cargo replays cached build warnings on stdout; keep only the size table.
+            RUSTFLAGS="$head_remap" cargo size --release $bin_flag 2>/dev/null | awk '$1 ~ /^(text|[0-9]+)$/' > "$outdir/size-head${bin_suffix}.txt"
             read -r h_text h_data h_bss head_size < <(awk 'NR==2 {print $1, $2, $3, $4}' "$outdir/size-head${bin_suffix}.txt")
 
             # cargo size + bloaty for BASE
             if [[ -d "$base_dir" ]]; then
-              (cd "$base_dir" && RUSTFLAGS="$base_remap" cargo size --release $bin_flag 2>/dev/null) > "$outdir/size-base${bin_suffix}.txt"
+              (cd "$base_dir" && RUSTFLAGS="$base_remap" cargo size --release $bin_flag 2>/dev/null) | awk '$1 ~ /^(text|[0-9]+)$/' > "$outdir/size-base${bin_suffix}.txt"
               read -r b_text b_data b_bss base_size < <(awk 'NR==2 {print $1, $2, $3, $4}' "$outdir/size-base${bin_suffix}.txt")
 
               # Section diffs

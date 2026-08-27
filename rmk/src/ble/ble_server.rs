@@ -2,7 +2,11 @@ use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
 use super::battery_service::BatteryService;
+#[cfg(feature = "split")]
+use super::battery_service::PeripheralBatteryServices;
 use super::device_info::DeviceConfigurationService;
+#[cfg(all(feature = "dongle", feature = "host"))]
+use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_MAX, DONGLE_EVENT_SERVICE_UUID};
 #[cfg(feature = "rynk")]
 use crate::hid::RynkHidReport;
 #[cfg(feature = "vial")]
@@ -18,31 +22,31 @@ use rmk_types::protocol::rynk::{
     RYNK_BLE_CHUNK_SIZE, RYNK_HID_REPORT_SIZE, RYNK_INPUT_CHAR_UUID, RYNK_OUTPUT_CHAR_UUID, RYNK_SERVICE_UUID,
 };
 
-#[cfg(feature = "vial")]
+/// Field order is the attribute order: append, never insert, so a bonded host's
+/// cached GATT table survives a firmware update that adds a service.
 #[gatt_server]
 pub(crate) struct Server {
     pub(crate) battery_service: BatteryService,
+    #[cfg(feature = "split")]
+    pub(crate) peripheral_battery_services: PeripheralBatteryServices,
     pub(crate) hid_service: HidService,
+    #[cfg(feature = "vial")]
     pub(crate) vial_service: VialGattService,
-    pub(crate) device_config_service: DeviceConfigurationService,
-}
-
-#[cfg(feature = "rynk")]
-#[gatt_server]
-pub(crate) struct Server {
-    pub(crate) battery_service: BatteryService,
-    pub(crate) hid_service: HidService,
+    #[cfg(feature = "rynk")]
     pub(crate) rynk_service: RynkGattService,
+    #[cfg(feature = "rynk")]
     pub(crate) rynk_hid_service: RynkHidService,
     pub(crate) device_config_service: DeviceConfigurationService,
+    #[cfg(all(feature = "dongle", feature = "host"))]
+    pub(crate) dongle_event_service: DongleEventService,
 }
 
-#[cfg(not(feature = "host"))]
-#[gatt_server]
-pub(crate) struct Server {
-    pub(crate) battery_service: BatteryService,
-    pub(crate) hid_service: HidService,
-    pub(crate) device_config_service: DeviceConfigurationService,
+/// One postcard-encoded [`crate::dongle::event::DongleEvent`] per notification.
+#[cfg(all(feature = "dongle", feature = "host"))]
+#[gatt_service(uuid = DONGLE_EVENT_SERVICE_UUID)]
+pub(crate) struct DongleEventService {
+    #[characteristic(uuid = DONGLE_EVENT_CHAR_UUID, notify, permissions(encrypted))]
+    pub(crate) event: heapless::Vec<u8, DONGLE_EVENT_MAX>,
 }
 
 /// Rynk-over-GATT transport. The host writes request chunks to `output_data`;

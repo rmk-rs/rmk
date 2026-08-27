@@ -1,3 +1,5 @@
+#[cfg(feature = "subrating")]
+use bt_hci::cmd::le::LeSubrateRequest;
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use embassy_futures::select::{Either, Either3, select, select3};
@@ -58,12 +60,6 @@ pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + ControllerC
     let mut central = stack.central();
     wait_for_stack_started().await;
     loop {
-        // The radio is the biggest draw while the keyboard sleeps, and a peripheral
-        // that isn't connected can't wake it anyway. Established links stay up.
-        while crate::state::current_sleep_state() {
-            Timer::after_secs(1).await;
-        }
-
         // Mark ended sessions `Disconnected`.
         while let Ok(id) = ended.try_receive() {
             if let SlotState::Connected(addr) = peripheral_slots[id] {
@@ -85,14 +81,14 @@ pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + ControllerC
             let targets: heapless::Vec<Address, { crate::SPLIT_PERIPHERALS_NUM }> =
                 pending.iter().map(|(_, addr)| Address::random(*addr)).collect();
             let config = ConnectConfig {
-                connect_params: default_central_conn_param(),
+                connect_params: default_split_conn_params(),
                 scan_config: ScanConfig {
                     filter_accept_list: &targets,
                     ..scan_config(SPLIT_CENTRAL_SCAN_WINDOW)
                 },
             };
             info!("Start connecting, {} peripheral(s) pending", pending.len());
-            match with_timeout(Duration::from_secs(15), central.connect(&config)).await {
+            let connected = match with_timeout(Duration::from_secs(15), central.connect(&config)).await {
                 Ok(Ok(conn)) => {
                     let peer = conn.peer_address();
                     if let Some(&(id, addr)) = pending.iter().find(|(_, addr)| Address::random(*addr) == peer) {
@@ -102,32 +98,54 @@ pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + ControllerC
                     } else {
                         warn!("Connected peer {:?} matches no pending slot", peer.addr);
                     }
+                    true
                 }
                 Ok(Err(e)) => {
                     #[cfg(feature = "defmt")]
                     let e = defmt::Debug2Format(&e);
                     error!("Connect error: {:?}", e);
                     Timer::after_millis(500).await;
+                    false
                 }
                 Err(_) => {
-                    // None answered: forget the addresses and rediscover the
-                    // peripherals when they come back.
-                    warn!("Connect timeout, clearing {} address(es)", pending.len());
-                    for &(id, _) in &pending {
-                        peripheral_slots[id] = SlotState::NoAddr;
+                    // None answered.
+                    if crate::state::current_sleep_state() {
+                        warn!("Connect timeout while asleep, keeping {} address(es)", pending.len());
+                    } else {
+                        warn!("Connect timeout, clearing {} address(es)", pending.len());
+                        for &(id, _) in &pending {
+                            peripheral_slots[id] = SlotState::NoAddr;
+                        }
                     }
+                    false
                 }
+            };
+            // If connecting to the peripheral failed, and the central is sleeping,
+            // don't keep connecting, just wait.
+            if !connected {
+                wait_until_wakeup(ended).await;
             }
-        } else if peripheral_slots.iter().any(|s| matches!(s, SlotState::NoAddr)) {
-            // No `Disconnected` peripherals, check `NoAddr` peripheral slot and scan new peripherals
+        } else if peripheral_slots.iter().all(|s| matches!(s, SlotState::Connected(_))) {
+            // All peripherals are connected: wait until a session ends.
+            ended.ready_to_receive().await;
+        } else if crate::state::current_sleep_state() {
+            // There's empty peripheral slot, and the central is sleeping,
+            // don't scanning, just wait.
+            wait_until_wakeup(ended).await;
+        } else {
+            // Place the `NoAddr` peripherals by scanning for them.
             info!("Start scanning peripherals");
             let session = start_scan(stack, SPLIT_CENTRAL_SCAN_WINDOW, &[]).await;
-            let event = select(PERIPHERAL_FOUND.wait(), ended.ready_to_receive()).await;
+            let event = with_timeout(
+                Duration::from_secs(30),
+                select(PERIPHERAL_FOUND.wait(), ended.ready_to_receive()),
+            )
+            .await;
             // Wait until the controller has confirmed the stop: it refuses an
             // initiator until then.
             session.stop().await;
             info!("Stop scanning");
-            if let Either::First((id, addr)) = event {
+            if let Ok(Either::First((id, addr))) = event {
                 // The id comes off the air — bounds-check it. Keep the first
                 // address seen for a slot; an occupied slot is cleared only
                 // when connecting to it times out.
@@ -143,9 +161,17 @@ pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + ControllerC
                     _ => {}
                 }
             }
-        } else {
-            // Fully linked: park until a session ends.
-            ended.ready_to_receive().await;
+        }
+    }
+}
+
+async fn wait_until_wakeup(ended: &Channel<NoopRawMutex, usize, { crate::SPLIT_PERIPHERALS_NUM }>) {
+    while crate::state::current_sleep_state() {
+        if with_timeout(Duration::from_secs(1), ended.ready_to_receive())
+            .await
+            .is_ok()
+        {
+            return;
         }
     }
 }
@@ -172,7 +198,15 @@ impl EventHandler for ScanHandler {
 /// report back so the radio reconnects or rediscovers the peripheral.
 pub(crate) async fn run_peripheral_session<
     'a,
-    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(not(feature = "subrating"))] C: Controller
+        + ControllerCmdSync<LeSetScanParams>
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(feature = "subrating")] C: Controller
+        + ControllerCmdSync<LeSetScanParams>
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>
+        + ControllerCmdAsync<LeSubrateRequest>,
 >(
     id: usize,
     conns: &Channel<NoopRawMutex, Connection<'a, DefaultPacketPool>, 1>,
@@ -199,46 +233,164 @@ pub(crate) async fn run_peripheral_session<
     }
 }
 
-fn default_central_conn_param() -> RequestedConnParams {
+/// Default connection parameters for the central <-> peripheral connection.
+fn default_split_conn_params() -> RequestedConnParams {
     RequestedConnParams {
         min_connection_interval: Duration::from_micros(7500),
         max_connection_interval: Duration::from_micros(7500),
-        max_latency: 10, // 75ms
-        supervision_timeout: Duration::from_secs(5),
+        max_latency: 30, // 232.5ms, same as the awake subrate params
+        supervision_timeout: Duration::from_secs(6),
         ..Default::default()
     }
 }
 
-/// Parameters for the central -> peripheral link while the central sleeps.
-///
-/// With a host connected, the central's radio is busy serving the host link
-/// anyway, so keep a short interval — the first key after wake-up arrives
-/// quickly, and the peripheral still saves power through its latency. With no
-/// host, a long interval also cuts the central-side radio wakeups.
-fn sleep_central_conn_param() -> RequestedConnParams {
+/// Connection parameters for the central <-> peripheral connection while the central sleeps.
+fn sleep_split_conn_params() -> RequestedConnParams {
     if crate::state::active_transport().is_some() {
         RequestedConnParams {
             min_connection_interval: Duration::from_millis(20),
             max_connection_interval: Duration::from_millis(20),
             max_latency: 200, // 4s
-            supervision_timeout: Duration::from_secs(9),
+            supervision_timeout: Duration::from_secs(15),
             ..Default::default()
         }
     } else {
         RequestedConnParams {
             min_connection_interval: Duration::from_millis(200),
             max_connection_interval: Duration::from_millis(200),
-            max_latency: 25, // 5s
-            supervision_timeout: Duration::from_secs(11),
+            max_latency: 20, // ~4s
+            supervision_timeout: Duration::from_secs(15),
             ..Default::default()
         }
+    }
+}
+
+#[cfg(feature = "subrating")]
+pub(crate) mod subrating {
+    // Measurements on nrf52840 for subrate request parameters:
+    //    |-------+------+-----+------+---------+------------|---------|
+    //    |   HCL | [ms] |  SF | [ms] | IC [µA] |  KPL [ms]  | IP [µA] |
+    //    |-------+------+-----+------+---------+------------|---------|
+    //    |    60 |  450 |  10 |   75 |      80 |  41 /   82 |      21 |
+    //    |    30 |  225 |  30 |  225 |      75 | 116 /  232 |      21 |
+    // ==>|    60 |  450 |  30 |  225 |      59 | 116 /  232 |      21 |<== Connected Sleep
+    //    |   180 | 1350 |  30 |  225 |      48 | 116 /  232 |      21 |
+    //    |   300 | 2250 |  30 |  225 |      48 | 116 /  232 |      21 |
+    //    |    30 |  225 |  60 |  450 |      63 | 228 /  457 |      21 |
+    //    |    60 |  450 |  60 |  450 |      48 | 228 /  457 |      21 |
+    //    |   180 | 1350 |  60 |  450 |      39 | 228 /  457 |      21 |
+    //    |   300 | 2250 |  60 |  450 |      34 | 228 /  457 |      21 |
+    //    |   300 | 2250 | 120 |  900 |      32 | 453 /  907 |      21 |
+    //    | no HC |      | 100 |  750 |      24 | 378 /  757 |      21 |
+    // ==>| no HC |      | 125 |  937 |      22 | 472 /  945 |      21 |<== Disconnected Sleep
+    //    | no HC |      | 250 | 1875 |      21 | 941 / 1882 |      24 |
+    //    |-------+------+-----+------+---------+------------|---------|
+    //    HCL .. Host Connection max latency (host <-> central, assumes 7.5ms interval)
+    //    SF ... Subrate Factor split connection
+    //    IC ... Central average current
+    //    KPL .. Key Press latency (mean/worst)
+    //    IP ... Peripheral average current
+    //
+    //
+    // In active mode without pressing any key, the peripheral current depends on the max
+    // latency of the split connection:
+    //    | max_latency |  [ms] | min_timeout [ms] | IP [µA] |
+    //    |-------------+-------+------------------+---------|
+    //    |          10 |    75 |              165 |      72 |
+    // ==>|          30 |   225 |              465 |      38 |<== Default Params
+    //    |          60 |   450 |              915 |      30 |
+    //    |         300 |  2250 |             4515 |      21 |
+    //    |-------------+-------+------------------+---------|
+
+    use bt_hci::cmd::le::{LeSubrateRequest, LeSubrateRequestParams};
+    use bt_hci::controller::ControllerCmdAsync;
+    use bt_hci::param::{ConnHandle, Duration, Error as HciError};
+    use trouble_host::prelude::*;
+
+    const SLEEP_HOST_CONN_SUBRATE: u16 = 30;
+    const SLEEP_NO_HOST_SUBRATE: u16 = 125;
+
+    // In some cases, the subrate request procedure does not complete with only one continuation.
+    const SLEEP_CONTINUATION_NUMBER: u16 = 2;
+
+    const fn calc_max_latency(subrate_max: u16) -> u16 {
+        // BLE spec requires: Subrate_Max * (Max_Latency + 1) <= 500.
+        // We use 250 here to tolerant clock drift(max 500 ppm).
+        (250 / subrate_max) - 1
+    }
+
+    /// Default subrating params when the central is awake.
+    pub(super) fn default_split_subrating_params(handle: ConnHandle) -> LeSubrateRequestParams {
+        LeSubrateRequestParams {
+            handle,
+            subrate_min: 1,
+            subrate_max: 1,
+            max_latency: 30,
+            continuation_number: 0,
+            supervision_timeout: Duration::from_secs(6),
+        }
+    }
+
+    pub(super) fn sleep_split_subrating_params(handle: ConnHandle) -> LeSubrateRequestParams {
+        let subrate = if crate::state::active_transport().is_some() {
+            SLEEP_HOST_CONN_SUBRATE
+        } else {
+            SLEEP_NO_HOST_SUBRATE
+        };
+
+        LeSubrateRequestParams {
+            handle,
+            subrate_min: subrate,
+            subrate_max: subrate,
+            max_latency: calc_max_latency(subrate), // answers every 3600ms with a host, 3750ms without
+            continuation_number: SLEEP_CONTINUATION_NUMBER,
+            supervision_timeout: Duration::from_millis(15_000),
+        }
+    }
+
+    pub(crate) async fn update_subrate_factor<C: Controller + ControllerCmdAsync<LeSubrateRequest>, P: PacketPool>(
+        stack: &Stack<'_, C, P>,
+        params: LeSubrateRequestParams,
+    ) -> bool {
+        for _ in 0..10 {
+            let subrate_request = LeSubrateRequest::from(params);
+            match stack.async_command(subrate_request).await {
+                Ok(_) => {
+                    debug!("[update_subrate_factor] requested {:?}", params);
+                    return true;
+                }
+                Err(BleHostError::BleHost(Error::Hci(error))) => {
+                    // A connection runs one link-layer control procedure at a time, and
+                    // a fresh one is still running its own.
+                    if error == HciError::CONTROLLER_BUSY || error == HciError::DIFFERENT_TRANSACTION_COLLISION {
+                        info!("[update_subrate_factor] controller busy, retrying: {:?}", error);
+                        embassy_time::Timer::after_millis(100).await;
+                        continue;
+                    }
+                    error!("[update_subrate_factor] HCI error: {:?}", error);
+                    return false;
+                }
+                Err(e) => {
+                    #[cfg(feature = "defmt")]
+                    let e = defmt::Debug2Format(&e);
+                    error!("[update_subrate_factor] BLE host error: {:?}", e);
+                    return false;
+                }
+            }
+        }
+        warn!("[update_subrate_factor] controller stayed busy, giving up");
+        false
     }
 }
 
 async fn run_central_manager_task<
     'b,
     's: 'b,
-    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(not(feature = "subrating"))] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(feature = "subrating")] C: Controller
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>
+        + ControllerCmdAsync<LeSubrateRequest>,
     P: PacketPool,
 >(
     id: usize,
@@ -252,12 +404,12 @@ async fn run_central_manager_task<
     update_ble_phy(stack, conn, PhyKind::Le2M).await;
 
     info!("Updating connection parameters for peripheral");
-    update_conn_params(stack, conn, &default_central_conn_param()).await;
+    update_conn_params(stack, conn, &default_split_conn_params()).await;
 
     let (Either3::First(e) | Either3::Second(e) | Either3::Third(e)) = select3(
         ble_central_task(&client, conn),
         discover_and_run_manager(id, &client, matrix_config),
-        follow_sleep_state(stack, conn),
+        update_conn_params_on_sleep_change(stack, conn),
     )
     .await;
     e
@@ -331,11 +483,10 @@ impl<'a, 'b, 'c, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool> Sp
     async fn read(&mut self) -> Result<SplitMessage, SplitDriverError> {
         let data = self.listener.next().await;
         let message = postcard::from_bytes(data.as_ref()).map_err(|_| SplitDriverError::DeserializeError)?;
-        info!("Received split message: {:?}", message);
+        debug!("Received split message: {:?}", message);
 
         // Key events from the peripheral count as activity for sleep management
         if matches!(message, SplitMessage::Key(_) | SplitMessage::Pointing(_)) {
-            debug!("Activity {:?} detected from peripheral", &message);
             report_activity();
         }
 
@@ -367,13 +518,12 @@ impl<'a, 'b, 'c, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool> Sp
 }
 
 /// Keep one peripheral link's connection parameters in sync with the keyboard's
-/// sleep state, published as [`SleepStateEvent`] by `crate::ble::sleep`. Runs
-/// for as long as the link is up, so every link ends up with the same
-/// parameters.
-async fn follow_sleep_state<
+/// sleep state. Runs for as long as the link is up.
+async fn update_conn_params_on_sleep_change<
     'b,
     's: 'b,
-    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(not(feature = "subrating"))] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(feature = "subrating")] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdAsync<LeSubrateRequest>,
     P: PacketPool,
 >(
     stack: &'b Stack<'s, C, P>,
@@ -381,28 +531,42 @@ async fn follow_sleep_state<
 ) -> Result<(), BleHostError<C::Error>> {
     let mut sleep_events = SleepStateEvent::subscriber();
 
-    // A peripheral coming up is activity in its own right: it needs the fast
-    // parameters for service discovery, and waking the whole keyboard keeps
-    // every link on the same state.
-    report_activity();
+    let mut sleeping = crate::state::current_sleep_state();
+    if !sleeping {
+        // Restart the idle timeout so service discovery isn't cut short. Asleep
+        // this isn't user activity, so discovery runs on the sleep parameters.
+        report_activity();
+    }
 
-    // What this link's controller last accepted. `run_central_manager_task` just
-    // applied the default (awake) parameters; tracking the applied value retries
-    // a rejected update on the next state change instead of leaving the link at
-    // the wrong interval until it reconnects.
-    let mut applied = false;
+    let mut sleeping_conn_param_applied = false;
+
     loop {
-        let sleeping = sleep_events.next_event().await.0;
-        if sleeping == applied {
-            continue;
+        if sleeping != sleeping_conn_param_applied {
+            #[cfg(not(feature = "subrating"))]
+            let sent = {
+                let params = if sleeping {
+                    sleep_split_conn_params()
+                } else {
+                    default_split_conn_params()
+                };
+                update_conn_params(stack, conn, &params).await
+            };
+
+            #[cfg(feature = "subrating")]
+            let sent = {
+                let params = if sleeping {
+                    subrating::sleep_split_subrating_params(conn.handle())
+                } else {
+                    subrating::default_split_subrating_params(conn.handle())
+                };
+                subrating::update_subrate_factor(stack, params).await
+            };
+
+            if sent {
+                sleeping_conn_param_applied = sleeping;
+            }
         }
-        let params = if sleeping {
-            sleep_central_conn_param()
-        } else {
-            default_central_conn_param()
-        };
-        if update_conn_params(stack, conn, &params).await {
-            applied = sleeping;
-        }
+
+        sleeping = sleep_events.next_event().await.0;
     }
 }

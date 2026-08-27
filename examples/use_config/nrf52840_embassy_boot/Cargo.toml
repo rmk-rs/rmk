@@ -30,17 +30,17 @@ embassy-nrf = { version = "0.11", features = [
     "time",
 ] }
 embassy-boot = { version = "0.7", default-features = false }
-nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "f54b6389ffa2750d4d3a4f5435660cb66b47e51a", features = [
+nrf-sdc = { version = "0.4.0", features = [
     "defmt",
     "peripheral",
     "central",
     "nrf52840",
 ] }
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "f54b6389ffa2750d4d3a4f5435660cb66b47e51a", features = [
+nrf-mpsl = { version = "0.4.0", features = [
     "defmt",
     "nrf52840",
 ] }
-bt-hci = { version = "0.9", features = ["defmt"] }
+bt-hci = { version = "0.10", features = ["defmt"] }
 embassy-executor = { version = "0.10", features = [
     "defmt",
     "platform-cortex-m",
@@ -53,8 +53,6 @@ defmt = "1"
 defmt-rtt = "1"
 panic-probe = { version = "1", features = ["print-defmt"] }
 static_cell = "2"
-rand_core = { version = "0.6", default-features = false }
-rand_chacha = { version = "0.3", default-features = false }
 
 [build-dependencies]
 xz2 = "0.1.7"

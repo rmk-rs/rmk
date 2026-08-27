@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add BLE passkey handling on the initial connection, for hosts that require pairing confirmation ([#756](https://github.com/rmk-rs/rmk/issues/756))
 - Add an option to disable the BLE battery service
 - Report the split peripheral's battery level to the central, and configure the peripheral's battery ADC from `keyboard.toml`
+- Expose battery levels from configured split peripherals through standard Battery Service instances on the central's BLE GATT server, including host-readable and notifiable levels for each peripheral
+- Add configurable `battery_user_description` values for the central and split peripheral Battery Level characteristics through `[ble]`, `[split.central]`, and `[[split.peripheral]]`, with descriptive defaults for each battery service
 - Advertise the boot keyboard protocol on the primary HID interface, so the keyboard works in BIOS/UEFI and other boot-protocol-only hosts
 - Add USB logging support for split peripherals ([#1000](https://github.com/rmk-rs/rmk/pull/1000))
 
@@ -82,7 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: `PollingController::INTERVAL` constant is now `PollingProcessor::interval()` method, allowing dynamic interval configuration at runtime
 - **BREAKING**: PointingDevice and PointingProcessor replace Pmw3610Device and Pmw3610Processor. For the Pmw3610 the calls of ::new() for these stay the same, only the name changes. If using Rust to configure the keyboard change the calls, if using Toml nothing needs to be done.
 - **BREAKING**: `MouseKeyConfig` fields renamed: `time_to_max` → `ticks_to_max`, `wheel_time_to_max` → `wheel_ticks_to_max`, `wheel_max_speed_multiplier` → `wheel_max_speed`
-- Update the dependency baseline: `embassy-executor` 0.10 (`platform-cortex-m`), `embassy-nrf` 0.11, `embassy-rp` 0.10, `embassy-stm32` 0.6, `bt-hci` 0.9, `cyw43` 0.7 / `cyw43-pio` 0.10, `esp-hal` 1.1 / `esp-radio` 0.18 / `esp-rtos` 0.3, and a newer `nrf-sdc`. The migration guide lists the matching code changes
+- Update the dependency baseline: `embassy-executor` 0.10 (`platform-cortex-m`), `embassy-nrf` 0.11, `embassy-rp` 0.10, `embassy-stm32` 0.6, `bt-hci` 0.10, `trouble-host` 0.8, `cyw43` 0.7 / `cyw43-pio` 0.10, `esp-hal` 1.2.0-rc.0 / `esp-radio` 1.0.0-beta.0 / `esp-rtos` 0.3, and `nrf-sdc` 0.4. `trouble-host` and `nrf-sdc` are now crates.io releases instead of git pins. The migration guide lists the matching code changes
 - Rynk moves from a CDC ACM interface to its own raw USB vendor interface, so it no longer occupies a serial port and host tools find it by interface class ([#1023](https://github.com/rmk-rs/rmk/pull/1023))
 - Refactor mouse key state machine into a dedicated module with per-direction press counts, independent movement/wheel repeat scheduling, and configurable acceleration curves
 - Optimize the timing for motion read and sending reports on the PMW3610

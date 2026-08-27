@@ -134,8 +134,8 @@ pub(crate) async fn process_vial<'a>(
                     LittleEndian::write_u16(&mut report.input_data[1..3], tap_interval);
                 }
                 SettingKey::TapCapslockInterval => {
-                    let tap_interval = ctx.tap_interval();
-                    LittleEndian::write_u16(&mut report.input_data[1..3], tap_interval);
+                    let tap_capslock_interval = ctx.tap_capslock_interval();
+                    LittleEndian::write_u16(&mut report.input_data[1..3], tap_capslock_interval);
                 }
                 SettingKey::PermissiveHold => {
                     if let Some(m) = ctx.morse_default_profile().mode()

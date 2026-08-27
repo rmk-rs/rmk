@@ -57,7 +57,7 @@ display-interface-i2c = { version = "0.5", optional = true }
 
 # Optional dependencies
 # BLE dependencies
-trouble-host = { git = "https://github.com/embassy-rs/trouble", rev = "088e09c451177d5db50cf3e58c68d05512265ba0", features = [
+trouble-host = { version = "0.8", features = [
     "gatt",
     "scan",
     "derive",
@@ -65,7 +65,7 @@ trouble-host = { git = "https://github.com/embassy-rs/trouble", rev = "088e09c45
     "serde",
     "default-packet-pool-size-32",
 ], optional = true }
-bt-hci = { version = "0.9", optional = true }
+bt-hci = { version = "0.10", optional = true }
 
 # nRF dependencies
 embassy-nrf = { version = "0.11", features = [
@@ -82,7 +82,7 @@ embassy-boot-rp = { version = "0.10.0", optional = true }
 embassy-boot = { version = "0.7", optional = true, default-features = false }
 
 # ESP32 dependencies
-esp-hal = { version = "1.1", optional = true }
+esp-hal = { version = "1.2.0-rc.0", optional = true }
 
 # Document feature
 document-features = "0.2"
@@ -183,7 +183,7 @@ defmt = [
 ]
 
 ## Enable logging via usb
-usb_log = ["dep:embassy-usb-logger", "log", "log/max_level_debug"]
+usb_log = ["dep:embassy-usb-logger", "log"]
 ## Use log, this feature cannot be enabled when defmt is enabled
 log = ["dep:log", "trouble-host?/log"]
 
@@ -275,6 +275,11 @@ _usb_high_speed = []
 ## Internal marker for chips without SAADC; compiles out `NrfAdc`.
 _no_saadc = []
 
+## Enable BLE connection subrating for split Connections
+subrating = ["split"]
+## Internal feature that indicates that subrating is not supported, this will be auto-activated for some chips
+_no_subrating = []
+
 #! ### BLE feature flags
 #!
 #! ⚠️ Due to the limitation of docs.rs, functions gated by BLE features won't show in docs.rs. You have to head to [`examples`](https://github.com/rmk-rs/rmk/tree/main/examples) folder of RMK repo for their usages.
@@ -294,7 +299,7 @@ nrf52832_ble = ["_nrf_ble", "_no_usb"]
 nrf52811_ble = ["_nrf_ble", "_no_usb"]
 ## Enable feature if you want to use nRF52810 with BLE.
 nrf52810_ble = ["_nrf_ble", "_no_usb"]
-_nrf_ble = ["_ble", "dep:embassy-nrf"]
+_nrf_ble = ["_ble", "dep:embassy-nrf", "trouble-host?/security-p256-cortex-m4"]
 
 ## Enable feature if you want to use ESP32C3 with BLE.
 esp32c3_ble = ["_esp_ble", "_no_usb"]
@@ -307,7 +312,7 @@ esp32s3_ble = ["_esp_ble"]
 _esp_ble = ["_ble", "dep:esp-hal"]
 
 ## Enable feature if you want to use RP2040W with BLE.
-pico_w_ble = ["_ble", "dep:embassy-rp"]
+pico_w_ble = ["_ble", "_no_subrating", "dep:embassy-rp"]
 
 ## Enable feature if you want to use SF32LB52x with BLE.
 sf32lb52x_ble = ["_ble"]

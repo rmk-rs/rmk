@@ -19,19 +19,19 @@ rmk = { path = "../../../rmk", default-features = false, features = [
     "defmt",
     "watchdog",
 ] }
-nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "f54b6389ffa2750d4d3a4f5435660cb66b47e51a", default-features = false, features = [
+nrf-sdc = { version = "0.4.0", default-features = false, features = [
     "defmt",
     "peripheral",
     "central",
     "nrf54lm20-app-s",
 ] }
-# nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "f54b6389ffa2750d4d3a4f5435660cb66b47e51a", default-features = false, features = [
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "f54b6389ffa2750d4d3a4f5435660cb66b47e51a", default-features = false, features = [
+# nrf-mpsl = { version = "0.4.0", default-features = false, features = [
+nrf-mpsl = { version = "0.4.0", default-features = false, features = [
     "defmt",
     "critical-section-impl",
     "nrf54lm20-app-s",
 ] }
-bt-hci = { version = "0.9", features = ["defmt"] }
+bt-hci = { version = "0.10", features = ["defmt"] }
 
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.5"
@@ -83,11 +83,11 @@ overflow-checks = false
 lto = "fat"
 
 [patch.crates-io]
-embassy-nrf = { git = "https://github.com/HaoboGu/embassy", rev = "95950532c5d920d9a2ffa22b02373198a3e4a4ea" }
-embassy-sync = { git = "https://github.com/HaoboGu/embassy", rev = "95950532c5d920d9a2ffa22b02373198a3e4a4ea" }
-embassy-usb = { git = "https://github.com/HaoboGu/embassy", rev = "95950532c5d920d9a2ffa22b02373198a3e4a4ea" }
-embassy-time = { git = "https://github.com/HaoboGu/embassy", rev = "95950532c5d920d9a2ffa22b02373198a3e4a4ea" }
-embassy-executor = { git = "https://github.com/HaoboGu/embassy", rev = "95950532c5d920d9a2ffa22b02373198a3e4a4ea" }
-embassy-hal-internal = { git = "https://github.com/HaoboGu/embassy", rev = "95950532c5d920d9a2ffa22b02373198a3e4a4ea" }
-embassy-futures = { git = "https://github.com/HaoboGu/embassy", rev = "95950532c5d920d9a2ffa22b02373198a3e4a4ea" }
-embassy-embedded-hal = { git = "https://github.com/HaoboGu/embassy", rev = "95950532c5d920d9a2ffa22b02373198a3e4a4ea" }
+embassy-nrf = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }

@@ -158,8 +158,8 @@ pub struct BehaviorConfig {
     pub tap_interval_ms: u16,
     pub tap_capslock_interval_ms: u16,
     /// Default profile for morse/tap-hold keys; per-key profiles override it.
-    /// A `None` field falls back to a firmware default the host can't read back —
-    /// for `enable_flow_tap`, the compiled `[behavior.morse]` switch.
+    /// `keyboard.toml` seeds `enable_flow_tap` and both timeouts, so a read
+    /// returns them; a `None` field falls back to the firmware default.
     pub morse_default_profile: MorseProfile,
     /// Flow-tap window: a morse key pressed within this time of the previous
     /// key press is forced to its tap action.

@@ -142,7 +142,7 @@ impl Runnable for Keyboard<'_> {
     /// The report is sent using `send_report`.
     async fn run(&mut self) -> ! {
         loop {
-            // TODO: Now the unprocessed_events is only used in one-shot keys and clear peer key.
+            // TODO: Now the unprocessed_events is only used in held_for_5s.
             // Maybe it can be removed in the future?
             if !self.unprocessed_events.is_empty() {
                 // Process unprocessed events
@@ -153,13 +153,20 @@ impl Runnable for Keyboard<'_> {
                 // Process buffered held key
                 self.process_buffered_key(key).await
             } else {
-                // If mouse repeat is pending, race subscriber against deadline
-                let event = if let Some(deadline) = self.mouse.next_deadline() {
+                // If a mouse repeat or one-shot expiry is pending, race subscriber against the earliest deadline
+                let deadline = [self.mouse.next_deadline(), self.osm_deadline, self.osl_deadline]
+                    .into_iter()
+                    .flatten()
+                    .min();
+                let event = if let Some(deadline) = deadline {
                     match with_deadline(deadline, self.keyboard_event_subscriber.next_message_pure()).await {
                         Ok(event) => event,
                         Err(_) => {
-                            // Repeat deadline expired, fire repeat
-                            self.fire_mouse_repeat().await;
+                            // Deadline expired: fire pending one-shot expiry and/or mouse repeat
+                            self.fire_oneshot_timeout().await;
+                            if self.mouse.next_deadline().is_some_and(|d| d <= Instant::now()) {
+                                self.fire_mouse_repeat().await;
+                            }
                             continue;
                         }
                     }
@@ -209,8 +216,14 @@ pub struct Keyboard<'a> {
     /// Oneshot Layer state
     osl_state: OneShotState<u8>,
 
+    /// Expiry deadline while the oneshot layer is armed (`Single`)
+    osl_deadline: Option<Instant>,
+
     /// Oneshot Modifier state
     osm_state: OneShotState<ModifierCombination>,
+
+    /// Expiry deadline while the oneshot modifiers are armed (`Single`)
+    osm_deadline: Option<Instant>,
 
     /// Caps Word state machine
     caps_word: CapsWordState,
@@ -264,7 +277,9 @@ impl<'a> Keyboard<'a> {
             keyboard_event_subscriber: KeyboardEvent::subscriber(),
             last_press_time: Instant::now(),
             osl_state: OneShotState::default(),
+            osl_deadline: None,
             osm_state: OneShotState::default(),
+            osm_deadline: None,
             caps_word: CapsWordState::default(),
             with_modifiers: ModifierCombination::default(),
             macro_texting: false,

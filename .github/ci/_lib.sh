@@ -49,6 +49,7 @@ RMK_FEATURESETS=(
     "split,vial,storage,passkey_entry"
     "vial,storage,steno"
     "split,vial,storage,async_matrix,_ble,steno"
+    "split,vial,storage,async_matrix,_ble,subrating"
     "rynk,_ble,split,storage,async_matrix"
     "rynk,storage"
     "rynk"
@@ -75,9 +76,9 @@ RMK_TEST_FEATURESETS=(
 #   - esp32_ble_split: dual-target split example; only builds through the
 #     `build-central` / `build-peripheral` cargo aliases.
 #   - py32f07x, sf32lb52x_usb: not currently buildable in CI.
-#   - sf32lb52x_ble: sifli-radio pins bt-hci 0.8 while rmk needs bt-hci 0.9, so its
+#   - sf32lb52x_ble: sifli-radio pins bt-hci 0.8 while rmk needs bt-hci 0.10, so its
 #     BleController doesn't satisfy rmk's Controller traits. Document-and-wait (no
-#     sifli-rs fork) until sifli-radio ships bt-hci 0.9.
+#     sifli-rs fork) until sifli-radio ships a bt-hci version rmk can use.
 EXAMPLE_SKIPLIST=(
     "examples/use_rust/nrf54lm20_ble"
     "examples/use_config/esp32_ble_split"
