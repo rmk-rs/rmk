@@ -24,11 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add configurable `battery_user_description` values for the central and split peripheral Battery Level characteristics through `[ble]`, `[split.central]`, and `[[split.peripheral]]`, with descriptive defaults for each battery service
 - Advertise the boot keyboard protocol on the primary HID interface, so the keyboard works in BIOS/UEFI and other boot-protocol-only hosts
 - Add USB logging support for split peripherals ([#1000](https://github.com/rmk-rs/rmk/pull/1000))
+- Add BLE connection subrating for the split link (`subrating` feature), see [low power](https://rmk.rs/docs/features/low_power) ([#1008](https://github.com/rmk-rs/rmk/pull/1008), [#1077](https://github.com/rmk-rs/rmk/pull/1077))
+- Stream keyboard state to the dongle over GATT: keys, modifiers, layer, WPM, sleep and battery ([#1086](https://github.com/rmk-rs/rmk/pull/1086))
+- Add a builder for the USB transport
 
 #### Displays and other outputs
 
 - Add OLED display support (`display` Cargo feature) with a `[display]` section in `keyboard.toml`. Ships `oled_async` drivers for SH1106, SH1107, SH1108 and SSD1309, plus `lcd-async` for color panels. Default renderers show layer, connection, and battery state, blank while the keyboard sleeps, and honour configurable render/poll intervals. Custom renderers are supported — see [examples/use_rust/custom_renderer](https://github.com/rmk-rs/rmk/tree/main/examples/use_rust/custom_renderer). On splits, the central forwards display state events to peripherals so both halves can show the same status
 - Add Plover HID stenography support (`steno` Cargo feature): a steno HID descriptor and USB endpoint, an `Action::Steno` keycode with `STN(key)` syntax in `keyboard.toml`, and a live-state reporter
+- Flush only the dirty rectangle in `LcdAsyncDisplay` ([#1070](https://github.com/rmk-rs/rmk/pull/1070))
 
 #### Behaviors
 
@@ -90,6 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optimize the timing for motion read and sending reports on the PMW3610
 - Correct the delay length of PMW3610 to the precise value
 - Update `sequential-storage` to v8.0. The on-flash format is unchanged, so existing storage is read back as-is
+- Apply connection subrating to the split link only, not to the host link ([#1088](https://github.com/rmk-rs/rmk/pull/1088))
+- Enable trouble's `security-p256-cortex-m4` on nRF for hardware-accelerated pairing ([#1076](https://github.com/rmk-rs/rmk/pull/1076))
 
 ### Fixed
 
@@ -112,6 +118,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix a bonded dongle hijacking the keyboard's BLE host profiles: it connected on the keyboard's bare address, so it also answered the plain HID advertising of a host profile and bonded itself into that slot. The dongle now connects only when the keyboard asks for a dongle, and the keyboard refuses the bonded dongle on every host profile ([#1056](https://github.com/rmk-rs/rmk/pull/1056))
 - Fix the nRF SoftDevice Controller memory pool size calculation ([#1002](https://github.com/rmk-rs/rmk/pull/1002))
 - Fix spurious sleep, and fix the split peripheral's connection parameters
+- Fix one-shot expiry blocking the keyboard task ([#1083](https://github.com/rmk-rs/rmk/pull/1083))
+- Fix a dropped split link staying down until the sleeping central wakes ([#1081](https://github.com/rmk-rs/rmk/pull/1081))
+- Declare the nRF52 LFRC at its specified 500 ppm ([#1080](https://github.com/rmk-rs/rmk/pull/1080))
+- Fix an out-of-bounds panic on key positions outside the matrix ([#1078](https://github.com/rmk-rs/rmk/pull/1078))
+- Reject misspelled modifier and fork state names in `keyboard.toml` ([#1089](https://github.com/rmk-rs/rmk/pull/1089))
+- Seed the default morse profile's flow-tap bit from `keyboard.toml` ([#1067](https://github.com/rmk-rs/rmk/pull/1067), [#1068](https://github.com/rmk-rs/rmk/pull/1068))
+- Stop a pointing device spinning after its sensor init failed ([#1066](https://github.com/rmk-rs/rmk/pull/1066), [#1087](https://github.com/rmk-rs/rmk/pull/1087))
+- Keep the dongle link at 2M PHY under `use_1m_phy` ([#1065](https://github.com/rmk-rs/rmk/pull/1065))
+- Return the persisted layout option from Vial's `GetKeyboardValue` ([#1060](https://github.com/rmk-rs/rmk/pull/1060))
+- Give the display processor its own event-subscriber slot
 
 ## [0.8.2] - 2025-12-18
 
