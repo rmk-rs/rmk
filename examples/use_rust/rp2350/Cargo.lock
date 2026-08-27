@@ -2041,7 +2041,7 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rmk"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "bt-hci",
  "byteorder",
@@ -2091,7 +2091,7 @@ dependencies = [
 
 [[package]]
 name = "rmk-macro"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "cargo_toml",
  "darling 0.24.1",
@@ -2124,7 +2124,7 @@ dependencies = [
 
 [[package]]
 name = "rmk-types"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bitfield-struct",
  "defmt 1.1.1",

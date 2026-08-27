@@ -1334,7 +1334,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rmk"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "cortex-m",
  "crc32fast",
@@ -1376,7 +1376,7 @@ dependencies = [
 
 [[package]]
 name = "rmk-macro"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "cargo_toml",
  "darling 0.24.1",
@@ -1408,7 +1408,7 @@ dependencies = [
 
 [[package]]
 name = "rmk-types"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bitfield-struct",
  "heapless 0.9.3",
