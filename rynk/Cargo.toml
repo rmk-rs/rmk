@@ -84,7 +84,7 @@ description = "Host-side tooling for the Rynk protocol — RMK's native host com
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rmk-rs/rmk"
-version = "0.2.0"
+version = "0.3.0"
 rust-version = "1.85"
 
 [workspace.dependencies]

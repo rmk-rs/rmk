@@ -15,7 +15,7 @@ keywords = ["keyboard", "firmware", "rmk", "protocol", "wasm"]
 crate-type = ["cdylib"]
 
 [dependencies]
-rynk = { path = "..", version = "=0.2.0", features = ["wasm"] }
+rynk = { path = "..", version = "=0.3.0", features = ["wasm"] }
 embassy-futures = "0.1"
 embassy-sync.workspace = true
 wasm-bindgen = "0.2"
