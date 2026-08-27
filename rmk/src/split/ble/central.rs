@@ -281,8 +281,8 @@ pub(crate) mod subrating {
     //    |   180 | 1350 |  60 |  450 |      39 | 228 /  457 |      21 |
     //    |   300 | 2250 |  60 |  450 |      34 | 228 /  457 |      21 |
     //    |   300 | 2250 | 120 |  900 |      32 | 453 /  907 |      21 |
-    //    | no HC |      | 100 |  750 |      24 | 378 /  757 |      21 |
-    // ==>| no HC |      | 125 |  937 |      22 | 472 /  945 |      21 |<== Disconnected Sleep
+    // ==>| no HC |      | 100 |  750 |      24 | 378 /  757 |      21 |<== Disconnected Sleep
+    //    | no HC |      | 125 |  937 |      22 | 472 /  945 |      21 |
     //    | no HC |      | 250 | 1875 |      21 | 941 / 1882 |      24 |
     //    |-------+------+-----+------+---------+------------|---------|
     //    HCL .. Host Connection max latency (host <-> central, assumes 7.5ms interval)
@@ -308,7 +308,7 @@ pub(crate) mod subrating {
     use trouble_host::prelude::*;
 
     const SLEEP_HOST_CONN_SUBRATE: u16 = 30;
-    const SLEEP_NO_HOST_SUBRATE: u16 = 125;
+    const SLEEP_NO_HOST_SUBRATE: u16 = 100;
 
     // In some cases, the subrate request procedure does not complete with only one continuation.
     const SLEEP_CONTINUATION_NUMBER: u16 = 2;
