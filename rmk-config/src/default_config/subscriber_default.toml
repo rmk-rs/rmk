@@ -16,6 +16,7 @@
 features = ["display"]
 events = [
     # display/mod.rs: DisplayProcessor subscribes to these events
+    { name = "keyboard" },
     { name = "wpm_update" },
     { name = "modifier" },
     { name = "sleep_state" },
