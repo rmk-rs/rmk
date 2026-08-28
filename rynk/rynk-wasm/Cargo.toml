@@ -1,6 +1,6 @@
 [package]
 name = "rynk-wasm"
-version = "0.3.1"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
