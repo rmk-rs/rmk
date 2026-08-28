@@ -2,21 +2,13 @@
 # twin `>`, or simply one keycode bound twice. Each press takes its own report
 # slot, but the report collapses held keycodes to one usage, so a roll from one
 # to the other leaves the usage continuously down and the host — which emits a
-# character on the absent→present transition — sees one keystroke for two.
-#
-# The usage must also stay down while any owner holds it, so the two halves have
-# to hold at once: exactly one extra report per re-strike, carrying every other
-# held usage and every held modifier.
+# character on the absent→present transition — sees one keystroke for two. The
+# usage must still stay down while any owner holds it, so the repair is one
+# extra report per re-strike, carrying every other held usage and modifier.
 #
 # Layer 0 row 0 pairs `<` with `>` and binds `Kc7` twice; row 1 is six distinct
 # keycodes to fill the report array; row 2 re-binds `Kc1` for the full-array
 # case and carries the two real modifiers.
-#
-# The decision is taken by comparing how many slots hold the usage on behalf of
-# a registered key event, before and after registration. That is an observation
-# of what registration did rather than a prediction of what it would do, so a
-# press finding no free slot synthesises nothing, and any path that gives the
-# usage a new owner strikes it however the slot came to hold it.
 
 [layout]
 rows = 3
