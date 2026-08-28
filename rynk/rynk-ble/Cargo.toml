@@ -1,6 +1,6 @@
 [package]
 name = "rynk-ble"
-version.workspace = true
+version = "0.3.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -10,7 +10,7 @@ repository.workspace = true
 keywords = ["keyboard", "firmware", "rmk", "protocol", "ble"]
 
 [dependencies]
-rynk = { path = "..", version = "=0.3.1" }
+rynk = { path = "..", version = "0.3" }
 bluest.workspace = true
 futures-util.workspace = true
 async-stream = "0.3"

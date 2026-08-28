@@ -1,6 +1,6 @@
 [package]
 name = "rynk"
-version.workspace = true
+version = "0.3.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -84,7 +84,6 @@ description = "Host-side tooling for the Rynk protocol — RMK's native host com
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rmk-rs/rmk"
-version = "0.3.1"
 rust-version = "1.85"
 
 [workspace.dependencies]

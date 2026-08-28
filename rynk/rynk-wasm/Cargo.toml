@@ -1,6 +1,6 @@
 [package]
 name = "rynk-wasm"
-version.workspace = true
+version = "0.3.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -15,7 +15,7 @@ keywords = ["keyboard", "firmware", "rmk", "protocol", "wasm"]
 crate-type = ["cdylib"]
 
 [dependencies]
-rynk = { path = "..", version = "=0.3.1", features = ["wasm"] }
+rynk = { path = "..", version = "0.3", features = ["wasm"] }
 embassy-futures = "0.1"
 embassy-sync.workspace = true
 wasm-bindgen = "0.2"

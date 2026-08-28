@@ -16,13 +16,14 @@ if [[ $# -eq 0 ]]; then
 else
     # Assign first: a process substitution would swallow release_closure's exit
     # status, leaving an empty crate list and a release that bumps nothing.
-    closure="$(release_closure "$@")"
+    closure="$(release_closure "$level" "$@")"
     crates=()
     while IFS= read -r name; do crates+=("$name"); done <<< "$closure"
     requested=" $* "
 fi
 
-# Set a crate's own version, then update every `=` pin that names it.
+# Set a crate's own version, then update every requirement that names it. An
+# exact pin takes the whole version; a caret pin only its major.minor.
 set_version() {
     local crate="$1" version="$2" manifest name
     manifest="$(crate_manifest "$crate")"
@@ -33,9 +34,10 @@ set_version() {
     mv "$manifest.new" "$manifest"
     for name in "${RELEASE_CRATES[@]}"; do
         manifest="$(crate_manifest "$name")"
-        awk -v n="$crate" -v v="$version" '
+        awk -v n="$crate" -v v="$version" -v caret="${version%.*}" '
             $0 ~ "^" n " *= *\\{" {
-                gsub(/version = "=[0-9]+\.[0-9]+\.[0-9]+"/, "version = \"=" v "\"")
+                gsub(/version = "=[0-9.]+"/, "version = \"=" v "\"")
+                gsub(/version = "[0-9][0-9.]*"/, "version = \"" caret "\"")
             }
             { print }
         ' "$manifest" > "$manifest.new"
@@ -50,36 +52,31 @@ for crate in "${crates[@]}"; do
         echo "$crate: cannot bump the non-numeric version $current" >&2
         exit 1
     fi
-    IFS=. read -r major minor patch <<< "$current"
-    case "$level" in
-        major) next="$((major + 1)).0.0" ;;
-        minor) next="$major.$((minor + 1)).0" ;;
-        patch) next="$major.$minor.$((patch + 1))" ;;
-        *) echo "unknown bump level: $level" >&2; exit 1 ;;
-    esac
+    next="$(bump_version "$current" "$level")"
     set_version "$crate" "$next"
     case "$requested" in
         *" $crate "*) echo "$crate $current -> $next" ;;
-        *) echo "$crate $current -> $next  (pins a crate above)" ;;
+        *) echo "$crate $current -> $next  (its requirement on a crate above moved)" ;;
     esac
 done
 
-# set_version only rewrites pins spelled `name = { ... }` on one line. Any other
-# spelling keeps its old version, which cargo would not reject until publish.
+# set_version only rewrites requirements spelled `name = { ... }` on one line.
+# Any other spelling keeps its old value, which cargo accepts until publish.
 log_section "Checking pins"
 for crate in "${crates[@]}"; do
     version="$(crate_version "$crate")"
     for name in "${RELEASE_CRATES[@]}"; do
         manifest="$(crate_manifest "$name")"
-        awk -v file="$manifest" -v c="$crate" -v v="$version" '
+        awk -v file="$manifest" -v c="$crate" -v v="$version" -v caret="${version%.*}" '
             /^\[/ { table = ($0 ~ "dependencies\\." c "\\]$") }
             $0 ~ "^" c " *= *\\{" || table {
-                if (match($0, /version *= *"=[^"]*"/)) {
+                if (match($0, /version *= *"[^"]*"/)) {
                     pin = substr($0, RSTART, RLENGTH)
-                    sub(/.*"=/, "", pin)
+                    sub(/^version *= *"/, "", pin)
                     sub(/"$/, "", pin)
-                    if (pin != v) {
-                        printf "::error file=%s,line=%d::%s pin is =%s, expected =%s\n", file, NR, c, pin, v
+                    want = (pin ~ /^=/) ? "=" v : caret
+                    if (pin != want) {
+                        printf "::error file=%s,line=%d::%s requirement is %s, expected %s\n", file, NR, c, pin, want
                         bad = 1
                     }
                 }

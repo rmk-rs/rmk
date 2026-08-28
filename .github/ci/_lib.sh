@@ -149,9 +149,8 @@ RELEASE_CRATES=(
     rynk rynk-usb rynk-ble rynk-kle rynk-wasm
 )
 
-# The crates a release can bump. The four rynk members are absent because they
-# inherit `version.workspace` from rynk.
-RELEASE_BUMPABLE=(rmk-config rmk-types rmk-macro rmk rynk)
+# Every crate carries its own version, so any of them can be released alone.
+RELEASE_BUMPABLE=("${RELEASE_CRATES[@]}")
 
 # release-pr.yml opens its PR from this branch, and publish.yml publishes only
 # commits that arrived through it.
@@ -166,28 +165,54 @@ crate_manifest() {
     esac
 }
 
-# A package's own version is the only `version = "..."` at column 0. In
-# rynk/Cargo.toml that is the one under [workspace.package].
+# A package's own version is the only `version = "..."` at column 0; dependency
+# versions are either indented or inline as `name = { version = ... }`.
 crate_version() {
-    local manifest
-    case "$1" in
-        rynk-*) manifest=rynk/Cargo.toml ;;
-        *) manifest="$(crate_manifest "$1")" ;;
-    esac
-    awk -F'"' '/^version = "/ { print $2; exit }' "$manifest"
+    awk -F'"' '/^version = "/ { print $2; exit }' "$(crate_manifest "$1")"
 }
 
-# The named crates plus everything that pins them, in publish order.
+# The version $1 becomes after a major, minor or patch bump.
+bump_version() {
+    local major minor patch
+    IFS=. read -r major minor patch <<< "$1"
+    case "$2" in
+        major) printf '%s.0.0\n' "$((major + 1))" ;;
+        minor) printf '%s.%s.0\n' "$major" "$((minor + 1))" ;;
+        patch) printf '%s.%s.%s\n' "$major" "$minor" "$((patch + 1))" ;;
+        *) echo "unknown bump level: $2" >&2; return 1 ;;
+    esac
+}
+
+# The version requirement $2 declares on $1, empty if it does not depend on it.
+crate_pin() {
+    sed -nE "s/^$1 *= *\{.*version *= *\"([^\"]*)\".*/\1/p" "$(crate_manifest "$2")"
+}
+
+# Whether bumping $1 by $2 moves the requirement $3 declares on it. An exact pin
+# always moves; a caret pin only when the bump crosses its major.minor.
+pin_moves() {
+    local pin next
+    pin="$(crate_pin "$1" "$3")"
+    [ -n "$pin" ] || return 1
+    next="$(bump_version "$(crate_version "$1")" "$2")"
+    case "$pin" in
+        "="*) return 0 ;;
+        *) [ "$pin" != "${next%.*}" ] ;;
+    esac
+}
+
+# The crates named in $2.. plus every dependent a $1 bump would drag along, in
+# publish order. A dependent whose requirement moves but whose own version does
+# not would publish nothing, leaving crates.io on the version the fix replaced.
 release_closure() {
-    local list=" $* " name dep grown=1
+    local level="$1" list name dep grown=1
+    shift
+    list=" $* "
     for name in "$@"; do
         case " ${RELEASE_BUMPABLE[*]} " in
             *" $name "*) continue ;;
         esac
-        case " ${RELEASE_CRATES[*]} " in
-            *" $name "*) echo "$name takes its version from rynk; name rynk instead" >&2 ;;
-            *) echo "unknown crate: $name (releasable: ${RELEASE_BUMPABLE[*]})" >&2 ;;
-        esac
+        echo "unknown crate: $name (releasable: ${RELEASE_BUMPABLE[*]})" >&2
         return 1
     done
     while [ "$grown" = 1 ]; do
@@ -195,7 +220,7 @@ release_closure() {
         for name in "${RELEASE_BUMPABLE[@]}"; do
             case "$list" in *" $name "*) continue ;; esac
             for dep in $list; do
-                if grep -qE "^$dep *= *\{[^}]*version *= *\"=" "$(crate_manifest "$name")"; then
+                if pin_moves "$dep" "$level" "$name"; then
                     list="$list$name "
                     grown=1
                     break
