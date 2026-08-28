@@ -52,9 +52,9 @@ peripheral_battery.subs = 4
 | Config Name                | Event Type                    | Default Notes                   |
 | -------------------------- | ----------------------------- | ------------------------------- |
 | **Input Events**           |                               |                                 |
-| `keyboard`                 | `KeyboardEvent`               | channel_size=16, pubs=2, subs=3 |
+| `keyboard`                 | `KeyboardEvent`               | channel_size=16, pubs=4, subs=3 |
 | `modifier`                 | `ModifierEvent`               | channel_size=8, subs=2          |
-| `pointing`                 | `PointingEvent`               | channel_size=8, pubs=2, subs=2  |
+| `pointing`                 | `PointingEvent`               | channel_size=8, pubs=4, subs=2  |
 | **State Events**           |                               |                                 |
 | `layer_change`             | `LayerChangeEvent`            | pubs=2                          |
 | `wpm_update`               | `WpmUpdateEvent`              |                                 |
