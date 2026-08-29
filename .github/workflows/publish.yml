@@ -97,9 +97,6 @@ jobs:
       - id: auth
         uses: rust-lang/crates-io-auth-action@v1
 
-      # Events from the default GITHUB_TOKEN never trigger other workflows, so
-      # a release created with it does not fire dc.yml's Discord announcement.
-      # Create the release with the release App's token instead.
       - id: app-token
         uses: actions/create-github-app-token@v3
         with:
