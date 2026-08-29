@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-08-29
+
+### Fixed
+
+- Fix `async_matrix` builds on current stable Rust: replace `select_slice(pin!(...))` with `select_array` in the matrix and direct-pin scan loops (backport of the fix shipped in 0.9.0)
+
 ## [0.8.2] - 2025-12-18
 
 ### Added
