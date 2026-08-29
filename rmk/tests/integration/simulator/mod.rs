@@ -57,7 +57,9 @@ type Link = embassy_sync::pipe::Pipe<embassy_sync::blocking_mutex::raw::NoopRawM
 /// Reset the process-global state a run observes. `embassy-time`'s `MockDriver`
 /// forces one test per process, but a test may still build several keyboards.
 fn reset() {
-    KeyboardEvent::publisher_async().clear();
+    KeyboardEvent::publisher_async()
+        .expect("free publisher slot at reset")
+        .clear();
 
     rmk::test_support::reset_connection_status();
     #[cfg(not(feature = "_no_usb"))]
@@ -405,7 +407,7 @@ impl SimKeyboard {
 /// Play `steps` in order, asserting as it goes. `to_device`/`from_device` are
 /// the host end of the link the caller's session runs on.
 async fn run_steps(steps: Vec<SimStep>, to_device: &Link, from_device: &Link) {
-    let sender = KeyboardEvent::publisher_async();
+    let sender = KeyboardEvent::publisher_async().expect("free publisher slot for the scenario driver");
     let mut pressed_inputs = Vec::<KeyboardEventPos>::new();
     // Codegen queues one step per `expect` entry, in order, so the nth
     // expectation played is the scenario's `expect[n]`.

@@ -427,8 +427,8 @@ dongle_pairing_window_secs = 30
 [event.keyboard]
 # Channel buffer size
 channel_size = 16
-# Number of publishers
-pubs = 2
+# Publisher waker slots: one per concurrently publishing task
+pubs = 4
 # Number of subscribers
 subs = 3
 

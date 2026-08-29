@@ -1457,7 +1457,7 @@ mod tests {
 
         // Check some key default values from event_default.toml
         assert_eq!(config.keyboard.channel_size, 16);
-        assert_eq!(config.keyboard.pubs, 2);
+        assert_eq!(config.keyboard.pubs, 4);
         assert_eq!(config.keyboard.subs, 3);
 
         assert_eq!(config.modifier.channel_size, 8);
@@ -1497,7 +1497,7 @@ channel_size = 32
 
         // User-overridden values
         assert_eq!(config.event.keyboard.channel_size, 32);
-        assert_eq!(config.event.keyboard.pubs, 2);
+        assert_eq!(config.event.keyboard.pubs, 4);
         assert_eq!(config.event.keyboard.subs, 3);
 
         // Non-overridden values should use defaults

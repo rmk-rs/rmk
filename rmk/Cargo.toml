@@ -12,7 +12,7 @@ resolver = "2"
 
 [dependencies]
 rmk-macro = { version = "=0.8.0", path = "../rmk-macro" }
-rmk-types = { version = "=0.3.0", path = "../rmk-types" }
+rmk-types = { version = "=0.4.0", path = "../rmk-types" }
 embedded-hal = { version = "1.0.0" }
 embedded-hal-async = { version = "1.0.0" }
 embedded-io-async = { version = "0.7" }
