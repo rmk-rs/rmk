@@ -37,6 +37,7 @@ for name in "${RELEASE_CRATES[@]}"; do
 done
 
 log_section "Tagging"
+created_tags=()
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 for name in "${RELEASE_CRATES[@]}"; do
@@ -46,9 +47,14 @@ for name in "${RELEASE_CRATES[@]}"; do
     # A crate that never made it to crates.io must not get a tag saying it did.
     crate_published "$name" "$version" || continue
     git tag -a "$tag" -m "$name $version"
+    created_tags+=("$tag")
     echo "created $tag"
 done
-git push origin --tags
+# One ref per push: the repository ruleset rejects pushes that update more
+# than 5 refs (GH013), which a 9-crate release trips with `--tags`.
+for tag in ${created_tags[@]+"${created_tags[@]}"}; do
+    git push origin "refs/tags/$tag"
+done
 
 log_section "GitHub release"
 version="$(crate_version rmk)"
