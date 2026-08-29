@@ -13,7 +13,7 @@ use embassy_executor::Spawner;
 use embassy_nrf::config::{ClockSpeed, Config as NrfConfig, HfclkSource, LfclkSource};
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::mode::Blocking;
-use embassy_nrf::peripherals::{SERIAL22, USBHS};
+use embassy_nrf::peripherals::{SERIAL22, SERIAL30, USBHS};
 use embassy_nrf::spim::{self, Spim};
 use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
 use embassy_nrf::usb::{self, Driver};
@@ -28,8 +28,10 @@ use rmk::ble::BleTransport;
 use rmk::config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::host::HostService;
+use rmk::input_device::battery::{BatteryProcessor, ChargingStateReader};
 use rmk::input_device::pmw3610::{Pmw3610, Pmw3610Config};
 use rmk::input_device::pointing::{PointingDevice, PointingProcessor, PointingProcessorConfig};
+use rmk::input_device::rotary_encoder::RotaryEncoder;
 use rmk::keyboard::Keyboard;
 use rmk::matrix::Matrix;
 use rmk::processor::builtin::wpm::WpmProcessor;
@@ -234,23 +236,6 @@ async fn main(spawner: Spawner) {
     // `J1`'s middle pin is tied to ground, so both phases need an internal pull-up.
     let mut encoder = RotaryEncoder::new(Input::new(p.P1_23, Pull::Up), Input::new(p.P1_19, Pull::Up), 0);
 
-    let pmw3610_spi = BitBangSpiBus::new(
-        Output::new(p.P1_17, Level::High, OutputDrive::Standard),
-        Flex::new(p.P1_16),
-    );
-    let mut trackball = PointingDevice::<Pmw3610<_, _, _>>::new(
-        0,
-        pmw3610_spi,
-        Output::new(p.P1_15, Level::High, OutputDrive::Standard),
-        Some(Input::new(p.P1_18, Pull::Up)),
-        Pmw3610Config {
-            res_cpi: 800,
-            smart_mode: true,
-            ..Default::default()
-        },
-    );
-    let mut pointing_processor = PointingProcessor::new(&keymap, PointingProcessorConfig::default());
-
     // Two WS2812s on `RGB`, powered through `RGB_EN`. See `rgb` for why the data
     // line is clocked out of SPIM30 rather than a PWM sequence.
     let mut spim_config = spim::Config::default();
@@ -299,13 +284,17 @@ async fn main(spawner: Spawner) {
 
     run_all!(
         matrix,
+        encoder,
+        trackball,
+        charging_reader,
         storage,
         usb_transport,
         ble_transport,
+        trackball_processor,
+        battery_processor,
         wpm_processor,
-        keyboard,
-        trackball,
-        trackball_processor
+        rgb,
+        keyboard
     )
     .await;
 }
