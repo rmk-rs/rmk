@@ -609,15 +609,12 @@ macro_rules! user {
 /// # Available Actions
 /// - Bootloader: Enter bootloader mode for firmware updates
 /// - Reboot: Reboot the keyboard
-/// - DebugToggle: Toggle debug mode
-/// - ClearEeprom: Clear EEPROM storage
-/// - OutputAuto: Auto-select output (USB/Bluetooth)
-/// - OutputUsb: Force USB output
-/// - OutputBluetooth: Force Bluetooth output
+/// - ClearEeprom: Clear EEPROM storage (requires the `storage` feature)
 /// - ComboOn: Enable combos
 /// - ComboOff: Disable combos
 /// - ComboToggle: Toggle combos
 /// - CapsWordToggle: Toggle caps word mode
+/// - DebugToggle, OutputAuto, OutputUsb, OutputBluetooth: Not implemented yet, do nothing
 ///
 /// # Example (internal use only)
 /// ```ignore
@@ -636,6 +633,9 @@ macro_rules! kbctrl {
 /// Create a light control action.
 ///
 /// This macro creates light control actions for backlight and RGB lighting.
+///
+/// Light control is not implemented yet: these actions are accepted in the
+/// keymap but the firmware ignores them when pressed.
 ///
 /// # Available Actions
 /// Backlight: BacklightOn, BacklightOff, BacklightToggle, BacklightDown,

@@ -20,9 +20,9 @@ pub use system_control::SystemControlKey;
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum SpecialKey {
-    // GraveEscape
+    /// Sends `Esc`, or `` ` `` when any modifier is held
     GraveEscape,
-    // Repeat
+    /// Repeats the last pressed key
     Repeat,
 }
 

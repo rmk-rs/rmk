@@ -11,15 +11,26 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum KeyboardAction {
+    /// Jump to the bootloader on key release, for firmware flashing
     Bootloader,
+    /// Reboot the keyboard on key release
     Reboot,
+    /// Not implemented yet, does nothing
     DebugToggle,
+    /// Reset the storage to default on key release, requires the `storage` feature
     ClearEeprom,
+    /// Not implemented yet, does nothing
     OutputAuto,
+    /// Not implemented yet, does nothing
     OutputUsb,
+    /// Not implemented yet, does nothing
     OutputBluetooth,
+    /// Enable combos
     ComboOn,
+    /// Disable combos
     ComboOff,
+    /// Toggle combos
     ComboToggle,
+    /// Toggle Caps Word
     CapsWordToggle,
 }
