@@ -303,7 +303,6 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 
 The following key names are accepted in `keyboard.toml` but not implemented yet — pressing them does nothing:
 
-- `DebugToggle`, `OutputAuto`, `OutputUsb`, `OutputBluetooth`
 - Backlight keys: `BacklightOn`, `BacklightOff`, `BacklightToggle`, `BacklightDown`, `BacklightUp`, `BacklightStep`, `BacklightToggleBreathing`
 - RGB keys: `RgbTog`, `RgbHui`, `RgbHud`, `RgbSai`, `RgbSad`, `RgbVai`, `RgbVad`, `RgbSpi`, `RgbSpd`, and the `RgbMode*` effect names
 

@@ -15,16 +15,8 @@ pub enum KeyboardAction {
     Bootloader,
     /// Reboot the keyboard on key release
     Reboot,
-    /// Not implemented yet, does nothing
-    DebugToggle,
     /// Reset the storage to default on key release, requires the `storage` feature
     ClearEeprom,
-    /// Not implemented yet, does nothing
-    OutputAuto,
-    /// Not implemented yet, does nothing
-    OutputUsb,
-    /// Not implemented yet, does nothing
-    OutputBluetooth,
     /// Enable combos
     ComboOn,
     /// Disable combos

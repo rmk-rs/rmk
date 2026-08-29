@@ -614,12 +614,11 @@ macro_rules! user {
 /// - ComboOff: Disable combos
 /// - ComboToggle: Toggle combos
 /// - CapsWordToggle: Toggle caps word mode
-/// - DebugToggle, OutputAuto, OutputUsb, OutputBluetooth: Not implemented yet, do nothing
 ///
 /// # Example (internal use only)
 /// ```ignore
 /// kbctrl!(Bootloader)
-/// kbctrl!(OutputUsb)
+/// kbctrl!(ComboToggle)
 /// ```
 #[macro_export]
 macro_rules! kbctrl {
