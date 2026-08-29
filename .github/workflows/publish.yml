@@ -88,6 +88,12 @@ jobs:
         with:
           shared-key: publish
 
+      # The rynk-ble verify build links BlueZ through libdbus on the host.
+      - name: Install host system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
       - id: auth
         uses: rust-lang/crates-io-auth-action@v1
 
