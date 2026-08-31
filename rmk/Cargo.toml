@@ -63,8 +63,7 @@ trouble-host = { version = "0.8", default-features = false, features = [
     "derive",
     "security",
     "serde",
-    "default-packet-pool-size-4",
-    "default-packet-pool-mtu-128",
+    "default-packet-pool-size-32",
 ], optional = true }
 bt-hci = { version = "0.10", optional = true }
 
@@ -229,17 +228,6 @@ async_matrix = []
 ## Use 1M PHY toward the host.
 ## The dongle link and the split link are unaffected: they always run at 2M.
 use_1m_phy = []
-
-## Use the bounded Trouble queues validated for a single peripheral connection.
-## This is intentionally opt-in: dongle and split products require their larger
-## central queues and must not combine them with this profile.
-compact-ble-peripheral = [
-    "trouble-host?/connection-event-queue-size-1",
-    "trouble-host?/l2cap-rx-queue-size-1",
-    # LE Secure Connections can queue Public Key and Pairing Confirm in the
-    # same synchronous state transition, so one TX slot is not sufficient.
-    "trouble-host?/l2cap-tx-queue-size-2",
-]
 
 ## Enable split keyboard support.
 split = [

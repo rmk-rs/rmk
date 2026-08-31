@@ -18,23 +18,22 @@ There are several approaches to solve the problem:
 
 ## Common approaches
 
-### Compact a single-device BLE peripheral
+### Tune a single-device BLE peripheral
 
-For a monolithic BLE keyboard that never acts as a central, dongle, or split host, enable RMK's compact peripheral profile:
+For a monolithic BLE keyboard that never acts as a central, dongle, or split host, Trouble's compile-time capacities can be reduced with environment variables in `.cargo/config.toml`:
 
 ```toml
-rmk = { version = "0.9", default-features = false, features = [
-    "defmt",
-    "storage",
-    "vial",
-    "nrf52832_ble",
-    "compact-ble-peripheral",
-] }
+[env]
+TROUBLE_HOST_CONNECTION_EVENT_QUEUE_SIZE = "1"
+TROUBLE_HOST_L2CAP_RX_QUEUE_SIZE = "1"
+TROUBLE_HOST_L2CAP_TX_QUEUE_SIZE = "2"
+TROUBLE_HOST_DEFAULT_PACKET_POOL_SIZE = "4"
+TROUBLE_HOST_DEFAULT_PACKET_POOL_MTU = "128"
 ```
 
-Also set the controller dependency to `default-features = false` and enable only its peripheral role. For example, the nRF SDC dependency should contain `peripheral` but not `central`.
+Keep two L2CAP TX buffers: LE Secure Connections may enqueue Public Key and Pairing Confirm in the same synchronous state transition. These values are intended only for a single peripheral connection. Do not apply them to an RMK `dongle` or `split` central; those products need larger queues and should be measured independently.
 
-This profile reduces Trouble's connection-event and L2CAP queues while deliberately retaining two TX buffers for LE Secure Connections. It is rejected when combined with RMK's `dongle` or `split` features; those products need the central-role queues.
+Also set the controller dependency to `default-features = false` and enable only its peripheral role. For example, an nRF SDC dependency for a standalone keyboard should contain `peripheral` but not `central`.
 
 ### Change `DEFMT_LOG` level
 

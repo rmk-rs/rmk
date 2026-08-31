@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Add the opt-in `compact-ble-peripheral` profile for single-device BLE keyboards. It keeps two L2CAP TX buffers for Secure Connections while reducing the connection-event and RX queues, and the nRF52832 examples no longer enable the unused SDC central role.
-- Add `BleTransportControl` so an application can pause advertising or disconnect and park an active BLE peripheral while keeping the controller/host runner alive, then resume it without rebuilding the stack. This supports bounded ownership handoff to another radio transport such as ESB.
+- Stop enabling Trouble's central and scan roles for peripheral-only keyboards. The `dongle` and `split` features still enable both roles, while the nRF52832 examples also stop enabling the unused SDC central role.
+- Document Trouble's environment-variable memory tuning for constrained single-device BLE peripherals without adding another RMK feature.
 - Derive the split-central notification listener capacity from Trouble's configured packet-pool MTU instead of assuming 512 bytes.
 
 All notable changes to this project will be documented in this file.
