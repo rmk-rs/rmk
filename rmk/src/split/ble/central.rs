@@ -472,7 +472,7 @@ async fn discover_and_run_manager<C: Controller + ControllerCmdAsync<LeSetPhy>, 
 /// [`SplitReader`]/[`SplitWriter`] over the peripheral's GATT link: reads are
 /// notifications on `message_to_central`, writes go to `message_to_peripheral`.
 struct BleSplitCentralDriver<'a, 'b, 'c, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool> {
-    listener: NotificationListener<'b, 512>,
+    listener: NotificationListener<'b, { trouble_host::config::GATT_CLIENT_NOTIFICATION_MTU }>,
     message_to_peripheral: Characteristic<GattSplitMessage>,
     client: &'c GattClient<'a, C, P, 10>,
 }

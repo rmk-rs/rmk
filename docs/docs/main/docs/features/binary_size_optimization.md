@@ -18,6 +18,24 @@ There are several approaches to solve the problem:
 
 ## Common approaches
 
+### Compact a single-device BLE peripheral
+
+For a monolithic BLE keyboard that never acts as a central, dongle, or split host, enable RMK's compact peripheral profile:
+
+```toml
+rmk = { version = "0.9", default-features = false, features = [
+    "defmt",
+    "storage",
+    "vial",
+    "nrf52832_ble",
+    "compact-ble-peripheral",
+] }
+```
+
+Also set the controller dependency to `default-features = false` and enable only its peripheral role. For example, the nRF SDC dependency should contain `peripheral` but not `central`.
+
+This profile reduces Trouble's connection-event and L2CAP queues while deliberately retaining two TX buffers for LE Secure Connections. It is rejected when combined with RMK's `dongle` or `split` features; those products need the central-role queues.
+
 ### Change `DEFMT_LOG` level
 
 Logging is quite useful when debugging the firmware, but it requires a lot of flash. You can change the default logging level to `error` at `.cargo/config.toml`, to print only error messages and save flash:

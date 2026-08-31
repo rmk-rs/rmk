@@ -39,6 +39,7 @@ RMK_FEATURESETS=(
     "async_matrix,storage"
     "vial,host_lock,storage"
     "vial,_ble"
+    "vial,_ble,storage,compact-ble-peripheral"
     "vial,_ble,_no_usb,steno,passkey_entry"
     "split,async_matrix"
     "split,async_matrix,_ble"
@@ -65,6 +66,7 @@ RMK_FEATURESETS=(
 RMK_TEST_FEATURESETS=(
     ""
     "vial,host_lock,_no_usb,steno,passkey_entry"
+    "vial,_ble,storage,compact-ble-peripheral"
     "rynk,_ble,split,async_matrix,storage"
     "dongle,_ble,storage"
     "dongle,vial,_ble,storage"

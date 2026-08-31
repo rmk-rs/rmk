@@ -10,11 +10,10 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "async_matrix", "nrf52832_ble"] }
-nrf-sdc = { version = "0.4.0", features = [
+rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "async_matrix", "nrf52832_ble", "compact-ble-peripheral"] }
+nrf-sdc = { version = "0.4.0", default-features = false, features = [
     "defmt",
     "peripheral",
-    "central",
     "nrf52832",
 ] }
 nrf-mpsl = { version = "0.4.0", features = [
