@@ -1,0 +1,28 @@
+# The keyboard task races every pending deadline at one wait point, so a
+# behavior that is waiting out its own timeout must not stall the others.
+#
+# Board positions used: MouseWheelUp@(0,8), TH(B, C)@(0,3).
+
+keyboard = "boards/split.toml"
+
+# Regression: the buffered-key wait used to race only its own timeout, so a
+# held morse key froze mouse repeats until the next key event arrived.
+[[test]]
+name = "buffered_morse_wait_does_not_stall_mouse_repeats"
+behavior.morse = { hold_timeout = "400ms" }
+steps = [
+  { press = [0, 8] },   # Wheel: initial delta, repeats due at +100/+180ms
+  { delay = 20 },
+  { press = [0, 3] },   # TH(B, C): buffered, waiting out the 400ms hold timeout
+  { delay = 210 },      # covers two repeat ticks while the morse key waits
+  { release = [0, 3] }, # well before the hold timeout: resolves as tap B
+  { delay = 20 },
+  { release = [0, 8] },
+]
+expect = [
+  { mouse = { wheel = -1 } },
+  { mouse = { wheel = -1 } },  # repeat while the morse key is buffered
+  { mouse = { wheel = -1 } },  # repeat
+  ["B"], [],
+  { mouse = {} },
+]

@@ -149,33 +149,23 @@ impl Runnable for Keyboard<'_> {
                 let e = self.unprocessed_events.remove(0);
                 debug!("Unprocessed event: {:?}", e);
                 self.process_inner(e).await
-            } else if let Some(key) = self.next_buffered_key() {
-                // Process buffered held key
-                self.process_buffered_key(key).await
             } else {
-                // If a mouse repeat or one-shot expiry is pending, race subscriber against the earliest deadline
-                let deadline = [self.mouse.next_deadline(), self.osm_deadline, self.osl_deadline]
-                    .into_iter()
-                    .flatten()
-                    .min();
-                let event = if let Some(deadline) = deadline {
-                    match with_deadline(deadline, self.keyboard_event_subscriber.next_message_pure()).await {
-                        Ok(event) => event,
-                        Err(_) => {
-                            // Deadline expired: fire pending one-shot expiry and/or mouse repeat
-                            self.fire_oneshot_timeout().await;
-                            if self.mouse.next_deadline().is_some_and(|d| d <= Instant::now()) {
-                                self.fire_mouse_repeat().await;
-                            }
-                            continue;
-                        }
+                // Race the subscriber against the earliest pending deadline.
+                // `with_deadline` polls the subscriber first, so a queued event
+                // always wins over an already-expired deadline.
+                let event = match self.next_deadline() {
+                    Some(deadline) => {
+                        with_deadline(deadline, self.keyboard_event_subscriber.next_message_pure())
+                            .await
+                            .ok()
                     }
-                } else {
-                    // No repeat pending, wait indefinitely
-                    self.keyboard_event_subscriber.next_message_pure().await
+                    None => Some(self.keyboard_event_subscriber.next_message_pure().await),
                 };
-                self.process_inner(event).await
-            };
+                match event {
+                    Some(event) => self.process_inner(event).await,
+                    None => self.fire_expired().await,
+                }
+            }
 
             // Run any macros triggered while handling the event.
             while let Ok((macro_idx, event)) = crate::channel::MACRO_TRIGGER_CHANNEL.try_receive() {
@@ -314,60 +304,57 @@ impl<'a> Keyboard<'a> {
         send_hid_report(report).await;
     }
 
-    /// Get a copy of the next timeout key in the buffer,
-    /// which is either a combo component that is waiting for other combo keys,
-    /// or a morse key that is in the pressed or released state.
-    pub fn next_buffered_key(&mut self) -> Option<HeldKey> {
+    /// Get a copy of the next timeout key in the buffer: a combo component
+    /// waiting out its combo window, or a morse key waiting out its timeout.
+    pub fn next_buffered_key(&self) -> Option<HeldKey> {
         self.held_buffer.next_timeout(|k| {
-            matches!(
-                k.state,
-                KeyState::Released(_) | KeyState::EarlyFired(_) | KeyState::WaitingCombo
-            ) || (matches!(k.state, KeyState::Pressed(_)) && k.action.is_morse())
+            matches!(k.state, KeyState::WaitingCombo)
+                || (k.action.is_morse()
+                    && matches!(
+                        k.state,
+                        KeyState::Pressed(_) | KeyState::Released(_) | KeyState::EarlyFired(_)
+                    ))
         })
     }
 
-    /// Process the latest buffered key.
-    ///
-    /// The given holding key is a copy of the buffered key. Only tap-hold keys are considered now.
-    pub async fn process_buffered_key(&mut self, key: HeldKey) {
-        debug!(
-            "Processing buffered key: \nevent: {:?} state: {:?}",
-            key.event, key.state
-        );
-        match key.state {
-            KeyState::WaitingCombo => {
-                debug!(
-                    "[Combo] Waiting combo, timeout in: {:?}ms",
-                    (key.timeout_time.saturating_duration_since(Instant::now())).as_millis()
-                );
-                match with_deadline(key.timeout_time, self.keyboard_event_subscriber.next_message_pure()).await {
-                    Ok(event) => {
-                        // Process new key event
-                        debug!("[Combo] Interrupted by a new key event: {:?}", event);
-                        self.process_inner(event).await;
-                    }
-                    Err(_timeout) => {
-                        // Timeout, dispatch combo
-                        debug!("[Combo] Timeout, dispatch combo");
-                        self.dispatch_combos(&key.action, key.event).await;
-                    }
+    /// `next_deadline()` and `fire_expired()` are a pair, kept adjacent and in
+    /// the same order: every source listed here must be cleared or advanced by
+    /// its `fire_*` once due, or `run()` spins on a deadline that never expires.
+    fn next_deadline(&self) -> Option<Instant> {
+        [
+            self.osm_deadline,
+            self.osl_deadline,
+            self.next_buffered_key().map(|k| k.timeout_time),
+            self.mouse.next_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    /// Fire every due deadline. Each `fire_*` re-checks its own deadline, so a
+    /// call before expiry is a no-op.
+    async fn fire_expired(&mut self) {
+        self.fire_oneshot_timeout().await;
+        self.fire_buffered_key_timeout().await;
+        self.fire_mouse_repeat().await;
+    }
+
+    /// Resolve one expired buffered key: dispatch the timed-out combo or the
+    /// morse timeout. One key per call: `run()` re-races the subscriber between
+    /// fires, so queued events preempt the next timeout.
+    async fn fire_buffered_key_timeout(&mut self) {
+        if let Some(key) = self.next_buffered_key().filter(|k| k.timeout_time <= Instant::now()) {
+            match key.state {
+                KeyState::WaitingCombo => {
+                    debug!("[Combo] Timeout, dispatch combo");
+                    self.dispatch_combos(&key.action, key.event).await;
+                }
+                _ => {
+                    debug!("Buffered morse key timeout");
+                    self.handle_morse_timeout(&key).await;
                 }
             }
-            KeyState::Pressed(_) | KeyState::Released(_) | KeyState::EarlyFired(_) if key.action.is_morse() => {
-                // Wait for timeout or new key event
-                info!("Waiting morse key: {:?}", key.action);
-                match with_deadline(key.timeout_time, self.keyboard_event_subscriber.next_message_pure()).await {
-                    Ok(event) => {
-                        debug!("Buffered morse key interrupted by a new key event: {:?}", event);
-                        self.process_inner(event).await;
-                    }
-                    Err(_timeout) => {
-                        debug!("Buffered morse key timeout");
-                        self.handle_morse_timeout(&key).await;
-                    }
-                }
-            }
-            _ => (),
         }
     }
 
@@ -2146,7 +2133,8 @@ mod test {
 
     async fn force_timeout_first_hold(keyboard: &mut Keyboard<'static>) {
         let key = keyboard.next_buffered_key().unwrap();
-        keyboard.process_buffered_key(key).await;
+        embassy_time::Timer::at(key.timeout_time).await;
+        keyboard.fire_buffered_key_timeout().await;
     }
 
     fn create_test_keyboard_with_forks(fork1: Fork, fork2: Fork) -> Keyboard<'static> {
