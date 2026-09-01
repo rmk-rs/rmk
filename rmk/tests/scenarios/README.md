@@ -2,17 +2,22 @@
 
 Each file defines a keyboard and named input/output cases. Every `*.toml` in this
 directory is a scenario: `run_tests!("tests/scenarios")` expands each one into a
-`mod` of ordinary tests, so dropping a file in is all it takes to register it.
-Board fixtures live in `boards/`, a subdirectory, so they are not scenarios
-themselves. Run them with:
+`mod` of ordinary tests. Cargo does not notice a file that is added, so after
+adding one run `touch tests/integration/main.rs` to re-expand; a generated
+`scenarios_are_registered` test fails with that hint if you forget. Board
+fixtures live in `boards/`, a subdirectory, so they are not scenarios
+themselves. Run them from `rmk/` with any of the five feature rows CI uses
+(`RMK_TEST_FEATURESETS` in `.github/ci/_lib.sh`), for example:
 
 ```console
+cd rmk
 cargo nextest run --no-default-features --features=vial,host_lock,_no_usb,steno,passkey_entry --test integration
 cargo nextest run --no-default-features --features=rynk,_ble,split,async_matrix,storage --test integration
 ```
 
-`vial` and `rynk` are mutually exclusive, so the host-protocol files split
-across those two rows.
+CI also passes `--config-file <repo>/.config/nextest.toml`, which only changes
+how failures are printed; the defaults are fine locally. `vial` and `rynk` are
+mutually exclusive, so the host-protocol files split across those two rows.
 
 ```toml
 keyboard = "boards/split.toml"
@@ -36,12 +41,16 @@ expect = [["LShift"], []]
 `keyboard` is optional. Its path is relative to the scenario, and the current
 file deep-merges over it. The keyboard portion uses normal `keyboard.toml`
 layout, keymap, alias, encoder, and behavior syntax. Hardware sections are
-ignored. `[rmk]` is rejected because its capacities are compile-time constants.
-A test's own `behavior.<section>` key overrides the shared behavior for that
-test only. Tables merge key by key; arrays such as `morses` replace wholesale.
+parsed but not used, and the parser rejects unknown keys, so a misspelled
+section or field is a hard error. `[rmk]` is rejected because its capacities are
+compile-time constants. A test's own `behavior.<section>` key overrides the
+shared behavior for that test only. Tables merge key by key; arrays such as
+`morses` replace wholesale. A `[[test]]` accepts only `name`, `steps`, `expect`,
+`behavior`, and `features`.
 
 `features` adds `#[cfg(feature = "...")]` gates; file and test features are
-combined. Test IDs are `<file>::<name>`.
+combined. Test IDs are `<file>::<name>`, where `<file>` is the file stem with
+`-` replaced by `_`.
 
 ## Files
 
@@ -58,8 +67,9 @@ splits by resolution mode. Those all start with `morse_`, so
 | everything else | One feature each — `combo`, `one_shot`, `layer`, `encoder`, `macros`, `hid_reports`, `passkey`, `steno` |
 
 Cases that only differ by mode share a name across files, so
-`nextest run two_key_misses_window` prints one row of the matrix. Keep that
-up when adding a case that an existing file already covers under another mode.
+`nextest run two_key_misses_window` runs that case under every mode at once —
+one row of the matrix. Keep that up when adding a case that an existing file
+already covers under another mode.
 
 ## Input
 
@@ -80,10 +90,14 @@ up when adding a case that an existing file already covers under another mode.
 `no_report` is a step rather than an expectation because an assertion deferred
 to the end of the timeline can no longer say *when* nothing was reported.
 
-Every step runs 10 ms after the one before it unless a `delay` sets that
-interval instead — far below any behavior timeout, so it only orders the steps.
-Spell out a `delay` where the timing is what the case is about, and leave it out
-everywhere else.
+The harness rejects a `press` of a key that is already down and a `release`
+without a matching press, and fails any step that blocks for more than 5 s.
+
+Every step, the first one included, runs 10 ms after the one before it unless a
+`delay` sets that interval instead (a step right after a `delay` gets no extra
+gap) — far below any behavior timeout, so it only orders the steps. Spell out a
+`delay` where the timing is what the case is about, and leave it out everywhere
+else.
 
 ## Output
 
@@ -107,16 +121,22 @@ expect = [
 ]
 ```
 
-Every case also rejects trailing reports, pressed inputs, and buffered keyboard
-state.
+`mouse` takes `buttons`, `x`, `y`, `wheel`, and `pan`, each defaulting to 0 and
+nothing else, so `{ mouse = {} }` is the all-released mouse report.
+
+Every case also rejects trailing reports, trailing host reply bytes, pressed
+inputs, and buffered keyboard state.
 
 ## Rynk
 
 A `rynk` step names a command from the protocol's endpoint table and spells its
 payload with the request type's own serde shape — there is no second vocabulary
 to keep in step with the protocol, and a new endpoint needs no code change.
-`reply` is the expected response payload, defaulting to the unit response every
-setter returns; `error` replaces it with a `RynkError` variant.
+`reply` is the expected response payload; `error` replaces it with a
+`RynkError` variant, and giving both is an error. An omitted `reply` means the
+unit response every setter returns — JSON `null` — so a getter must always
+spell its `reply`, otherwise the test panics decoding `null` as the response
+type.
 
 ```toml
 { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 0 }, action = { Single = { Key = { Hid = "B" } } } } } },
@@ -133,15 +153,18 @@ how TOML says `null`.
 A request is a barrier: its reply must arrive before the next step runs, so a
 write is applied by the time the matrix input after it is played.
 
-`[host]` configures the lock gate, and its `unlock_keys` are ordinary matrix
-positions — so a scenario completes the unlock ceremony by pressing them.
+`[host]` configures the lock gate — `unlock_keys`, `insecure`, and
+`write_requires_unlock` — and is honoured only when the scenario's features
+include `rynk`. Its `unlock_keys` are ordinary matrix positions, so a scenario
+completes the unlock ceremony by pressing them.
 
 ## Adding a case
 
 **Pick the file first**, using the table above. A new file is picked up by
-dropping it in this directory, but its `features` have to fit a feature set in
-`.github/ci/_lib.sh` — a case gated on a feature no row enables compiles out of
-every row and silently never runs, while an ungated case runs in all three.
+dropping it in this directory (and touching `tests/integration/main.rs`), but
+its `features` have to fit a feature set in `.github/ci/_lib.sh` — a case gated
+on a feature no row enables compiles out of every row and silently never runs,
+while an ungated case runs in every row.
 
 **Name it after the behavior it pins**, not the input that gets there. The name
 is what a failing CI row prints and what `nextest run <name>` reruns, so it has
@@ -167,15 +190,18 @@ whatever the firmware does today, bug included.
 that the failure names the step you meant:
 
 ```console
-expect[0]: keyboard report mismatch
+expect[0]: HID report mismatch
   expected ["B"]
     actual ["V"]
 ```
 
-`expect[k]` and `reply[k]` count the assertions the run played, in order, so
-they index the scenario's own lists. Confirming matters most when a case
-asserts absence: omitting `expect` asserts only that nothing was reported and
-nothing stuck, which also holds when the input never reached the keyboard.
+`expect[k]` counts the report assertions the run played, in order — the
+`expect` entries plus any `no_report` steps — so it indexes `expect` only in a
+case without `no_report`. `reply[k]` likewise counts the host steps (`rynk`,
+`rynk_topic`, `rynk_reply`, `rynk_no_reply`) in step order; there is no `reply`
+list. Confirming matters most when a case asserts absence: omitting `expect`
+asserts only that nothing was reported and nothing stuck, which also holds when
+the input never reached the keyboard.
 
 **Carry the bug in a regression case.** The comment says what the wrong
 behavior was, not just that there was a bug — a later reader deciding whether

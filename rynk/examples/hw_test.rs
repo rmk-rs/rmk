@@ -7,7 +7,7 @@
 //! but don't fail the run).
 //!
 //! ```text
-//! cargo run -p rynk --example hw_test            # USB CDC serial (default)
+//! cargo run -p rynk --example hw_test            # USB vendor bulk (default)
 //! cargo run -p rynk --example hw_test -- ble     # BLE GATT
 //! ```
 //!

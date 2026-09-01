@@ -1,6 +1,6 @@
 # Low Power
 
-RMK supports low-power mode by utilizing embassy's low-power feature and the `Wait` trait in `embedded-hal-async`.
+RMK supports low-power mode by utilizing the `Wait` trait in `embedded-hal-async`.
 
 ## Usage
 
@@ -27,17 +27,60 @@ There are a few more things that you need to do:
 2. Ensure that your input pins don't share the same EXTI channel
 3. For configuration:
    - If you're using `keyboard.toml`, you are all set. The `#[rmk_keyboard]` macro will automatically check your `Cargo.toml` and handle it for you.
-   - If you're using Rust code, you'll need to use `ExtiInput` for your input pins:
+   - If you're using Rust code, you'll need to use `ExtiInput` for your input pins and bind the EXTI interrupts of those pins. EXTI0 to EXTI4 each have their own interrupt, EXTI5 to EXTI9 share `EXTI9_5`, and EXTI10 to EXTI15 share `EXTI15_10`:
 
 ```rust
-    let pd9 = ExtiInput::new(p.PD9,  p.EXTI9, Pull::Down);
-    let pd8 = ExtiInput::new(p.PD8,  p.EXTI8, Pull::Down);
-    let pb13 = ExtiInput::new(p.PB13, p.EXTI13, Pull::Down);
-    let pb12 = ExtiInput::new(p.PB12, p.EXTI12, Pull::Down);
+use embassy_stm32::bind_interrupts;
+use embassy_stm32::exti::{ExtiInput, InterruptHandler};
+use embassy_stm32::gpio::Pull;
+use embassy_stm32::interrupt::typelevel::{EXTI9_5, EXTI15_10};
+
+bind_interrupts!(struct Irqs {
+    EXTI9_5 => InterruptHandler<EXTI9_5>;
+    EXTI15_10 => InterruptHandler<EXTI15_10>;
+});
+
+    let pd9 = ExtiInput::new(p.PD9, p.EXTI9, Pull::Down, Irqs);
+    let pd8 = ExtiInput::new(p.PD8, p.EXTI8, Pull::Down, Irqs);
+    let pb13 = ExtiInput::new(p.PB13, p.EXTI13, Pull::Down, Irqs);
+    let pb12 = ExtiInput::new(p.PB12, p.EXTI12, Pull::Down, Irqs);
     let row_pins = [pd9, pd8, pb13, pb12];
 
     let mut matrix = Matrix::<_, _, _, ROW, COL, true>::new(row_pins, col_pins, debouncer);
 ```
+
+If your firmware already has a `bind_interrupts!` block (for example, for USB), add the EXTI lines to that block instead of declaring a second `Irqs`.
+
+## BLE idle sleep
+
+BLE builds also run an idle sleep manager. Set `split_central_sleep_timeout_seconds` in the `[rmk]` section of `keyboard.toml` (default `0`, disabled) to put the keyboard to sleep after that many seconds without key or pointing activity. Despite the name, it applies to every BLE keyboard, not only split centrals:
+
+```toml
+[rmk]
+split_central_sleep_timeout_seconds = 600
+```
+
+When the keyboard falls asleep, RMK publishes a `SleepStateEvent`, holds battery level reports, and on a split central switches the peripheral links to slower connection parameters. Any key press wakes the keyboard up. The host's HID suspend and exit-suspend commands also put the keyboard to sleep and wake it.
+
+A sleeping split central keeps its radio idle rather than scanning, so a peripheral link that drops gets a single reconnect attempt. If that attempt fails, the central keeps the peripheral's address: press a key on the central half while the peripheral is still advertising (about five minutes) and the halves relink instead of rediscovering each other. After that the peripheral stops advertising too, so it takes a key press on each half to bring the link back.
+
+Two related behaviors are always on:
+
+- When BLE advertising times out without a connection (after 5 minutes), the keyboard sleeps immediately and waits for a key or pointing event before it advertises again.
+- `NrfAdc` takes a `light_sleep` interval as its last argument. When the analog inputs have been idle for more than 1.2 seconds, the ADC polls at that interval instead of `polling_interval`. A joystick configured in `keyboard.toml` uses 350ms.
+
+### Split central sleep using BLE Connection Subrating (tested on nrf52840 only)
+
+Enable the `subrating` feature in your `Cargo.toml` to let a sleeping central skip connection events while still switching back to the fast intervals in one step.
+
+The key press that wakes the keyboard costs up to ~232ms (~116ms on average) when it lands on the peripheral half; keys on the central half are never delayed. The link is back on the active parameters right after that, which is cheap enough to shorten the timeout aggressively:
+
+```toml
+[rmk]
+split_central_sleep_timeout_seconds = 60
+```
+
+With no host connected the central skips further: the waking peripheral key press costs ~472ms on average and up to ~945ms, and the central draws ~22µA, nearly the same as the peripheral (~21µA).
 
 ## External VCC
 

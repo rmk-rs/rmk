@@ -8,7 +8,6 @@ adc_divider_measured = 2000
 adc_divider_total = 2806
 
 [dfu]
-flash_size = 1048576
 
 [storage]
 enabled = true

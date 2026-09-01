@@ -403,17 +403,16 @@ impl<'a> Keyboard<'a> {
     }
 
     pub fn is_flow_tap_enabled(keymap: &KeyMap, key_action: &KeyAction) -> bool {
-        match key_action {
-            KeyAction::TapHold(_, _, idx) => keymap
-                .morse_profile(*idx)
-                .enable_flow_tap()
-                .unwrap_or_else(|| keymap.morse_enable_flow_tap()),
+        let per_key = match key_action {
+            KeyAction::TapHold(_, _, idx) => keymap.morse_profile(*idx).enable_flow_tap(),
             KeyAction::Morse(index) => keymap
                 .get_morse(*index as usize)
-                .and_then(|morse| morse.profile.enable_flow_tap())
-                .unwrap_or_else(|| keymap.morse_enable_flow_tap()),
-            _ => keymap.morse_enable_flow_tap(),
-        }
+                .and_then(|morse| morse.profile.enable_flow_tap()),
+            _ => None,
+        };
+        per_key
+            .or_else(|| keymap.morse_default_profile().enable_flow_tap())
+            .unwrap_or_else(|| keymap.morse_enable_flow_tap())
     }
 
     /// Checks if the given pattern can fire its action early even though longer

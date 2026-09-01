@@ -208,18 +208,20 @@ impl Client {
                 "advertised layout blob length {total_len} exceeds maximum {MAX_LAYOUT_BLOB_LEN}"
             )));
         }
-        let mut collected: Vec<u8> = first.bytes.to_vec();
-        // An empty page means the firmware stopped sending, so stop rather than loop
-        // forever; a firmware with no `[layout].map` sends an empty first page.
-        while !collected.is_empty() && collected.len() < total_len {
-            let chunk = self.request::<command::GetLayout>(&(collected.len() as u32)).await?;
-            if chunk.bytes.is_empty() {
-                break;
-            }
-            collected.extend_from_slice(&chunk.bytes);
-        }
-        collected.truncate(total_len);
-        LayoutInfo::from_compressed_blob(&collected).map_err(RynkHostError::Layout)
+        // The first page fixes the page size, which is all [`Self::read_all`] needs to
+        // read the rest on lanes — one round trip per `MAX_IN_FLIGHT` pages instead of
+        // one each. It re-reads page 0, which rides an existing lane and costs nothing.
+        let page = first.bytes.len();
+        let mut blob: Vec<u8> = if page == 0 || total_len <= page {
+            first.bytes.to_vec()
+        } else {
+            self.read_all(total_len, page, async |c, offset| {
+                Ok(c.request::<command::GetLayout>(&(offset as u32)).await?.bytes.to_vec())
+            })
+            .await?
+        };
+        blob.truncate(total_len);
+        LayoutInfo::from_compressed_blob(&blob).map_err(RynkHostError::Layout)
     }
 
     /// Read one combo entry by index.
@@ -401,7 +403,7 @@ impl Client {
         let caps = self.capabilities;
         let (rows, cols) = (caps.num_rows as u16, caps.num_cols as u16);
         let total = caps.num_layers as usize * rows as usize * cols as usize;
-        self.read_all(total, caps.max_bulk_keys, async |c, start| {
+        self.read_all(total, caps.max_bulk_keys.into(), async |c, start| {
             let (layer, row, col) = keymap_pos(start, rows, cols);
             c.get_keymap_bulk(layer, row, col).await.map(|r| r.actions)
         })
@@ -411,7 +413,7 @@ impl Client {
     /// Read every combo slot with concurrent paged reads. A short page ends the read early.
     pub async fn read_all_combos(&self) -> Result<Vec<Combo>, RynkHostError> {
         let total = self.capabilities.max_combos as usize;
-        self.read_all(total, self.capabilities.max_bulk_items, async |c, start| {
+        self.read_all(total, self.capabilities.max_bulk_items.into(), async |c, start| {
             c.get_combo_bulk(start as u8).await.map(|r| r.configs)
         })
         .await
@@ -420,7 +422,7 @@ impl Client {
     /// Read every morse slot with concurrent paged reads. A short page ends the read early.
     pub async fn read_all_morses(&self) -> Result<Vec<Morse>, RynkHostError> {
         let total = self.capabilities.max_morse as usize;
-        self.read_all(total, self.capabilities.max_bulk_items, async |c, start| {
+        self.read_all(total, self.capabilities.max_bulk_items.into(), async |c, start| {
             c.get_morse_bulk(start as u8).await.map(|r| r.configs)
         })
         .await
@@ -481,11 +483,11 @@ impl Client {
     async fn read_all<Item>(
         &self,
         total: usize,
-        advertised: u8,
+        advertised: usize,
         fetch: impl AsyncFn(&Self, u16) -> Result<Vec<Item>, RynkHostError>,
     ) -> Result<Vec<Item>, RynkHostError> {
         let frame = RYNK_HEADER_SIZE + self.capabilities.max_payload_size as usize;
-        let spacing = (advertised as usize * frame.saturating_sub(MAX_IN_FLIGHT * PARKED_REQUEST_BYTES) / frame).max(1);
+        let spacing = (advertised * frame.saturating_sub(MAX_IN_FLIGHT * PARKED_REQUEST_BYTES) / frame).max(1);
         let next = AtomicUsize::new(0);
         let lanes = join_array(core::array::from_fn::<_, MAX_IN_FLIGHT, _>(|_| async {
             let mut pages = Vec::new();

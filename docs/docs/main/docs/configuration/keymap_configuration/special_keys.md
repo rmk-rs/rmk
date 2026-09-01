@@ -12,4 +12,4 @@ In QMK an `AlternativeRepeatKey` is supported. This functionality is not impleme
 
 ## Caps Word
 
-RMK includes `CapsWordToggle`. It can be aliased with any of `caps_word` or `cword` in a keymap. Caps word capitalizes all characters until a breaking character such as space occurs.
+RMK includes `CapsWordToggle` (case-insensitive, no aliases). Caps word capitalizes letters (and turns `-` into `_`) until you press a key other than a letter, digit, `-`, Backspace or Delete, or after 5 seconds without one of those keys.

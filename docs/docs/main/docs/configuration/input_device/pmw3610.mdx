@@ -73,16 +73,12 @@ id = 1
 The peripheral forwards events to the central with the `device_id` preserved. The generated `PointingProcessorConfig` on the central will automatically use the matching `device_id` for each sensor.
 :::
 
-::: warning Breaking change
-Adding `device_id` to `PointingEvent` changes the serialized binary format used by the split protocol. Both halves of a split keyboard **must** be flashed with the same firmware version at the same time.
-:::
-
 ## Rust configuration
 
 Define a `PointingDevice` and add it to `run_all!` macro. For a split keyboard this must be added to the file (`central.rs` or `peripheral.rs`) corresponding to the side the sensor is connected to.
 
 ```rust
-use embassy_rp::gpio::{Output, Flex, Level};
+use embassy_nrf::gpio::{Flex, Input, Level, Output, OutputDrive, Pull};
 use rmk::input_device::pmw3610::{BitBangSpiBus, Pmw3610, Pmw3610Config};
 use rmk::input_device::pointing::PointingDevice;
 

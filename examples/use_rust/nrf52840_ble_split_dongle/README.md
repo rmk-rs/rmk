@@ -12,6 +12,9 @@ cargo build --release --bin central
 
 # Build peripheral firmware
 cargo build --release --bin peripheral
+
+# Build peripheral2 firmware
+cargo build --release --bin peripheral2
 ```
 
 ## Nice!nano support
@@ -66,7 +69,7 @@ After you have `memory.x` set, use `cargo run --release` to flash the RMK firmwa
 
 1. Enter example folder:
    ```shell
-   cd examples/use_rust/nrf52840_ble_split
+   cd examples/use_rust/nrf52840_ble_split_dongle
    ```
 2. Compile, flash and run the example
    ```shell
@@ -75,4 +78,7 @@ After you have `memory.x` set, use `cargo run --release` to flash the RMK firmwa
 
    # Run peripheral firmware
    cargo run --release --bin peripheral
+
+   # Run peripheral2 firmware
+   cargo run --release --bin peripheral2
    ```

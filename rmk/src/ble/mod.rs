@@ -1,7 +1,9 @@
+#[cfg(feature = "subrating")]
+use bt_hci::cmd::le::LeSubrateRequest;
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
-use embassy_futures::join::join3;
+use embassy_futures::join::{join3, join4};
 use embassy_futures::select::{Either, Either3, select, select3};
 #[cfg(feature = "split")]
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -16,6 +18,8 @@ use trouble_host::prelude::*;
 
 use crate::ble::adv::{Adv, advertise};
 use crate::ble::battery_service::BleBatteryServer;
+#[cfg(feature = "split")]
+use crate::ble::battery_service::BlePeripheralBatteryServer;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
 #[cfg(feature = "host")]
@@ -50,6 +54,9 @@ pub(crate) mod profile;
 #[cfg(any(feature = "split", feature = "dongle"))]
 pub(crate) mod scan;
 pub(crate) mod sleep;
+
+#[cfg(all(feature = "subrating", feature = "_no_subrating"))]
+compile_error!("You may not enable feature `subrating` on unsupported platforms!");
 
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
 /// own — see [`crate::dongle::Dongle`].
@@ -146,12 +153,18 @@ where
 }
 
 #[cfg(feature = "split")]
-impl<'a, C> Runnable for BleTransport<'a, C>
-where
-    C: Controller
+impl<
+    'a,
+    #[cfg(not(feature = "subrating"))] C: Controller
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>,
+    #[cfg(feature = "subrating")] C: Controller
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>
+        + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>
+        + ControllerCmdAsync<LeSubrateRequest>,
+> Runnable for BleTransport<'a, C>
 {
     async fn run(&mut self) -> ! {
         // Load the preferred connection from storage
@@ -193,15 +206,15 @@ where
 
 /// Owns the GATT server and the profile manager, and advertises→connects→
 /// serves forever, joined with the stack runner and the sleep manager.
-async fn run_ble_keyboard<#[cfg(feature = "host")] 'r, C>(
+async fn run_ble_keyboard<
+    #[cfg(feature = "host")] 'r,
+    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+>(
     stack: &Stack<'_, C, DefaultPacketPool>,
     device_config: &DeviceConfig<'static>,
     config: &BleBatteryConfig<'static>,
     #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
-) -> !
-where
-    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
-{
+) -> ! {
     let product_name = device_config.product_name;
     #[cfg(feature = "_nrf_ble")]
     let serial_number = crate::ble::nrf::get_serial_number();
@@ -301,6 +314,15 @@ where
                         disconnect(&conn).await;
                         continue;
                     }
+                    // When connecting to BLE host, check the connected peer is not a dongle.
+                    #[cfg(feature = "dongle")]
+                    if crate::state::current_profile() != crate::ble::profile::DONGLE_PROFILE
+                        && profile_manager.is_bonded_dongle(&conn.raw().peer_identity())
+                    {
+                        warn!("[ble] the bonded dongle connected on a host BLE profile, disconnecting");
+                        disconnect(&conn).await;
+                        continue;
+                    }
                     if let Either::Second(_) = select(
                         serve_keyboard_connection(
                             server,
@@ -389,10 +411,7 @@ pub(crate) async fn wait_for_stack_started() {
 }
 
 /// This is a background task that is required to run forever alongside any other BLE tasks.
-pub(crate) async fn ble_task<C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool, E: EventHandler>(
-    mut runner: Runner<'_, C, P>,
-    handler: &E,
-) {
+pub(crate) async fn ble_task<C: Controller, P: PacketPool, E: EventHandler>(mut runner: Runner<'_, C, P>, handler: &E) {
     STACK_STARTED.signal(());
     loop {
         if let Err(e) = runner.run_with_handler(handler).await {
@@ -408,6 +427,8 @@ pub(crate) async fn ble_task<C: Controller + ControllerCmdAsync<LeSetPhy>, P: Pa
 /// This is how we interact with read and write requests.
 async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacketPool>) -> Result<(), Error> {
     let level = server.battery_service.level;
+    #[cfg(feature = "split")]
+    let peripheral_levels = server.peripheral_battery_services.levels;
     let output_keyboard = server.hid_service.output_keyboard;
     let hid_control_point = server.hid_service.hid_control_point;
     let input_keyboard = server.hid_service.input_keyboard;
@@ -472,7 +493,17 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                             let value = server.get(&level);
                             debug!("Read GATT Event to Level: {:?}", value);
                         } else {
-                            debug!("Read GATT Event to Unknown: {:?}", event.handle());
+                            #[cfg(feature = "split")]
+                            let peripheral_level =
+                                peripheral_levels.iter().find(|level| event.handle() == level.handle);
+                            #[cfg(not(feature = "split"))]
+                            let peripheral_level: Option<&Characteristic<u8>> = None;
+                            if let Some(peripheral_level) = peripheral_level {
+                                let value = server.get(peripheral_level);
+                                debug!("Read GATT Event to Peripheral Level: {:?}", value);
+                            } else {
+                                debug!("Read GATT Event to Unknown: {:?}", event.handle());
+                            }
                         }
 
                         if conn.raw().security_level()?.encrypted() {
@@ -512,6 +543,19 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                             || event.handle() == media.cccd_handle.expect("No CCCD for media report")
                             || event.handle() == system_control.cccd_handle.expect("No CCCD for system report")
                             || event.handle() == level.cccd_handle.expect("No CCCD for battery level")
+                            || {
+                                #[cfg(feature = "split")]
+                                {
+                                    peripheral_levels.iter().any(|level| {
+                                        event.handle()
+                                            == level.cccd_handle.expect("No CCCD for peripheral battery level")
+                                    })
+                                }
+                                #[cfg(not(feature = "split"))]
+                                {
+                                    false
+                                }
+                            }
                         {
                             cccd_updated = true;
                         } else if event.handle() == hid_control_point.handle {
@@ -640,6 +684,20 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                     supervision_timeout.as_millis()
                 );
             }
+            GattConnectionEvent::SubratingParamsUpdated {
+                subrate_factor,
+                peripheral_latency,
+                continuation_number,
+                supervision_timeout,
+            } => {
+                info!(
+                    "[gatt] SubratingParamsUpdated: {:?}, {:?}, {:?}, {:?}ms",
+                    subrate_factor,
+                    peripheral_latency,
+                    continuation_number,
+                    supervision_timeout.as_millis()
+                );
+            }
             GattConnectionEvent::PassKeyDisplay(pass_key) => info!("[gatt] PassKeyDisplay: {:?}", pass_key),
             GattConnectionEvent::PassKeyConfirm(pass_key) => info!("[gatt] PassKeyConfirm: {:?}", pass_key),
             GattConnectionEvent::PassKeyInput => {
@@ -673,6 +731,7 @@ async fn disconnect(conn: &GattConnection<'_, '_, DefaultPacketPool>) {
     while !matches!(conn.next().await, GattConnectionEvent::Disconnected { .. }) {}
 }
 
+/// Set keyboard <-> host connection parameters
 pub(crate) async fn set_conn_params<
     'a,
     'b,
@@ -682,29 +741,26 @@ pub(crate) async fn set_conn_params<
     stack: &Stack<'_, C, P>,
     conn: &GattConnection<'a, 'b, P>,
 ) {
-    // On the dongle slot the dongle (our own central) owns the link
-    // parameters; the Apple-tuned requests below would push supervision back
-    // to 10 s and slow down reconnect after a dongle power-cycle.
-    #[cfg(feature = "dongle")]
-    if crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE {
-        core::future::pending::<()>().await;
-    }
+    let requests = [
+        // The first request is what Apple devices accept:
+        // https://developer.apple.com/accessories/Accessory-Design-Guidelines.pdf
+        (Duration::from_millis(15), 30, Duration::from_secs(6)),
+        // The second request is for best performance
+        (Duration::from_micros(7500), 60, Duration::from_secs(6)),
+    ];
 
-    // Apple rejects 7.5ms outright, so ask for the 15ms its guidelines allow
-    // first and only then for 7.5ms: platforms that take it end up at the best
-    // interval, and Apple keeps the 15ms it already granted.
-    // Reference: https://developer.apple.com/accessories/Accessory-Design-Guidelines.pdf
-    for interval in [Duration::from_millis(15), Duration::from_micros(7500)] {
+    for (interval, max_latency, supervision_timeout) in requests {
         // Wait 5 seconds before each request to avoid connection drop
         embassy_time::Timer::after_secs(5).await;
+
         update_conn_params(
             stack,
             conn.raw(),
             &RequestedConnParams {
                 min_connection_interval: interval,
                 max_connection_interval: interval,
-                max_latency: 30,
-                supervision_timeout: Duration::from_secs(10),
+                max_latency,
+                supervision_timeout,
                 ..Default::default()
             },
         )
@@ -717,11 +773,6 @@ pub(crate) async fn set_conn_params<
 }
 
 /// Serve one host keyboard connection.
-///
-/// Returns when the GATT events task ends (i.e. the connection drops).
-/// `writer_task`, `led_task`, and `host_task` are all infinite, so the outer
-/// `select(communication_task, inner)` cancels them as a side-effect of
-/// `communication_task` returning. `inner` itself never completes.
 async fn serve_keyboard_connection<
     'a,
     'b,
@@ -738,6 +789,10 @@ async fn serve_keyboard_connection<
     let mut ble_hid_server = BleHidServer::new(server, conn);
     let mut ble_led_reader = BleLedReader;
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
+    #[cfg(feature = "split")]
+    let mut ble_peripheral_battery_server = crate::SPLIT_BATTERY_PERIPHERAL_IDS
+        .first()
+        .map(|_| BlePeripheralBatteryServer::new(server, conn));
 
     // CCCD lookup uses cached bond info to avoid a cancellable flash read while
     // this future is racing other arms of an outer `select`.
@@ -751,18 +806,29 @@ async fn serve_keyboard_connection<
         }
     }
 
-    let host_phy = if cfg!(feature = "use_1m_phy") {
+    // `use_1m_phy` exists for legacy host adapters that cannot do 2M.
+    // Always use 2M for the dongle link.
+    #[cfg(feature = "dongle")]
+    let dongle_link = crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE;
+    #[cfg(not(feature = "dongle"))]
+    let dongle_link = false;
+    let host_phy = if cfg!(feature = "use_1m_phy") && !dongle_link {
         PhyKind::Le1M
     } else {
         PhyKind::Le2M
     };
     update_ble_phy(stack, conn.raw(), host_phy).await;
 
+    #[cfg(not(feature = "split"))]
+    let battery_task = ble_battery_server.run();
+    #[cfg(feature = "split")]
+    let battery_task = embassy_futures::join::join(ble_battery_server.run(), ble_peripheral_battery_server.run());
+
     let communication_task = async {
         if let Either3::First(e) = select3(
             gatt_events_task(server, conn),
             set_conn_params(stack, conn),
-            ble_battery_server.run(),
+            battery_task,
         )
         .await
         {
@@ -796,7 +862,18 @@ async fn serve_keyboard_connection<
     #[cfg(not(feature = "host"))]
     let host_task = core::future::pending::<()>();
 
-    let inner = join3(writer_task, led_task, host_task);
+    // When dongle feature is enabled, send `DongleEvent` to the dongle.
+    #[cfg(all(feature = "dongle", feature = "host"))]
+    let dongle_event_task = async {
+        if !dongle_link {
+            core::future::pending::<()>().await;
+        }
+        crate::dongle::event::run(server, conn).await;
+    };
+    #[cfg(not(all(feature = "dongle", feature = "host")))]
+    let dongle_event_task = core::future::pending::<()>();
+
+    let inner = join4(writer_task, led_task, host_task, dongle_event_task);
     select(communication_task, inner).await;
 }
 

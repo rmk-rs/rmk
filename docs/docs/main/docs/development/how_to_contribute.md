@@ -16,14 +16,26 @@ If you're not familiar with RMK, the following is a simple introduction to the s
 
 ### Project Architecture
 
-There are four crates in the RMK project: `rmk`, `rmk-config`, `rmk-types` and `rmk-macro`.
+The firmware side of the RMK repository has four crates: `rmk`, `rmk-config`, `rmk-types` and `rmk-macro`. Each is its own cargo workspace; there is no `Cargo.toml` at the repository root.
 
 - `rmk`: The main crate that contains the core firmware logic, including matrix scanning, key processing, USB/BLE communication, and all the runtime services.
 - `rmk-macro`: A proc-macro helper for RMK that reads the `keyboard.toml` config file, converts the TOML config to RMK config, and generates the boilerplate code.
 - `rmk-config`: Contains the configuration data structures and parsing logic shared between `rmk-macro` and `rmk`, defining how keyboard configurations are represented in memory.
 - `rmk-types`: Provides common type definitions used across all RMK crates, such as keyboard actions, key events, and other shared data structures.
 
-So, if you want to contribute new features to RMK, look into the `rmk` core crate. If you want to add support for a new chip, both `rmk` and `rmk-macro` should be updated so that users can use `keyboard.toml` to configure keyboards with your new chip. If you want to add new configurations, look into both `rmk-config` and `rmk/src/config`.
+The host side lives in the `rynk/` workspace: `rynk` (the Rynk host client), `rynk-usb`, `rynk-ble`, `rynk-wasm` and `rynk-kle`. See `rynk/README.md`.
+
+So, if you want to contribute new features to RMK, look into the `rmk` core crate. If you want to add support for a new chip, update `rmk` (feature gates and drivers), `rmk-config` (the chip family in `src/chip.rs` and a chip default in `src/default_config/`) and `rmk-macro` (the generated initialization code) so that users can use `keyboard.toml` to configure keyboards with your new chip. If you want to add new configurations, look into both `rmk-config` and `rmk/src/config`.
+
+### Dev loop
+
+CI runs `.github/ci/format.sh`, `.github/ci/check.sh`, `.github/ci/test.sh` and `.github/ci/host.sh`; the feature rows they iterate are defined in `.github/ci/_lib.sh` (`RMK_FEATURESETS` for check/clippy, `RMK_TEST_FEATURESETS` for tests). Locally:
+
+- Format everything (nightly rustfmt): `bash scripts/format_all.sh`. Pass `--touched` to format only files changed in the working tree.
+- Run one test feature row from `rmk/` (requires [cargo-nextest](https://nexte.st/)): `cargo nextest run --no-default-features --features=split,vial,storage,async_matrix,_ble`
+- Run the whole test suite, including the `rynk/` workspace: `bash scripts/test_all.sh`
+
+Keyboard behavior is tested by the TOML scenarios in `rmk/tests/scenarios/`, which `run_tests!` expands into ordinary tests. Read `rmk/tests/scenarios/README.md` before adding a case. `rmk-macro` tests are expansion snapshots and need `cargo install cargo-expand`; run them from `rmk-macro/` with `cargo nextest run --features _simulator`.
 
 ### RMK Core
 

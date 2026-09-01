@@ -6,8 +6,7 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use embassy_futures::select::{Either, select};
-use embassy_sync::channel::Channel;
+use embassy_futures::select::select;
 use embassy_sync::pipe::Pipe;
 use embassy_sync::signal::Signal;
 use embedded_io_async::{Read, Write};
@@ -16,36 +15,31 @@ use rmk_types::protocol::rynk::{RYNK_BLE_CHUNK_SIZE, RynkError, RynkHeader, enco
 
 use crate::RawMutex;
 
-/// A whole encoded frame, delimiter included.
-type RouterFrame = heapless::Vec<u8, RYNK_BUFFER_SIZE>;
-
-/// A whole max-size frame, plus two notifies of slack for a briefly stalled
-/// host. Anything less and one full frame in flight leaves no room for the
-/// notify behind it, which costs a frame every bulk read.
+/// One max-size frame plus two notifies of slack: any less and a full frame in
+/// flight leaves no room for the notify behind it, costing a frame per bulk read.
 const TO_HOST_SIZE: usize = RYNK_BUFFER_SIZE + 2 * RYNK_BLE_CHUNK_SIZE;
 
 /// Serves the Rynk USB interface for a dongle binary, as `RynkService` does for
-/// a keyboard; [`crate::usb::rynk::run_host_usb`] drives one session per
-/// connection. The binary's `main` owns one and lends it to both sides that meet
-/// here: the [`crate::usb::UsbTransport`] running the sessions, and the
-/// [`super::Dongle`] whose dongle task relays what they queue.
+/// a keyboard. `main` owns one and lends it to both sides:
+/// [`crate::usb::rynk::run_host_usb`] drives a session per connection, and the
+/// [`super::Dongle`] task relays what the session queues.
 pub struct DongleRouter {
-    /// Frames waiting for the keyboard's `output_data` writes.
-    pub(super) to_keyboard: Channel<RawMutex, RouterFrame, 1>,
+    /// Raw bytes waiting for the keyboard's `output_data` writes.
+    pub(super) to_keyboard: Pipe<RawMutex, RYNK_BUFFER_SIZE>,
     /// Raw bytes waiting for the host: the keyboard's `input_data` notifies plus
     /// the relay's own replies.
     pub(super) to_host: Pipe<RawMutex, TO_HOST_SIZE>,
     /// The dongle task has a keyboard connected and is draining `to_keyboard`.
     link_connected: AtomicBool,
     /// Raised when a link stops relaying: only a live link drains `to_keyboard`,
-    /// so a waiting [`Self::forward_frame`] has to give up.
+    /// so a waiting [`Self::host_to_keyboard`] has to give up.
     link_dropped: Signal<RawMutex, ()>,
 }
 
 impl DongleRouter {
     pub const fn new() -> Self {
         Self {
-            to_keyboard: Channel::new(),
+            to_keyboard: Pipe::new(),
             to_host: Pipe::new(),
             link_connected: AtomicBool::new(false),
             link_dropped: Signal::new(),
@@ -79,58 +73,60 @@ impl DongleRouter {
         select(self.host_to_keyboard(rx), self.keyboard_to_host(tx)).await;
     }
 
-    /// Host→keyboard: deframe what the host sends and hand whole frames over.
+    /// Host -> keyboard: bytes cross as they arrive. The only state is the head of
+    /// the frame in flight — all [`RynkHeader::peek`] needs to answer an absent
+    /// keyboard on the request's own CMD and SEQ.
     async fn host_to_keyboard<R: Read>(&self, rx: &mut R) {
-        let mut frames = FrameSplitter::new("host");
+        let mut buf = [0u8; RYNK_BLE_CHUNK_SIZE];
+        let mut head: heapless::Vec<u8, 8> = heapless::Vec::new();
         loop {
-            let n = match rx.read(frames.spare()).await {
+            let n = match rx.read(&mut buf).await {
                 Ok(0) | Err(_) => return,
                 Ok(n) => n,
             };
-            frames.commit(n);
-            while let Some(frame) = frames.next_frame() {
-                self.forward_frame(frame).await;
-            }
-        }
-    }
+            // Each piece ends at a delimiter, except a trailing partial frame.
+            for piece in buf[..n].split_inclusive(|&b| b == 0) {
+                let ends_frame = piece.ends_with(&[0]);
+                let body = if ends_frame { &piece[..piece.len() - 1] } else { piece };
+                head.extend_from_slice(&body[..body.len().min(head.capacity() - head.len())])
+                    .ok();
 
-    /// Keyboard→host: one frame per write, which is what the host transport's
-    /// zero-length-packet rule is written for. Sole owner of that transport.
-    async fn keyboard_to_host<T: Write>(&self, tx: &mut T) {
-        let mut frames = FrameSplitter::new("keyboard");
-        loop {
-            let n = self.to_host.read(frames.spare()).await;
-            frames.commit(n);
-            while let Some(frame) = frames.next_frame() {
-                if tx.write_all(frame).await.is_err() {
-                    return;
+                // `link_dropped` is polled first so it wins the tie when the link dies
+                // mid-write; the keyboard's deframer resyncs at the next delimiter.
+                if self.link_connected.load(Ordering::Relaxed) {
+                    let _ = select(self.link_dropped.wait(), self.to_keyboard.write_all(piece)).await;
                 }
+                if !ends_frame {
+                    continue;
+                }
+                // Whole frame seen. Nothing drains the queue while the keyboard is
+                // away and the host has no timeout of its own, so answer here; a
+                // bare delimiter carries no request to answer.
+                if !head.is_empty() && !self.link_connected.load(Ordering::Relaxed) {
+                    if let Some(header) = RynkHeader::peek(&head) {
+                        let mut reply = [0u8; 16];
+                        match encode_frame(&mut reply[1..], header, &Err::<(), RynkError>(RynkError::NotReady)) {
+                            // `reply[0]` is a bare delimiter, closing off any partial frame in the stream.
+                            Ok(n) => self.to_host.write_all(&reply[..n + 1]).await,
+                            Err(e) => warn!("[dongle] reply encode failed: {:?}", e),
+                        }
+                    } else {
+                        warn!("[dongle] undecodable host frame dropped");
+                    }
+                }
+                head.clear();
             }
         }
     }
 
-    /// Hand one whole encoded frame (delimiter included) to the keyboard, or
-    /// answer it here if there is no keyboard to hand it to.
-    async fn forward_frame(&self, frame: &[u8]) {
-        // `link_dropped` is polled first so it wins the tie when the link dies mid-wait.
-        if self.link_connected.load(Ordering::Relaxed)
-            && let Ok(copy) = RouterFrame::from_slice(frame)
-            && let Either::Second(()) = select(self.link_dropped.wait(), self.to_keyboard.send(copy)).await
-        {
-            return;
-        }
-
-        // Queueing it would strand it — nothing drains the queue while the keyboard
-        // is away — and the host has no timeout of its own, so answer it here.
-        let Some(header) = RynkHeader::peek(&frame[..frame.len() - 1]) else {
-            warn!("[dongle] undecodable host frame dropped");
-            return;
-        };
-        let mut buf = [0u8; 16];
-        match encode_frame(&mut buf[1..], header, &Err::<(), RynkError>(RynkError::NotReady)) {
-            // `buf[0]` is a bare delimiter, closing off any partial frame in the stream.
-            Ok(n) => self.to_host.write_all(&buf[..n + 1]).await,
-            Err(e) => warn!("[dongle] reply encode failed: {:?}", e),
+    /// Keyboard -> host: raw bytes forwarded as they arrive.
+    async fn keyboard_to_host<T: Write>(&self, tx: &mut T) {
+        let mut buf = [0u8; RYNK_BLE_CHUNK_SIZE];
+        loop {
+            let n = self.to_host.read(&mut buf).await;
+            if tx.write_all(&buf[..n]).await.is_err() {
+                return;
+            }
         }
     }
 }
@@ -138,64 +134,6 @@ impl DongleRouter {
 impl Default for DongleRouter {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Splits a byte stream into whole delimiter-terminated frames without decoding
-/// them, which rmk_types' `Deframer` can't do — it decodes in place. Sized like
-/// the keyboard's session buffer, so anything a keyboard could parse fits.
-struct FrameSplitter {
-    buf: [u8; RYNK_BUFFER_SIZE],
-    len: usize,
-    /// Scan position: frames before it have been yielded.
-    start: usize,
-    /// Mid-oversized-frame: eat bytes until its delimiter resyncs the stream.
-    discard: bool,
-    /// Names the sender when an oversized frame is dropped.
-    from: &'static str,
-}
-
-impl FrameSplitter {
-    const fn new(from: &'static str) -> Self {
-        Self {
-            buf: [0; RYNK_BUFFER_SIZE],
-            len: 0,
-            start: 0,
-            discard: false,
-            from,
-        }
-    }
-
-    /// Free space to read the next chunk into; never empty. Follow with `commit`.
-    fn spare(&mut self) -> &mut [u8] {
-        &mut self.buf[self.len..]
-    }
-
-    fn commit(&mut self, n: usize) {
-        self.len += n;
-    }
-
-    /// The next whole frame (delimiter included), or `None` once the buffered
-    /// bytes hold no more — which compacts, so `spare` has room again.
-    fn next_frame(&mut self) -> Option<&[u8]> {
-        while let Some(pos) = self.buf[self.start..self.len].iter().position(|&b| b == 0) {
-            let start = self.start;
-            self.start += pos + 1;
-            if core::mem::take(&mut self.discard) || pos == 0 {
-                continue; // an oversized frame's delimiter, or a bare one
-            }
-            return Some(&self.buf[start..self.start]);
-        }
-        self.buf.copy_within(self.start..self.len, 0);
-        self.len -= self.start;
-        self.start = 0;
-        if self.len == self.buf.len() {
-            // No delimiter in a full buffer: drop and drain to the next one.
-            warn!("[dongle] oversized {} frame dropped", self.from);
-            self.len = 0;
-            self.discard = true;
-        }
-        None
     }
 }
 
@@ -304,19 +242,27 @@ mod tests {
         let captured = run(&router, VecDeque::from([request.clone()]), 0);
 
         assert!(captured.is_empty(), "forwarded frames get no local reply");
-        let forwarded = router.to_keyboard.try_receive().expect("frame routed to the keyboard");
-        assert_eq!(&forwarded[..], &request[..], "byte-for-byte pass-through");
+        let mut forwarded = [0u8; 64];
+        let n = router
+            .to_keyboard
+            .try_read(&mut forwarded)
+            .expect("bytes routed to the keyboard");
+        assert_eq!(&forwarded[..n], &request[..], "byte-for-byte pass-through");
     }
 
     #[test]
     fn a_forward_waiting_on_a_dying_link_answers_instead_of_replaying() {
         let router = DongleRouter::new();
         router.link_up();
-        // Occupy the single slot so the forward has to wait for room.
-        router.to_keyboard.try_send(RouterFrame::new()).unwrap();
+        // Fill the pipe so the forward has to wait for room.
+        while router.to_keyboard.try_write(&[0xFF; 64]).is_ok() {}
 
         let request = frame(Cmd::GetVersion, 11, &());
-        block_on(join(router.forward_frame(&request), async {
+        let mut rx = ChunkRead {
+            chunks: VecDeque::from([request.clone()]),
+            idle_reads: 4,
+        };
+        block_on(join(router.host_to_keyboard(&mut rx), async {
             yield_now().await;
             // The link drops with the forward still waiting.
             router.link_down();
@@ -331,8 +277,9 @@ mod tests {
             postcard::from_bytes::<Result<(), RynkError>>(&resp[0].2).unwrap(),
             Err(RynkError::NotReady),
         );
+        let mut parked = [0u8; 8];
         assert!(
-            router.to_keyboard.try_receive().is_err(),
+            router.to_keyboard.try_read(&mut parked).is_err(),
             "and the request is not parked for whichever keyboard reconnects next"
         );
     }
@@ -369,6 +316,20 @@ mod tests {
         assert_eq!(resp[0].1, 3, "and the next response reaches the host intact");
     }
 
+    /// The relay keeps no frame buffer, so a request split across reads must still
+    /// be answered exactly once — on the header it started with.
+    #[test]
+    fn a_request_split_across_reads_is_answered_once() {
+        let router = DongleRouter::new();
+        let request = frame(Cmd::GetVersion, 21, &());
+        let (head, tail) = request.split_at(2);
+        let captured = run(&router, VecDeque::from([head.to_vec(), tail.to_vec()]), 2);
+
+        let resp = decode_frames(&captured);
+        assert_eq!(resp.len(), 1, "one request, one answer");
+        assert_eq!(resp[0].1, 21, "seq echo survives the split");
+    }
+
     #[test]
     fn an_absent_keyboard_answers_not_ready_on_the_host_s_header() {
         let router = DongleRouter::new();
@@ -384,8 +345,9 @@ mod tests {
             postcard::from_bytes::<Result<(), RynkError>>(&resp[0].2).unwrap(),
             Err(RynkError::NotReady),
         );
+        let mut parked = [0u8; 8];
         assert!(
-            router.to_keyboard.try_receive().is_err(),
+            router.to_keyboard.try_read(&mut parked).is_err(),
             "and nothing is parked for later"
         );
     }

@@ -1,9 +1,10 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-# runner = "probe-rs run --chip nrf52833_xxAA"
-runner = "./run.sh"
+runner = "probe-rs run --chip nrf52833_xxAA"
+# runner = "./run.sh"
 
 [build]
 target = "thumbv7em-none-eabihf"
 
 [env]
 DEFMT_LOG = "debug"
+KEYBOARD_TOML_PATH = { value = "keyboard.toml", relative = true }

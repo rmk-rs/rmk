@@ -13,7 +13,8 @@ map = """
 [[keymap.layer]]
 keys = "A  B  TD(0)"
 
-# Overwritten over the wire below; present so `TD(0)` resolves.
+# Lets `TD(0)` resolve. Most cases overwrite it over the wire, but the flow-tap
+# case asserts `X`/`Y` directly, so renaming them breaks it.
 [[behavior.morse.morses]]
 tap = "X"
 hold = "Y"
@@ -25,7 +26,7 @@ steps = [
     { Single = { Key = { Hid = "A" } } },
     { Single = { Key = { Hid = "B" } } },
   ], output = { Single = { Key = { Hid = "C" } } } } } } },
-  { rynk = { cmd = "SetBehaviorConfig", payload = { combo_timeout_ms = 80, oneshot_timeout_ms = 1000, tap_interval_ms = 200, tap_capslock_interval_ms = 250 } } },
+  { rynk = { cmd = "SetBehaviorConfig", payload = { combo_timeout_ms = 80, oneshot_timeout_ms = 1000, tap_interval_ms = 200, tap_capslock_interval_ms = 250, morse_default_profile = {}, morse_prior_idle_time_ms = 120 } } },
   # One combo key alone stays silent until the written timeout expires, which is
   # what proves the timeout came from the wire and not the compiled default.
   { press = [0, 0] },
@@ -91,12 +92,35 @@ steps = [
 ]
 expect = [["C"], [], ["A"], ["A", "B"], ["B"], []]
 
+# The written profile leaves flow-tap unset and the read returns it unchanged:
+# the profile stores exactly what the host wrote, and an unset bit keeps
+# inheriting the config-level switch at use time.
 [[test]]
 name = "behavior_config_read_returns_what_was_written"
 steps = [
-  { rynk = { cmd = "SetBehaviorConfig", payload = { combo_timeout_ms = 42, oneshot_timeout_ms = 900, tap_interval_ms = 180, tap_capslock_interval_ms = 240 } } },
-  { rynk = { cmd = "GetBehaviorConfig", reply = { combo_timeout_ms = 42, oneshot_timeout_ms = 900, tap_interval_ms = 180, tap_capslock_interval_ms = 240 } } },
+  { rynk = { cmd = "SetBehaviorConfig", payload = { combo_timeout_ms = 42, oneshot_timeout_ms = 900, tap_interval_ms = 180, tap_capslock_interval_ms = 240, morse_default_profile = { unilateral_tap = true, mode = "PermissiveHold", hold_timeout_ms = 210, gap_timeout_ms = 160, quick_tap_timeout_ms = 110 }, morse_prior_idle_time_ms = 95 } } },
+  { rynk = { cmd = "GetBehaviorConfig", reply = { combo_timeout_ms = 42, oneshot_timeout_ms = 900, tap_interval_ms = 180, tap_capslock_interval_ms = 240, morse_default_profile = { unilateral_tap = true, mode = "PermissiveHold", hold_timeout_ms = 210, gap_timeout_ms = 160, quick_tap_timeout_ms = 110 }, morse_prior_idle_time_ms = 95 } } },
 ]
+
+# Flow tap resolves through the default profile, so turning it on over the wire
+# reaches morse-table keys too: a long press right after another key is forced
+# to its tap action instead of resolving as a hold. Writing the bit back unset
+# reverts to the config-level switch (off here): the same gesture holds again.
+[[test]]
+name = "flow_tap_written_to_the_default_profile_forces_a_tap"
+steps = [
+  { rynk = { cmd = "SetBehaviorConfig", payload = { combo_timeout_ms = 50, oneshot_timeout_ms = 1000, tap_interval_ms = 200, tap_capslock_interval_ms = 250, morse_default_profile = { enable_flow_tap = true }, morse_prior_idle_time_ms = 120 } } },
+  { delay = 200 },
+  { tap = { pos = [0, 0], duration = 30 } },
+  { delay = 50 },
+  { tap = { pos = [0, 2], duration = 400 } },
+  { rynk = { cmd = "SetBehaviorConfig", payload = { combo_timeout_ms = 50, oneshot_timeout_ms = 1000, tap_interval_ms = 200, tap_capslock_interval_ms = 250, morse_default_profile = {}, morse_prior_idle_time_ms = 120 } } },
+  { delay = 200 },
+  { tap = { pos = [0, 0], duration = 30 } },
+  { delay = 50 },
+  { tap = { pos = [0, 2], duration = 400 } },
+]
+expect = [["A"], [], ["X"], [], ["A"], [], ["Y"], []]
 
 # `actions` is a pattern-to-action map: 2 = tap, 3 = hold, 4 = double tap,
 # 5 = hold after tap.

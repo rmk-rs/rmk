@@ -6,7 +6,6 @@ enabled = true
 battery_adc_pin = "vddh"
 
 [dfu]
-flash_size = 1048576
 
 [storage]
 enabled = true

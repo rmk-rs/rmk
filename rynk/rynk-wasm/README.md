@@ -4,12 +4,12 @@
 `rynk::Client` protocol layer to wasm and exposes a `RynkClient` API to
 JavaScript.
 
-The browser page owns browser transports such as Web Serial and WebHID. The wasm
+The browser page owns the browser transport — WebHID today — and the wasm
 package owns the Rynk protocol state machine.
 
 ```text
-Web Serial / WebHID / another browser transport
-        -> JsByteLink { label, send, recv, close }
+WebHID / another browser transport
+        -> JsByteLink { label, send, recv }
         -> transport read/write halves
         -> rynk::Client
         -> RynkClient methods exposed to JavaScript
@@ -21,8 +21,8 @@ protocol validation stay in Rust.
 
 ## Prerequisites
 
-- A Chromium browser such as Chrome or Edge. Web Serial and WebHID are not
-  available in Firefox or Safari.
+- A Chromium browser such as Chrome or Edge. WebHID is not available in Firefox
+  or Safari.
 - Wasm target: `rustup target add wasm32-unknown-unknown`
 - Packager: `cargo install wasm-pack`
 
@@ -31,7 +31,7 @@ protocol validation stay in Rust.
 ```bash
 cd rynk/rynk-wasm
 wasm-pack build --target web        # emits ./pkg/ with generated JS and .d.ts files
-python3 -m http.server 8000         # localhost is a secure context for Web Serial / WebHID
+python3 -m http.server 8000         # localhost is a secure context for WebHID
 ```
 
 Open Chrome or Edge at `http://localhost:8000` and use `index.html` as the
@@ -51,7 +51,7 @@ import init, { connect } from "./pkg/rynk_wasm.js";
 
 await init();
 
-const link = await openSerialByteLink();
+const link = await openHidByteLink();
 const client = await connect(link);
 
 // Pull topic pushes (layer changes, WPM, …) until the link closes. Runs
@@ -84,15 +84,16 @@ The object passed to `connect(link)` only needs this shape:
 }
 ```
 
-`index.html` includes complete Web Serial and WebHID implementations. It also
-shows the optional version-probe flow used before dynamically loading a protocol
+`index.html` includes a complete WebHID implementation. It also shows the
+optional version-probe flow used before dynamically loading a protocol
 major-specific wasm package.
 
 ## JsByteLink Contract
 
 `JsByteLink` is a byte-stream boundary, not a high-level Rynk API.
 
-- `label` is the required device-picker label. It must be a string.
+- `label` is a string naming the device. `rynk-wasm` reads it only when the
+  host asks (`RynkDevice::label`); `connect()` does not.
 - `send(bytes)` receives bytes from Rust and must deliver them in order. It should
   resolve only after the browser transport has accepted the bytes.
 - `recv()` must wait until bytes are available or the link is closed. It may
@@ -100,64 +101,72 @@ major-specific wasm package.
   frame.
 - `recv()` returns `new Uint8Array(0)` only for EOF. That becomes
   `Disconnected` in the wasm API.
-- Closing the link is the page's job; `rynk-wasm` never closes it. Close on
-  every exit path — including a rejected `connect()` — releasing locks and
-  waking any pending `recv()`, which then returns the EOF empty array.
+- Closing the link is the page's job; `rynk-wasm` never calls a `close` method
+  and does not require one. Close on every exit path — including a rejected
+  `connect()` — releasing the device and waking any pending `recv()`, which
+  then returns the EOF empty array.
 - Only `rynk-wasm` should call `recv()` after `connect()`. If your page needs to
   probe the protocol version first, do it before calling `connect()`.
-- Transport-specific framing must be hidden below this boundary. For example,
-  WebHID report padding must be stripped so wasm sees the same clean Rynk byte
-  stream that Web Serial exposes.
+- Transport-specific framing lives below this boundary. WebHID reports are a
+  fixed size, so the link splits outgoing bytes across reports and passes
+  incoming reports through as-is: the zero padding decodes as empty COBS frames,
+  which the Rynk deframer discards.
 
-## Minimal Web Serial Link
+## Minimal WebHID Link
 
 This is the smallest useful shape. The demo has a more complete buffered version
-that supports the pre-load version probe.
+that supports the pre-load version probe. The firmware's `RynkHidService` uses
+usage page `0xFF14`, usage `0x61`, and 32-byte reports with report ID 0.
 
 ```js
-async function openSerialByteLink() {
-  const port = await navigator.serial.requestPort();
-  await port.open({ baudRate: 115200 });
+async function openHidByteLink() {
+  const [device] = await navigator.hid.requestDevice({
+    filters: [{ usagePage: 0xff14, usage: 0x61 }],
+  });
+  if (!device) throw new Error("no WebHID device chosen");
+  if (!device.opened) await device.open();
 
-  const reader = port.readable.getReader();
-  const writer = port.writable.getWriter();
+  const REPORT = 32;
+  let rx = [];
+  let wake = null;
   let closed = false;
-  const { usbVendorId, usbProductId } = port.getInfo();
-  const label = usbVendorId === undefined || usbProductId === undefined
-    ? "Web Serial device"
-    : `USB ${usbVendorId.toString(16).padStart(4, "0")}:${usbProductId.toString(16).padStart(4, "0")}`;
+  const onReport = (event) => {
+    const d = event.data;
+    rx.push(new Uint8Array(d.buffer, d.byteOffset, d.byteLength));
+    if (wake) { const w = wake; wake = null; w(); }
+  };
+  device.addEventListener("inputreport", onReport);
 
   return {
-    label,
+    label: device.productName || "WebHID device",
+
     async send(bytes) {
-      await writer.write(bytes);
+      for (let off = 0; off < bytes.length; off += REPORT) {
+        const report = new Uint8Array(REPORT);        // zero-padded last chunk
+        report.set(bytes.subarray(off, off + REPORT));
+        await device.sendReport(0, report);
+      }
     },
 
     async recv() {
-      if (closed) return new Uint8Array(0);
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) {
-          closed = true;
-          return new Uint8Array(0);
-        }
-        if (value && value.length) return value;
-      }
+      while (rx.length === 0 && !closed) await new Promise((res) => { wake = res; });
+      if (rx.length === 0) return new Uint8Array(0);   // EOF
+      return rx.shift();
     },
 
     async close() {
       closed = true;
-      try { await reader.cancel(); } catch {}
-      try { reader.releaseLock(); } catch {}
-      try { await writer.close(); } catch {}
-      try { writer.releaseLock(); } catch {}
-      try { await port.close(); } catch {}
+      device.removeEventListener("inputreport", onReport);
+      if (wake) { const w = wake; wake = null; w(); }
+      try { await device.close(); } catch {}
     },
   };
 }
 ```
 
-Call `requestPort()` inside a user gesture such as a button click.
+Call `requestDevice()` inside a user gesture such as a button click. Once the
+user has granted a device, `navigator.hid.getDevices()` returns it again without
+a chooser, which is how the demo auto-reconnects.
 
 ## RynkClient API
 
@@ -171,7 +180,7 @@ concurrency contract on `RynkClient` itself.
 
 Topic pushes are pulled, not delivered by callback: drive `next_topic()` in a
 loop. It parks until the next recognized topic and rejects with `Disconnected`
-at EOF, mirroring the native `Client::next_topic()` used by `rynk-serial` /
+at EOF, mirroring the native `Client::next_topic()` used by `rynk-usb` /
 `rynk-ble`.
 
 The typed request surface is the `endpoints!` table in `src/client.rs`, which
@@ -183,24 +192,27 @@ Getter results and topic values are plain JS values produced through the
 tsify-generated wire types. Setter payloads are plain JS objects matching the
 Rust serde shape for the corresponding `rmk-types` type.
 
-Errors are thrown as JS `Error` objects with stable `name` values such as
-`Disconnected`, `TransportError`, `Rejected`, `Unsupported`,
-`ResponseDecodeError`, and `VersionMismatch`.
+Errors are thrown as JS `Error` objects whose `name` is one of these stable
+values: `Disconnected`, `TransportError`, `DeviceNotFound`, `Rejected`,
+`Unsupported`, `VersionMismatch`, `RequestEncodeError`, `ResponseDecodeError`,
+`LayoutDecodeError`, `ResponseTrailingBytes`, and `ResponseCommandMismatch`.
 
 ## Browser Transports
 
-Both built-in demo links present the same `JsByteLink` shape to wasm. Only the
-JS code that opens and normalizes the browser transport differs.
+Any browser transport that presents the `JsByteLink` shape works with the same
+wasm package; only the JS code that opens and normalizes the transport differs.
 
-- **USB - Web Serial.** The page opens the keyboard's serial port and streams raw
-  Rynk frame bytes over it.
 - **BLE - WebHID over the OS HID link.** A pure browser cannot reach Rynk's
   custom 128-bit GATT service on an OS-bonded keyboard, and Web Bluetooth cannot
   attach a bonded keyboard at all. WebHID can reach the firmware's vendor HID
   report (`RynkHidService`, usage page `0xFF14`) via the existing OS HID link, so
   there is no pairing prompt. The page fragments each Rynk frame into fixed
-  32-byte reports and reassembles reports back into the clean byte stream before
-  wasm sees them.
+  32-byte reports; padding decodes as empty frames the deframer drops.
+- **USB - not yet available in the browser.** The firmware exposes Rynk on a
+  vendor-specific bulk interface (class `0xFF`, subclass and protocol `0x52`),
+  which only WebUSB could reach, and no WebUSB `JsByteLink` exists yet. The
+  demo page's Web Serial button dates from the earlier CDC transport and does
+  not reach current firmware. Use the native `rynk-usb` crate for USB today.
 
 Rynk's custom-GATT BLE transport (`rynk-ble`, native `bluest`) is a separate
 native-only path, for example:
@@ -227,14 +239,12 @@ select a second wasm build while keeping the same JS byte-link implementations.
 
 ## Troubleshooting
 
-- **`navigator.serial` / `navigator.hid` is undefined**: use a Chromium browser
-  over `http://localhost:8000`. Firefox and Safari do not expose these APIs.
-- **Serial port chooser empty / device absent**: the OS may already hold the
-  port. Close native `hw_test`, serial monitors, Arduino IDE, and other tabs. On
-  Linux, make sure the user is in the `dialout` group.
-- **WebHID chooser empty**: the firmware must expose `RynkHidService` with usage
-  page `0xFF14`; a build without that HID report will not appear.
-- **`port closed` / `device closed` / open failure**: the link is busy or lacks
-  permission; another tab or app may hold it.
-- **`bad version reply`**: the page opened the wrong serial port or HID
-  collection. Pick the keyboard's own Rynk serial port or HID device.
+- **`navigator.hid` is undefined**: use a Chromium browser over
+  `http://localhost:8000`. Firefox and Safari do not expose WebHID.
+- **WebHID chooser empty**: the keyboard must be connected to the OS over
+  Bluetooth, and the firmware must expose `RynkHidService` (usage page
+  `0xFF14`); a build without that HID report will not appear.
+- **`device closed` / open failure**: another tab or app may hold the device;
+  close it and retry.
+- **`bad version reply`**: the page opened the wrong HID collection. Pick the
+  keyboard's own Rynk entry in the chooser.

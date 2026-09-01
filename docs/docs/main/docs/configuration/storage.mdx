@@ -15,11 +15,14 @@ import { Tab, Tabs, Rust, Toml } from '@theme'
 
 ```toml title="keyboard.toml"
 [storage]
-# Enable/disable storage feature (default: true)
+# Enable/disable storage feature (default: true). Must match the `storage` Cargo feature of rmk
 enabled = true
-# Number of flash sectors to allocate (default: 2)
+# Number of flash sectors to allocate. Defaults to 8 when a [dfu] section is present, either here or
+# in the chip default (nRF52840, nice!nano, RP2040 and Pico W ship one); otherwise 2 unless the chip
+# default sets a value
 num_sectors = 2
-# Storage start address (default: 0 = auto-allocate from end)
+# Storage start address (default: 0 = auto-allocate from end; on nRF BLE builds without DFU,
+# 0 means 0x60000)
 start_addr = 0x00000000
 # Clear all storage data on boot, including keymap, BLE bonds, etc
 clear_storage = false
@@ -48,8 +51,19 @@ let rmk_config = RmkConfig {
 </Tab>
 </Tabs>
 
+`enabled` must agree with the `storage` Cargo feature of the `rmk` crate in both directions: `enabled = false` requires disabling the feature (for example with `default-features = false`), and a build without the feature requires `enabled = false`. The build fails otherwise.
+
+## Storage and DFU
+
+When using DFU (`dfu_rp` / `dfu_nrf`), the storage partition is placed **after the DFU download slot**, determined by the `rmk-memory.x` linker script. In this mode:
+
+- `start_addr` is **ignored** — RMK automatically places storage at the address defined in `rmk-memory.x` (`__bootloader_storage_start`).
+- The default `num_sectors` is **8** (32 KB, matching rmk-boot's default storage area). You can override `num_sectors` to use fewer sectors, but cannot exceed the allocated area.
+
+If you change the storage size in rmk-boot's `build.rs`, rebuild the bootloader and regenerate `rmk-memory.x`. All partition addresses recalculate automatically.
+
 ::: info Storage is re-initialized when the firmware changes
 
-Every firmware build embeds a unique build hash, and on boot RMK compares it with the hash saved in flash. If they differ (for example after flashing a new build), the whole storage area is erased and re-initialized with the firmware's defaults, so saved keymap changes and BLE bonds don't survive a firmware update.
+Every firmware build embeds a unique build hash, and on boot RMK compares it with the hash saved in Flash. If they differ (for example after flashing a new build), the whole storage area is erased and re-initialized with the firmware's defaults, so saved keymap changes and BLE bonds don't survive a firmware update.
 
 :::

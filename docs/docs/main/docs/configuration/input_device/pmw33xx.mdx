@@ -39,9 +39,9 @@ motion = "PIN_20" # Optional. If omitted, the sensor is polled.
 # how often the sensor sends reports to the computer
 report_hz = 125 # Optional: Report rate in Hz
 
-cpi = 1600
-rot_trans_angle = -15
-liftoff_dist = 8
+cpi = 1600 # Optional, defaults to 1600
+rot_trans_angle = -15 # Optional, defaults to 0
+liftoff_dist = 8 # Optional, defaults to 0
 proc_invert_x = true
 # proc_invert_y = true
 # proc_swap_xy = true
@@ -76,10 +76,6 @@ id = 1
 The peripheral forwards events to the central with the `device_id` preserved. The generated `PointingProcessorConfig` on the central will automatically use the matching `device_id` for each sensor.
 :::
 
-::: warning Breaking change
-Adding `device_id` to `PointingEvent` changes the serialized binary format used by the split protocol. Both halves of a split keyboard **must** be flashed with the same firmware version at the same time.
-:::
-
 ## Rust configuration
 
 Define a `PointingDevice` and add it to `run_all!` macro. For a split keyboard this must be added to the file (`central.rs` or `peripheral.rs`) corresponding to the side the sensor is connected to.
@@ -99,7 +95,7 @@ bind_interrupts!(struct Irqs {
 
 ```rust
     use embassy_rp::spi::{Spi, Config, Polarity, Phase};
-    use embassy_rp::gpio::{Level, Output, Pull};
+    use embassy_rp::gpio::{Input, Level, Output, Pull};
     use rmk::input_device::pointing::PointingDevice;
     // for PMW3360 import
     use rmk::input_device::pmw33xx::{Pmw33xx, Pmw33xxConfig, Pmw3360Spec};
@@ -124,9 +120,9 @@ bind_interrupts!(struct Irqs {
 
     // Initialize PMW33xx mouse sensor
     let sensor_config = Pmw33xxConfig {
-         // res_cpi: 1600,
+        // res_cpi: 1600,
         // rot_trans_angle: 0,
-        // liftoff_dist: 0x02,
+        // liftoff_dist: 0x02, // default
         ..Default::default()
     };
 

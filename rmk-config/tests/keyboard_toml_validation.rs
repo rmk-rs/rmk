@@ -224,3 +224,52 @@ keys = "A A A A"
         "unexpected error: {msg}"
     );
 }
+
+#[test]
+fn dfu_storage_conflict_reports_explicit_storage_keys() {
+    let cases = [
+        (
+            "dfu-start-addr",
+            "[dfu]\n\n[storage]\nstart_addr = 0x100000\n",
+            true,
+            false,
+        ),
+        ("dfu-num-sectors", "[dfu]\n\n[storage]\nnum_sectors = 8\n", false, true),
+        (
+            "dfu-both",
+            "[dfu]\n\n[storage]\nstart_addr = 0x100000\nnum_sectors = 8\n",
+            true,
+            true,
+        ),
+    ];
+    for (name, extra, expect_start, expect_sectors) in cases {
+        let path = write_temp_keyboard_toml(name, extra);
+        let config = KeyboardTomlConfig::new_from_toml_path(&path);
+        std::fs::remove_file(path).ok();
+
+        let conflict = config
+            .dfu_storage_conflict()
+            .unwrap_or_else(|| panic!("{name}: expected a conflict"));
+        assert_eq!(
+            (conflict.start_addr_set, conflict.num_sectors_set),
+            (expect_start, expect_sectors),
+            "{name}: unexpected conflict flags"
+        );
+    }
+}
+
+#[test]
+fn dfu_storage_conflict_absent_without_user_storage() {
+    let cases = [
+        ("dfu-only", "[dfu]\n"),
+        ("dfu-empty-storage", "[dfu]\n\n[storage]\n"),
+        ("storage-only", "[storage]\nstart_addr = 0x100000\nnum_sectors = 8\n"),
+    ];
+    for (name, extra) in cases {
+        let path = write_temp_keyboard_toml(name, extra);
+        let config = KeyboardTomlConfig::new_from_toml_path(&path);
+        std::fs::remove_file(path).ok();
+
+        assert!(config.dfu_storage_conflict().is_none(), "{name}: expected no conflict");
+    }
+}

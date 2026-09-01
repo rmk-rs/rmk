@@ -9,8 +9,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=KEYBOARD_TOML_PATH");
     println!("cargo:rerun-if-env-changed=VIAL_JSON_PATH");
 
-    // Build-time constants only need [rmk] + [event] + [layout], so load event
-    // defaults without requiring [keyboard.board]/[keyboard.chip].
+    // Load compile-time constants with event defaults, without requiring
+    // chip-specific defaults from [keyboard.board]/[keyboard.chip].
     let toml_path = std::env::var("KEYBOARD_TOML_PATH").ok();
     let config: KeyboardTomlConfig = if let Some(toml_path) = &toml_path {
         println!("cargo:rerun-if-changed={toml_path}");
@@ -22,6 +22,20 @@ fn main() {
     // Enabled features drive constant resolution (notably event subscriber counts).
     let active_features = collect_active_features();
     let feature_refs: Vec<&str> = active_features.iter().map(|s| s.as_str()).collect();
+
+    if let Some(conflict) = config.dfu_storage_conflict()
+        && active_features.iter().any(|f| f == "dfu")
+    {
+        let keys = match (conflict.start_addr_set, conflict.num_sectors_set) {
+            (true, true) => "[storage] start_addr and num_sectors",
+            (true, false) => "[storage] start_addr",
+            (false, true) => "[storage] num_sectors",
+            (false, false) => unreachable!(),
+        };
+        println!(
+            "cargo:warning={keys} have no effect while [dfu] is enabled: the storage partition size and position are fixed by the bootloader linker script (rmk-boot build.rs STORAGE_SIZE -> rmk-memory.x, default 8 x 4K = 32K). Change it there and re-flash the bootloader"
+        );
+    }
 
     let bc = config
         .build_constants(&feature_refs)
@@ -65,6 +79,22 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     lines.push(format!(
         "pub const SPLIT_PERIPHERALS_NUM: usize = {};",
         bc.split_peripherals_num
+    ));
+    lines.push(format!(
+        "pub const CENTRAL_BATTERY_USER_DESCRIPTION: &str = {:?};",
+        bc.central_battery_user_description
+    ));
+    lines.push(format!(
+        "pub const SPLIT_BATTERY_PERIPHERALS_NUM: usize = {};",
+        bc.split_battery_peripheral_ids.len()
+    ));
+    lines.push(format!(
+        "pub const SPLIT_BATTERY_PERIPHERAL_IDS: [usize; SPLIT_BATTERY_PERIPHERALS_NUM] = {:?};",
+        bc.split_battery_peripheral_ids
+    ));
+    lines.push(format!(
+        "pub const SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS: [&str; SPLIT_BATTERY_PERIPHERALS_NUM] = {:?};",
+        bc.split_battery_peripheral_user_descriptions
     ));
     lines.push(format!("pub const NUM_BLE_PROFILE: usize = {};", bc.ble_profiles_num));
     lines.push(format!(

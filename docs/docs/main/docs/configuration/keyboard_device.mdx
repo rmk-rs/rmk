@@ -13,11 +13,11 @@ import { Rust, Toml, Tab, Tabs } from '@theme'
 
 ```toml title="keyboard.toml"
 [keyboard]
-name = "My Custom Keyboard"       # Display name
+name = "My Custom Keyboard"       # A label for your configuration; it does not appear on USB or BLE
 vendor_id = 0x4c4b                # USB vendor ID (16-bit hex)
 product_id = 0x4643               # USB product ID (16-bit hex)
-manufacturer = "YourName"         # (Optional) Manufacturer string
-product_name = "KeyboardName"     # (Optional) Keyboard name, if not set, it will be same as `name` field
+manufacturer = "YourName"         # (Optional) Manufacturer string, defaults to "RMK"
+product_name = "KeyboardName"     # (Optional) USB product string and BLE device name, defaults to "RMK Keyboard"
 serial_number = "my-firmware-v1"  # (Optional) Serial number; defaults to rmk:<version> (with a vial: prefix for Vial builds)
 chip = "nrf52840"                 # Target microcontroller
 usb_enable = true                 # (Optional) Enable USB functionality. If omitted, RMK uses the board/chip default.
@@ -52,9 +52,10 @@ let rmk_config = RmkConfig {
 
 If `serial_number` is omitted, RMK embeds a version stamp automatically. For Vial builds (the
 default), this is `vial:f64c2b3c;rmk:<version>`, which lets Vial discover the keyboard without a
-hardcoded serial override. Non-Vial builds use `rmk:<version>` without the Vial marker. The Vial
-marker comes first because BLE's serial number characteristic is length limited, so a trailing
-marker can be truncated away.
+hardcoded serial override. Non-Vial builds use `rmk:<version>` without the Vial marker; builds with
+the `rynk` feature (or `dongle` without `vial`) prepend `rynk:` to the USB serial number, giving
+`rynk:rmk:<version>`. The Vial marker comes first because BLE's serial number characteristic is
+length limited, so a trailing marker can be truncated away.
 
 :::
 

@@ -39,7 +39,7 @@ rustup target add thumbv7em-none-eabihf
 ```shell
 cargo install rmkit
 # If you have problems installing rmkit on Windows, try the following command to install it:
-# powershell -ExecutionPolicy ByPass -c "irm https://github.com/rmk-rs/rmkit/releases/download/v0.0.21/rmkit-installer.ps1 | iex"
+# powershell -ExecutionPolicy ByPass -c "irm https://github.com/rmk-rs/rmkit/releases/latest/download/rmkit-installer.ps1 | iex"
 ```
 
 There are several other tools that should be installed:
@@ -61,6 +61,16 @@ You can use the following commands to install them:
   curl --proto '=https' --tlsv1.2 -LsSf https://github.com/probe-rs/probe-rs/releases/latest/download/probe-rs-tools-installer.sh | sh
   # Windows
   irm https://github.com/probe-rs/probe-rs/releases/latest/download/probe-rs-tools-installer.ps1 | iex
+```
+
+To compile firmware for nRF chips, you also need the [Arm GNU toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads), which builds the P-256 assembly that RMK uses to speed up BLE pairing:
+
+```bash
+# macOS
+brew install --cask gcc-arm-embedded
+
+# Ubuntu/Debian
+sudo apt install gcc-arm-none-eabi
 ```
 
 To compile firmware for nRF52 on windows, you may need to install LLVM(Clang) as well. Follow the doc [here](https://rust-lang.github.io/rust-bindgen/requirements.html#windows) to install LLVM(Clang).
@@ -98,7 +108,7 @@ The [Keyboard Configuration](../../configuration) section has full instructions 
 
 ### Update `memory.x`
 
-`memory.x` is the linker script of the Rust embedded project, it's used to define the memory layout of the microcontroller. RMK enables the `memory-x` feature for `embassy-stm32`, so if you're using stm32, you can just ignore this step.
+`memory.x` is the linker script of the Rust embedded project, it's used to define the memory layout of the microcontroller. The generated project (like the STM32 examples) enables the `memory-x` feature of `embassy-stm32`, so if you're using stm32, you can just ignore this step.
 
 For other ARM Cortex-M microcontrollers, you only need to update the `LENGTH` of FLASH and RAM to your microcontroller.
 

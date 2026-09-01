@@ -35,29 +35,7 @@ async fn main(_spawner: Spawner) {
 
     let (row_pins, col_pins) = config_matrix_pins_rp!(peripherals: p, input: [PIN_8, PIN_9], output: [PIN_10]);
 
-    // Flash layout for embassy-boot on the peripheral,
-    // matching the central's layout for consistency.
-    const FLASH_SIZE: u32 = 2 * 1024 * 1024;
-    const PAGE_SIZE: u32 = 4 * 1024;
-    const STORAGE_SIZE: u32 = 128 * 1024;
-    const STATE_OFFSET: u32 = 0x6000;
-    const STATE_SIZE: u32 = 0x1000;
-    const ACTIVE_OFFSET: u32 = 0x7000;
-    let remaining: u32 = FLASH_SIZE - 28 * 1024 - STORAGE_SIZE;
-    let active_size: u32 = (remaining - PAGE_SIZE) / 2;
-    let dfu_size: u32 = active_size + PAGE_SIZE;
-    let dfu_offset: u32 = ACTIVE_OFFSET + active_size;
-    let storage_offset: u32 = dfu_offset + dfu_size;
-
-    rmk::dfu::init_flash(
-        p.FLASH,
-        storage_offset,
-        STORAGE_SIZE,
-        STATE_OFFSET,
-        STATE_SIZE,
-        dfu_offset,
-        dfu_size,
-    );
+    rmk::dfu::init_flash_from_linkerscript(p.FLASH);
 
     // mark the firmware as booted otherwise the bootloader thinks it didn't and will revert to the old firmware
     rmk::dfu::mark_booted();

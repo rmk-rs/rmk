@@ -130,12 +130,9 @@ impl<D: Driver<'static>> ErrorType for HostUsbWriter<D> {
     type Error = EndpointError;
 }
 
-/// Sends one frame per `write`, then a zero-length packet when the frame
-/// fills the last bulk-IN packet. A bulk IN transfer completes on the host
-/// only at a packet shorter than the max packet size, so a frame whose length
-/// is a multiple of it would otherwise hang the host read (hit at Full-Speed's
-/// 64-byte packets; masked at High-Speed's 512). `run_session` writes each
-/// frame with a single `write_all`, so `buf` is one whole frame.
+/// A bulk-IN transfer completes on the host only at a short packet, so a write
+/// that's a multiple of the max packet size is terminated with a zero-length
+/// packet — otherwise the host read hangs (hit at Full-Speed's 64 bytes).
 impl<D: Driver<'static>> Write for HostUsbWriter<D> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         for packet in buf.chunks(RYNK_USB_MAX_PACKET_SIZE) {

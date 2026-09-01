@@ -152,6 +152,10 @@ pub(crate) enum FlashOperationMessage {
     PriorIdleTime(u16),
     // Default morse profile containing all morse/tap-hold settings (mode, timeouts, unilateral_tap)
     MorseDefaultProfile(MorseProfile),
+    #[cfg(feature = "rynk")]
+    // The whole behavior config in one message (Rynk's SetBehaviorConfig carries
+    // every field, so one store beats six read-modify-write cycles)
+    BehaviorConfig(BehaviorConfig),
     #[cfg(feature = "_ble")]
     // Read bond info for the given slot; storage task replies via `BOND_INFO_RESPONSE`.
     ReadBleBondInfo(u8),
@@ -294,7 +298,7 @@ pub(crate) struct LocalStorageConfig {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) struct LayoutConfig {
     pub(crate) default_layer: u8,
-    layout_option: u32,
+    pub(crate) layout_option: u32,
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, MaxSize)]
@@ -807,6 +811,14 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                 FlashOperationMessage::MorseDefaultProfile(morse_default_profile) => {
                     update_storage_field!(&mut self.flash, &mut self.buffer, BehaviorConfig, morse_default_profile)
                 }
+                #[cfg(feature = "rynk")]
+                FlashOperationMessage::BehaviorConfig(behavior_config) => {
+                    self.store_data(
+                        StorageKey::BehaviorConfig,
+                        &StorageData::BehaviorConfig(behavior_config),
+                    )
+                    .await
+                }
             };
 
             match write_result {
@@ -1062,6 +1074,76 @@ mod tests {
                     build_hash: BUILD_HASH,
                 })
             ));
+        });
+    }
+
+    // A stored LayoutConfig must reach the Vial GUI again after a power
+    // cycle: read_keymap restores layout_option into KeymapData and
+    // KeyMap::build copies it into the runtime state that
+    // GetKeyboardValue(LayoutOptions) answers from (the GET wiring itself is
+    // covered by host::via::tests::layout_options_set_then_get_roundtrip).
+    // Deleting the restore in read_keymap (or the copy in KeyMap::build)
+    // leaves the runtime value at 0 and fails this test.
+    #[cfg(feature = "vial")]
+    #[test]
+    fn layout_option_restored_from_storage() {
+        use crate::config::BehaviorConfig;
+        use crate::keymap::{KeyMap, KeymapData};
+
+        block_on(async {
+            type Flash = TestFlash<16_384, 4_096, 1>;
+
+            let storage_range = (16_384 - 2 * 4_096) as u32..16_384u32;
+            let mut map =
+                MapStorage::<StorageKey, _, _>::new(Flash::new(), MapConfig::new(storage_range), Cache::new_uncached());
+            let mut buffer = [0u8; 256];
+
+            // A matching build hash keeps the stored records across the boot.
+            map.store_item(
+                &mut buffer,
+                &StorageKey::StorageConfig,
+                &StorageData::StorageConfig(LocalStorageConfig {
+                    enable: true,
+                    build_hash: BUILD_HASH,
+                }),
+            )
+            .await
+            .unwrap();
+            map.store_item(
+                &mut buffer,
+                &StorageKey::LayoutConfig,
+                &StorageData::LayoutConfig(LayoutConfig {
+                    default_layer: 0,
+                    layout_option: 42,
+                }),
+            )
+            .await
+            .unwrap();
+
+            let (flash, _) = map.destroy();
+            let keymap_init = [[[KeyAction::No; 1]; 1]; 1];
+            let encoder_map_init: Option<&mut [[EncoderAction; 0]; 1]> = None;
+
+            let mut storage = Storage::<Flash, 1, 1, 1, 0>::new(
+                flash,
+                &keymap_init,
+                &encoder_map_init,
+                &RuntimeStorageConfig::default(),
+                &RuntimeBehaviorConfig::default(),
+            )
+            .await;
+
+            // Boot-time restore path: storage -> KeymapData -> KeyMap::build.
+            let mut data = KeymapData::new([[[KeyAction::No]]]);
+            let mut behavior = BehaviorConfig::default();
+            storage.read_keymap(&mut data, &mut behavior).await.unwrap();
+
+            let positional = crate::config::PositionalConfig::<1, 1>::default();
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+
+            // The freshly built keymap exposes the stored value to the via
+            // GET handler.
+            assert_eq!(keymap.layout_option(), 42);
         });
     }
 }

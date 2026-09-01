@@ -295,6 +295,8 @@ The `layer.keys` string follows several rules:
 
 9. For keyboard macros, use `Macro(n)`.
 
+10. For a [Plover HID steno](../features/steno) key, use `STN(key)`, where `key` is the steno key name (for example `STN(S1)`). Requires the `steno` Cargo feature.
+
 ## Aliases
 
 The `[aliases]` section maps user-defined names to replacement strings, which you can then use in `layer.keys`:

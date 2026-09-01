@@ -38,13 +38,6 @@ bind_interrupts!(struct Irqs {
     DMA_IRQ_0 => dma::InterruptHandler<embassy_rp::peripherals::DMA_CH0>;
 });
 
-const FLASH_SIZE: u32 = 2 * 1024 * 1024;
-const PAGE_SIZE: u32 = 4 * 1024;
-const STORAGE_SIZE: u32 = 128 * 1024;
-const STATE_OFFSET: u32 = 0x6000;
-const STATE_SIZE: u32 = 0x1000;
-const ACTIVE_OFFSET: u32 = 0x7000;
-
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     info!("RMK central start!");
@@ -54,32 +47,7 @@ async fn main(_spawner: Spawner) {
 
     let (row_pins, col_pins) = config_matrix_pins_rp!(peripherals: p, input: [PIN_9, PIN_11], output: [PIN_10, PIN_12]);
 
-    let remaining = FLASH_SIZE - 28 * 1024 - STORAGE_SIZE;
-    let active_size = (remaining - PAGE_SIZE) / 2;
-    let dfu_size = active_size + PAGE_SIZE;
-    let dfu_offset = ACTIVE_OFFSET + active_size;
-    let storage_offset = dfu_offset + dfu_size;
-    assert!(storage_offset + STORAGE_SIZE == FLASH_SIZE);
-
-    info!(
-        "Flash: state=0x{:04X} active=0x{:04X}({}K) dfu=0x{:04X}({}K) storage=0x{:04X}",
-        STATE_OFFSET,
-        ACTIVE_OFFSET,
-        active_size / 1024,
-        dfu_offset,
-        dfu_size / 1024,
-        storage_offset
-    );
-
-    let flash = async_flash_wrapper(rmk::dfu::init_flash(
-        p.FLASH,
-        storage_offset,
-        STORAGE_SIZE,
-        STATE_OFFSET,
-        STATE_SIZE,
-        dfu_offset,
-        dfu_size,
-    ));
+    let flash = async_flash_wrapper(rmk::dfu::init_flash_from_linkerscript(p.FLASH));
 
     rmk::dfu::mark_booted();
 
@@ -108,7 +76,7 @@ async fn main(_spawner: Spawner) {
     let mut keymap_data = KeymapData::new(keymap::get_default_keymap());
     let mut behavior_config = BehaviorConfig::default();
     let storage_config = StorageConfig {
-        num_sectors: 32,
+        num_sectors: 8,
         start_addr: 0,
         clear_storage: false,
         clear_layout: false,

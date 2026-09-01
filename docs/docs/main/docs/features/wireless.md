@@ -12,19 +12,16 @@ RMK also provides BLE examples; check out [nrf52840_ble](https://github.com/rmk-
 
 Since multiple targets are not currently supported by `docs.rs`, API documentation is not available on `docs.rs`. Check the examples for usage.
 
-::: warning Upgrading from v0.8?
-v0.9 moves all BLE HID reports into a single HID service and renumbers the HID report ids, so hosts bonded to a v0.8 keyboard cache a stale layout. After flashing v0.9, forget the keyboard in the Bluetooth settings of every previously paired host, then pair again. See the [migration guide](../migration/v08_v09#ble-hosts-must-forget-and-re-pair).
-:::
-
 ## Supported Microcontrollers
 
 The following is the list of available feature gates (i.e., supported BLE chips):
 
-- nrf54lm20_ble
-- nrf54l15_ble
+- nrf54lm20_ble (Rust API only)
+- nrf54l15_ble (Rust API only)
 - nrf52840_ble
 - nrf52833_ble
 - nrf52832_ble
+- nrf52820_ble
 - nrf52811_ble
 - nrf52810_ble
 - esp32c3_ble
@@ -32,13 +29,21 @@ The following is the list of available feature gates (i.e., supported BLE chips)
 - esp32h2_ble
 - esp32s3_ble
 - pico_w_ble (for Raspberry Pi Pico W and Raspberry Pi Pico 2 W)
-- sf32lb52x_ble
+- sf32lb52x_ble (Rust API only)
+
+`keyboard.toml` recognizes `chip` values starting with `stm32`, `nrf52`, `rp2040` or `esp32`, plus the [supported boards](../configuration/keyboard_device#supported-development-boards). Chips marked "Rust API only" have no `keyboard.toml` support yet; start from their `examples/use_rust` projects.
 
 ## Nice!nano Support
 
 RMK has special support for [nice!nano](https://nicekeyboards.com/), a widely used board for building wireless keyboards.
 
 nice!nano has a built-in bootloader that enables flashing a .uf2 format firmware via USB drive. [`examples/use_rust/nrf52840_ble/README.md`](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/README.md) provides instructions for converting RMK firmware to .uf2 format.
+
+Enable the `adafruit_bl` Cargo feature so that the `Bootloader` keycode reboots into the Adafruit nRF52 bootloader (the UF2 drive); without it the key only reboots the keyboard. Both `nrf52840_ble` examples enable it:
+
+```toml
+rmk = { version = "0.9", features = ["nrf52840_ble", "adafruit_bl"] }
+```
 
 You can also refer to the [RMK user guide](../user_guide/flash_firmware#use-uf2-bootloader) for the instructions.
 
@@ -54,7 +59,7 @@ Vial user keycodes can be configured to operate wireless profiles. Suppose that 
 - `User(N+2)`: clear current profile bond info
 - `User(N+3)`: switch default output between USB/BLE
 - `User(N+4)`: clear the stored split peer bond — hold the key for 5 seconds (BLE split keyboards only)
-- `User(N+5)`: switch to the dongle bond slot, a slot of its own that profile cycling never reaches. Hold the key for 5 seconds to clear that bond and go looking for another dongle. Keyboards built with the `dongle` feature only.
+- `User(N+5)`: switch to the dongle bond slot, a slot of its own that profile cycling never reaches. Hold the key for 5 seconds to clear that bond and go looking for another dongle. Keyboards built with the `dongle` feature only — see [Dongle](./dongle).
 
 Vial also provides a way to customize the displayed keycode, see `customKeycodes` in [this example](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/vial.json). If `customKeycodes` are configured, the `User0` ~ `User(N+3)` will be displayed as `BT0`, ..., `Switch Output`.
 

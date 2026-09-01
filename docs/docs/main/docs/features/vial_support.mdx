@@ -2,9 +2,13 @@
 
 RMK can expose the [Vial](https://get.vial.today/) protocol for compatibility with the Vial app. Vial allows you to change your keymapping in real-time without flashing new firmware.
 
-::: warning Vial and [Rynk](./rynk) are mutually exclusive firmware protocols. Vial is enabled by the `rmk` crate's default Cargo features; enable Rynk explicitly only after disabling those defaults. :::
+::: warning
+Vial and [Rynk](./rynk) are mutually exclusive firmware protocols. Vial is enabled by the `rmk` crate's default Cargo features; enable Rynk explicitly only after disabling those defaults.
+:::
 
-::: warning Vial requires the [storage feature](./storage) to persist your keymap data. Without storage feature enabled, any changes to your keymap will be lost after the keyboard reboots. :::
+::: warning
+Vial requires the [storage feature](./storage) to persist your keymap data. Without storage feature enabled, any changes to your keymap will be lost after the keyboard reboots.
+:::
 
 ## Enable Vial
 
@@ -28,7 +32,9 @@ Add any chip, BLE, split, display, or other features your board needs.
 
 To use Vial with RMK, you need a keyboard definition file named `vial.json`. Vial provides detailed documentation on how to generate this file: https://get.vial.today/docs/porting-to-via.html.
 
-::: note When creating your `vial.json`, it is essential that you use the exact same layout definition as your RMK firmware's internal keymap, which is defined in either `src/keymap.rs` or `keyboard.toml`.
+::: note
+
+When creating your `vial.json`, it is essential that you use the exact same layout definition as your RMK firmware's internal keymap, which is defined in either `src/keymap.rs` or `keyboard.toml`.
 
 It's important to understand the difference:
 
@@ -44,13 +50,14 @@ If your `keyboard.toml` already defines the [`[layout]`](../configuration/layout
 :::
 
 Once you have your `vial.json` file, simply place it in the root directory of your RMK firmware
-project. RMK will automatically handle the rest.
+project. The `build.rs` that comes with the project template embeds it into the firmware. If you
+wrote your own `build.rs`, copy the `generate_vial_config` step from an [example](https://github.com/rmk-rs/rmk/blob/main/examples/use_config/rp2040/build.rs).
 
 ## Disable Vial
 
 Vial support requires additional Flash and RAM. If you want to minimize binary size and memory usage, you can disable Vial support.
 
-When using `keyboard.toml`, disable Vial by setting `vial_enabled` to `false` under `[host]`. If you still want host-side configuration, enable Rynk instead:
+When using `keyboard.toml`, disable Vial by setting `vial_enabled` to `false` under `[host]`. If you still want host-side configuration, enable the experimental [Rynk](./rynk) instead:
 
 ```toml title="keyboard.toml"
 [host]
@@ -81,7 +88,11 @@ For security purposes, you can configure unlock keys that must be pressed simult
 unlock_keys = [[0, 0], [0, 1]]  # Keys at (row=0,col=0) and (row=0,col=1)
 ```
 
-::: tip The unlock keys use the physical matrix position (row, column), not the keycode. Make sure to use keys that are easy to press simultaneously but not commonly pressed together accidentally. :::
+With the default `host_lock` feature, `unlock_keys` is the only way to unlock: if it's empty, RMK refuses every unlock request, and locked features such as the Matrix Tester stay unavailable unless you set `insecure = true` (see below). At most 4 positions are allowed.
+
+::: tip
+The unlock keys use the physical matrix position (row, column), not the keycode. Make sure to use keys that are easy to press simultaneously but not commonly pressed together accidentally.
+:::
 
 ## Start Vial Unlocked (insecure)
 

@@ -1,5 +1,5 @@
-use bt_hci::cmd::le::LeSetPhy;
-use bt_hci::controller::ControllerCmdAsync;
+#[cfg(feature = "subrating")]
+use bt_hci::{cmd::le::LeSetHostFeature, controller::ControllerCmdSync};
 use embassy_futures::join::join;
 use embassy_time::{Duration, Timer};
 use rmk_types::connection::ConnectionStatus;
@@ -9,7 +9,7 @@ use trouble_host::prelude::*;
 use super::PeerAddress;
 use super::{GattSplitMessage, SplitMessage};
 use crate::ble::adv::{Adv, advertise};
-use crate::event::{CentralConnectedEvent, KeyboardEvent, SubscribableEvent, publish_event};
+use crate::event::{CentralConnectedEvent, KeyboardEvent, SleepStateEvent, SubscribableEvent, publish_event};
 use crate::split::driver::{SplitDriverError, SplitReader, SplitWriter};
 use crate::split::peripheral::SplitPeripheral;
 use crate::state::update_status;
@@ -90,16 +90,26 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitReader for BleSplitPeripheralDrive
                     conn_interval,
                     peripheral_latency,
                     supervision_timeout,
-                } => {
-                    info!(
-                        "Connection parameters updated: {:?}ms, {:?}, {:?}ms",
-                        conn_interval.as_millis(),
-                        peripheral_latency,
-                        supervision_timeout.as_millis()
-                    );
-                }
+                } => info!(
+                    "[split] params updated: interval {:?}us, latency {:?}, timeout {:?}ms",
+                    conn_interval.as_micros(),
+                    peripheral_latency,
+                    supervision_timeout.as_millis()
+                ),
+                GattConnectionEvent::SubratingParamsUpdated {
+                    subrate_factor,
+                    peripheral_latency,
+                    continuation_number,
+                    supervision_timeout,
+                } => info!(
+                    "[split] subrating updated: subrate {:?}, latency {:?}, continuation {:?}, timeout {:?}ms",
+                    subrate_factor,
+                    peripheral_latency,
+                    continuation_number,
+                    supervision_timeout.as_millis()
+                ),
                 GattConnectionEvent::PhyUpdated { tx_phy, rx_phy } => {
-                    info!("PHY updated: {:?}, {:?}", tx_phy, rx_phy);
+                    info!("[split] PHY updated: {:?}, {:?}", tx_phy, rx_phy)
                 }
                 _ => (),
             }
@@ -111,7 +121,7 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitReader for BleSplitPeripheralDrive
 impl<'stack, 'server, 'c, P: PacketPool> SplitWriter for BleSplitPeripheralDriver<'stack, 'server, 'c, P> {
     async fn write(&mut self, message: &SplitMessage) -> Result<usize, SplitDriverError> {
         let gatt_msg = GattSplitMessage::try_from(message)?;
-        info!("Writing split message to central: {:?}", message);
+        debug!("Writing split message to central: {:?}", message);
         self.message_to_central
             .notify(self.conn, &gatt_msg, true)
             .await
@@ -123,6 +133,22 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitWriter for BleSplitPeripheralDrive
     }
 }
 
+/// Let the controller accept the central's subrate requests on the split link.
+///
+/// Must run concurrently with `ble_task()` (whose runner serves the HCI command)
+/// and before any advertising, since the flag only applies to links opened after
+/// it is set.
+#[cfg(feature = "subrating")]
+async fn init_subrating_host_feature<C: Controller + ControllerCmdSync<LeSetHostFeature>>(
+    stack: &Stack<'_, C, impl PacketPool>,
+) {
+    const CONN_SUBRATING_HOST_BIT: u8 = 38;
+    let cmd = LeSetHostFeature::new(CONN_SUBRATING_HOST_BIT, 1);
+    if let Err(e) = stack.command(cmd).await {
+        error!("[split_peri] error setting subrating host feature flag: {:?}", e);
+    }
+}
+
 /// Initialize and run the nRF peripheral keyboard service via BLE.
 ///
 /// # Arguments
@@ -130,7 +156,12 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitWriter for BleSplitPeripheralDrive
 /// * `id` - The id of the peripheral
 /// * `central_addr` - The address of the central
 /// * `stack` - The stack to use
-pub async fn initialize_nrf_ble_split_peripheral_and_run<'b, 's: 'b, C: Controller + ControllerCmdAsync<LeSetPhy>>(
+pub async fn initialize_nrf_ble_split_peripheral_and_run<
+    'b,
+    's: 'b,
+    #[cfg(feature = "subrating")] C: Controller + ControllerCmdSync<LeSetHostFeature>,
+    #[cfg(not(feature = "subrating"))] C: Controller,
+>(
     id: usize,
     stack: &'b Stack<'s, C, DefaultPacketPool>,
 ) {
@@ -146,10 +177,15 @@ pub async fn initialize_nrf_ble_split_peripheral_and_run<'b, 's: 'b, C: Controll
         .map(|a| a.address);
 
     let peri_task = async {
+        // Set subrating host support before any advertising/connecting
+        #[cfg(feature = "subrating")]
+        init_subrating_host_feature(stack).await;
+
         let server = BleSplitPeripheralServer::new_default("rmk").unwrap();
         loop {
             update_status(|c| *c = ConnectionStatus::new());
             publish_event(CentralConnectedEvent { connected: false });
+            publish_event(SleepStateEvent::new(false));
             match split_peripheral_advertise(id, central_addr, &mut peripheral, &server).await {
                 Ok(conn) => {
                     info!("Connected to the central");
@@ -174,6 +210,7 @@ pub async fn initialize_nrf_ble_split_peripheral_and_run<'b, 's: 'b, C: Controll
                 Err(BleHostError::BleHost(Error::Timeout)) => {
                     // Timeout, wait new keys to continue
                     error!("Connect to central timeout");
+                    publish_event(SleepStateEvent::new(true));
                     let mut sub = KeyboardEvent::subscriber();
                     sub.clear();
                     let _ = sub.next_message_pure().await;

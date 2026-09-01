@@ -3,7 +3,10 @@
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 
-/// Actions for controlling lights
+/// Actions for controlling lights.
+///
+/// Not implemented yet: the firmware accepts these in the keymap but ignores
+/// them when pressed.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "_codegen", derive(strum::VariantNames))]

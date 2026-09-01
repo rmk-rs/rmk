@@ -14,11 +14,10 @@ use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
-use esp_hal::interrupt::software::SoftwareInterruptControl;
-use esp_hal::otg_fs::Usb;
-use esp_hal::otg_fs::embassy_usb_device::{Config, Driver};
 use esp_hal::rng::TrngSource;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::usb::otg::Usb;
+use esp_hal::usb::otg::embassy_usb_device::{Config, Driver};
 use esp_radio::ble::controller::BleConnector;
 use esp_storage::FlashStorage;
 use rmk::ble::BleTransport;
@@ -44,8 +43,7 @@ async fn main(_s: Spawner) {
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
     esp_alloc::heap_allocator!(size: 72 * 1024);
     let timg0 = TimerGroup::new(peripherals.TIMG0);
-    let software_interrupt = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
-    esp_rtos::start(timg0.timer0, software_interrupt.software_interrupt0);
+    esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
     let _trng_source = TrngSource::new(peripherals.RNG, peripherals.ADC1);
 
     let connector = BleConnector::new(peripherals.BT, Default::default()).unwrap();
@@ -54,7 +52,7 @@ async fn main(_s: Spawner) {
 
     // Initialize USB
     static mut EP_MEMORY: [u8; 1024] = [0; 1024];
-    let usb = Usb::new(peripherals.USB_FS, peripherals.GPIO20, peripherals.GPIO19);
+    let usb = Usb::new_fs(peripherals.USB_FS, peripherals.GPIO20, peripherals.GPIO19);
     // Create the driver, from the HAL.
     let config = Config::default();
     let usb_driver = Driver::new(usb, unsafe { &mut *addr_of_mut!(EP_MEMORY) }, config);

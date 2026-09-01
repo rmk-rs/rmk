@@ -33,7 +33,7 @@ If you have a debug probe and don't want to use the bootloader, use the followin
 }
 ```
 
-### Tips for the STM32F411 Blackpill / F401 Bluepill
+### Tips for the STM32F411 / F401 Blackpill
 
 For STM32 MCUs the memory.x file us usually created by the embassy-stm32 crate and a memory.x file doesnt have to be created. This will result in a file similar to this: (you can find that in the target directory)
 
@@ -104,7 +104,7 @@ cargo run --release
 
 Then the command configured in `.cargo/config.toml` will be executed. The firmware will be flashed to your microcontroller and run automatically, yay!
 
-## Use esptool
+## Use espflash
 
 Many of the Espressif ESP32 based controllers have a physical USB port, but cannot be used as a
 USB keyboard. The USB port should support USB JTAG/serial debug, and this can be used to flash

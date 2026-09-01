@@ -1,0 +1,60 @@
+[tasks.install-llvm-tools]
+install_crate = { rustup_component_name = "llvm-tools" }
+
+[tasks.flip-link]
+install_crate = { crate_name = "flip-link", binary = "flip-link", test_arg = ["-h"] }
+
+[tasks.build]
+command = "cargo"
+args = ["build", "--release"]
+dependencies = ["bin-peripheral", "install-llvm-tools", "flip-link"]
+
+[tasks.objcopy-central]
+install_crate = { crate_name = "cargo-binutils", binary = "cargo", test_arg = ["objcopy", "--help"] }
+command = "cargo"
+args = ["objcopy", "--release", "--bin", "central", "--", "-O", "ihex", "rmk-rp2040-embassy-boot-split-central.hex"]
+dependencies = ["build"]
+
+[tasks.objcopy-peripheral]
+install_crate = { crate_name = "cargo-binutils", binary = "cargo", test_arg = ["objcopy", "--help"] }
+command = "cargo"
+args = ["objcopy", "--release", "--bin", "peripheral", "--", "-O", "ihex", "rmk-rp2040-embassy-boot-split-peripheral.hex"]
+dependencies = ["build"]
+
+[tasks.uf2-central]
+install_crate = { crate_name = "cargo-hex-to-uf2", binary = "cargo", test_arg = ["hex-to-uf2", "--help"] }
+command = "cargo"
+args = ["hex-to-uf2", "--input-path", "rmk-rp2040-embassy-boot-split-central.hex", "--output-path", "rmk-rp2040-embassy-boot-split-central.uf2", "--family", "rp2040"]
+dependencies = ["objcopy-central"]
+
+[tasks.uf2-peripheral]
+install_crate = { crate_name = "cargo-hex-to-uf2", binary = "cargo", test_arg = ["hex-to-uf2", "--help"] }
+command = "cargo"
+args = ["hex-to-uf2", "--input-path", "rmk-rp2040-embassy-boot-split-peripheral.hex", "--output-path", "rmk-rp2040-embassy-boot-split-peripheral.uf2", "--family", "rp2040"]
+dependencies = ["objcopy-peripheral"]
+
+[tasks.uf2]
+dependencies = ["uf2-central", "uf2-peripheral"]
+
+[tasks.build-peripheral]
+command = "cargo"
+args = ["build", "--bin", "peripheral", "--release"]
+dependencies = ["install-llvm-tools", "flip-link"]
+
+[tasks.bin-peripheral]
+command = "cargo"
+args = ["objcopy", "--release", "--bin", "peripheral", "--", "-O", "binary", "rmk-rp2040-embassy-boot-split-peripheral.bin"]
+dependencies = ["build-peripheral"]
+
+[tasks.build-central]
+command = "cargo"
+args = ["build", "--bin", "central", "--release"]
+dependencies = ["bin-peripheral", "install-llvm-tools", "flip-link"]
+
+[tasks.bin-central]
+command = "cargo"
+args = ["objcopy", "--release", "--bin", "central", "--", "-O", "binary", "rmk-rp2040-embassy-boot-split-central.bin"]
+dependencies = ["build-central"]
+
+[tasks.bin]
+dependencies = ["bin-central"]

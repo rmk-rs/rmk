@@ -151,7 +151,7 @@ See [`examples/use_rust/nrf52840_ble`](https://github.com/rmk-rs/rmk/blob/main/e
 
 ## Configuration
 
-RMK provides `keyboard.toml` configuration support for some built-in input devices (such as rotary encoders, joysticks, and PMW3610 sensors), so you can use them without writing any Rust code. See the [Input Device Configuration](../configuration/input_device) documentation for details.
+RMK provides `keyboard.toml` configuration support for some built-in input devices (such as rotary encoders, joysticks, PMW3610 and PMW3360/PMW3389 sensors, and IQS5xx trackpads), so you can use them without writing any Rust code. See the [Input Device Configuration](../configuration/input_device) documentation for details.
 
 ## Combining with Processor
 

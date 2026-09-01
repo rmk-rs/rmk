@@ -33,10 +33,15 @@ pub(crate) fn scan_config(window: Duration) -> ScanConfig<'static> {
 pub(crate) async fn start_scan<'a, C: Controller + ControllerCmdSync<LeSetScanParams>>(
     stack: &'a Stack<'_, C, DefaultPacketPool>,
     window: Duration,
+    filter_accept_list: &[Address],
 ) -> ScanSession<'a, false> {
+    let config = ScanConfig {
+        filter_accept_list,
+        ..scan_config(window)
+    };
     loop {
         let mut central = stack.central();
-        match Scanner::new(&mut central).scan(&scan_config(window)).await {
+        match Scanner::new(&mut central).scan(&config).await {
             Ok(session) => return session,
             Err(_) => Timer::after_millis(500).await,
         }

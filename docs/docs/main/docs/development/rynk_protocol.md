@@ -1,12 +1,13 @@
 <!-- GENERATED — do not edit. Rendered from the `endpoints!`/`topics!` tables in
-     rmk-types/src/protocol/rynk/command.rs. Regenerate with:
+     rmk-types/src/protocol/rynk/command.rs by the template in rmk-types/src/protocol/rynk/tests.rs.
+     Regenerate from the rmk-types/ directory with:
      UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features rynk protocol_reference -->
 
 # Rynk Protocol Reference
 
 Current protocol version: **0.1**.
 
-Every transport (USB CDC, BLE GATT, BLE HID) carries the same frame — a 3-byte header plus a [postcard](https://docs.rs/postcard)-encoded payload:
+Every transport (USB vendor bulk, BLE GATT, BLE HID) carries the same frame — a 3-byte header plus a [postcard](https://docs.rs/postcard)-encoded payload:
 
 ```text
 ┌──────────────┬───────────┐
@@ -22,6 +23,48 @@ On the wire the whole frame is COBS-encoded and terminated by a single `0x00` de
 - **Topics** use CMD `0x8000..=0xFFFF` (server → host push, SEQ `0`, bare payload).
 
 Which commands a firmware answers depends on the RMK Cargo features it was built with: a row with no **Feature** is present once `rynk` is on, and the rest need their feature (`_ble`, `split`, …) compiled in. A command the firmware wasn't built with answers `UnknownCmd`.
+
+## Transports
+
+The same COBS-framed byte stream runs over every transport; only how a host finds and opens the link differs.
+
+| Transport       | How the host reaches it                                                                                                                                                                                                                                                                                                                                                            |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| USB vendor bulk | A vendor-specific interface with class/subclass/protocol `0xFF`/`0x52`/`0x52` and one bulk IN + one bulk OUT endpoint. Hosts discover keyboards by that interface triple, not by VID/PID. An MS OS 2.0 descriptor binds it to WinUSB, so Windows needs no driver. The firmware also prefixes its USB serial number with `rynk:` as an informational marker.                        |
+| BLE GATT        | Service `10900067-537f-4f0a-9b55-929e271f61ab` with two characteristics: the host writes request bytes to `output_data` (`19802524-6f90-4346-93c2-63dbc509ab55`) and subscribes to notifications on `input_data` (`80f9319b-0c74-43a5-9738-c59d6dda3db9`). Both require an encrypted link. A single write or notification carries at most 244 bytes; a longer frame spans several. |
+| BLE HID         | A vendor HID report (usage page `0xFF14`, usage `0x61`) alongside the keyboard's HID-over-GATT service, so a bonded keyboard is reachable through the OS HID stack (for example WebHID) without a second pairing. Each report is exactly 32 bytes: the host splits a frame across reports and zero-pads the last one, and the receiver treats padding as empty COBS frames.        |
+
+A [dongle](../features/dongle) relays these frames untouched, so a host talks to the dongle's USB interface exactly as it would to the keyboard.
+
+## Sizing and bulk transfer
+
+Each peer holds one frame in a buffer of `rynk_buffer_size` bytes (a `[rmk]` option, see [RMK config](../configuration/rmk_config#rynk-protocol-configuration)). The largest payload a frame can carry is what remains after COBS overhead, the delimiter, and the 3-byte header; the firmware reports it as `DeviceCapabilities.max_payload_size`. Read the capabilities and size requests from them rather than assuming a fixed limit.
+
+`DeviceCapabilities` also advertises `bulk_transfer_supported` and the paging strides `max_bulk_keys` (worst-case keys per `GetKeymapBulk` page) and `max_bulk_items` (worst-case entries per `GetComboBulk`/`GetMorseBulk` page). A bulk read names a start — for the keymap `(layer, row, col)`, read forward through the flat row-major, layer-major keymap; for combos and morses a slot index — and returns as many consecutive entries as fit in one payload, or fewer at the end. A host pages by advancing its start by the stride; a short page ends the read. A bulk write carries a start plus a list of entries and is packed by encoded size up to `max_payload_size`. A reply that does not fit beside other pipelined requests answers `Busy`; retry once they complete.
+
+`GetLayout` serves the compressed layout blob 244 bytes per call: the request is a byte offset and `LayoutChunk` carries `total_len` plus that page's bytes. Macros move in `macro_chunk_size` pieces (`protocol_macro_chunk_size` in `[rmk]`) addressed by byte offset.
+
+## Errors
+
+A request's response is postcard `Result<T, RynkError>`; the `Err` side is one of these variants.
+
+| Variant         | Meaning                                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------------------------------- |
+| `Malformed`     | The request could not be decoded.                                                                               |
+| `NotReady`      | The device is not in a state to satisfy the request.                                                            |
+| `StorageFault`  | Persistent storage failed on a write (flash erase/write error).                                                 |
+| `Internal`      | Internal firmware fault.                                                                                        |
+| `Unimplemented` | The command is recognized but its handler is not implemented yet.                                               |
+| `Invalid`       | The request decoded cleanly but is semantically invalid (out-of-range index, bad value).                        |
+| `UnknownCmd`    | The frame is well-formed but its CMD is unknown to this firmware.                                               |
+| `Locked`        | The command is gated by the lock and this session is locked (see Lock).                                         |
+| `Busy`          | Transient backpressure: the reply did not fit beside pipelined requests still queued. Retry once they complete. |
+
+## Lock
+
+Commands that can flash firmware, wipe storage, or read the matrix sit behind a physical-presence unlock. `BootloaderJump`, `StorageReset`, `GetMatrixState`, and (with `_ble`) `ClearBleProfile` always need an unlocked session; every `Set*` command joins them when the firmware was built with `[host] write_requires_unlock = true`. A gated command on a locked session answers `Locked` and does nothing. `GetLockStatus`, `UnlockPoll`, and `Lock` are never gated.
+
+The lock is per session and starts locked; `Lock` or the end of the session (unplug, BLE disconnect) relocks it. To unlock, a host polls `UnlockPoll` while the user holds the challenge keys that `LockStatus.key_positions` reports (`[host].unlock_keys`); the session is unlocked once `locked` clears. With no `unlock_keys` configured the challenge is empty and the gated commands can never be unlocked; a firmware built with `[host] insecure = true` starts unlocked and ignores `Lock`. See [Rynk](../features/rynk#locking-dangerous-operations) for the user-facing side.
 
 ## Endpoints
 

@@ -1,7 +1,6 @@
 # nRF54L15 BLE example
 
-This example targets the nRF54L15 DK and uses the local `embassy`, `nrf-sdc`, and `trouble`
-trees from the sibling `../../../../../rust/` directory for nRF54 support.
+This example targets the nRF54L15 DK.
 
 It uses the DK's four onboard buttons as a 2x2 direct-pin keyboard matrix:
 

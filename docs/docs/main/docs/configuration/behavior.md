@@ -9,6 +9,10 @@ one_shot = { timeout = "1s" }
 one_shot_modifiers = { activate_on_keypress = false }
 ```
 
+::: note Rust API only
+`BehaviorConfig` has three fields with no `keyboard.toml` counterpart: `default_layer` (the base layer at startup), `tap` (`TapConfig`) and `mouse_key` (`MouseKeyConfig`, mouse-key acceleration; only its repeat intervals come from `[rmk].mouse_key_interval` and `[rmk].mouse_wheel_interval`). With `keyboard.toml` they keep their defaults; set them when you build `BehaviorConfig` in Rust.
+:::
+
 ## Tri Layer
 
 Tri-layer enables a third layer (often called `adjust`) automatically when two other layers (`upper` and `lower`) are both active.
@@ -71,7 +75,7 @@ In the `combo` sub-table, you can configure the keyboard's combo key functionali
 
 Combo configuration includes the following parameters:
 
-- `timeout`: Defines the maximum time window for pressing all combo keys. If the time exceeds this, the combo key will not be triggered. The format is a string, which can be milliseconds (e.g. "200ms") or seconds (e.g. "1s").
+- `timeout`: Defines the maximum time window for pressing all combo keys. If the time exceeds this, the combo key will not be triggered. The format is a string, which can be milliseconds (e.g. "200ms") or seconds (e.g. "1s"). Defaults to 50ms.
 - `prior_idle_time`: An optional cooldown window after any key press before a combo can start recording. This helps prevent accidental combo triggers during fast typing. The format is a string (e.g. `"130ms"`). If not set, there is no idle check (equivalent to ZMK's `require-prior-idle-ms`).
 - `combos`: An array containing all defined combos. Each combo configuration is an object containing the following attributes:
   - `actions`: An array of strings defining the keys that need to be pressed simultaneously to trigger the combo action.
@@ -110,6 +114,10 @@ operations = [
   { operation = "text", text = "foo" }
 ]
 ```
+
+- `keycode` accepts a plain [keycode](./keymap_configuration/keycodes.md) or an action expression such as `WM(A, LCtrl)`, `PDF(1)` or `OSM(LShift)`. Action expressions use the Vial extended encoding and require the `vial` feature; without it, the build fails.
+- `duration` is at most 65024ms; longer delays fail the build.
+- A macro cannot trigger another macro. `Macro(n)` inside a macro is ignored with a warning.
 
 ```toml
 # Outputs "Hello"
@@ -172,15 +180,15 @@ morses = [
 
 This is an extended version of tap dance. It allows you to define sequences of actions for multiple taps and for holds that occur after a specific number of taps.
 
-- `tap_actions`: An array of actions triggered by sequential taps. Each tap within the tapping term increments the tap count and triggers the corresponding action from the `tap_actions` array. For example, `tap_actions = ["F1", "F2", "F3"]` means a single tap triggers "F1", double tap triggers "F2", triple tap triggers "F3", and so on. If the tap count exceeds the length of the array, the last action is used.
-- `hold_actions`: An array of actions triggered when the key is held _after_ a certain number of taps. When a key is held after multiple taps, the corresponding action from the `hold_actions` array is triggered. For example, `hold_actions = ["MO(1)", "MO(2)", "MO(3)"]` means holding after one tap triggers "MO(1)", holding after two taps triggers "MO(2)", and so on.
+- `tap_actions`: An array of actions triggered by sequential taps. Each tap within the tapping term increments the tap count and triggers the corresponding action from the `tap_actions` array. For example, `tap_actions = ["F1", "F2", "F3"]` means a single tap triggers "F1", double tap triggers "F2", triple tap triggers "F3". Once the longest configured pattern is reached (the third tap here), the action fires immediately and the sequence ends; the next tap starts a new sequence.
+- `hold_actions`: An array of actions triggered when the key is held, indexed by the number of taps _before_ the hold: the first entry is a plain hold, the second is a hold after one tap, and so on. For example, `hold_actions = ["MO(1)", "MO(2)", "MO(3)"]` means holding triggers "MO(1)", holding after one tap triggers "MO(2)", holding after two taps triggers "MO(3)".
 
 Example:
 
 ```toml
 [behavior.morse]
 morses = [
-  # A morse key defined with tap and hold-after-tap actions array
+  # A morse key defined with tap and hold action arrays
   { tap_actions = ["F1", "F2", "F3", "F4", "F5"], hold_actions = ["MO(1)", "MO(2)", "MO(3)", "MO(4)", "MO(5)"] }
 ]
 ```
@@ -223,16 +231,16 @@ The `profile` of a morse key contains all tunable configurations of this morse k
 ::: tip
 
 - `enable_flow_tap`: Enables HRM (Home Row Mod) mode. When enabled, the global `prior_idle_time` setting becomes functional. Defaults to `false`. Profiles may set this to override the global `[behavior.morse]` value; omitting it inherits the global value.
-- `prior_idle_time`: _(global only)_ If the previous non-modifier key is released within this period before pressing the current tap-hold key, the tap action for the tap-hold behavior will be triggered. This parameter lives in `[behavior.morse]` (not in a per-key profile) and is effective only when `enable_flow_tap` is enabled for the key. Defaults to 120ms.
+- `prior_idle_time`: _(global only)_ If the previous non-modifier key was pressed within this period before pressing the current tap-hold key, the tap action for the tap-hold behavior will be triggered. This parameter lives in `[behavior.morse]` (not in a per-key profile) and is effective only when `enable_flow_tap` is enabled for the key. Defaults to 120ms.
   :::
 
 A profile contains the following fields:
 
-- `unilateral_tap`: (Experimental) Enables unilateral tap mode. When enabled, tap action will be triggered when a key from "same" hand is pressed. In current experimental version, the "same" hand is calculated using the `<hand>`, which can be given in `layout.map`. This option is recommended to set to true when `enable_flow_tap` is set to true.
+- `unilateral_tap`: (Experimental) Enables unilateral tap mode. When enabled, tap action will be triggered when a key from "same" hand is pressed. In current experimental version, the "same" hand is calculated using the `<hand>`, which can be given in `layout.map`. This option is recommended to set to true when `enable_flow_tap` is set to true. In `normal_mode` the tap resolves when the same-hand key is pressed; in `permissive_hold` mode, when it is released. `hold_on_other_press` mode ignores this option, because the hold fires on the other key's press first.
 
 - The morse mode, which can be set by enabling one of these:
   - `permissive_hold`: Enables permissive hold mode. When enabled, hold action will be triggered when a key is pressed and released during tap-hold decision. This option is recommended to set to true when `enable_flow_tap` is set to true.
-  - `hold_on_other_press`: Enables hold-on-other-key-press mode. When enabled, hold action will be triggered immediately when any other non-tap-hold key is pressed while a tap-hold key is being held. This provides faster modifier activation without waiting for the timeout. Defaults to `false`.
+  - `hold_on_other_press`: Enables hold-on-other-key-press mode. When enabled, hold action will be triggered immediately when any other key (including another tap-hold key) is pressed while a tap-hold key is being held. This provides faster modifier activation without waiting for the timeout. Defaults to `false`.
   - `normal_mode` : this is the default mode, when nor the `permissive_hold` nor the `hold_on_other_press` is set.
 
 - `hold_timeout`: Defines the duration a tap-hold key must be pressed to determine hold behavior. If tap-hold key is released within this time, the key is recognized as a "tap". Holding it beyond this duration triggers the "hold" action when that hold pattern is final; if a longer configured morse pattern can still continue from the hold, RMK keeps the morse key unresolved until the sequence is completed. Defaults to 250ms. Maximum 8191ms (13-bit field).
@@ -316,15 +324,15 @@ The following parameters in the `[rmk]` section control the resource allocation 
 
 - `morse_max_num`: The maximum number of Morse key you can create. (Default: 8, Range: 0-255)
 - `morse_profile_max_num`: The capacity of the named profile table in `[behavior.morse.profiles]`. (Default: 16, Range: 0-255)
-- `max_patterns_per_key`: The maximum number of individual patterns (like ".-") or actions that a single Morse key can contain. (Default: 8, Range: 4-65536)
+- `max_patterns_per_key`: The maximum number of individual patterns (like ".-") or actions that a single Morse key can contain. (Default: 8, Range: 4-32)
 
 ```toml
 [rmk]
 morse_max_num = 10  # To support up to 10 morse keys
-max_patterns_per_key = 36  # To support up to 36 morse patterns per morse key
+max_patterns_per_key = 32  # To support up to 32 morse patterns per morse key
 ```
 
-Note that the Vial-style method (using `tap`, `hold`, `hold_after_tap`, `double_tap`) needs at least 4 patterns. If you create a key with a long `tap_actions`/`hold_actions` array or many `morse_actions`, you might need to increase `max_patterns_per_key` accordingly.
+Note that the Vial-style method (using `tap`, `hold`, `hold_after_tap`, `double_tap`) needs at least 4 patterns. RMK raises `morse_max_num` and `max_patterns_per_key` automatically to fit the morse keys defined in `keyboard.toml`, so set them only to reserve room for keys added later (for example through Vial). A single key cannot hold more than 32 patterns; the build fails above that limit.
 
 ::: warning Vial Compatibility
 Please note that while the firmware can handle all Morse configurations, Vial can only recognize and edit the four basic Vial-style actions. These correspond to the patterns for single tap (.), hold (-), double tap (..), and hold-after-tap (.-). More complex patterns defined using morse_actions or extended tap_actions will not be visible or editable in Vial.
@@ -338,8 +346,8 @@ Here is a comprehensive example of morse configuration:
 [rmk]
 # Maximum number of morses keyboard can store (max 255)
 morse_max_num = 9
-# Maximum number of patterns a morse key can handle
-max_patterns_per_key = 36
+# Maximum number of patterns a morse key can handle (max 32)
+max_patterns_per_key = 32
 
 [behavior.morse]
 # default profile for morse, tap dance and tap-hold keys:
@@ -390,17 +398,7 @@ morses = [
       { pattern = ".--", action = "W" },
       { pattern = "-..-", action = "X" },
       { pattern = "-.--", action = "Y" },
-      { pattern = "--..", action = "Z" },
-      { pattern = ".----", action = "Kc1" },
-      { pattern = "..---", action = "Kc2" },
-      { pattern = "...--", action = "Kc3" },
-      { pattern = "....-", action = "Kc4" },
-      { pattern = ".....", action = "Kc5" },
-      { pattern = "-....", action = "Kc6" },
-      { pattern = "--...", action = "Kc7" },
-      { pattern = "---..", action = "Kc8" },
-      { pattern = "----.", action = "Kc9" },
-      { pattern = "-----", action = "Kc0" }
+      { pattern = "--..", action = "Z" }
     ], profile = "MRZ" }
 ]
 
@@ -466,6 +464,8 @@ Fork configuration includes the following parameters:
   - `match_none`: A string defining a combination of modifier keys, lock LEDs, mouse buttons (optional)
   - `kept_modifiers`: A string defining a combination of modifier keys, which should not be 'suppressed' from the keyboard state for the time the replacement action is executed (optional)
   - `bindable`: Enables the evaluation of not yet triggered forks on the output of this fork to further manipulate the output. Advanced use cases can be solved using this option (optional)
+
+Each fork must set at least one of `match_any` and `match_none`; the build fails otherwise.
 
 For `match_any`, `match_none` the legal values are listed below (many values may be combined with "|"):
 

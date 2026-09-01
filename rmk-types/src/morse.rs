@@ -104,7 +104,8 @@ impl MorseProfile {
         )
     }
 
-    /// Per-profile override for flow tap. `None` inherits the global morse setting.
+    /// Per-profile override for flow tap. `None` falls back to the default
+    /// profile's bit, then the config-level `enable_flow_tap` switch.
     pub fn enable_flow_tap(self) -> Option<bool> {
         match (self.0 & FLOW_TAP_MASK) >> 13 {
             3 => Some(true),

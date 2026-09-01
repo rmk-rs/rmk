@@ -12,6 +12,7 @@ pkg
 *.uf2
 
 .idea
+.direnv/
 
 # ignore Cargo.lock of library, but keep it for binaries
 rmk/Cargo.lock

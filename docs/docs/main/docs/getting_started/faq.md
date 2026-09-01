@@ -49,7 +49,7 @@ By default, Rust compiler generates `elf` file in target folder. There're a litt
   cargo objcopy --release -- -O ihex rmk.hex
   ```
 
-- `uf2`: RMK provides [cargo-make](https://github.com/sagiegurari/cargo-make) config for all examples to generate `uf2` file automatically. Check `Makefile.toml` files in the example folders. The following command can be used to generate uf2 firmware:
+- `uf2`: most Cortex-M examples (nRF52, RP2040, STM32) ship a [cargo-make](https://github.com/sagiegurari/cargo-make) config that generates the `uf2` file automatically; ESP32 examples are flashed with `espflash` instead. Check the `Makefile.toml` files in the example folders. The following command can be used to generate uf2 firmware:
 
   ```shell
   # Install cargo-make
@@ -172,7 +172,7 @@ run `cargo clean` and then `cargo run --release`. Open an [issue](https://github
 
 ### I see "ERROR: Storage is full" error in the log
 
-By default, RMK uses only 2 sectors of your microcontroller's internal flash. You may get the following error if 2 sectors are not big enough to store all your keymaps:
+By default, RMK uses only a few sectors of your microcontroller's internal flash: `num_sectors` defaults to 8 when a `[dfu]` section is present, either in your `keyboard.toml` or in the chip default (nRF52840, nice!nano, RP2040 and Pico W ship one), otherwise 2. The Rust API `StorageConfig::default()` is 2. You may get the following error if the sectors are not big enough to store all your keymaps:
 
 ```
 ERROR Storage is full
@@ -183,7 +183,40 @@ ERROR Keymap reading aborted!
 └─ rmk::keymap::{impl#0}::new_from_storage::{async_fn#0} @ /Users/haobogu/Projects/keyboard/rmk/rmk/src/keymap.rs:38
 ```
 
-If you have more sectors available in your internal flash, you can increase `num_sectors` in `[storage]` section of your `keyboard.toml`, or change `storage_config` in your [`RmkConfig`](https://docs.rs/rmk/latest/rmk/config/struct.RmkConfig.html) if you're using Rust API.
+If you have more sectors available in your internal flash, you can increase `num_sectors` in `[storage]` section of your `keyboard.toml`, or change `storage_config` in your [`RmkConfig`](https://docs.rs/rmk/latest/rmk/config/struct.RmkConfig.html) if you're using Rust API. When using DFU (`dfu_rp` / `dfu_nrf`), the storage partition is placed after the DFU slot (via `rmk-memory.x`) and the 8-sector default matches its 32 KB size.
+
+### ZMK no longer works after flashing RMK
+
+::: info
+Generally, the behavior you'll see is that ZMK is not outputting any keys or and isn't broadcasting a bluetooth connection. If you have other symptoms, something else is likely wrong.
+:::
+
+Some nRF boards (i.e. the `nice!nano` or `XIAO BLE`) ship a bootloader that comes with a SoftDevice. RMK reclaims the flash region the SoftDevice occupies, while ZMK reserves it. So if you flash ZMK after RMK, the firmware might not work. To get ZMK working again, build it without the SoftDevice reservation; see below. All future firmwares for the ZMK board should be built the same way.
+
+A more permanent solution would be to restore the SoftDevice by re-flashing the bootloader package that bundles it. Unfortunately, the stock `XIAO BLE` bootloader does not seem to be published anywhere, so this is not an easy option.
+
+#### Build ZMK without the SoftDevice (cloud build)
+Add the `nrf52840-nosd` (for the nRF82840) or `nrf52833-nosd` (for the nRF52833) snippet to your `build.yaml`, i.e.
+
+```yaml
+  - board: xiao_ble//zmk
+    snippet: nrf52840-nosd
+    shield: <your_keyboard>
+```
+
+You may also need to perform a [settings reset](https://zmk.dev/docs/troubleshooting/connection-issues#building-a-reset-firmware) to clear the Bluetooth settings so the board can re-pair:
+
+```yaml
+  - board: xiao_ble//zmk
+    snippet: nrf52840-nosd
+    shield: settings_reset
+```
+
+#### Build ZMK without the SoftDevice (local build)
+
+Build with the `nrf52840-nosd` or `rnf52833-nosd` snippet (depending on your chip) by adding `--snippet nrf52840-nosd` (or `--snippet rnf52833-nosd`) to the `west build` command.
+
+If you need to perform a settings reset, you can change the board type (i.e. `-b settings_reset`).
 
 ### OUTDATED: panicked at embassy-executor: task arena is full.
 
@@ -219,6 +252,21 @@ embassy-executor = { version = "0.10", features = [
 In the latest git version of Embassy, the task arena size can be calculated automatically, but it requires the **nightly** version of Rust.
 
 If you're comfortable with nightly Rust, you can enable the `nightly` feature of embassy-executor and remove the `task-arena-size-*` feature.
+
+### `rustc` overflowed its stack while compiling `rmk-types`
+
+Some `rustc` versions run out of stack on `rmk-types`' generated keycode tables. Give the compiler a bigger stack:
+
+```bash
+export RUST_MIN_STACK=67108864
+```
+
+To make it stick for a project, put it in the project's `.cargo/config.toml` instead of exporting it every time:
+
+```toml title=".cargo/config.toml"
+[env]
+RUST_MIN_STACK = "67108864"
+```
 
 ### What font is used for the RMK logo?
 

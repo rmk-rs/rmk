@@ -31,6 +31,9 @@ RMK provides built-in event types organized by category. All of them are exporte
 - `KeyboardEvent` - Key press/release event from matrix or encoders
 - `ModifierEvent` - Modifier key combination changes
 - `PointingEvent` - Pointing device events (mouse movement, scroll)
+- `PointingSetCpiEvent` - Request to set the CPI (resolution) of a pointing device by `device_id`
+- `PointingProcessorEvent` - Switch a pointing device's `PointingMode` (cursor, scroll, sniper, caret)
+- `ActionEvent` - The `Action` resolved from a key press/release, published before it is executed. `[event.action].subs` defaults to `0`; raise it in `keyboard.toml` before subscribing
 
 **State Events**:
 
@@ -54,7 +57,11 @@ RMK provides built-in event types organized by category. All of them are exporte
 - `PeripheralConnectedEvent` - Peripheral connection state changed
 - `CentralConnectedEvent` - Connected to central state changed
 - `PeripheralBatteryEvent` - Peripheral battery status changed
-- `ClearPeerEvent` - BLE peer clearing event
+- `ClearPeerEvent` - BLE peer clearing event (BLE split builds only)
+
+**DFU Events** (when the `dfu` feature is enabled):
+
+- `DfuStatusEvent` - DFU status changed (`DfuStatus`: idle, started, downloading, finished, error, lock waiting, unlocked)
 
 ## Defining Custom Events
 
@@ -118,6 +125,8 @@ publish_event(MyCustomEvent(42));
 // Asynchronous (awaitable, may block if channel is full)
 publish_event_async(MyCustomEvent(42)).await;
 ```
+
+`publish_event` never waits: on a full Channel the event is dropped, and on a full PubSub the oldest unread event is overwritten. Use `publish_event_async` when every event must be delivered.
 
 ## Related Documentation
 

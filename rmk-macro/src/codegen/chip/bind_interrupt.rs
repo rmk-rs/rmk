@@ -191,6 +191,12 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
             let nrf_sdc_config = match &board {
                 BoardConfig::Split(_) => {
                     let num_peri = board.get_num_peripheral() as u8;
+                    let support_subrating = if is_feature_enabled(&get_rmk_features(), "subrating")
+                    {
+                        quote! { .support_connection_subrating_central() }
+                    } else {
+                        quote! {}
+                    };
                     quote! {
                         ::nrf_sdc::Builder::new()?
                         .support_scan()
@@ -201,6 +207,7 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
                         .support_dle_central()
                         .support_phy_update_central()
                         .support_phy_update_peripheral()
+                        #support_subrating
                         #use_2m_phy
                         #tx_power
                         .central_count(#num_peri)?

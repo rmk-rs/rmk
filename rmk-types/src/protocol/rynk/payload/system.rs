@@ -6,6 +6,8 @@ use heapless::{String, Vec};
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 
+use crate::morse::MorseProfile;
+
 /// Maximum byte length of each `DeviceInfo` string field.
 pub const DEVICE_INFO_STRING_SIZE: usize = 32;
 
@@ -155,6 +157,13 @@ pub struct BehaviorConfig {
     pub oneshot_timeout_ms: u16,
     pub tap_interval_ms: u16,
     pub tap_capslock_interval_ms: u16,
+    /// Default profile for morse/tap-hold keys; per-key profiles override it.
+    /// `keyboard.toml` seeds `enable_flow_tap` and both timeouts, so a read
+    /// returns them; a `None` field falls back to the firmware default.
+    pub morse_default_profile: MorseProfile,
+    /// Flow-tap window: a morse key pressed within this time of the previous
+    /// key press is forced to its tap action.
+    pub morse_prior_idle_time_ms: u16,
 }
 
 #[cfg(test)]
@@ -287,6 +296,28 @@ mod tests {
             oneshot_timeout_ms: 500,
             tap_interval_ms: 200,
             tap_capslock_interval_ms: 20,
+            morse_default_profile: MorseProfile::new(
+                Some(true),
+                Some(crate::morse::MorseMode::PermissiveHold),
+                Some(260),
+                Some(180),
+            )
+            .with_quick_tap_timeout_ms(Some(120)),
+            morse_prior_idle_time_ms: 130,
         });
+
+        // Max-width case. The profile's setters top out at bit 45, so it is built
+        // from raw bits: a host decodes `MorseProfile` from a bare u64, and only
+        // the reserved high bits reach the 10-byte varint `MaxSize` counts.
+        let cfg = BehaviorConfig {
+            combo_timeout_ms: u16::MAX,
+            oneshot_timeout_ms: u16::MAX,
+            tap_interval_ms: u16::MAX,
+            tap_capslock_interval_ms: u16::MAX,
+            morse_default_profile: MorseProfile::from(u64::MAX),
+            morse_prior_idle_time_ms: u16::MAX,
+        };
+        round_trip(&cfg);
+        assert_max_size_bound(&cfg);
     }
 }
