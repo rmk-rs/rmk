@@ -63,6 +63,7 @@ trouble-host = { version = "0.8", default-features = false, features = [
     "derive",
     "security",
     "serde",
+    "default-packet-pool",
     "default-packet-pool-size-32",
 ], optional = true }
 bt-hci = { version = "0.10", optional = true }

@@ -18,7 +18,7 @@ There are several approaches to solve the problem:
 
 ## Common approaches
 
-### Tune a single-device BLE peripheral
+### Tune Trouble parameters
 
 For a monolithic BLE keyboard that never acts as a central, dongle, or split host, Trouble's compile-time capacities can be reduced with environment variables in `.cargo/config.toml`:
 
@@ -33,7 +33,18 @@ TROUBLE_HOST_DEFAULT_PACKET_POOL_MTU = "128"
 
 Keep two L2CAP TX buffers: LE Secure Connections may enqueue Public Key and Pairing Confirm in the same synchronous state transition. These values are intended only for a single peripheral connection. Do not apply them to an RMK `dongle` or `split` central; those products need larger queues and should be measured independently.
 
-Also set the controller dependency to `default-features = false` and enable only its peripheral role. For example, an nRF SDC dependency for a standalone keyboard should contain `peripheral` but not `central`.
+### Enable the peripheral-only role
+
+For a standalone keyboard, set the controller dependency to `default-features = false` and enable only its peripheral role. For example, an nRF SDC dependency should contain `peripheral` but not `central`:
+
+```toml
+nrf-sdc = { version = "0.4", default-features = false, features = [
+    "peripheral",
+    "nrf52832",
+] }
+```
+
+RMK enables Trouble's central and scan roles only when its `dongle` or `split` feature is active.
 
 ### Change `DEFMT_LOG` level
 

@@ -2,9 +2,7 @@
 
 ## Unreleased
 
-- Stop enabling Trouble's central and scan roles for peripheral-only keyboards. The `dongle` and `split` features still enable both roles, while the nRF52832 examples also stop enabling the unused SDC central role.
-- Document Trouble's environment-variable memory tuning for constrained single-device BLE peripherals without adding another RMK feature.
-- Derive the split-central notification listener capacity from Trouble's configured packet-pool MTU instead of assuming 512 bytes.
+- Make Trouble BLE roles explicit, document environment-variable memory tuning, update the nRF52832 examples to peripheral-only SDC, and derive split notification capacity from Trouble's configured packet-pool MTU.
 
 All notable changes to this project will be documented in this file.
 
