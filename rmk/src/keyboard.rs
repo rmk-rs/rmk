@@ -190,14 +190,8 @@ pub struct Keyboard<'a> {
     /// Oneshot Layer state
     osl_state: OneShotState<u8>,
 
-    /// Expiry deadline while the oneshot layer is armed (`Single`)
-    osl_deadline: Option<Instant>,
-
     /// Oneshot Modifier state
     osm_state: OneShotState<ModifierCombination>,
-
-    /// Expiry deadline while the oneshot modifiers are armed (`Single`)
-    osm_deadline: Option<Instant>,
 
     /// In-progress User-key hold gesture (5s bond-clear etc.): the expiry
     /// deadline and the held key's user id. Any key event disarms it; only
@@ -257,9 +251,7 @@ impl<'a> Keyboard<'a> {
             keyboard_event_subscriber: KeyboardEvent::subscriber(),
             last_press_time: Instant::now(),
             osl_state: OneShotState::default(),
-            osl_deadline: None,
             osm_state: OneShotState::default(),
-            osm_deadline: None,
             #[cfg(feature = "_ble")]
             user_hold: None,
             caps_word: CapsWordState::default(),
@@ -311,10 +303,12 @@ impl<'a> Keyboard<'a> {
     /// `next_deadline()` and `fire_expired()` are a pair, kept adjacent and in
     /// the same order: every source listed here must be cleared or advanced by
     /// its `fire_*` once due, or `run()` spins on a deadline that never expires.
+    /// ("Advanced" may be indirect: morse fires transition the key to a state
+    /// outside `next_buffered_key`'s predicate.)
     fn next_deadline(&self) -> Option<Instant> {
         [
-            self.osm_deadline,
-            self.osl_deadline,
+            self.osm_state.deadline(),
+            self.osl_state.deadline(),
             #[cfg(feature = "_ble")]
             self.user_hold.map(|(at, _)| at),
             self.next_buffered_key().map(|k| k.timeout_time),
@@ -325,7 +319,7 @@ impl<'a> Keyboard<'a> {
         .min()
     }
 
-    /// Fire every due deadline. Each `fire_*` re-checks its own deadline, so a
+    /// Fire every due deadline. Each step re-checks its own deadline, so a
     /// call before expiry is a no-op.
     async fn fire_expired(&mut self) {
         self.fire_oneshot_timeout().await;
@@ -1669,7 +1663,6 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    /// How long a User key must stay held to trigger its hold gesture.
     #[cfg(feature = "_ble")]
     const USER_HOLD_DURATION: Duration = Duration::from_secs(5);
 
@@ -1732,16 +1725,13 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    /// Fire an expired User-key hold gesture: clear the bond of the held slot
-    /// and switch to it (or clear the split peer). Reaching expiry implies no
-    /// key event intervened, since any event disarms the gesture.
+    /// Fire an expired User-key hold gesture. Reaching expiry implies no key
+    /// event intervened, since any event disarms the gesture.
     #[cfg(feature = "_ble")]
     async fn fire_user_hold(&mut self) {
-        let Some((deadline, id)) = self.user_hold else { return };
-        if Instant::now() < deadline {
+        let Some((_, id)) = self.user_hold.take_if(|(at, _)| *at <= Instant::now()) else {
             return;
-        }
-        self.user_hold = None;
+        };
 
         use crate::NUM_BLE_PROFILE;
         use crate::ble::profile::BleProfileAction;

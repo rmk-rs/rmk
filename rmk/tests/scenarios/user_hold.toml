@@ -42,8 +42,7 @@ steps = [
   { delay = 100 },
   { tap = { pos = [1, 3], duration = 10 } },  # W: cancels the hold, reports promptly
   { release = [0, 13] },
-  { delay = 2600 },                           # Past the would-be expiry: nothing fires
-  { delay = 2600 },
+  { delay = 5200 },                           # Past the would-be expiry: nothing fires
   { tap = { pos = [1, 3], duration = 10 } },  # W again: keyboard still healthy
 ]
 expect = [["W"], [], ["W"], []]
