@@ -1,7 +1,5 @@
 use core::fmt::Debug;
 
-#[cfg(feature = "_ble")]
-use embassy_futures::select::{Either, select};
 use embassy_futures::yield_now;
 #[cfg(feature = "_ble")]
 use embassy_sync::signal::Signal;
@@ -142,29 +140,18 @@ impl Runnable for Keyboard<'_> {
     /// The report is sent using `send_report`.
     async fn run(&mut self) -> ! {
         loop {
-            // TODO: Now the unprocessed_events is only used in held_for_5s.
-            // Maybe it can be removed in the future?
-            if !self.unprocessed_events.is_empty() {
-                // Process unprocessed events
-                let e = self.unprocessed_events.remove(0);
-                debug!("Unprocessed event: {:?}", e);
-                self.process_inner(e).await
-            } else {
-                // Race the subscriber against the earliest pending deadline.
-                // `with_deadline` polls the subscriber first, so a queued event
-                // always wins over an already-expired deadline.
-                let event = match self.next_deadline() {
-                    Some(deadline) => {
-                        with_deadline(deadline, self.keyboard_event_subscriber.next_message_pure())
-                            .await
-                            .ok()
-                    }
-                    None => Some(self.keyboard_event_subscriber.next_message_pure().await),
-                };
-                match event {
-                    Some(event) => self.process_inner(event).await,
-                    None => self.fire_expired().await,
-                }
+            // Race the subscriber against the earliest pending deadline.
+            // `with_deadline` polls the subscriber first, so a queued event
+            // always wins over an already-expired deadline.
+            let event = match self.next_deadline() {
+                Some(deadline) => with_deadline(deadline, self.keyboard_event_subscriber.next_message_pure())
+                    .await
+                    .ok(),
+                None => Some(self.keyboard_event_subscriber.next_message_pure().await),
+            };
+            match event {
+                Some(event) => self.process_inner(event).await,
+                None => self.fire_expired().await,
             }
 
             // Run any macros triggered while handling the event.
@@ -189,9 +176,6 @@ pub struct Keyboard<'a> {
         { crate::KEYBOARD_EVENT_PUB_SIZE },
     >,
 
-    /// Unprocessed events
-    pub unprocessed_events: Vec<KeyboardEvent, 4>,
-
     /// Buffered held keys
     pub held_buffer: HeldBuffer,
 
@@ -214,6 +198,12 @@ pub struct Keyboard<'a> {
 
     /// Expiry deadline while the oneshot modifiers are armed (`Single`)
     osm_deadline: Option<Instant>,
+
+    /// In-progress User-key hold gesture (5s bond-clear etc.): the expiry
+    /// deadline and the held key's user id. Any key event disarms it; only
+    /// true idle for the full window completes the gesture.
+    #[cfg(feature = "_ble")]
+    user_hold: Option<(Instant, u8)>,
 
     /// Caps Word state machine
     caps_word: CapsWordState,
@@ -270,13 +260,14 @@ impl<'a> Keyboard<'a> {
             osl_deadline: None,
             osm_state: OneShotState::default(),
             osm_deadline: None,
+            #[cfg(feature = "_ble")]
+            user_hold: None,
             caps_word: CapsWordState::default(),
             with_modifiers: ModifierCombination::default(),
             macro_texting: false,
             macro_caps: false,
             fork_states: [None; FORK_MAX_NUM],
             fork_keep_mask: ModifierCombination::default(),
-            unprocessed_events: Vec::new(),
             held_buffer: HeldBuffer::new(),
             registered_keys: [None; 6],
             held_modifiers: ModifierCombination::default(),
@@ -324,6 +315,8 @@ impl<'a> Keyboard<'a> {
         [
             self.osm_deadline,
             self.osl_deadline,
+            #[cfg(feature = "_ble")]
+            self.user_hold.map(|(at, _)| at),
             self.next_buffered_key().map(|k| k.timeout_time),
             self.mouse.next_deadline(),
         ]
@@ -336,6 +329,8 @@ impl<'a> Keyboard<'a> {
     /// call before expiry is a no-op.
     async fn fire_expired(&mut self) {
         self.fire_oneshot_timeout().await;
+        #[cfg(feature = "_ble")]
+        self.fire_user_hold().await;
         self.fire_buffered_key_timeout().await;
         self.fire_mouse_repeat().await;
     }
@@ -360,6 +355,13 @@ impl<'a> Keyboard<'a> {
 
     /// Process key changes at (row, col)
     pub async fn process_inner(&mut self, event: KeyboardEvent) {
+        // Any key event cancels a pending User-key hold gesture; only true
+        // idle for the full window completes it.
+        #[cfg(feature = "_ble")]
+        {
+            self.user_hold = None;
+        }
+
         // Check for mode transitions (e.g., entering/exiting passkey entry)
         #[cfg(feature = "passkey_entry")]
         self.passkey_entry_state.check_mode_transition();
@@ -1668,25 +1670,9 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    /// True when the key is still down 5s later. A release inside the window is
-    /// pushed back to `unprocessed_events`, so it replays as a short press.
+    /// How long a User key must stay held to trigger its hold gesture.
     #[cfg(feature = "_ble")]
-    async fn held_for_5s(&mut self) -> bool {
-        match select(
-            embassy_time::Timer::after_millis(5000),
-            self.keyboard_event_subscriber.next_message_pure(),
-        )
-        .await
-        {
-            Either::First(_) => true,
-            Either::Second(e) => {
-                if self.unprocessed_events.push(e).is_err() {
-                    warn!("Unprocessed event queue is full, dropping event");
-                }
-                false
-            }
-        }
-    }
+    const USER_HOLD_DURATION: Duration = Duration::from_secs(5);
 
     async fn process_user(&mut self, id: u8, event: KeyboardEvent) {
         debug!("Processing user key id: {:?}, event: {:?}", id, event);
@@ -1698,28 +1684,18 @@ impl<'a> Keyboard<'a> {
             use crate::channel::BLE_PROFILE_CHANNEL;
             if event.pressed {
                 // The uniform gesture across all bond slots: tap switches, a 5s
-                // hold forgets the slot's bond and re-pairs. Holding a profile key
-                // clears that profile and switches to it, so it advertises openly.
-                if id < NUM_BLE_PROFILE as u8 && self.held_for_5s().await {
-                    info!("Profile key held: clearing bond on profile {}", id);
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearSlot(id)).await;
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
-                }
-                // A 5s hold of the dongle key clears the local dongle bond and goes
-                // seeking, which is how a keyboard moves to a different dongle.
-                #[cfg(feature = "dongle")]
-                if id == NUM_BLE_PROFILE as u8 + 5 && self.held_for_5s().await {
-                    use crate::ble::profile::DONGLE_PROFILE;
-                    info!("Dongle key held: clearing dongle bond, seeking a dongle");
-                    BLE_PROFILE_CHANNEL
-                        .send(BleProfileAction::ClearSlot(DONGLE_PROFILE))
-                        .await;
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(DONGLE_PROFILE)).await;
-                }
+                // hold forgets the slot's bond and re-pairs (holding a profile key
+                // clears that profile and switches to it, so it advertises openly;
+                // the dongle key seeks a new dongle; the peer key clears the split
+                // peer). The hold is deadline-driven from `run()`: arming returns
+                // immediately, so the task keeps servicing events while it's down.
+                let arm = id < NUM_BLE_PROFILE as u8;
                 #[cfg(feature = "split")]
-                if id == NUM_BLE_PROFILE as u8 + 4 && self.held_for_5s().await {
-                    publish_event(ClearPeerEvent);
-                    info!("Clear peer");
+                let arm = arm || id == NUM_BLE_PROFILE as u8 + 4;
+                #[cfg(feature = "dongle")]
+                let arm = arm || id == NUM_BLE_PROFILE as u8 + 5;
+                if arm {
+                    self.user_hold = Some((Instant::now() + Self::USER_HOLD_DURATION, id));
                 }
             } else {
                 // Other user keys are processed when released.
@@ -1754,6 +1730,41 @@ impl<'a> Keyboard<'a> {
                         .await;
                 }
             }
+        }
+    }
+
+    /// Fire an expired User-key hold gesture: clear the bond of the held slot
+    /// and switch to it (or clear the split peer). Reaching expiry implies no
+    /// key event intervened, since any event disarms the gesture.
+    #[cfg(feature = "_ble")]
+    async fn fire_user_hold(&mut self) {
+        let Some((deadline, id)) = self.user_hold else { return };
+        if Instant::now() < deadline {
+            return;
+        }
+        self.user_hold = None;
+
+        use crate::NUM_BLE_PROFILE;
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+        if id < NUM_BLE_PROFILE as u8 {
+            info!("Profile key held: clearing bond on profile {}", id);
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearSlot(id)).await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
+        }
+        #[cfg(feature = "split")]
+        if id == NUM_BLE_PROFILE as u8 + 4 {
+            info!("Clear peer");
+            publish_event(ClearPeerEvent);
+        }
+        #[cfg(feature = "dongle")]
+        if id == NUM_BLE_PROFILE as u8 + 5 {
+            use crate::ble::profile::DONGLE_PROFILE;
+            info!("Dongle key held: clearing dongle bond, seeking a dongle");
+            BLE_PROFILE_CHANNEL
+                .send(BleProfileAction::ClearSlot(DONGLE_PROFILE))
+                .await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(DONGLE_PROFILE)).await;
         }
     }
 

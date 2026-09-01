@@ -1,0 +1,49 @@
+# User-key hold gestures (5 s bond-clear etc.).
+#
+# The expiry is deadline-driven from `run()`: holding a profile key must not
+# park the keyboard task, so everything else keeps working during the hold.
+#
+# User keys aren't expressible in keymap TOML yet, so each case writes
+# `User(0)` into an unused board position over rynk first (a request is a
+# barrier, so the write is applied before the matrix input plays).
+#
+# Board positions used: (0,13) -> User(0), MouseWheelUp@(0,8), W@(1,3).
+
+keyboard = "boards/split.toml"
+
+features = ["_ble", "rynk"]
+
+[[test]]
+name = "held_user_key_does_not_stall_mouse_repeats"
+steps = [
+  { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 13 }, action = { Single = { User = 0 } } } } },
+  { press = [0, 8] },   # Wheel down first: initial delta, repeats due at +100/+180ms
+  { delay = 20 },
+  { press = [0, 13] },  # Hold User(0): arms the 5s bond-clear deadline. No events
+                        # arrive while it's down, so only repeats fire meanwhile
+  { delay = 210 },      # covers two repeat ticks while the key stays held
+  { release = [0, 13] },
+  { release = [0, 8] },
+]
+expect = [
+  { mouse = { wheel = -1 } },
+  { mouse = { wheel = -1 } },  # repeat while the user key is held
+  { mouse = { wheel = -1 } },  # repeat
+  { mouse = {} },
+]
+
+# Any intervening key event cancels the hold gesture: typing over a held
+# profile key must not clear bonds, and the task must stay responsive.
+[[test]]
+name = "intervening_key_cancels_user_hold"
+steps = [
+  { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 13 }, action = { Single = { User = 0 } } } } },
+  { press = [0, 13] },                        # Hold User(0)
+  { delay = 100 },
+  { tap = { pos = [1, 3], duration = 10 } },  # W: cancels the hold, reports promptly
+  { release = [0, 13] },
+  { delay = 2600 },                           # Past the would-be expiry: nothing fires
+  { delay = 2600 },
+  { tap = { pos = [1, 3], duration = 10 } },  # W again: keyboard still healthy
+]
+expect = [["W"], [], ["W"], []]
