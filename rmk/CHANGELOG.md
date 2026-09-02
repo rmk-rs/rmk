@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fix UTF-8 panics when non-ASCII names are used in `keyboard.toml` aliases, and accept Unicode whitespace between keymap actions
+- Honour `SET_PROTOCOL` on the boot-subclass keyboard interface. v0.9.0 advertises the boot keyboard protocol in the descriptor, but the device rejected the switch to boot mode and `GET_PROTOCOL` always answered report mode, so a host that requires the switch before using the keyboard — a BIOS/UEFI setup screen, a KVM switch, a BMC — could be left without a working keyboard. The keyboard interface now accepts both modes and reports the selected one
 
 ## [0.9.0] - 2026-08-27
 

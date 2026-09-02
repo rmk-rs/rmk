@@ -3,7 +3,7 @@ use embassy_futures::select::{Either, select};
 use embassy_sync::signal::Signal;
 #[cfg(feature = "usb_log")]
 use embassy_usb::class::cdc_acm::CdcAcmClass;
-use embassy_usb::class::hid::{HidReader, HidReaderWriter, HidWriter, ReportId, RequestHandler};
+use embassy_usb::class::hid::{HidProtocolMode, HidReader, HidReaderWriter, HidWriter, ReportId, RequestHandler};
 use embassy_usb::control::OutResponse;
 use embassy_usb::driver::{Driver, EndpointError};
 use embassy_usb::{Builder, Handler, UsbDevice};
@@ -553,7 +553,11 @@ macro_rules! usb_hid_state_and_config {
         }
 
         let state = paste::paste! { [<$descriptor:snake:upper _STATE>].init(::embassy_usb::class::hid::State::new()) };
-        let request_handler = paste::paste! { [<$descriptor:snake:upper _HANDLER>].init($crate::usb::UsbRequestHandler {}) };
+        let request_handler = paste::paste! {
+            [<$descriptor:snake:upper _HANDLER>].init($crate::usb::UsbRequestHandler {
+                protocol: ::embassy_usb::class::hid::HidProtocolMode::Report,
+            })
+        };
 
         let hid_config = ::embassy_usb::class::hid::Config {
             report_descriptor: <$descriptor>::desc(),
@@ -604,11 +608,26 @@ pub(crate) use add_usb_reader_writer;
 pub(crate) use add_usb_writer;
 pub(crate) use usb_hid_state_and_config;
 
-pub(crate) struct UsbRequestHandler {}
+pub(crate) struct UsbRequestHandler {
+    pub(crate) protocol: HidProtocolMode,
+}
 
 impl RequestHandler for UsbRequestHandler {
     fn set_report(&mut self, id: ReportId, data: &[u8]) -> OutResponse {
         info!("Set report for {:?}: {:?}", id, data);
+        OutResponse::Accepted
+    }
+
+    fn get_protocol(&self) -> HidProtocolMode {
+        self.protocol
+    }
+
+    fn set_protocol(&mut self, protocol: HidProtocolMode) -> OutResponse {
+        // KeyboardReport is already the 8-byte boot keyboard layout, so the
+        // mode only changes what GET_PROTOCOL answers.
+        // TODO: Return to Report on a bus reset once embassy-usb tells the
+        // request handler about it (embassy-rs/embassy#6891).
+        self.protocol = protocol;
         OutResponse::Accepted
     }
 }
@@ -702,10 +721,28 @@ impl Handler for UsbDeviceHandler {
 #[cfg(test)]
 mod tests {
     use embassy_usb::Handler;
+    use embassy_usb::class::hid::RequestHandler;
     use rmk_types::connection::UsbState;
 
-    use super::UsbDeviceHandler;
+    use super::{HidProtocolMode, OutResponse, UsbDeviceHandler, UsbRequestHandler};
     use crate::state::{current_usb_state, set_usb_state};
+
+    /// A BIOS or KVM switch selects the boot protocol before it will use the
+    /// keyboard; rejecting the switch strands a host that trusts the boot
+    /// subclass the interface advertises.
+    #[test]
+    fn the_keyboard_switches_protocol_and_reports_it() {
+        let mut handler = UsbRequestHandler {
+            protocol: HidProtocolMode::Report,
+        };
+        assert_eq!(handler.get_protocol(), HidProtocolMode::Report);
+
+        assert_eq!(handler.set_protocol(HidProtocolMode::Boot), OutResponse::Accepted);
+        assert_eq!(handler.get_protocol(), HidProtocolMode::Boot);
+
+        assert_eq!(handler.set_protocol(HidProtocolMode::Report), OutResponse::Accepted);
+        assert_eq!(handler.get_protocol(), HidProtocolMode::Report);
+    }
 
     /// A charge-only cable / wall charger enables the device (VBUS present) but
     /// never enumerates it; the bus-idle suspend that follows must not publish
