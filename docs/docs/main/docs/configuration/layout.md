@@ -312,6 +312,7 @@ my_paste = "WM(V, LCtrl)"
 ::: warning
 
 Alias names may not contain whitespace or any of `(`, `)`, `,`, `@`, and they are case sensitive.
+Alias names may contain non-English Unicode characters, such as `ö` or `中`. Unicode whitespace is accepted between keymap actions.
 
 :::
 

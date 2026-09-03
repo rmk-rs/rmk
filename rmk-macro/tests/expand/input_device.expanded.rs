@@ -88,8 +88,8 @@ impl ::rmk::event::PublishableEvent for NrfAdcEvent {
 }
 impl ::rmk::event::AsyncPublishableEvent for NrfAdcEvent {
     type AsyncPublisher = NrfAdcEventPublisher;
-    fn publisher_async() -> Self::AsyncPublisher {
-        NrfAdcEventPublisher
+    fn publisher_async() -> Result<Self::AsyncPublisher, ::embassy_sync::pubsub::Error> {
+        Ok(NrfAdcEventPublisher)
     }
 }
 impl From<PointingEvent> for NrfAdcEvent {

@@ -1,9 +1,9 @@
-use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 #[cfg(feature = "subrating")]
-use bt_hci::cmd::le::{LeSetHostFeature, LeSubrateRequest};
+use bt_hci::cmd::le::LeSubrateRequest;
+use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
-use embassy_futures::join::join3;
+use embassy_futures::join::{join3, join4};
 use embassy_futures::select::{Either, Either3, select, select3};
 #[cfg(feature = "split")]
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -36,8 +36,6 @@ use crate::event::SubscribableEvent;
 use crate::hid::{HidWriterTrait, run_led_reader};
 #[cfg(feature = "split")]
 use crate::split::PeripheralMatrixConfig;
-#[cfg(feature = "subrating")]
-use crate::split::ble::central::subrating;
 #[cfg(feature = "split")]
 use crate::split::ble::central::{run_peripheral_session, scan_and_connect_peripherals};
 use crate::state::set_ble_state;
@@ -165,7 +163,6 @@ impl<
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>
-        + ControllerCmdSync<LeSetHostFeature>
         + ControllerCmdAsync<LeSubrateRequest>,
 > Runnable for BleTransport<'a, C>
 {
@@ -211,11 +208,7 @@ impl<
 /// serves forever, joined with the stack runner and the sleep manager.
 async fn run_ble_keyboard<
     #[cfg(feature = "host")] 'r,
-    #[cfg(not(feature = "subrating"))] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
-    #[cfg(feature = "subrating")] C: Controller
-        + ControllerCmdAsync<LeSetPhy>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetHostFeature>,
+    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 >(
     stack: &Stack<'_, C, DefaultPacketPool>,
     device_config: &DeviceConfig<'static>,
@@ -279,11 +272,6 @@ async fn run_ble_keyboard<
     let profile_manager = &mut profile_manager;
 
     let connection_loop = async {
-        // Subrating: set host feature flag BEFORE ANY CONNECTIONS
-        // This must run concurrently with the ble_task runner (which processes HCI commands).
-        #[cfg(feature = "subrating")]
-        init_subrating_host_feature(stack).await;
-
         loop {
             // On the dongle slot, advertise directed to the bonded dongle or
             // as a seeking broadcast; on the normal profiles, plain HID.
@@ -401,23 +389,6 @@ async fn run_ble_keyboard<
     )
     .await;
     unreachable!("BleTransport sub-tasks must run forever")
-}
-
-/// Initialize subrating host support.
-///
-/// **Must** be called concurrently with `ble_task()` (the runner processes the
-/// HCI command) and **before** any advertising, scanning or connecting, because
-/// the controller only applies the feature flag to connections established after
-/// it is set.
-#[cfg(feature = "subrating")]
-pub(crate) async fn init_subrating_host_feature<C: Controller + ControllerCmdSync<LeSetHostFeature>>(
-    stack: &Stack<'_, C, impl PacketPool>,
-) {
-    const CONN_SUBRATING_HOST_BIT: u8 = 38;
-    let cmd = LeSetHostFeature::new(CONN_SUBRATING_HOST_BIT, 1);
-    if let Err(e) = stack.command(cmd).await {
-        error!("[Host] error setting subrating host feature flag: {:?}", e);
-    }
 }
 
 /// NoopHandler is used on the device which never scans,
@@ -713,6 +684,20 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                     supervision_timeout.as_millis()
                 );
             }
+            GattConnectionEvent::SubratingParamsUpdated {
+                subrate_factor,
+                peripheral_latency,
+                continuation_number,
+                supervision_timeout,
+            } => {
+                info!(
+                    "[gatt] SubratingParamsUpdated: {:?}, {:?}, {:?}, {:?}ms",
+                    subrate_factor,
+                    peripheral_latency,
+                    continuation_number,
+                    supervision_timeout.as_millis()
+                );
+            }
             GattConnectionEvent::PassKeyDisplay(pass_key) => info!("[gatt] PassKeyDisplay: {:?}", pass_key),
             GattConnectionEvent::PassKeyConfirm(pass_key) => info!("[gatt] PassKeyConfirm: {:?}", pass_key),
             GattConnectionEvent::PassKeyInput => {
@@ -746,6 +731,7 @@ async fn disconnect(conn: &GattConnection<'_, '_, DefaultPacketPool>) {
     while !matches!(conn.next().await, GattConnectionEvent::Disconnected { .. }) {}
 }
 
+/// Set keyboard <-> host connection parameters
 pub(crate) async fn set_conn_params<
     'a,
     'b,
@@ -755,29 +741,17 @@ pub(crate) async fn set_conn_params<
     stack: &Stack<'_, C, P>,
     conn: &GattConnection<'a, 'b, P>,
 ) {
-    // On the dongle slot the dongle (our own central) owns the link
-    // parameters; the Apple-tuned requests below would push supervision back
-    // to 10 s and slow down reconnect after a dongle power-cycle.
-    #[cfg(feature = "dongle")]
-    if crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE {
-        core::future::pending::<()>().await;
-    }
+    let requests = [
+        // The first request is what Apple devices accept:
+        // https://developer.apple.com/accessories/Accessory-Design-Guidelines.pdf
+        (Duration::from_millis(15), 30, Duration::from_secs(6)),
+        // The second request is for best performance
+        (Duration::from_micros(7500), 60, Duration::from_secs(6)),
+    ];
 
-    // Apple rejects 7.5ms outright, so ask for the 15ms its guidelines allow
-    // first and only then for 7.5ms: platforms that take it end up at the best
-    // interval, and Apple keeps the 15ms it already granted.
-    // Reference: https://developer.apple.com/accessories/Accessory-Design-Guidelines.pdf
-    for interval in [Duration::from_millis(15), Duration::from_micros(7500)] {
+    for (interval, max_latency, supervision_timeout) in requests {
         // Wait 5 seconds before each request to avoid connection drop
         embassy_time::Timer::after_secs(5).await;
-
-        // We need to let the central sleep for long periods of time when the
-        // split connection is subrated to get the power savings.
-        #[cfg(feature = "subrating")]
-        let max_latency = subrating::HOST_MAX_LATENCY;
-
-        #[cfg(not(feature = "subrating"))]
-        let max_latency = 30;
 
         update_conn_params(
             stack,
@@ -786,7 +760,7 @@ pub(crate) async fn set_conn_params<
                 min_connection_interval: interval,
                 max_connection_interval: interval,
                 max_latency,
-                supervision_timeout: Duration::from_secs(10),
+                supervision_timeout,
                 ..Default::default()
             },
         )
@@ -799,11 +773,6 @@ pub(crate) async fn set_conn_params<
 }
 
 /// Serve one host keyboard connection.
-///
-/// Returns when the GATT events task ends (i.e. the connection drops).
-/// `writer_task`, `led_task`, and `host_task` are all infinite, so the outer
-/// `select(communication_task, inner)` cancels them as a side-effect of
-/// `communication_task` returning. `inner` itself never completes.
 async fn serve_keyboard_connection<
     'a,
     'b,
@@ -893,7 +862,18 @@ async fn serve_keyboard_connection<
     #[cfg(not(feature = "host"))]
     let host_task = core::future::pending::<()>();
 
-    let inner = join3(writer_task, led_task, host_task);
+    // When dongle feature is enabled, send `DongleEvent` to the dongle.
+    #[cfg(all(feature = "dongle", feature = "host"))]
+    let dongle_event_task = async {
+        if !dongle_link {
+            core::future::pending::<()>().await;
+        }
+        crate::dongle::event::run(server, conn).await;
+    };
+    #[cfg(not(all(feature = "dongle", feature = "host")))]
+    let dongle_event_task = core::future::pending::<()>();
+
+    let inner = join4(writer_task, led_task, host_task, dongle_event_task);
     select(communication_task, inner).await;
 }
 

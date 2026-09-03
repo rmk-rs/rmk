@@ -4,6 +4,9 @@
 #   Layer 0: OSM(LShift)          OSL(1)  A  TH(B, C)  OSM(LCtrl)  WM(B, LGui)
 #   Layer 1: OSM(LShift | LCtrl)  No      C  D         E           F
 #
+# Two more shared-board positions are used below: MouseWheelUp@(0,8) and
+# the plain layer key MO(1)@(3,0).
+#
 # Tests inherit the one-shot defaults (timeout 1000ms, activate_on_keypress and
 # quick_release both false) unless they carry a `behavior.one_shot*` delta.
 
@@ -221,12 +224,64 @@ expect = [
   [],
 ]
 
+# The timeout fires even though other keys were tapped during the armed window.
+# Regression: a layer switch neither cancels nor extends the expiry deadline, so
+# the modifier can't stay armed until some later keypress, potentially minutes
+# after the OSM itself.
+[[test]]
+name = "osm_timeout_survives_intervening_keys"
+behavior.one_shot = { timeout = "150ms" }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift)
+  { tap = { pos = [3, 0], duration = 10 } },  # MO(1) down and up
+  { delay = 200 },                            # OSM deadline passes in here
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  ["A"],  # A without LShift (timed out despite the MO tap)
+  [],
+]
+
+# Mouse wheel repeats keep streaming while a one-shot is armed. Regression: the
+# armed wait must not park the keyboard task, which would freeze held-key
+# repeats (and every other timed behavior) until the next key event or the
+# timeout.
+[[test]]
+name = "osm_armed_does_not_stall_mouse_repeats"
+behavior.one_shot = { timeout = "600ms" }
+steps = [
+  { press = [0, 8] },   # Hold MouseWheelUp: initial delta, first repeat due at +100ms
+  { press = [0, 0] },   # OSM(LShift) down
+  { release = [0, 0] }, # OSM(LShift) up and still armed; repeats must continue regardless
+  { delay = 280 },      # covers the repeat ticks at +100/+180/+260ms
+  { release = [0, 8] },
+  { tap = { pos = [0, 2], duration = 10 } },  # Control: OSM still armed here
+]
+expect = [
+  { mouse = { wheel = -1 } },
+  { mouse = { wheel = -1 } },  # repeat while OSM armed
+  { mouse = { wheel = -1 } },  # repeat while OSM armed
+  { mouse = { wheel = -1 } },  # repeat while OSM armed
+  { mouse = {} },
+  ["LShift", "A"],
+  [],
+]
+
 # Quick-release mode (quick_release = true): the modifier drops on key PRESS,
 # so each key report is followed by an unmodified one.
 #
-# `test_osm_quick_release_rolling` was dropped before this port: OSM combined
-# with a morse/tap-hold key has a known bug where the OSM deadline loop times
-# out before the tap resolves.
+# Rolling into a morse/tap-hold key keeps the modifier applied: the expiry
+# deadline runs alongside the pending tap resolution instead of firing before
+# the tap resolves.
+[[test]]
+name = "osm_quick_release_rolling"
+behavior.one_shot_modifiers = { quick_release = true }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },  # TH(B, C) tapped
+]
+expect = [["LShift", "B"], ["B"], []]
+
 [[test]]
 name = "osm_quick_release_multiple_keys"
 behavior.one_shot_modifiers = { quick_release = true }

@@ -109,8 +109,8 @@ fn generate_mpsc_channel(
                 { #cap }
             >;
 
-            fn publisher_async() -> Self::AsyncPublisher {
-                #channel_name.sender()
+            fn publisher_async() -> Result<Self::AsyncPublisher, ::embassy_sync::pubsub::Error> {
+                Ok(#channel_name.sender())
             }
         }
     };
@@ -181,7 +181,7 @@ fn generate_pubsub_channel(
                     concat!(
                         "Failed to create subscriber for ",
                         stringify!(#type_name),
-                        ". The 'subs' limit has been exceeded. Increase the 'subs' parameter in #[event(subs = N)]."
+                        ". The 'subs' limit has been exceeded. Increase 'subs' for this event in keyboard.toml [event] (or #[event(subs = N)] for custom events)."
                     )
                 )
             }
@@ -197,14 +197,8 @@ fn generate_pubsub_channel(
                 { #pubs_val }
             >;
 
-            fn publisher_async() -> Self::AsyncPublisher {
-                #channel_name.publisher().expect(
-                    concat!(
-                        "Failed to create async publisher for ",
-                        stringify!(#type_name),
-                        ". The 'pubs' limit has been exceeded. Increase the 'pubs' parameter in #[event(pubs = N)]."
-                    )
-                )
+            fn publisher_async() -> Result<Self::AsyncPublisher, ::embassy_sync::pubsub::Error> {
+                #channel_name.publisher()
             }
         }
     };

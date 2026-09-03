@@ -16,6 +16,7 @@ emit_batch_args() {
             printf -- '--- %s --manifest-path rmk/Cargo.toml --no-default-features --features %s\n' "$cmd" "$feats"
         fi
     done
+    printf -- '--- %s --manifest-path rmk/Cargo.toml\n' "$cmd"
     printf -- '--- %s --manifest-path rmk-config/Cargo.toml\n' "$cmd"
     printf -- '--- %s --manifest-path rmk-macro/Cargo.toml\n' "$cmd"
     printf -- '--- %s --manifest-path rmk-types/Cargo.toml\n' "$cmd"
@@ -48,6 +49,7 @@ clippy_rmk() {
 for feats in "${RMK_FEATURESETS[@]}"; do
     clippy_rmk "$feats"
 done
+cargo +stable clippy --target-dir "$clippy_target" --manifest-path rmk/Cargo.toml -- -D warnings
 cargo +stable clippy --target-dir "$clippy_target" --manifest-path rmk-config/Cargo.toml -- -D warnings
 cargo +stable clippy --target-dir "$clippy_target" --manifest-path rmk-macro/Cargo.toml -- -D warnings
 cargo +stable clippy --target-dir "$clippy_target" --manifest-path rmk-types/Cargo.toml -- -D warnings

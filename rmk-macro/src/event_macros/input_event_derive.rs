@@ -150,8 +150,8 @@ pub fn event_derive_impl(input: TokenStream) -> TokenStream {
         impl #impl_generics ::rmk::event::AsyncPublishableEvent for #enum_name #ty_generics #where_clause {
             type AsyncPublisher = #publisher_name #ty_generics;
 
-            fn publisher_async() -> Self::AsyncPublisher {
-                #publisher_ctor
+            fn publisher_async() -> Result<Self::AsyncPublisher, ::embassy_sync::pubsub::Error> {
+                Ok(#publisher_ctor)
             }
         }
 

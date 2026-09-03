@@ -63,6 +63,16 @@ You can use the following commands to install them:
   irm https://github.com/probe-rs/probe-rs/releases/latest/download/probe-rs-tools-installer.ps1 | iex
 ```
 
+To compile firmware for nRF chips, you also need the [Arm GNU toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads), which builds the P-256 assembly that RMK uses to speed up BLE pairing:
+
+```bash
+# macOS
+brew install --cask gcc-arm-embedded
+
+# Ubuntu/Debian
+sudo apt install gcc-arm-none-eabi
+```
+
 To compile firmware for nRF52 on windows, you may need to install LLVM(Clang) as well. Follow the doc [here](https://rust-lang.github.io/rust-bindgen/requirements.html#windows) to install LLVM(Clang).
 
 ## Create firmware project

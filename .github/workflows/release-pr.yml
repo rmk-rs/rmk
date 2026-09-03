@@ -1,0 +1,64 @@
+name: Release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Bump level"
+        type: choice
+        options: [minor, patch, major]
+        default: minor
+      crates:
+        description: "Crates to bump, space separated. Empty bumps all of them."
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: release-pr
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.actor == 'HaoboGu'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+
+      - id: prepare
+        name: Prepare the release
+        env:
+          BUMP: ${{ inputs.bump }}
+          CRATES: ${{ inputs.crates }}
+        run: |
+          source .github/ci/_lib.sh
+          # $CRATES unquoted on purpose: space-separated crate names.
+          .github/ci/prepare-release.sh "$BUMP" $CRATES
+          echo "branch=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
+
+      - id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          # publish.yml gates on this branch, so both read it from _lib.sh.
+          branch: ${{ steps.prepare.outputs.branch }}
+          title: "chore(release): prepare next release"
+          commit-message: "chore(release): bump versions and refresh lockfiles"
+          body: |
+            Review the rolled CHANGELOG section before merging.
+
+            Merging this starts the **Publish** workflow, which publishes every
+            crate whose version changed once you approve the `crates-io`
+            deployment on its run.

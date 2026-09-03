@@ -92,7 +92,7 @@ pub struct RotaryEncoderPos {
 
 /// Modifier keys combination changed event
 #[event(channel_size = crate::MODIFIER_EVENT_CHANNEL_SIZE, pubs = crate::MODIFIER_EVENT_PUB_SIZE, subs = crate::MODIFIER_EVENT_SUB_SIZE)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ModifierEvent {
     pub modifier: ModifierCombination,

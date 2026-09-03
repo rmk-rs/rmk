@@ -15,7 +15,7 @@ subs = 2
 
 [event.keyboard]
 channel_size = 16
-pubs = 2
+pubs = 4
 subs = 3
 
 # Keyboard state events
@@ -58,7 +58,7 @@ subs = 1
 # Pointing device events
 [event.pointing]
 channel_size = 8
-pubs = 2
+pubs = 4
 subs = 2
 
 # Split events

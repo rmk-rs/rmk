@@ -16,7 +16,7 @@
 //! - `split`: Split keyboard events (peripheral/central connection)
 
 use embassy_sync::blocking_mutex::raw::RawMutex;
-use embassy_sync::pubsub::{ImmediatePublisher, Publisher, Subscriber};
+use embassy_sync::pubsub::{Error as PubSubError, ImmediatePublisher, Publisher, Subscriber};
 use embassy_sync::{channel, watch};
 
 /// Generates `Deref`, `From<Event> for Payload`, and `From<Payload> for Event`
@@ -101,7 +101,9 @@ pub trait PublishableEvent: Clone + Send {
 pub trait AsyncPublishableEvent: PublishableEvent {
     type AsyncPublisher: AsyncEventPublisher<Event = Self>;
 
-    fn publisher_async() -> Self::AsyncPublisher;
+    /// Errors when all `pubs` waker slots are taken, which happens only while
+    /// the channel is full and `pubs` publishers are blocked on it.
+    fn publisher_async() -> Result<Self::AsyncPublisher, PubSubError>;
 }
 
 /// Trait for events that can be subscribed to.
@@ -208,6 +210,20 @@ pub fn publish_event<E: PublishableEvent>(e: E) {
 /// Example: `publish_event_async(KeyboardEvent::key(0, 0, true)).await`
 pub async fn publish_event_async<E: AsyncPublishableEvent>(e: E) {
     if !E::PUBLISH_IS_NOOP {
-        E::publisher_async().publish_async(e).await;
+        let publisher = match E::publisher_async() {
+            Ok(p) => p,
+            Err(_) => {
+                // All `pubs` waker slots are held by publishers blocked on a full
+                // channel; there is no waker for a freed slot, so poll briefly.
+                warn!("publisher slots exhausted, consider raising [event] pubs in keyboard.toml");
+                loop {
+                    embassy_time::Timer::after_millis(1).await;
+                    if let Ok(p) = E::publisher_async() {
+                        break p;
+                    }
+                }
+            }
+        };
+        publisher.publish_async(e).await;
     }
 }

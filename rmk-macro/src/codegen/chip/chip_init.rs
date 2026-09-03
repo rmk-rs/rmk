@@ -94,7 +94,8 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
             const SDC_MEM_SUBRATING_PER_PERIPHERAL: usize = 56;
             const SDC_MEM_SUBRATING_PER_EXTRA_PERIPHERAL: usize = 8;
 
-            let subrating_enabled = is_feature_enabled(&get_rmk_features(), "subrating");
+            let subrating_enabled =
+                peri_num > 0 && is_feature_enabled(&get_rmk_features(), "subrating");
 
             let sdc_mem_size = if peripheral_id.is_none() && peri_num > 0 {
                 // Split central
@@ -123,7 +124,9 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                         source: ::nrf_sdc::mpsl::raw::MPSL_CLOCK_LF_SRC_RC as u8,
                         rc_ctiv: ::nrf_sdc::mpsl::raw::MPSL_RECOMMENDED_RC_CTIV as u8,
                         rc_temp_ctiv: ::nrf_sdc::mpsl::raw::MPSL_RECOMMENDED_RC_TEMP_CTIV as u8,
-                        accuracy_ppm: ::nrf_sdc::mpsl::raw::MPSL_DEFAULT_CLOCK_ACCURACY_PPM as u16,
+                        // nRF52 LFRC is +/-500 ppm after calibration (PS 5.4.4.4); the 250 ppm
+                        // MPSL default understates it and narrows the receive window on the peer.
+                        accuracy_ppm: 500,
                         skip_wait_lfclk_started: ::nrf_sdc::mpsl::raw::MPSL_DEFAULT_SKIP_WAIT_LFCLK_STARTED != 0,
                     };
                     static MPSL: ::static_cell::StaticCell<::nrf_sdc::mpsl::MultiprotocolServiceLayer> = ::static_cell::StaticCell::new();
@@ -220,8 +223,7 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                 let p = ::esp_hal::init(::esp_hal::Config::default().with_cpu_clock(::esp_hal::clock::CpuClock::max()));
                 ::esp_alloc::heap_allocator!(size: 72 * 1024);
                 let timg0 = ::esp_hal::timer::timg::TimerGroup::new(p.TIMG0);
-                let software_interrupt = ::esp_hal::interrupt::software::SoftwareInterruptControl::new(p.SW_INTERRUPT);
-                ::esp_rtos::start(timg0.timer0, software_interrupt.software_interrupt0);
+                ::esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
                 let _trng_source = ::esp_hal::rng::TrngSource::new(p.RNG, p.ADC1);
                 let connector = ::esp_radio::ble::controller::BleConnector::new(p.BT, Default::default()).unwrap();
                 let ble_controller: ::bt_hci::controller::ExternalController<_, 64> = ::bt_hci::controller::ExternalController::new(connector);

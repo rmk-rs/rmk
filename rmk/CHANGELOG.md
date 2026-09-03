@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Make Trouble BLE roles explicit, document environment-variable memory tuning, update the nRF52832 examples to peripheral-only SDC, and derive split notification capacity from Trouble's configured packet-pool MTU.
+
+### Fixed
+
+- Fix UTF-8 panics when non-ASCII names are used in `keyboard.toml` aliases, and accept Unicode whitespace between keymap actions
+- Honour `SET_PROTOCOL` on the boot-subclass keyboard interface. v0.9.0 advertises the boot keyboard protocol in the descriptor, but the device rejected the switch to boot mode and `GET_PROTOCOL` always answered report mode, so a host that requires the switch before using the keyboard — a BIOS/UEFI setup screen, a KVM switch, a BMC — could be left without a working keyboard. The keyboard interface now accepts both modes and reports the selected one
+
+## [0.9.0] - 2026-08-27
+
+### Added
+
 #### Connectivity
 
 - Add BLE dongle support (`dongle` Cargo feature). A dongle is a USB-attached nRF board that relays a wireless keyboard's HID reports to the host, so the keyboard works on machines with no usable Bluetooth. The keyboard reserves a bond slot of its own for the dongle — profile cycling never reaches it — and `User(N+5)` (`SwitchToDongle`) switches to it; holding that key for 5 seconds clears the bond and goes looking for another dongle. The dongle also relays the host protocol, so Vial and Rynk keep working through it ([#1028](https://github.com/rmk-rs/rmk/pull/1028), [#1047](https://github.com/rmk-rs/rmk/pull/1047)). See [examples/use_rust/nrf_dongle](https://github.com/rmk-rs/rmk/tree/main/examples/use_rust/nrf_dongle)
@@ -24,11 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add configurable `battery_user_description` values for the central and split peripheral Battery Level characteristics through `[ble]`, `[split.central]`, and `[[split.peripheral]]`, with descriptive defaults for each battery service
 - Advertise the boot keyboard protocol on the primary HID interface, so the keyboard works in BIOS/UEFI and other boot-protocol-only hosts
 - Add USB logging support for split peripherals ([#1000](https://github.com/rmk-rs/rmk/pull/1000))
+- Add BLE connection subrating for the split link (`subrating` feature), see [low power](https://rmk.rs/docs/features/low_power) ([#1008](https://github.com/rmk-rs/rmk/pull/1008), [#1077](https://github.com/rmk-rs/rmk/pull/1077))
+- Stream keyboard state to the dongle over GATT: keys, modifiers, layer, WPM, sleep and battery ([#1086](https://github.com/rmk-rs/rmk/pull/1086))
+- Add a builder for the USB transport
 
 #### Displays and other outputs
 
 - Add OLED display support (`display` Cargo feature) with a `[display]` section in `keyboard.toml`. Ships `oled_async` drivers for SH1106, SH1107, SH1108 and SSD1309, plus `lcd-async` for color panels. Default renderers show layer, connection, and battery state, blank while the keyboard sleeps, and honour configurable render/poll intervals. Custom renderers are supported — see [examples/use_rust/custom_renderer](https://github.com/rmk-rs/rmk/tree/main/examples/use_rust/custom_renderer). On splits, the central forwards display state events to peripherals so both halves can show the same status
 - Add Plover HID stenography support (`steno` Cargo feature): a steno HID descriptor and USB endpoint, an `Action::Steno` keycode with `STN(key)` syntax in `keyboard.toml`, and a live-state reporter
+- Flush only the dirty rectangle in `LcdAsyncDisplay` ([#1070](https://github.com/rmk-rs/rmk/pull/1070))
 
 #### Behaviors
 
@@ -84,12 +99,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: `PollingController::INTERVAL` constant is now `PollingProcessor::interval()` method, allowing dynamic interval configuration at runtime
 - **BREAKING**: PointingDevice and PointingProcessor replace Pmw3610Device and Pmw3610Processor. For the Pmw3610 the calls of ::new() for these stay the same, only the name changes. If using Rust to configure the keyboard change the calls, if using Toml nothing needs to be done.
 - **BREAKING**: `MouseKeyConfig` fields renamed: `time_to_max` → `ticks_to_max`, `wheel_time_to_max` → `wheel_ticks_to_max`, `wheel_max_speed_multiplier` → `wheel_max_speed`
-- Update the dependency baseline: `embassy-executor` 0.10 (`platform-cortex-m`), `embassy-nrf` 0.11, `embassy-rp` 0.10, `embassy-stm32` 0.6, `bt-hci` 0.9, `cyw43` 0.7 / `cyw43-pio` 0.10, `esp-hal` 1.1 / `esp-radio` 0.18 / `esp-rtos` 0.3, and a newer `nrf-sdc`. The migration guide lists the matching code changes
+- Update the dependency baseline: `embassy-executor` 0.10 (`platform-cortex-m`), `embassy-nrf` 0.11, `embassy-rp` 0.10, `embassy-stm32` 0.6, `bt-hci` 0.10, `trouble-host` 0.8, `cyw43` 0.7 / `cyw43-pio` 0.10, `esp-hal` 1.2.0-rc.0 / `esp-radio` 1.0.0-beta.0 / `esp-rtos` 0.3, and `nrf-sdc` 0.4. `trouble-host` and `nrf-sdc` are now crates.io releases instead of git pins. The migration guide lists the matching code changes
 - Rynk moves from a CDC ACM interface to its own raw USB vendor interface, so it no longer occupies a serial port and host tools find it by interface class ([#1023](https://github.com/rmk-rs/rmk/pull/1023))
 - Refactor mouse key state machine into a dedicated module with per-direction press counts, independent movement/wheel repeat scheduling, and configurable acceleration curves
 - Optimize the timing for motion read and sending reports on the PMW3610
 - Correct the delay length of PMW3610 to the precise value
 - Update `sequential-storage` to v8.0. The on-flash format is unchanged, so existing storage is read back as-is
+- Apply connection subrating to the split link only, not to the host link ([#1088](https://github.com/rmk-rs/rmk/pull/1088))
+- Enable trouble's `security-p256-cortex-m4` on nRF for hardware-accelerated pairing ([#1076](https://github.com/rmk-rs/rmk/pull/1076))
 
 ### Fixed
 
@@ -112,6 +129,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix a bonded dongle hijacking the keyboard's BLE host profiles: it connected on the keyboard's bare address, so it also answered the plain HID advertising of a host profile and bonded itself into that slot. The dongle now connects only when the keyboard asks for a dongle, and the keyboard refuses the bonded dongle on every host profile ([#1056](https://github.com/rmk-rs/rmk/pull/1056))
 - Fix the nRF SoftDevice Controller memory pool size calculation ([#1002](https://github.com/rmk-rs/rmk/pull/1002))
 - Fix spurious sleep, and fix the split peripheral's connection parameters
+- Fix one-shot expiry blocking the keyboard task ([#1083](https://github.com/rmk-rs/rmk/pull/1083))
+- Fix a dropped split link staying down until the sleeping central wakes ([#1081](https://github.com/rmk-rs/rmk/pull/1081))
+- Declare the nRF52 LFRC at its specified 500 ppm ([#1080](https://github.com/rmk-rs/rmk/pull/1080))
+- Fix an out-of-bounds panic on key positions outside the matrix ([#1078](https://github.com/rmk-rs/rmk/pull/1078))
+- Reject misspelled modifier and fork state names in `keyboard.toml` ([#1089](https://github.com/rmk-rs/rmk/pull/1089))
+- Seed the default morse profile's flow-tap bit from `keyboard.toml` ([#1067](https://github.com/rmk-rs/rmk/pull/1067), [#1068](https://github.com/rmk-rs/rmk/pull/1068))
+- Stop a pointing device spinning after its sensor init failed ([#1066](https://github.com/rmk-rs/rmk/pull/1066), [#1087](https://github.com/rmk-rs/rmk/pull/1087))
+- Keep the dongle link at 2M PHY under `use_1m_phy` ([#1065](https://github.com/rmk-rs/rmk/pull/1065))
+- Return the persisted layout option from Vial's `GetKeyboardValue` ([#1060](https://github.com/rmk-rs/rmk/pull/1060))
+- Give the display processor its own event-subscriber slot
 
 ## [0.8.2] - 2025-12-18
 

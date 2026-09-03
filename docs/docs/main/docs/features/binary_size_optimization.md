@@ -18,6 +18,34 @@ There are several approaches to solve the problem:
 
 ## Common approaches
 
+### Tune Trouble parameters
+
+For a monolithic BLE keyboard that never acts as a central, dongle, or split host, Trouble's compile-time capacities can be reduced with environment variables in `.cargo/config.toml`:
+
+```toml
+[env]
+TROUBLE_HOST_CONNECTION_EVENT_QUEUE_SIZE = "1"
+TROUBLE_HOST_L2CAP_RX_QUEUE_SIZE = "1"
+TROUBLE_HOST_L2CAP_TX_QUEUE_SIZE = "2"
+TROUBLE_HOST_DEFAULT_PACKET_POOL_SIZE = "4"
+TROUBLE_HOST_DEFAULT_PACKET_POOL_MTU = "128"
+```
+
+Keep two L2CAP TX buffers: LE Secure Connections may enqueue Public Key and Pairing Confirm in the same synchronous state transition. These values are intended only for a single peripheral connection. Do not apply them to an RMK `dongle` or `split` central; those products need larger queues and should be measured independently.
+
+### Enable the peripheral-only role
+
+For a standalone keyboard, set the controller dependency to `default-features = false` and enable only its peripheral role. For example, an nRF SDC dependency should contain `peripheral` but not `central`:
+
+```toml
+nrf-sdc = { version = "0.4", default-features = false, features = [
+    "peripheral",
+    "nrf52832",
+] }
+```
+
+RMK enables Trouble's central and scan roles only when its `dongle` or `split` feature is active.
+
 ### Change `DEFMT_LOG` level
 
 Logging is quite useful when debugging the firmware, but it requires a lot of flash. You can change the default logging level to `error` at `.cargo/config.toml`, to print only error messages and save flash:

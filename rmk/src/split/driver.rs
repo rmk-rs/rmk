@@ -207,7 +207,6 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
         let mut wpm_sub = crate::event::WpmUpdateEvent::subscriber();
         #[cfg(feature = "display")]
         let mut modifier_sub = crate::event::ModifierEvent::subscriber();
-        #[cfg(feature = "display")]
         let mut sleep_sub = crate::event::SleepStateEvent::subscriber();
 
         // Send the current state once on startup so the peripheral matches us
@@ -248,9 +247,9 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
                         }
                         SplitMessage::ClearPeer
                     },
+                    e = sleep_sub.next_event().fuse() => SplitMessage::SleepState(e.0),
                     with_feature("display"): e = wpm_sub.next_event().fuse() => SplitMessage::Wpm(e.0),
                     with_feature("display"): e = modifier_sub.next_event().fuse() => SplitMessage::Modifier(e.modifier.into_bits()),
-                    with_feature("display"): e = sleep_sub.next_event().fuse() => SplitMessage::SleepState(e.0),
                 }
             };
 

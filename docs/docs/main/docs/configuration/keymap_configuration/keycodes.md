@@ -299,6 +299,13 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `ComboToggle`    |         | Toggle combos                                                         |
 | `CapsWordToggle` |         | Toggle [Caps Word](./special_keys#caps-word)                          |
 
+## Not yet implemented keys
+
+The following key names are accepted in `keyboard.toml` but not implemented yet — pressing them does nothing:
+
+- Backlight keys: `BacklightOn`, `BacklightOff`, `BacklightToggle`, `BacklightDown`, `BacklightUp`, `BacklightStep`, `BacklightToggleBreathing`
+- RGB keys: `RgbTog`, `RgbHui`, `RgbHud`, `RgbSai`, `RgbSad`, `RgbVai`, `RgbVad`, `RgbSpi`, `RgbSpd`, and the `RgbMode*` effect names
+
 ## User keys
 
 | Keycode          | Aliases   | Usage                                                                                                                                                                                                                |

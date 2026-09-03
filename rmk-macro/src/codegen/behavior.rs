@@ -10,8 +10,8 @@ use rmk_config::resolved::behavior::{
 };
 
 use super::action_parser::{
-    as_hid_keycode, expand_profile, expand_profile_name, get_key_with_alias, parse_action,
-    parse_key, sorted_profile_names,
+    SetterTable, as_hid_keycode, expand_profile, expand_profile_name, get_key_with_alias,
+    parse_action, parse_key, parse_name_list, sorted_profile_names,
 };
 use super::feature::{get_rmk_features, is_feature_enabled};
 
@@ -303,7 +303,7 @@ fn expand_morses(
 
         if let Some(morse_actions) = &morse.morse_actions {
             if morse.tap.is_some() || morse.hold.is_some() || morse.hold_after_tap.is_some() || morse.double_tap.is_some() || morse.tap_actions.is_some() || morse.hold_actions.is_some() {
-                panic!("\n❌ keyboard.toml: `morse_actions` cannot be used together with `tap_actions`, `hold_actions`, `tap`, `hold`, `hold_after_tap`, or `double_tap`. Please check the documentation: https://rmk.rs/docs/features/configuration/behavior.html#morse");
+                panic!("\n❌ keyboard.toml: `morse_actions` cannot be used together with `tap_actions`, `hold_actions`, `tap`, `hold`, `hold_after_tap`, or `double_tap`.");
             }
 
             let actions_def = expand_morse_actions(morse_actions, profiles);
@@ -319,7 +319,7 @@ fn expand_morses(
         } else if morse.tap_actions.is_some() || morse.hold_actions.is_some() {
             // Check first
             if morse.tap.is_some() || morse.hold.is_some() || morse.hold_after_tap.is_some() || morse.double_tap.is_some() {
-                panic!("\n❌ keyboard.toml: `tap_actions` and `hold_actions` cannot be used together with `tap`, `hold`, `hold_after_tap`, or `double_tap`. Please check the documentation: https://rmk.rs/docs/features/configuration/behavior.html#morse");
+                panic!("\n❌ keyboard.toml: `tap_actions` and `hold_actions` cannot be used together with `tap`, `hold`, `hold_after_tap`, or `double_tap`.");
             }
 
             let tap_actions_def = match &morse.tap_actions {
@@ -462,39 +462,31 @@ impl quote::ToTokens for StateBitsMacro {
 
 /// Get modifier combination, in types of mod1 | mod2 | ...
 fn parse_state_combination(states_str: &str) -> StateBitsMacro {
-    let mut combination = StateBitsMacro::default();
-    let tokens = states_str.split_terminator("|");
-    tokens.for_each(|w| {
-        let w = w.trim();
-        match w {
-            "LCtrl" => combination.modifiers_left_ctrl = true,
-            "LShift" => combination.modifiers_left_shift = true,
-            "LAlt" => combination.modifiers_left_alt = true,
-            "LGui" => combination.modifiers_left_gui = true,
-            "RCtrl" => combination.modifiers_right_ctrl = true,
-            "RShift" => combination.modifiers_right_shift = true,
-            "RAlt" => combination.modifiers_right_alt = true,
-            "RGui" => combination.modifiers_right_gui = true,
+    const STATES: &SetterTable<StateBitsMacro> = &[
+        ("LCtrl", |c| c.modifiers_left_ctrl = true),
+        ("LShift", |c| c.modifiers_left_shift = true),
+        ("LAlt", |c| c.modifiers_left_alt = true),
+        ("LGui", |c| c.modifiers_left_gui = true),
+        ("RCtrl", |c| c.modifiers_right_ctrl = true),
+        ("RShift", |c| c.modifiers_right_shift = true),
+        ("RAlt", |c| c.modifiers_right_alt = true),
+        ("RGui", |c| c.modifiers_right_gui = true),
+        ("NumLock", |c| c.leds_num_lock = true),
+        ("CapsLock", |c| c.leds_caps_lock = true),
+        ("ScrollLock", |c| c.leds_scroll_lock = true),
+        ("Compose", |c| c.leds_compose = true),
+        ("Kana", |c| c.leds_kana = true),
+        ("MouseBtn1", |c| c.mouse_button1 = true),
+        ("MouseBtn2", |c| c.mouse_button2 = true),
+        ("MouseBtn3", |c| c.mouse_button3 = true),
+        ("MouseBtn4", |c| c.mouse_button4 = true),
+        ("MouseBtn5", |c| c.mouse_button5 = true),
+        ("MouseBtn6", |c| c.mouse_button6 = true),
+        ("MouseBtn7", |c| c.mouse_button7 = true),
+        ("MouseBtn8", |c| c.mouse_button8 = true),
+    ];
 
-            "NumLock" => combination.leds_num_lock = true,
-            "CapsLock" => combination.leds_caps_lock = true,
-            "ScrollLock" => combination.leds_scroll_lock = true,
-            "Compose" => combination.leds_compose = true,
-            "Kana" => combination.leds_kana = true,
-
-            "MouseBtn1" => combination.mouse_button1 = true,
-            "MouseBtn2" => combination.mouse_button2 = true,
-            "MouseBtn3" => combination.mouse_button3 = true,
-            "MouseBtn4" => combination.mouse_button4 = true,
-            "MouseBtn5" => combination.mouse_button5 = true,
-            "MouseBtn6" => combination.mouse_button6 = true,
-            "MouseBtn7" => combination.mouse_button7 = true,
-            "MouseBtn8" => combination.mouse_button8 = true,
-            _ => (),
-        }
-    });
-
-    combination
+    parse_name_list(states_str, "state", "fork state", STATES, |w| w)
 }
 
 fn expand_forks(
@@ -514,7 +506,7 @@ fn expand_forks(
                 let bindable = fork.bindable;
 
                 if match_any.is_empty() && match_none.is_empty() {
-                    panic!("\n❌ keyboard.toml: fork configuration missing match conditions! Please check the documentation: https://rmk.rs/docs/features/configuration/behavior.html#fork");
+                    panic!("\n❌ keyboard.toml: fork configuration missing match conditions!");
                 }
 
                 quote! { ::rmk::types::fork::Fork::new(#trigger, #negative_output, #positive_output, #match_any, #match_none, #kept.modifiers, #bindable) }
@@ -603,5 +595,43 @@ pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenS
             auto_mouse_layer: #auto_mouse_layer,
             ..Default::default()
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_state_combination_sets_bits_for_valid_states() {
+        let s = parse_state_combination("LShift|MouseBtn1 |CapsLock");
+        assert!(s.modifiers_left_shift);
+        assert!(s.mouse_button1);
+        assert!(s.leds_caps_lock);
+        assert!(!s.modifiers_right_ctrl);
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown state(s) [NumLok (did you mean NumLock?)]")]
+    fn parse_state_combination_rejects_unknown_state() {
+        let _ = parse_state_combination("NumLok | LShift");
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown state(s) [capslock (did you mean CapsLock?)]")]
+    fn parse_state_combination_suggests_canonical_casing() {
+        let _ = parse_state_combination("capslock | LShift");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty segment")]
+    fn parse_state_combination_rejects_trailing_separator() {
+        let _ = parse_state_combination("LShift|");
+    }
+
+    #[test]
+    #[should_panic(expected = "empty segment")]
+    fn parse_state_combination_rejects_doubled_separator() {
+        let _ = parse_state_combination("CapsLock || MouseBtn1");
     }
 }

@@ -63,8 +63,8 @@ impl ::rmk::event::AsyncPublishableEvent for BatteryEvent {
         BatteryEvent,
         { 8 },
     >;
-    fn publisher_async() -> Self::AsyncPublisher {
-        BATTERY_EVENT_EVENT_CHANNEL.sender()
+    fn publisher_async() -> Result<Self::AsyncPublisher, ::embassy_sync::pubsub::Error> {
+        Ok(BATTERY_EVENT_EVENT_CHANNEL.sender())
     }
 }
 pub struct PointingEvent {
@@ -134,8 +134,8 @@ impl ::rmk::event::AsyncPublishableEvent for PointingEvent {
         PointingEvent,
         { 8 },
     >;
-    fn publisher_async() -> Self::AsyncPublisher {
-        POINTING_EVENT_EVENT_CHANNEL.sender()
+    fn publisher_async() -> Result<Self::AsyncPublisher, ::embassy_sync::pubsub::Error> {
+        Ok(POINTING_EVENT_EVENT_CHANNEL.sender())
     }
 }
 pub enum MultiSensorEvent {
@@ -174,8 +174,8 @@ impl ::rmk::event::PublishableEvent for MultiSensorEvent {
 }
 impl ::rmk::event::AsyncPublishableEvent for MultiSensorEvent {
     type AsyncPublisher = MultiSensorEventPublisher;
-    fn publisher_async() -> Self::AsyncPublisher {
-        MultiSensorEventPublisher
+    fn publisher_async() -> Result<Self::AsyncPublisher, ::embassy_sync::pubsub::Error> {
+        Ok(MultiSensorEventPublisher)
     }
 }
 impl From<BatteryEvent> for MultiSensorEvent {
