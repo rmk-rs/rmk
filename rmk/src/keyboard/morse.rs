@@ -168,7 +168,6 @@ impl<'a> Keyboard<'a> {
                                 k.press_time = released_time;
                                 k.timeout_time = released_time + keep_alive;
                             }
-                            self.held_buffer.keys.sort_unstable_by_key(|k| k.timeout_time);
                             if !self.has_unresolved_morse_key() {
                                 self.fire_held_non_morse_keys().await;
                             }
@@ -270,8 +269,6 @@ impl<'a> Keyboard<'a> {
                 _ => (),
             }
         }
-
-        self.held_buffer.keys.sort_unstable_by_key(|k| k.timeout_time);
     }
 
     fn has_unresolved_morse_key(&self) -> bool {

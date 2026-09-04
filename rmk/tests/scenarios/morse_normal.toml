@@ -244,3 +244,21 @@ steps = [
   { tap = { pos = [1, 2], duration = 300 } },
 ]
 expect = [["R"], [], ["M"], [], ["K"], []]
+
+# Two morse keys with different hold timeouts held together: a plain key
+# pressed after them re-sorts the held buffer by press time, and the shorter
+# timeout must still fire on time, not when the longer one does.
+[[test]]
+name = "shorter_hold_timeout_fires_before_longer_one"
+behavior.morse = { unilateral_tap = false, profiles = { p0 = { hold_timeout = "100ms" } } }
+steps = [
+  { press = [1, 8] },                          # LT(1, D): hold due at +250
+  { press = [3, 6] },                          # MT(B, LShift, p0): hold due at +100
+  { tap = { pos = [1, 0], duration = 10 } },   # A: re-sorts the held buffer by press time
+  { delay = 150 },                             # MT hold is 70ms overdue, LT still pending
+  { tap = { pos = [1, 11], duration = 10 } },  # U: must be shifted
+  { delay = 100 },                             # LT hold fires (layer 1, no report)
+  { release = [3, 6] },
+  { release = [1, 8] },
+]
+expect = [["A"], [], ["LShift"], ["LShift", "U"], ["LShift"], []]
