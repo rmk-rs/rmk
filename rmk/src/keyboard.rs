@@ -1030,7 +1030,6 @@ impl<'a> Keyboard<'a> {
             new_event.pressed = true;
             self.process_key_action(&action, new_event, true, Instant::now()).await;
             debug!("[Combo] {:?} triggered", action);
-            embassy_time::Timer::after_millis(20).await;
             // Reset other combos shadowed by the one that just fired.
             self.reset_shadowed_combos(&combo_actions);
         }

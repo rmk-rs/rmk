@@ -330,3 +330,28 @@ behavior.combo = {
 }
 steps = [{ tap = { pos = [0, 8], duration = 120 } }, { delay = 300 }]
 expect = [{ mouse = { wheel = -1 } }, { mouse = {} }]
+
+# Three overlapping pairs delayed behind a four-key combo: releasing E fires
+# ER, and releasing R right after must not fire the WR pair that ER shadows.
+# The shadowed pairs are reset synchronously when ER triggers; a deferred
+# reset would leave WR armed for the second release.
+[[test]]
+name = "shadowed_pair_does_not_fire_on_second_release"
+behavior.combo = {
+  timeout = "100ms",
+  combos = [
+    { actions = ["W", "E"], output = "A", layer = 0 },
+    { actions = ["E", "R"], output = "B", layer = 0 },
+    { actions = ["W", "R"], output = "C", layer = 0 },
+    { actions = ["W", "E", "R", "T"], output = "D", layer = 0 },
+  ]
+}
+steps = [
+  { press = [1, 3] },    # W
+  { press = [1, 5] },    # R: W+R back to back, so WR is fully pressed too
+  { press = [1, 4] },    # E
+  { release = [1, 4] },  # ER fires (B)
+  { release = [1, 5] },  # 10ms later: WR must stay quiet
+  { release = [1, 3] },  # the leftover W dispatches on its release
+]
+expect = [["B"], [], ["W"], []]
