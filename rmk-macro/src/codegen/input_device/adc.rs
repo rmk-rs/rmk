@@ -76,9 +76,12 @@ pub(crate) fn expand_adc_device(
             }
 
             for (joy_idx, joystick) in joystick_config.into_iter().enumerate() {
-                let warnings = joystick.validate_power_config().unwrap_or_else(|e| panic!("{e}"));
+                let warnings = joystick
+                    .validate_power_config()
+                    .unwrap_or_else(|e| panic!("{e}"));
                 for (warning_idx, message) in warnings.iter().enumerate() {
-                    let warning = format_ident!("JOYSTICK_TIMING_WARNING_{}_{}", joy_idx, warning_idx);
+                    let warning =
+                        format_ident!("JOYSTICK_TIMING_WARNING_{}_{}", joy_idx, warning_idx);
                     timing_warnings.push(quote! {
                         #[deprecated(note = #message)]
                         const #warning: () = ();
@@ -134,11 +137,17 @@ pub(crate) fn expand_adc_device(
                     });
                     cnt += 1;
                 }
-                assert!((2..=3).contains(&cnt), "joystick must have X/Y, and optionally Z");
+                assert!(
+                    (2..=3).contains(&cnt),
+                    "joystick must have X/Y, and optionally Z"
+                );
                 assert!(
                     joystick.bias.len() == cnt as usize
                         && joystick.transform.len() == cnt as usize
-                        && joystick.transform.iter().all(|row| row.len() == cnt as usize),
+                        && joystick
+                            .transform
+                            .iter()
+                            .all(|row| row.len() == cnt as usize),
                     "joystick bias/transform dimensions must match its ADC axes"
                 );
 
