@@ -1156,7 +1156,7 @@ impl<'a> Keyboard<'a> {
                 debug!("[Combo] {:?} triggered", next_action);
                 self.held_buffer
                     .keys
-                    .retain(|item| item.state != KeyState::WaitingCombo);
+                    .retain(|item| item.state != KeyState::WaitingCombo || !triggered_actions.contains(&item.action));
                 self.reset_shadowed_combos(&triggered_actions);
                 return (Some(next_action), true);
             }

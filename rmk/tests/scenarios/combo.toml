@@ -36,6 +36,29 @@ name = "combo_timeout_and_ignore"
 steps = [{ tap = { pos = [2, 3], duration = 100 } }]
 expect = [["V"], []]
 
+# A disjoint combo firing must not discard an unrelated key that is still
+# waiting to see whether its own combo completes. Regression: the immediate
+# trigger path removed every WaitingCombo entry, so V's press vanished when
+# R+T fired before V+B had resolved.
+[[test]]
+name = "disjoint_combo_keeps_unresolved_key"
+behavior.combo = {
+  timeout = "100ms",
+  combos = [
+    { actions = ["V", "B"], output = "LShift", layer = 0 },
+    { actions = ["R", "T"], output = "LAlt", layer = 0 },
+  ]
+}
+steps = [
+  { press = [2, 3] },   # V waits for B
+  { press = [1, 5] },   # R waits for T
+  { press = [1, 6] },   # R+T fires without consuming V
+  { release = [1, 6] },
+  { release = [1, 5] },
+  { release = [2, 3] },
+]
+expect = [["LAlt"], [], ["V"], []]
+
 [[test]]
 name = "combo_with_mod_then_mod_timeout"
 steps = [
