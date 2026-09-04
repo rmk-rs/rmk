@@ -15,6 +15,7 @@ keycode_name = @{ loose_identifier }
 // contexts where it won't conflict with argument separators.
 symbol_keycode = @{ "," }
 profile_name = { strict_identifier }
+alias_ref = @{ "@" ~ strict_identifier }
 
 // Number (for layer indices)
 number = @{ ASCII_DIGIT+ }
@@ -55,7 +56,8 @@ wm_action = { ^"WM" ~ "(" ~ keycode_name ~ "," ~ modifier_combination ~ ")" }
 mod_action = { ^"MOD" ~ "(" ~ modifier_combination ~ ")" }
 
 // Rule 4.6: OSM(modifier) - One-Shot Modifier (requires quotes)
-osm_action = { ^"OSM" ~ "(" ~ modifier_combination ~ ")" }
+sticky_profile_ref = { "@" ~ profile_name }
+osm_action = { ^"OSM" ~ "(" ~ modifier_combination ~ ("," ~ sticky_profile_ref)? ~ ")" }
 
 // Rule 4.1: DF(n) - Switch Default Layer
 df_action = { ^"DF" ~ "(" ~ layer_reference ~ ")" }
@@ -73,7 +75,7 @@ lm_action = { ^"LM" ~ "(" ~ layer_reference ~ "," ~ modifier_combination ~ ")" }
 lt_action = { ^"LT" ~ "(" ~ layer_reference ~ "," ~ nestable_action ~ ("," ~ profile_name)? ~ ")" }
 
 // Rule 4.5: OSL(n) - One-Shot Layer
-osl_action = { ^"OSL" ~ "(" ~ layer_reference ~ ")" }
+osl_action = { ^"OSL" ~ "(" ~ layer_reference ~ ("," ~ sticky_profile_ref)? ~ ")" }
 
 // Rule 4.7: TT(n) - Layer Activate or Tap Toggle
 tt_action = { ^"TT" ~ "(" ~ layer_reference ~ ")" }
@@ -96,9 +98,9 @@ layer_action = _{
 // `keycode_name` fallback (not `simple_keycode`) keeps a lone `,` from being
 // accepted as a slot argument.
 nestable_action = _{
-    wm_action | mod_action | osm_action | shifted_action | trigger_macro_action |
+    wm_action | mod_action | osm_action | shifted_action | trigger_macro_action | alias_ref |
     df_action | pdf_action | mo_action | lm_action | osl_action | tg_action | to_action |
-    stn_action | keycode_name
+    stn_action | sk_action | keycode_name
 }
 
 // Rule 5: MT(key, modifier) - Modifier Tap-Hold
@@ -116,6 +118,17 @@ morse_action = { (^"TD" | ^"MORSE") ~ "(" ~ number ~ ")" }
 // Rule 9: Macro(n) - Trigger Macro
 trigger_macro_action = { ^"MACRO" ~ "(" ~ number ~ ")" }
 
+modifier_keep_list = { "[" ~ modifier_combination ~ "]" | "[" ~ "]" }
+
+// SK(key, [mods], @profile) | SK(modifier, @profile) | SK(MO(n), @profile)
+sk_action = {
+    ^"SK" ~ "(" ~ (
+        mo_action ~ ("," ~ sticky_profile_ref)?
+      | (keycode_name ~ "," ~ modifier_keep_list ~ ("," ~ sticky_profile_ref)?)
+      | modifier_combination ~ ("," ~ sticky_profile_ref)?
+    ) ~ ")"
+}
+
 // Rule 10: STN(key) - Plover HID steno key, named by its position in the chart
 stn_action = { ^"STN" ~ "(" ~ keycode_name ~ ")" }
 
@@ -124,7 +137,7 @@ stn_action = { ^"STN" ~ "(" ~ keycode_name ~ ")" }
 // A single key action entry in the map
 // Order is important: more specific function-like rules first, then aliases/specials, then simple keycodes.
 key_action = _{ // Consume surrounding whitespace/comments implicitly
-    wm_action | mod_action | osm_action | layer_action | mt_action | th_action | shifted_action | morse_action | trigger_macro_action | stn_action | no_action | transparent_action | simple_keycode
+    wm_action | mod_action | osm_action | layer_action | mt_action | th_action | shifted_action | morse_action | trigger_macro_action | stn_action | sk_action | alias_ref | no_action | transparent_action | simple_keycode
 }
 
 // The entire key map string: Start, zero or more key actions, End.

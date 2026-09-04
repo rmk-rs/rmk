@@ -63,8 +63,10 @@ splits by resolution mode. Those all start with `morse_`, so
 | `morse_normal`, `morse_permissive_hold`, `morse_hold_on_other_press`, `morse_hrm` | The same home-row fixture under each resolution mode |
 | `morse_combo_*` | One combo table over morse keys, under each of those modes |
 | `morse_tap_dance`, `morse_bilateral`, `morse_rollover`, `morse_layer_release`, `morse_quick_tap` | Morse behavior that isn't mode-specific |
+| `sticky_key`, `sticky_key_*` | Canonical Sticky Key actions, profiles, composition, release ordering, and combo output identity |
+| `one_shot` | `OSM`/`OSL` compatibility syntax and legacy behavior settings |
 | `rynk_*` | The Rynk host protocol, one file per endpoint group |
-| everything else | One feature each — `combo`, `one_shot`, `layer`, `encoder`, `macros`, `hid_reports`, `passkey`, `steno` |
+| everything else | One feature each — `combo`, `layer`, `encoder`, `macros`, `hid_reports`, `passkey`, `steno` |
 
 Cases that only differ by mode share a name across files, so
 `nextest run two_key_misses_window` runs that case under every mode at once —
@@ -140,7 +142,7 @@ type.
 
 ```toml
 { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 0 }, action = { Single = { Key = { Hid = "B" } } } } } },
-{ rynk = { cmd = "GetVersion", reply = { major = 0, minor = 1 } } },
+{ rynk = { cmd = "GetVersion", reply = { major = 1, minor = 0 } } },
 { rynk = { cmd = "GetMatrixState", error = "Locked" } },
 ```
 

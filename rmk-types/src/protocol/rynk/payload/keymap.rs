@@ -128,7 +128,7 @@ mod tests {
         /// tests makes `assert_max_size_bound` exercise both the per-element
         /// and the length-prefix dimensions of the bound.
         fn worst_key_action() -> KeyAction {
-            let action = Action::KeyWithModifier(HidKeyCode::A, ModifierCombination::new());
+            let action = Action::KeyWithModifier(HidKeyCode::A, ModifierCombination::LCTRL);
             KeyAction::TapHold(action, action, u8::MAX)
         }
 

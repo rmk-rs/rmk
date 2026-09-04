@@ -406,6 +406,13 @@ fn wire_values_locked() {
             )),
         ),
         ("KeyAction::Morse(3)", encode(&KeyAction::Morse(3))),
+        (
+            "KeyAction::Sticky(KeyWithModifier(Tab,LAlt),7)",
+            encode(&KeyAction::Sticky(
+                Action::KeyWithModifier(HidKeyCode::Tab, ModifierCombination::LALT),
+                7,
+            )),
+        ),
         // --- Action: every feature-independent variant tag (positional) ---
         ("Action::No", encode(&Action::No)),
         ("Action::Key(Hid(A))", encode(&Action::Key(KeyCode::Hid(HidKeyCode::A)))),
@@ -429,12 +436,6 @@ fn wire_values_locked() {
         ("Action::TriLayerLower", encode(&Action::TriLayerLower)),
         ("Action::TriLayerUpper", encode(&Action::TriLayerUpper)),
         ("Action::TriggerMacro(7)", encode(&Action::TriggerMacro(7))),
-        ("Action::OneShotLayer(8)", encode(&Action::OneShotLayer(8))),
-        (
-            "Action::OneShotModifier(LAlt)",
-            encode(&Action::OneShotModifier(ModifierCombination::LALT))
-        ),
-        ("Action::OneShotKey(Hid(B))", encode(&Action::OneShotKey(HidKeyCode::B))),
         ("Action::Light(RgbTog)", encode(&Action::Light(LightAction::RgbTog))),
         (
             "Action::KeyboardControl(Bootloader)",

@@ -271,7 +271,23 @@ impl KeyboardTomlConfig {
             self.rmk.auto_mouse_layer_max_num.get_or_insert(0);
         }
     }
+
+    pub(crate) fn sticky_key_profile_capacity(&self) -> usize {
+        self.rmk
+            .sticky_key_profile_max_num
+            .unwrap_or_else(|| DEFAULT_STICKY_KEY_PROFILE_MAX_NUM.max(self.configured_sticky_key_profile_count()))
+    }
+
+    pub(crate) fn configured_sticky_key_profile_count(&self) -> usize {
+        self.behavior
+            .as_ref()
+            .and_then(|behavior| behavior.sticky_key.as_ref())
+            .map(|sticky_key| sticky_key.profiles.len())
+            .unwrap_or_default()
+    }
 }
+
+const DEFAULT_STICKY_KEY_PROFILE_MAX_NUM: usize = 4;
 
 /// Keyboard constants configuration for performance and hardware limits
 #[serde_inline_default]
@@ -303,6 +319,9 @@ pub(crate) struct RmkConstantsConfig {
     #[serde_inline_default(16)]
     #[serde(deserialize_with = "check_morse_profile_max_num")]
     pub morse_profile_max_num: usize,
+    /// Capacity of the named Sticky Key profile table (maximum 255).
+    #[serde(default, deserialize_with = "check_sticky_key_profile_max_num")]
+    pub sticky_key_profile_max_num: Option<usize>,
     /// Maximum number of patterns a morse key can handle
     #[serde_inline_default(8)]
     #[serde(deserialize_with = "check_max_patterns_per_key")]
@@ -388,6 +407,20 @@ where
     Ok(value)
 }
 
+fn check_sticky_key_profile_max_num<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let value = Option::<usize>::deserialize(deserializer)?;
+    if value.is_some_and(|value| value > u8::MAX as usize) {
+        return Err(de::Error::custom(format!(
+            "sticky_key_profile_max_num must be between 0 and 255, got {}",
+            value.unwrap()
+        )));
+    }
+    Ok(value)
+}
+
 fn check_max_patterns_per_key<'de, D>(deserializer: D) -> Result<usize, D::Error>
 where
     D: de::Deserializer<'de>,
@@ -425,6 +458,7 @@ impl Default for RmkConstantsConfig {
             fork_max_num: 8,
             morse_max_num: 8,
             morse_profile_max_num: 16,
+            sticky_key_profile_max_num: None,
             max_patterns_per_key: 8,
             macro_space_size: 256,
             debounce_time: 20,
@@ -790,7 +824,32 @@ pub(crate) struct BehaviorConfig {
     pub macros: Option<MacrosConfig>,
     pub fork: Option<ForksConfig>,
     pub morse: Option<MorsesConfig>,
+    pub sticky_key: Option<StickyKeyConfig>,
     pub auto_mouse_layer: Option<Vec<AutoMouseLayerConfig>>,
+}
+
+/// Default Sticky Key settings and named profile overrides.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StickyKeyConfig {
+    pub timeout: Option<DurationMillis>,
+    pub activate_on_keypress: Option<bool>,
+    pub release_after_hold: Option<DurationMillis>,
+    pub max_repeat: Option<u16>,
+    pub release_mode: Option<String>,
+    #[serde(default)]
+    pub profiles: HashMap<String, StickyKeyProfile>,
+}
+
+/// Per-profile Sticky Key overrides.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StickyKeyProfile {
+    pub timeout: Option<DurationMillis>,
+    pub activate_on_keypress: Option<bool>,
+    pub release_after_hold: Option<DurationMillis>,
+    pub max_repeat: Option<u16>,
+    pub release_mode: Option<String>,
 }
 
 /// Configurations for auto mouse layer
@@ -1070,7 +1129,7 @@ pub struct SerialConfig {
 
 /// Duration in milliseconds
 #[derive(Clone, Debug, Deserialize)]
-pub(crate) struct DurationMillis(#[serde(deserialize_with = "parse_duration_millis")] pub u64);
+pub struct DurationMillis(#[serde(deserialize_with = "parse_duration_millis")] pub u64);
 
 const fn default_true() -> bool {
     true

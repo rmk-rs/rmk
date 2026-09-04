@@ -1,0 +1,87 @@
+# Eight identical Sticky modifiers fill the physical-producer table. Sixteen
+# more presses exceed both the producer table and the removed canceled-release
+# table's old capacity. Their releases arrive out of order and must not remove
+# any of the eight accepted owners.
+
+[layout]
+rows = 1
+cols = 26
+map = "(0,0) (0,1) (0,2) (0,3) (0,4) (0,5) (0,6) (0,7) (0,8) (0,9) (0,10) (0,11) (0,12) (0,13) (0,14) (0,15) (0,16) (0,17) (0,18) (0,19) (0,20) (0,21) (0,22) (0,23) (0,24) (0,25)"
+
+[[keymap.layer]]
+keys = "SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) SK(LCtrl) A B"
+
+[behavior.sticky_key]
+activate_on_keypress = true
+
+[[test]]
+name = "rejected_duplicate_releases_beyond_old_canceled_capacity_preserve_accepted_owners"
+steps = [
+  { press = [0, 0] },
+  { press = [0, 1] },
+  { press = [0, 2] },
+  { press = [0, 3] },
+  { press = [0, 4] },
+  { press = [0, 5] },
+  { press = [0, 6] },
+  { press = [0, 7] },
+  { press = [0, 8] },
+  { press = [0, 9] },
+  { press = [0, 10] },
+  { press = [0, 11] },
+  { press = [0, 12] },
+  { press = [0, 13] },
+  { press = [0, 14] },
+  { press = [0, 15] },
+  { press = [0, 16] },
+  { press = [0, 17] },
+  { press = [0, 18] },
+  { press = [0, 19] },
+  { press = [0, 20] },
+  { press = [0, 21] },
+  { press = [0, 22] },
+  { press = [0, 23] },
+  { press = [0, 24] },
+  { release = [0, 23] },
+  { release = [0, 8] },
+  { release = [0, 16] },
+  { release = [0, 12] },
+  { release = [0, 20] },
+  { release = [0, 9] },
+  { release = [0, 17] },
+  { release = [0, 13] },
+  { release = [0, 21] },
+  { release = [0, 10] },
+  { release = [0, 18] },
+  { release = [0, 14] },
+  { release = [0, 22] },
+  { release = [0, 11] },
+  { release = [0, 19] },
+  { release = [0, 15] },
+  { release = [0, 0] },
+  { release = [0, 1] },
+  { release = [0, 2] },
+  { release = [0, 3] },
+  { release = [0, 4] },
+  { release = [0, 5] },
+  { release = [0, 6] },
+  { press = [0, 25] },
+  { release = [0, 25] },
+  { release = [0, 7] },
+  { release = [0, 24] },
+]
+expect = [
+  ["LCtrl"],
+  ["LCtrl"],
+  ["LCtrl"],
+  ["LCtrl"],
+  ["LCtrl"],
+  ["LCtrl"],
+  ["LCtrl"],
+  ["LCtrl"],
+  ["LCtrl", "A"],
+  ["LCtrl", "A", "B"],
+  ["LCtrl", "A"],
+  ["A"],
+  [],
+]

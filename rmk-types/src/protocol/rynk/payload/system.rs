@@ -22,8 +22,9 @@ pub struct ProtocolVersion {
 
 impl ProtocolVersion {
     /// Current protocol version for this firmware release.
-    /// Now the protocol is still being developed, so the version is v0.1
-    pub const CURRENT: Self = Self { major: 0, minor: 1 };
+    /// Version 1.0 introduces `KeyAction::Sticky` and removes the legacy
+    /// one-shot `Action` variants.
+    pub const CURRENT: Self = Self { major: 1, minor: 0 };
 }
 
 /// Device capabilities discovered during the connection handshake.

@@ -53,6 +53,10 @@ Once you have your `vial.json` file, simply place it in the root directory of yo
 project. The `build.rs` that comes with the project template embeds it into the firmware. If you
 wrote your own `build.rs`, copy the `generate_vial_config` step from an [example](https://github.com/rmk-rs/rmk/blob/main/examples/use_config/rp2040/build.rs).
 
+## Sticky Key limits
+
+VIA and Vial encode only default-profile Sticky modifiers and Sticky layers, shown through their standard one-shot keycodes. VIA limits those layers to 0 through 15. Named-profile Sticky actions and modified Sticky tap keys such as `SK(Tab, [LAlt])` cannot be represented; editing or round-tripping those cells through Vial loses the action. Vial's "One Shot Timeout" setting changes only the default Sticky timeout. See [Sticky Keys](../configuration/behavior#host-tools-and-storage) for the complete boundary.
+
 ## Disable Vial
 
 Vial support requires additional Flash and RAM. If you want to minimize binary size and memory usage, you can disable Vial support.

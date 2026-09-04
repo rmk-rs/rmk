@@ -55,7 +55,7 @@ mod dongle;
 mod input;
 #[cfg(feature = "split")]
 mod split;
-mod state;
+pub(crate) mod state;
 
 pub use action::ActionEvent;
 pub use battery::{BatteryAdcEvent, BatteryStatusEvent, ChargingStateEvent};

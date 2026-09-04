@@ -55,7 +55,7 @@ GetPeripheralStatus reply Ok(PeripheralStatus{true,Available{Discharging,85}})  
 GetPeripheralStatus request 1                                                   05 04 08 01 01 00
 GetSleepState reply Ok(true)                                                    04 06 08 01 02 01 00
 GetSleepState request ()                                                        04 06 08 01 00
-GetVersion reply Ok(CURRENT)                                                    02 01 02 01 01 02 01 00
+GetVersion reply Ok(CURRENT)                                                    02 01 02 01 02 01 01 00
 GetVersion request ()                                                           02 01 02 01 00
 GetWpm reply Ok(42)                                                             04 05 08 01 02 2a 00
 GetWpm request ()                                                               04 05 08 01 00

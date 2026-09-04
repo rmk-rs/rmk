@@ -54,7 +54,7 @@ steps = [
 name = "the_session_resyncs_after_garbage"
 steps = [
   { rynk_raw = [0xde, 0xad, 0xbe, 0xef, 0x00] },
-  { rynk = { cmd = "GetVersion", reply = { major = 0, minor = 1 } } },
+  { rynk = { cmd = "GetVersion", reply = { major = 1, minor = 0 } } },
 ]
 
 # A position outside the keymap is well-formed but meaningless, so it is

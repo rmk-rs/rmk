@@ -140,11 +140,27 @@ MouseWheelLeft   MouseDown  MouseWheelRight  MouseWheelDown
 # Tri Layer configuration
 tri_layer = { upper = 1, lower = 2, adjust = 3 }
 
-# OneShot configuration
-one_shot = { timeout = "1s" }
+# Default Sticky Key profile
+[behavior.sticky_key]
+timeout = "1s"
+activate_on_keypress = false
+# release_after_hold = "500ms"
+max_repeat = 0
+# release_mode = "other_key_release"
 
-# One Shot Modifiers configuration
-one_shot_modifiers = { activate_on_keypress = false, quick_release = false }
+# Named Sticky Key profile, selected with SK(..., @quick), OSM(..., @quick),
+# or OSL(..., @quick)
+[behavior.sticky_key.profiles.quick]
+release_mode = "other_key_press | double_tap"
+
+# Compatibility settings for older one-shot configurations. Prefer
+# [behavior.sticky_key] for new configurations.
+[behavior.one_shot]
+timeout = "1s"
+
+[behavior.one_shot_modifiers]
+activate_on_keypress = false
+quick_release = false
 
 [behavior.morse]
 # default profile for morse, tap dance and tap-hold keys:
@@ -387,6 +403,9 @@ fork_max_num = 8
 morse_max_num = 8
 # Capacity of the named morse profile table ([behavior.morse.profiles], max 255)
 morse_profile_max_num = 16
+# Capacity of [behavior.sticky_key.profiles] (max 255). If omitted, RMK uses
+# max(4, number of configured profiles).
+# sticky_key_profile_max_num = 4
 # Maximum number of patterns a morse key can handle (min 4, max 32; raised automatically to fit the
 # largest configured morse key)
 max_patterns_per_key = 32

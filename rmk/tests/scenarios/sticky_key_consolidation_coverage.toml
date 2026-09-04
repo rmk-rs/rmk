@@ -1,0 +1,74 @@
+# Focused coverage for independent entries in the consolidated Sticky Key
+# collection. Short and long profiles let one entry expire while the other
+# remains armed; layers 1 and 2 resolve A to B and C respectively.
+
+[layout]
+rows = 1
+cols = 6
+map = "(0,0) (0,1) (0,2) (0,3) (0,4) (0,5)"
+
+[keymap]
+layers = 3
+
+[[keymap.layer]]
+keys = "SK(LAlt, @short) SK(LShift, @very_long) SK(MO(1), @short) SK(MO(1), @long) SK(MO(2), @long) A"
+
+[[keymap.layer]]
+keys = "Trns Trns Trns Trns Trns B"
+
+[[keymap.layer]]
+keys = "Trns Trns Trns Trns Trns C"
+
+[behavior.sticky_key]
+release_mode = "other_key_press"
+
+[behavior.sticky_key.profiles.short]
+timeout = "100ms"
+
+[behavior.sticky_key.profiles.long]
+timeout = "2s"
+
+[behavior.sticky_key.profiles.very_long]
+timeout = "4s"
+
+[[test]]
+name = "independent_deadlines_expire_modifier_only"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+  { delay = 150 },
+  { tap = { pos = [0, 5], duration = 10 } },
+]
+expect = [["B"], []]
+
+[[test]]
+name = "independent_deadlines_expire_layer_only"
+steps = [
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { delay = 150 },
+  { tap = { pos = [0, 5], duration = 10 } },
+]
+expect = [["LShift", "A"], ["A"], []]
+
+[[test]]
+name = "same_layer_refresh_keeps_modifier_and_restarts_layer_deadline"
+steps = [
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+  { delay = 1100 },
+  { tap = { pos = [0, 3], duration = 10 } },
+  { delay = 1100 },
+  { tap = { pos = [0, 5], duration = 10 } },
+]
+expect = [["LShift", "B"], ["B"], []]
+
+[[test]]
+name = "different_layer_replacement_keeps_modifier"
+steps = [
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [0, 5], duration = 10 } },
+]
+expect = [["LShift", "C"], ["C"], []]

@@ -307,32 +307,31 @@ macro_rules! thp {
     };
 }
 
-/// Create a one-shot layer action.
+/// Compatibility alias for [`crate::sk_layer!`] using the default Sticky Key profile.
 ///
-/// This macro creates a key that activates a layer for the next keypress only.
-/// After the next key is pressed, the layer automatically deactivates.
+/// The default profile keeps the layer active through the next key's release.
+/// Configure its policy with [`crate::config::BehaviorConfig::sticky_key`].
 ///
 /// # Parameters
 /// - `$x`: Layer number (0-255)
 ///
 /// # Example
 /// ```ignore
-/// osl!(1)  // Next key will be from layer 1, then return to current layer
-/// osl!(2)  // Next key will be from layer 2, then return to current layer
+/// osl!(1)
+/// osl!(2)
 /// ```
 #[macro_export]
 macro_rules! osl {
     ($x: literal) => {
-        $crate::types::action::KeyAction::Single($crate::types::action::Action::OneShotLayer($x))
+        $crate::types::action::KeyAction::Sticky($crate::types::action::Action::LayerOn($x), u8::MAX)
     };
 }
 
-/// Create a one-shot modifier action.
+/// Compatibility alias for [`crate::sk_mod!`] using the default Sticky Key profile.
 ///
-/// This macro creates a key that applies modifiers for the next keypress only.
-/// They automatically deactivate if:
-/// - other key that sends keyboard report is pressed,
-/// - timeout has passed before next key is triggered.
+/// The default profile keeps the modifier active through the next key's
+/// release or until its timeout. Configure its policy with
+/// [`crate::config::BehaviorConfig::sticky_key`].
 ///
 /// # Parameters
 /// - `$m`: `ModifierCombination` to apply for the next keypress
@@ -347,7 +346,49 @@ macro_rules! osl {
 #[macro_export]
 macro_rules! osm {
     ($m: expr) => {
-        $crate::types::action::KeyAction::Single($crate::types::action::Action::OneShotModifier($m))
+        $crate::types::action::KeyAction::Sticky($crate::types::action::Action::Modifier($m), u8::MAX)
+    };
+}
+
+/// Create a Sticky Key from a supported action.
+///
+/// Sticky Keys support `Action::Modifier`, `Action::LayerOn`, and
+/// `Action::KeyWithModifier`. Prefer [`crate::sk_mod!`] and [`crate::sk_layer!`] where they
+/// fit. Unsupported actions are ignored with a warning.
+///
+/// The one-argument form selects the default profile with `u8::MAX`. The
+/// two-argument form takes a zero-based index into
+/// [`crate::config::StickyKeyConfig::profiles`]. Rust keymaps use these numeric
+/// indices; `keyboard.toml` resolves its `@name` syntax at build time.
+#[macro_export]
+macro_rules! sk {
+    ($action: expr) => {
+        $crate::types::action::KeyAction::Sticky($action, u8::MAX)
+    };
+    ($action: expr, $profile: expr) => {
+        $crate::types::action::KeyAction::Sticky($action, $profile)
+    };
+}
+
+/// Create a Sticky modifier using the default profile or a numeric profile index.
+#[macro_export]
+macro_rules! sk_mod {
+    ($modifiers: expr) => {
+        $crate::sk!($crate::types::action::Action::Modifier($modifiers))
+    };
+    ($modifiers: expr, $profile: expr) => {
+        $crate::sk!($crate::types::action::Action::Modifier($modifiers), $profile)
+    };
+}
+
+/// Create a Sticky layer using the default profile or a numeric profile index.
+#[macro_export]
+macro_rules! sk_layer {
+    ($layer: expr) => {
+        $crate::sk!($crate::types::action::Action::LayerOn($layer))
+    };
+    ($layer: expr, $profile: expr) => {
+        $crate::sk!($crate::types::action::Action::LayerOn($layer), $profile)
     };
 }
 

@@ -5,8 +5,10 @@ The `[behavior]` section contains configuration for how different keyboard actio
 ```toml
 [behavior]
 tri_layer = { upper = 1, lower = 2, adjust = 3 }
-one_shot = { timeout = "1s" }
-one_shot_modifiers = { activate_on_keypress = false }
+
+[behavior.sticky_key]
+timeout = "1s"
+activate_on_keypress = false
 ```
 
 ::: note Rust API only
@@ -28,46 +30,89 @@ adjust = 3
 
 In this example, when both layers 1 (`upper`) and 2 (`lower`) are active, layer 3 (`adjust`) will also be enabled.
 
-## One-Shot
+## Sticky Keys
 
-The `one_shot` sub-table contains common one-shot configuration (for both OSM and OSL)
+Sticky Keys retain modifiers and layers, and support repeated modified HID keyboard keys. The three supported forms are:
 
-Currently, there are only `timeout` field that specifies how long the one-shot modifier/layer remains active. When no key is pressed within this time, the one-shot modifier/layer will be canceled. `timeout` value is a string suffixed with `s` or `ms` (default: `1s`).
+- `SK(LShift)` for one or more modifiers
+- `SK(MO(1))` for a layer
+- `SK(Tab, [LAlt])` for one HID keyboard key with a bracketed modifier list
 
-## One-Shot Modifiers
-
-The `one_shot_modifiers` sub-table configures one-shot modifiers (OSM).
-
-By default, one-shot modifiers do not activate on keypress and will be sent only when other key is pressed. You can change this behavior by setting `activate_on_keypress` to `true`. This behavior is also known as One-Shot Sticky Modifiers (OSSM).
-
-If you press One-Shot Modifier again, it will be sent as a normal modifier key press and, therefore, released.
-
-The `quick_release` option controls when the one-shot modifier is released:
-
-- `false` (default): the modifier is included in the next key's press report and stays part of that report for as long as the key is held, including key repeat (chain mode, equivalent to ZMK `&skn`). No separate report is sent when the key is released.
-- `true`: an extra report is sent right after the next key's press with the modifier removed (equivalent to ZMK `&skq`). Only the initial press of the next key is modified; key repeat will not include the modifier.
-
-Default values:
+The tap-key form does not accept consumer, system-control, mouse, or nested actions. `SK(MO(n))` is the only Sticky layer form.
 
 ```toml
-[behavior.one_shot_modifiers]
-activate_on_keypress = false
-quick_release = false
-```
-
-OSSM example:
-
-```toml
-[behavior.one_shot_modifiers]
+[behavior.sticky_key]
+timeout = "1s"
 activate_on_keypress = true
+release_after_hold = "500ms"
+max_repeat = 0
+release_mode = "other_key_release"
+
+[behavior.sticky_key.profiles.quick]
+release_mode = "other_key_press | double_tap"
+
+[behavior.sticky_key.profiles.alt_tab]
+timeout = "5s"
+max_repeat = 8
+release_mode = "other_key_press | layer_exit"
 ```
 
-Quick-release example:
+Each field may be omitted. Named profiles inherit omitted fields from `[behavior.sticky_key]` and are selected with `@name`, for example `SK(LShift, @quick)` or `SK(Tab, [LAlt], @alt_tab)`.
 
-```toml
-[behavior.one_shot_modifiers]
-quick_release = true
-```
+Profile names are case-sensitive. An undefined profile name fails the build.
+
+### Profile fields
+
+| Field | Behavior |
+| --- | --- |
+| `timeout` | Releases a latch that has not reached a configured release trigger. The default is `1s`. The timer starts when the physical Sticky key is released and the effect becomes latched. Holding the key does not consume this time. |
+| `activate_on_keypress` | Sends a pure modifier report as soon as its Sticky key is pressed. If false, another key pressed while the Sticky key remains down still receives the modifier. This field has no useful effect on Sticky layers or tap keys. |
+| `release_after_hold` | For a modifier or layer held at least this long, releases the effect on physical key-up instead of latching it. A foreign key pressed during the hold keeps the effect active until the Sticky key is released. A shorter tap receives the full `timeout` from key-up. Pure modifiers need `activate_on_keypress = true` to appear in a modifier-only report while held. The default is disabled, and Sticky tap keys ignore this field. |
+| `max_repeat` | Limits how many times `SK(key, [modifiers])` emits the same tap key in one retained sequence, including its first press. For example, `2` emits twice and the third press cancels without emitting. `0` means unlimited. Modifiers and layers ignore this field. |
+| `release_mode` | Selects one or more release triggers. Join triggers with `|`. A configured value must name at least one trigger and replaces the shape's default. |
+
+The default release mode depends on the action:
+
+| Shape | Default | Effect |
+| --- | --- | --- |
+| `SK(LShift)` | `other_key_release` | The target key receives Shift through its release. Keys rolled before that release also receive Shift. |
+| `SK(MO(1))` | `other_key_release` | The selected layer stays active through the target key's release. |
+| `SK(Tab, [LAlt])` | `other_key_press` | Another non-modifier action releases the retained tap key before that action runs. |
+
+Release triggers work as follows:
+
+- `other_key_press` releases on another action's press. A triggering key is resolved while a latched modifier or layer is still active, then RMK balances the modifier report or layer state. A Sticky tap key releases its retained key and modifiers before the foreign action. Plain modifier actions do not release a Sticky tap key.
+- `other_key_release` keeps the effect through another key's press and releases it on that key's release.
+- `layer_enter` and `layer_exit` release only when a layer changes state. Activating an active layer or deactivating an inactive layer does not count.
+- `double_tap` cancels the latch when the same Sticky source is pressed again. Pressing a different Sticky key does not trigger it.
+
+Combo and Morse decisions can delay resolution of the consuming key. RMK claims a press-triggered Sticky latch when the physical press arrives, so its timeout cannot expire while that decision is pending.
+
+### Composition
+
+Sticky modifiers combine. Different physical keys and combo outputs retain separate identities even when they produce overlapping modifier masks. A Sticky modifier and one Sticky layer may coexist.
+
+Pressing the same Sticky layer again refreshes it. Pressing a different Sticky layer releases and replaces the old layer. Sticky layers use RMK's normal boolean layer state, so the latest activation or deactivation command controls a layer shared with another action.
+
+A Sticky tap key releases an active Sticky modifier and layer. Pressing a Sticky modifier or layer releases an active Sticky tap key, and pressing a different Sticky tap key replaces the first.
+
+Releasing a physically held Sticky modifier immediately removes only the bits owned by that producer. Other held Sticky modifiers, ordinary modifiers, Caps Word Shift, `WM` or `SHIFTED` modifiers, layers, and held keys remain active. If another physical key is still down when the final Sticky modifier producer is released, that modifier entry ends instead of becoming a new latch. For accumulated modifiers, `release_after_hold` starts at the first producer press, while the most recently accepted producer supplies the active profile.
+
+RMK tracks up to eight simultaneously held Sticky modifier producers. A directly pressed Sticky modifier and a combo that outputs one each use a slot, including producers with the same modifier mask. A press above this limit is ignored, as is its later release, so it cannot release any accepted producer. Releasing an accepted producer frees its slot.
+
+### Compatibility settings
+
+`OSM(modifiers)` and `OSL(layer)` are syntax aliases for default-profile `SK(modifiers)` and `SK(MO(layer))`. They can select a named profile as their final argument, for example `OSM(LShift, @quick)` and `OSL(2, @navigation)`.
+
+The legacy `[behavior.one_shot]` and `[behavior.one_shot_modifiers]` tables remain accepted. A field in `[behavior.sticky_key]` wins when both forms configure the same default. Otherwise, legacy `timeout` and `activate_on_keypress` fill omitted default fields. Legacy `quick_release = true` selects `other_key_press` only for a default-profile pure modifier when the canonical default does not set `release_mode`. It affects `OSM(...)` and equivalent `SK(...)` syntax. Named profiles inherit the resolved default timeout and activation fields, but legacy `quick_release` does not change their release mode.
+
+### Host tools and storage
+
+VIA and Vial can represent only default-profile Sticky modifiers and Sticky layers through their standard one-shot keycodes. VIA layers are limited to 0 through 15. Named-profile Sticky actions and `SK(key, [modifiers])` have no VIA encoding and convert to `No` with a firmware warning. Editing or round-tripping those cells through Vial loses the action. Vial's "One Shot Timeout" setting changes only the canonical default Sticky timeout.
+
+Rynk can read and write all three Sticky action shapes and their existing numeric profile indices. Its behavior endpoint exposes only the default Sticky timeout as `oneshot_timeout_ms`; it does not edit Sticky profile definitions or the other profile fields.
+
+Storage persists Sticky actions with the keymap. Its behavior record persists only the canonical default timeout under the compatibility name `one_shot_timeout`. Firmware configuration supplies every other default-profile field and all named profiles.
 
 ## Combo
 
@@ -115,7 +160,7 @@ operations = [
 ]
 ```
 
-- `keycode` accepts a plain [keycode](./keymap_configuration/keycodes.md) or an action expression such as `WM(A, LCtrl)`, `PDF(1)` or `OSM(LShift)`. Action expressions use the Vial extended encoding and require the `vial` feature; without it, the build fails.
+- `keycode` accepts a plain [keycode](./keymap_configuration/keycodes.md) or a supported action expression such as `WM(A, LCtrl)` or `PDF(1)`. Action expressions use the Vial extended encoding and require the `vial` feature; without it, the build fails. Firmware macros cannot emit Sticky actions (`SK`, `OSM`, or `OSL`).
 - `duration` is at most 65024ms; longer delays fail the build.
 - A macro cannot trigger another macro. `Macro(n)` inside a macro is ignored with a warning.
 
@@ -452,7 +497,7 @@ Here `TD(0)`, `TD(1)`, and `TD(2)` reference morse dances by index, and the trai
 
 ## Fork
 
-In the `fork` sub-table, you can configure the keyboard's state-based key fork functionality. Forks allow you to define a trigger key and condition-dependent possible replacement keys. When the trigger key is pressed, the condition is checked by the following rule: If any of the `match_any` states are active AND none of the `match_none` states are active, the trigger key will be replaced with positive_output; otherwise, it will be replaced with the negative_output. By default, the modifiers listed in `match_any` will be suppressed (even the one-shot modifiers) for the time the replacement key action is executed. However, with `kept_modifiers` some of them can be kept instead of automatic suppression.
+In the `fork` sub-table, you can configure the keyboard's state-based key fork functionality. Forks allow you to define a trigger key and condition-dependent possible replacement keys. When the trigger key is pressed, the condition is checked by the following rule: If any of the `match_any` states are active AND none of the `match_none` states are active, the trigger key will be replaced with positive_output; otherwise, it will be replaced with the negative_output. By default, the modifiers listed in `match_any` will be suppressed, including Sticky modifiers and their `OSM` aliases, for the time the replacement key action is executed. However, with `kept_modifiers` some of them can be kept instead of automatic suppression.
 
 Fork configuration includes the following parameters:
 
@@ -469,7 +514,7 @@ Each fork must set at least one of `match_any` and `match_none`; the build fails
 
 For `match_any`, `match_none` the legal values are listed below (many values may be combined with "|"):
 
-- `LShift`, `LCtrl`, `LAlt`, `LGui`, `RShift`, `RCtrl`, `RAlt`, `RGui` (these include the effect of explicitly held and one-shot modifiers too)
+- `LShift`, `LCtrl`, `LAlt`, `LGui`, `RShift`, `RCtrl`, `RAlt`, `RGui` (these include explicitly held and Sticky modifiers)
 - `CapsLock`, `ScrollLock`, `NumLock`, `Compose`, `Kana`
 - `MouseBtn1` .. `MouseBtn8`
 
@@ -582,7 +627,7 @@ Entries that share the same `target_layer` cooperate: the layer stays active unt
 
 Some keys cannot be classified; they never trigger immediate deactivation (only `timeout` clears the layer) and extend the deadline when `reset_timeout_on_key` is set:
 
-- **Keys that emit no keycode**: layer keys (`MO`, `TG`, `TO`, `DF`, `TT`, `LM`, ...), one-shot modifiers/layers (`OSM`, `OSL`), user keys, and keyboard control keys (bootloader, reboot, ...).
+- **Keys that emit no classifiable keycode**: layer keys (`MO`, `TG`, `TO`, `DF`, `TT`, `LM`, ...), Sticky actions (`SK`, including the `OSM` and `OSL` aliases), user keys, and keyboard control keys (bootloader, reboot, ...).
 - **Macros**: keycodes emitted while a macro runs bypass action resolution; the trigger key itself is also unclassifiable.
 - **`Again` / `Repeat`**: the repeated keycode is unknown at classification time.
 - **`GraveEscape`**: resolves to Escape or Grave after classification.

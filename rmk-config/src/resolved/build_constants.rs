@@ -36,6 +36,7 @@ pub struct BuildConstants {
     pub fork_max_num: usize,
     pub morse_max_num: usize,
     pub morse_profile_max_num: usize,
+    pub sticky_key_profile_max_num: usize,
     pub max_patterns_per_key: usize,
     pub macro_space_size: usize,
     pub debounce_time: u16,
@@ -172,6 +173,12 @@ impl crate::KeyboardTomlConfig {
             event.subs += 1;
         }
 
+        let auto_mouse_layers = self
+            .behavior
+            .as_ref()
+            .and_then(|behavior| behavior.auto_mouse_layer.as_deref())
+            .unwrap_or_default();
+
         // Only validate passkey settings when the build will emit passkey constants.
         let passkey = if active_features.contains(&"passkey_entry") {
             self.ble.as_ref().map(resolve_passkey_enabled).transpose()?
@@ -205,15 +212,27 @@ impl crate::KeyboardTomlConfig {
         let auto_mouse_layer_max_num = rmk
             .auto_mouse_layer_max_num
             .unwrap_or(crate::resolved::behavior::DEFAULT_AUTO_MOUSE_LAYER_MAX_NUM);
-        if let Some(entries) = self.behavior.as_ref().and_then(|b| b.auto_mouse_layer.as_ref()) {
-            if entries.len() > auto_mouse_layer_max_num {
+        let sticky_key_profile_max_num = self.sticky_key_profile_capacity();
+        let sticky_key_profile_count = self.configured_sticky_key_profile_count();
+        if sticky_key_profile_count > u8::MAX as usize {
+            return Err(format!(
+                "behavior.sticky_key.profiles defines {sticky_key_profile_count} profiles, but at most 255 named profiles are supported"
+            ));
+        }
+        if sticky_key_profile_count > sticky_key_profile_max_num {
+            return Err(format!(
+                "behavior.sticky_key.profiles defines {sticky_key_profile_count} profiles, but `[rmk] sticky_key_profile_max_num` is {sticky_key_profile_max_num}. Raise it in keyboard.toml"
+            ));
+        }
+        if !auto_mouse_layers.is_empty() {
+            if auto_mouse_layers.len() > auto_mouse_layer_max_num {
                 return Err(format!(
                     "number of [[behavior.auto_mouse_layer]] entries ({}) exceeds auto_mouse_layer_max_num ({})",
-                    entries.len(),
+                    auto_mouse_layers.len(),
                     auto_mouse_layer_max_num
                 ));
             }
-            let uses_action_event = entries
+            let uses_action_event = auto_mouse_layers
                 .iter()
                 .any(|e| e.deactivate_on_key == Some(true) || e.reset_timeout_on_key == Some(true));
             if uses_action_event && events.iter().any(|e| e.name == "action" && e.subs == 0) {
@@ -236,6 +255,7 @@ impl crate::KeyboardTomlConfig {
             fork_max_num: rmk.fork_max_num,
             morse_max_num: rmk.morse_max_num,
             morse_profile_max_num: rmk.morse_profile_max_num,
+            sticky_key_profile_max_num,
             max_patterns_per_key: rmk.max_patterns_per_key,
             macro_space_size: rmk.macro_space_size,
             debounce_time: rmk.debounce_time,
@@ -587,6 +607,37 @@ mod tests {
     fn auto_mouse_layer_within_capacity_is_accepted() {
         let toml = "[rmk]\nauto_mouse_layer_max_num = 1\n\n[[behavior.auto_mouse_layer]]\ntarget_layer = 1\nextra_mouse_keys = [\"LCtrl\"]\n";
         assert!(parse(toml).build_constants(&[]).is_ok());
+    }
+
+    #[test]
+    fn sticky_profile_capacity_is_derived_and_validated() {
+        let derived = parse(
+            "[behavior.sticky_key.profiles.one]\n[behavior.sticky_key.profiles.two]\n[behavior.sticky_key.profiles.three]\n[behavior.sticky_key.profiles.four]\n[behavior.sticky_key.profiles.five]\n",
+        )
+        .build_constants(&[])
+        .unwrap();
+        assert_eq!(derived.sticky_key_profile_max_num, 5);
+
+        let too_small = "[rmk]\nsticky_key_profile_max_num = 0\n\n[behavior.sticky_key.profiles.named]\n";
+        let err = match parse(too_small).build_constants(&[]) {
+            Ok(_) => panic!("expected sticky profile capacity validation failure"),
+            Err(err) => err,
+        };
+        assert!(err.contains("sticky_key_profile_max_num"));
+    }
+
+    #[test]
+    fn sticky_profile_count_preserves_the_default_profile_sentinel() {
+        let mut toml = String::new();
+        for index in 0..=u8::MAX {
+            toml.push_str(&format!("[behavior.sticky_key.profiles.profile_{index}]\n"));
+        }
+
+        let err = match parse(&toml).build_constants(&[]) {
+            Ok(_) => panic!("expected sticky profile count validation failure"),
+            Err(err) => err,
+        };
+        assert!(err.contains("at most 255 named profiles"));
     }
 
     #[test]

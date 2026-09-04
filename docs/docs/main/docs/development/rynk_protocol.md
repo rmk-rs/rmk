@@ -5,7 +5,7 @@
 
 # Rynk Protocol Reference
 
-Current protocol version: **0.1**.
+Current protocol version: **1.0**.
 
 Every transport (USB vendor bulk, BLE GATT, BLE HID) carries the same frame — a 3-byte header plus a [postcard](https://docs.rs/postcard)-encoded payload:
 

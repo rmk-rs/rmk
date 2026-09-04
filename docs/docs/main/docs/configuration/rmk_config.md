@@ -20,6 +20,9 @@ fork_max_num = 8
 morse_max_num = 8
 # Maximum number of named morse profiles, shared by morse and tap-hold keys (max 255)
 morse_profile_max_num = 16
+# Maximum number of named Sticky Key profiles (max 255). If omitted, RMK uses
+# max(4, number of configured profiles).
+# sticky_key_profile_max_num = 4
 # Maximum number of patterns a morse key can handle (default: 8, min: 4, max: 32)
 max_patterns_per_key = 8
 # Macro space size in bytes for storing sequences. The maximum number of Macros depends on the size of each sequence: All sequences combined need to fit into macro_space_size, the number of macro sequences doesn't matter.
@@ -68,6 +71,7 @@ Increasing the number of combos, forks, morses (tap dances), and macros will inc
 - `fork_max_num`: Maximum number of forks for conditional key actions, default value is 8. This value must be between 0 and 255.
 - `morse_max_num`: Maximum number of morses that can be stored, default value is 8. This value must be between 0 and 255.
 - `morse_profile_max_num`: Capacity of the morse profile table (the named profiles in `[behavior.morse.profiles]`, referenced by morse and tap-hold keys), default value is 16. This value must be between 0 and 255.
+- `sticky_key_profile_max_num`: Capacity of the named Sticky Key profile table. If omitted, RMK uses `max(4, configured profile count)`. An explicit value must be between 0 and 255 and cannot be smaller than the configured profile count. Zero is valid only when there are no named profiles.
 - `max_patterns_per_key` : Maximum number of tap/hold patterns a morse key can handle, default value is 8. This value must be between 4 and 32. (Automatically raised to fit the largest `tap_actions` + `hold_actions` + `morse_actions` count among the configured morse keys.)
 - `macro_space_size`: Space size in bytes for storing macro sequences, default value is 256. This value must be between 0 and 65535.
 

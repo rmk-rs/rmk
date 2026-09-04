@@ -50,11 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Behaviors
 
+- Add configurable Sticky Keys for modifiers, layers, and repeated modified keys, with named profiles, timeout/repeat limits, configurable release triggers (including modifier or layer key-up after a configurable hold duration), and `OSM`/`OSL` compatibility aliases. Legacy `[behavior.one_shot_modifiers] quick_release` remains available for the default Sticky modifier profile
 - Add `bootmagic` config: hold a designated key during boot to drop into the chip bootloader. Works on unibody and on each half of a split independently. Particularly useful for split peripherals whose BOOTSEL button is physically inaccessible ([#457](https://github.com/rmk-rs/rmk/issues/457)).
 - Make `rmk::boot` module public so user code can call `boot::jump_to_bootloader()` directly
 - Add auto mouse layer behavior: automatically activate a configured layer when X/Y cursor motion from a pointing device is detected, and deactivate it after a `timeout` of inactivity ([#781](https://github.com/rmk-rs/rmk/issues/781)) with `deactivate_on_key` (with `extra_mouse_keys`) and `reset_timeout_on_key` options; entry capacity is auto-derived from `keyboard.toml`, overridable via `[rmk].auto_mouse_layer_max_num`
 - Add `quick_tap_timeout` morse profile option: re-pressing a morse/tap-hold key within the window after its last release fires the tap action immediately and keeps it held, so the OS auto-repeats the tap instead of triggering the hold action
-- Add one-shot sticky modifiers, with a `quick_release` option under `[behavior.one_shot_modifiers]`
 - Add a `prior_idle_time` cooldown for combos: a combo won't fire if another key was pressed within the window, which keeps fast rolls from triggering combos accidentally
 - Support nested actions in tap-hold / morse configuration
 - Add `PDF(n)` (set default layer) to `keyboard.toml` keymaps
@@ -126,13 +126,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix non-`defmt` DFU builds (e.g. `dfu_rp` with `usb_log`) failing with a borrow-of-moved-value error on `central_attrs`: embassy-usb's `DfuAttributes` is `Copy` only under `defmt`, so the DFU descriptor now reads the attribute bits before handing the attributes to `DfuState` ([#973](https://github.com/rmk-rs/rmk/issues/973))
 - Fix a dropped keypress when two keys resolve to the same HID keycode with different modifiers (a plain bracket and its `SHIFTED()` neighbor). Rolling them quickly sent the same usage in two report slots, which some hosts read as a release of the held key and dropped the second key. Keyboard reports now deduplicate keycodes so the shared usage stays down until the last holder releases it
 - Fix the whole input pipeline freezing while the USB host is asleep. On nRF an IN-endpoint write during suspend pends until the host resumes, which parked the report writer and backed up every bounded queue upstream — keyboard task, key event channel, split peripheral manager, GATT notifications — then flushed the backlog at once on resume. RMK now signals remote wakeup and drops the report instead, and keeps retrying the wakeup rather than parking in `wait_resume()` ([#1035](https://github.com/rmk-rs/rmk/pull/1035))
-- Fix a one-shot modifier applying to one key too many: a key rolled over before the first shifted key was released still saw the one-shot as active. The modifier is now consumed on the next key press instead of its release, and a held `OSL` consumes a pending one-shot modifier at its own press ([#1036](https://github.com/rmk-rs/rmk/pull/1036))
+- Fix Sticky modifier release-mode handling: `other_key_press` consumes the modifier on the triggering press, while the default `other_key_release` mode keeps it through the triggering key's release. Pressing a held Sticky layer also honors a pending press-triggered modifier ([#1036](https://github.com/rmk-rs/rmk/pull/1036))
 - Fix a panic in the split central's scan handler when an advertising report carried exactly 25 bytes: the peripheral id is read from byte 25, so the length check let an out-of-bounds index through. Also shorten the central's link supervision timeout from 10s to 5s so a dead peripheral link is detected and reconnected sooner ([#1034](https://github.com/rmk-rs/rmk/pull/1034))
 - Drop a BLE connection immediately when the bond info doesn't match the profile, instead of letting the wrong host hold the link ([#1024](https://github.com/rmk-rs/rmk/pull/1024))
 - Fix a bonded dongle hijacking the keyboard's BLE host profiles: it connected on the keyboard's bare address, so it also answered the plain HID advertising of a host profile and bonded itself into that slot. The dongle now connects only when the keyboard asks for a dongle, and the keyboard refuses the bonded dongle on every host profile ([#1056](https://github.com/rmk-rs/rmk/pull/1056))
 - Fix the nRF SoftDevice Controller memory pool size calculation ([#1002](https://github.com/rmk-rs/rmk/pull/1002))
 - Fix spurious sleep, and fix the split peripheral's connection parameters
-- Fix one-shot expiry blocking the keyboard task ([#1083](https://github.com/rmk-rs/rmk/pull/1083))
+- Fix Sticky Key, formerly one-shot, expiry blocking the keyboard task ([#1083](https://github.com/rmk-rs/rmk/pull/1083))
 - Fix a dropped split link staying down until the sleeping central wakes ([#1081](https://github.com/rmk-rs/rmk/pull/1081))
 - Declare the nRF52 LFRC at its specified 500 ppm ([#1080](https://github.com/rmk-rs/rmk/pull/1080))
 - Fix an out-of-bounds panic on key positions outside the matrix ([#1078](https://github.com/rmk-rs/rmk/pull/1078))

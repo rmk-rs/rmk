@@ -1,0 +1,262 @@
+# Canonical Sticky Key forms. OSM/OSL compatibility is covered by one_shot.toml.
+#
+# Layer 0:
+#   SK(LShift) SK(Tab,[LAlt],@short) SK(MO(1)) A
+#   SK(LCtrl,@double) SK(B,[LGui],@repeat) SK(LAlt,@short) SK(LGui,@short) MO(2) MO(1)
+#   SK(LShift,@visible) SK(LCtrl,@short)
+# Layers 1/2 leave the behavior keys transparent; col 3 is B/C respectively.
+
+[layout]
+rows = 1
+cols = 12
+map = "(0,0) (0,1) (0,2) (0,3) (0,4) (0,5) (0,6) (0,7) (0,8) (0,9) (0,10) (0,11)"
+
+[keymap]
+layers = 3
+
+[[keymap.layer]]
+keys = "SK(LShift) SK(Tab, [LAlt], @short) SK(MO(1)) A SK(LCtrl, @double) SK(B, [LGui], @repeat) SK(LAlt, @short) SK(LGui, @short) MO(2) MO(1) SK(LShift, @visible) SK(LCtrl, @short)"
+
+[[keymap.layer]]
+keys = "Trns Trns Trns B Trns Trns Trns Trns Trns Trns Trns Trns"
+
+[[keymap.layer]]
+keys = "Trns Trns Trns C Trns Trns Trns Trns Trns Trns Trns Trns"
+
+[behavior.sticky_key]
+release_mode = "other_key_press"
+
+[behavior.sticky_key.profiles.short]
+timeout = "100ms"
+release_after_hold = "50ms"
+release_mode = "layer_enter | layer_exit"
+
+[behavior.sticky_key.profiles.double]
+timeout = "100ms"
+release_mode = "double_tap"
+
+[behavior.sticky_key.profiles.repeat]
+max_repeat = 2
+
+[behavior.sticky_key.profiles.visible]
+activate_on_keypress = true
+timeout = "1s"
+release_after_hold = "100ms"
+
+[[test]]
+name = "canonical_modifier_uses_press_policy"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["LShift", "A"], ["A"], []]
+
+[[test]]
+name = "canonical_layer_applies_to_one_key"
+steps = [
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["B"], [], ["A"], []]
+
+[[test]]
+name = "sticky_cleanup_is_latest_command_for_shared_layer"
+steps = [
+  { tap = { pos = [0, 2], duration = 10 } },
+  { press = [0, 9] },
+  { tap = { pos = [0, 3], duration = 10 } },
+  { release = [0, 9] },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["B"], [], ["A"], []]
+
+[[test]]
+name = "tap_key_holds_modifiers_until_profile_timeout"
+steps = [
+  { tap = { pos = [0, 1], duration = 10 } },
+  { delay = 150 },
+]
+expect = [["LAlt", "Tab"], ["LAlt"], []]
+
+[[test]]
+name = "canonical_modifier_and_layer_latches_coexist"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["LShift", "B"], ["B"], []]
+
+[[test]]
+name = "tap_key_replaces_layer_and_releases_owned_layer"
+steps = [
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { delay = 150 },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["LAlt", "Tab"], ["LAlt"], [], ["A"], []]
+
+[[test]]
+name = "tap_key_replaces_pending_modifier"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { delay = 150 },
+]
+expect = [["LAlt", "Tab"], ["LAlt"], []]
+
+[[test]]
+name = "held_tap_key_displaced_by_modifier_synthesizes_release"
+steps = [
+  { press = [0, 1] },
+  { tap = { pos = [0, 0], duration = 10 } },
+  { release = [0, 1] },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["LAlt", "Tab"], [], ["A"], []]
+
+# Retained and physically held modifier bits keep the existing shared entry
+# lifecycle. Releasing the final producer while A remains down releases the
+# whole entry, including the previously retained Ctrl bit.
+[[test]]
+name = "mixed_retained_and_held_modifiers_keep_shared_lifecycle"
+steps = [
+  { tap = { pos = [0, 4], duration = 10 } },
+  { press = [0, 0] },
+  { press = [0, 3] },
+  { release = [0, 0] },
+  { release = [0, 3] },
+]
+expect = [["LShift", "LCtrl", "A"], ["A"], []]
+
+[[test]]
+name = "held_tap_key_displaced_by_layer_synthesizes_release"
+steps = [
+  { press = [0, 1] },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [0, 1] },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["LAlt", "Tab"], [], ["B"], []]
+
+[[test]]
+name = "held_tap_key_displaced_by_tap_key_synthesizes_release"
+steps = [
+  { press = [0, 1] },
+  { tap = { pos = [0, 5], duration = 10 } },
+  { release = [0, 1] },
+  { delay = 1100 },
+]
+expect = [["LAlt", "Tab"], [], ["LGui", "B"], ["LGui"], []]
+
+[[test]]
+name = "max_repeat_deactivates_tap_key_on_third_press"
+steps = [
+  { tap = { pos = [0, 5], duration = 10 } },
+  { tap = { pos = [0, 5], duration = 10 } },
+  { tap = { pos = [0, 5], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["LGui", "B"], ["LGui"], ["LGui", "B"], ["LGui"], [], ["A"], []]
+
+[[test]]
+name = "double_tap_cancels_modifier_before_next_key"
+steps = [
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["A"], []]
+
+[[test]]
+name = "late_release_after_double_tap_does_not_consume_new_modifier"
+steps = [
+  { tap = { pos = [0, 4], duration = 10 } },
+  { press = [0, 4] },
+  { press = [0, 0] },
+  { release = [0, 4] },
+  { tap = { pos = [0, 3], duration = 10 } },
+  { release = [0, 0] },
+]
+expect = [["LShift", "A"], ["LShift"], []]
+
+[[test]]
+name = "mixed_visibility_profiles_release_host_visible_modifiers"
+steps = [
+  { tap = { pos = [0, 10], duration = 10 } },
+  { tap = { pos = [0, 11], duration = 10 } },
+  { delay = 150 },
+]
+expect = [["LShift"], []]
+
+[[test]]
+name = "timeout_is_deferred_while_sticky_modifier_is_held"
+steps = [
+  { press = [0, 4] },
+  { delay = 150 },
+  { tap = { pos = [0, 3], duration = 10 } },
+  { release = [0, 4] },
+]
+expect = [["LCtrl", "A"], ["LCtrl"], []]
+
+[[test]]
+name = "held_modifier_releases_on_keyup_after_hold_threshold"
+steps = [
+  { press = [0, 10] },
+  { delay = 150 },
+  { release = [0, 10] },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["LShift"], [], ["A"], []]
+
+[[test]]
+name = "short_modifier_tap_gets_full_timeout_after_keyup"
+steps = [
+  { tap = { pos = [0, 10], duration = 50 } },
+  { delay = 150 },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["LShift"], ["LShift", "A"], ["A"], []]
+
+[[test]]
+name = "default_profile_restarts_timeout_on_keyup_after_elapsed_timeout"
+steps = [
+  { press = [0, 0] },
+  { delay = 1100 },
+  { release = [0, 0] },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["LShift", "A"], ["A"], []]
+
+[[test]]
+name = "layer_enter_profile_releases_modifier"
+steps = [
+  { tap = { pos = [0, 6], duration = 10 } },
+  { press = [0, 8] },
+  { tap = { pos = [0, 3], duration = 10 } },
+  { release = [0, 8] },
+]
+expect = [["C"], []]
+
+[[test]]
+name = "layer_exit_profile_releases_modifier"
+steps = [
+  { press = [0, 8] },
+  { tap = { pos = [0, 7], duration = 10 } },
+  { release = [0, 8] },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["A"], []]
+
+[[test]]
+name = "sticky_layer_cleanup_overrides_preexisting_layer_state"
+steps = [
+  { press = [0, 9] },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+  { release = [0, 9] },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["B"], [], ["A"], []]

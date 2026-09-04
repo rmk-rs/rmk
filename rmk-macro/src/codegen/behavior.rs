@@ -6,12 +6,12 @@ use quote::{format_ident, quote};
 use rmk_config::resolved::Behavior;
 use rmk_config::resolved::behavior::{
     AutoMouseLayer, Combos, Forks, MacroOperation, Macros, Morse, MorseActionPair, MorseKey,
-    MorseProfile, OneShot,
+    MorseProfile, OneShot, StickyKeyProfile,
 };
 
 use super::action_parser::{
     SetterTable, as_hid_keycode, expand_profile, expand_profile_name, get_key_with_alias,
-    parse_action, parse_key, parse_name_list, sorted_profile_names,
+    parse_action, parse_key, parse_name_list, sorted_profile_names, sorted_sticky_profile_names,
 };
 use super::feature::{get_rmk_features, is_feature_enabled};
 
@@ -69,9 +69,88 @@ fn expand_one_shot_modifiers(one_shot_modifiers: &Option<OneShot>) -> proc_macro
     }
 }
 
+fn expand_sticky_key_profile(
+    profile: &StickyKeyProfile,
+    fallback: &StickyKeyProfile,
+) -> proc_macro2::TokenStream {
+    let timeout = profile.timeout_ms.or(fallback.timeout_ms).unwrap_or(1000);
+    let activate_on_keypress = profile
+        .activate_on_keypress
+        .or(fallback.activate_on_keypress)
+        .unwrap_or(false);
+    let release_after_hold = match profile
+        .release_after_hold_ms
+        .or(fallback.release_after_hold_ms)
+    {
+        Some(duration) => {
+            quote! { ::rmk::config::StickyKeyHoldDuration::from_duration(::rmk::embassy_time::Duration::from_millis(#duration)) }
+        }
+        None => quote! { ::rmk::config::StickyKeyHoldDuration::DISABLED },
+    };
+    let max_repeat = profile.max_repeat.or(fallback.max_repeat).unwrap_or(0);
+    let release_mode = match profile.release_mode.or(fallback.release_mode) {
+        Some(mode) => {
+            let bits = mode.into_bits();
+            quote! { ::core::option::Option::Some(::rmk::types::sticky_key::StickyKeyReleaseMode::from_bits(#bits)) }
+        }
+        None => quote! { ::core::option::Option::None },
+    };
+    quote! {
+        ::rmk::config::StickyKeyProfile {
+            timeout: ::rmk::embassy_time::Duration::from_millis(#timeout),
+            activate_on_keypress: #activate_on_keypress,
+            release_after_hold: #release_after_hold,
+            max_repeat: #max_repeat,
+            release_mode: #release_mode,
+        }
+    }
+}
+
+fn expand_sticky_key(behavior: &Behavior) -> proc_macro2::TokenStream {
+    let default = behavior
+        .sticky_key
+        .as_ref()
+        .map(|sticky| StickyKeyProfile {
+            timeout_ms: sticky.timeout_ms.or(behavior.one_shot_timeout_ms),
+            activate_on_keypress: sticky.activate_on_keypress.or(behavior
+                .one_shot_modifiers
+                .as_ref()
+                .and_then(|one_shot| one_shot.activate_on_keypress)),
+            release_after_hold_ms: sticky.release_after_hold_ms,
+            max_repeat: sticky.max_repeat,
+            release_mode: sticky.release_mode,
+        })
+        .unwrap_or_else(|| StickyKeyProfile {
+            timeout_ms: behavior.one_shot_timeout_ms,
+            activate_on_keypress: behavior
+                .one_shot_modifiers
+                .as_ref()
+                .and_then(|one_shot| one_shot.activate_on_keypress),
+            ..Default::default()
+        });
+    let default_profile = expand_sticky_key_profile(&default, &StickyKeyProfile::default());
+    let profiles = behavior
+        .sticky_key
+        .as_ref()
+        .map(|sticky| {
+            sorted_sticky_profile_names(Some(&sticky.profiles))
+                .into_iter()
+                .map(|name| expand_sticky_key_profile(&sticky.profiles[&name], &default))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    quote! {
+        ::rmk::config::StickyKeyConfig {
+            default_profile: #default_profile,
+            profiles: ::rmk::heapless::Vec::from_iter([#(#profiles),*]),
+        }
+    }
+}
+
 fn expand_morse_action_pair(
     action_pair: &MorseActionPair,
     profiles: &Option<HashMap<String, MorseProfile>>,
+    sticky_profiles: &Option<HashMap<String, StickyKeyProfile>>,
 ) -> proc_macro2::TokenStream {
     let mut pattern = 0b1u16;
     for ch in action_pair.pattern.chars() {
@@ -84,18 +163,19 @@ fn expand_morse_action_pair(
             _ => {}
         }
     }
-    let action = parse_key(action_pair.action.to_owned(), profiles);
+    let action = parse_key(action_pair.action.to_owned(), profiles, sticky_profiles);
     quote! { (rmk::types::morse::MorsePattern::from_u16(#pattern), #action.to_action()) }
 }
 
 fn expand_morse_actions(
     actions: &[MorseActionPair],
     profiles: &Option<HashMap<String, MorseProfile>>,
+    sticky_profiles: &Option<HashMap<String, StickyKeyProfile>>,
 ) -> proc_macro2::TokenStream {
     if !actions.is_empty() {
         let action_pair_def = actions
             .iter()
-            .map(|action_pair| expand_morse_action_pair(action_pair, profiles));
+            .map(|action_pair| expand_morse_action_pair(action_pair, profiles, sticky_profiles));
         quote! {
             actions: ::rmk::heapless::LinearMap::from_iter([#(#action_pair_def),*]),
         }
@@ -104,7 +184,10 @@ fn expand_morse_actions(
     }
 }
 
-fn expand_morse(morse: &Option<Morse>) -> proc_macro2::TokenStream {
+fn expand_morse(
+    morse: &Option<Morse>,
+    sticky_profiles: &Option<HashMap<String, StickyKeyProfile>>,
+) -> proc_macro2::TokenStream {
     if let Some(config) = morse {
         let enable_flow_tap = config.enable_flow_tap;
         let enable_flow_tap_token = quote! { enable_flow_tap: #enable_flow_tap, };
@@ -120,7 +203,7 @@ fn expand_morse(morse: &Option<Morse>) -> proc_macro2::TokenStream {
         } else {
             Some(config.profiles.clone())
         };
-        let morses = expand_morses(&config.morses, &profiles_ref);
+        let morses = expand_morses(&config.morses, &profiles_ref, sticky_profiles);
 
         // Interned morse profile table, in the same sorted-name order used by
         // `morse_profile` when it emits per-key indices. The pushes can't overflow:
@@ -163,6 +246,7 @@ fn expand_morse(morse: &Option<Morse>) -> proc_macro2::TokenStream {
 fn expand_combos(
     combos: &Option<Combos>,
     profiles: &Option<HashMap<String, MorseProfile>>,
+    sticky_profiles: &Option<HashMap<String, StickyKeyProfile>>,
 ) -> proc_macro2::TokenStream {
     let default = quote! { ::core::default::Default::default() };
     match combos {
@@ -190,8 +274,8 @@ fn expand_combos(
                 }
             } else {
                 let combos_def = combos.combos.iter().map(|combo| {
-                    let actions = combo.actions.iter().map(|a| parse_key(a.to_owned(), profiles));
-                    let output = parse_key(combo.output.to_owned(), profiles);
+                    let actions = combo.actions.iter().map(|a| parse_key(a.to_owned(), profiles, sticky_profiles));
+                    let output = parse_key(combo.output.to_owned(), profiles, sticky_profiles);
                     let layer = match combo.layer {
                         Some(layer) => quote! { ::core::option::Option::Some(#layer) },
                         None => quote! { ::core::option::Option::None },
@@ -289,6 +373,7 @@ fn expand_macros(macros: &Option<Macros>) -> proc_macro2::TokenStream {
 fn expand_morses(
     morses: &[MorseKey],
     profiles: &Option<HashMap<String, MorseProfile>>,
+    sticky_profiles: &Option<HashMap<String, StickyKeyProfile>>,
 ) -> proc_macro2::TokenStream {
     if morses.is_empty() {
         return quote! {};
@@ -306,7 +391,7 @@ fn expand_morses(
                 panic!("\n❌ keyboard.toml: `morse_actions` cannot be used together with `tap_actions`, `hold_actions`, `tap`, `hold`, `hold_after_tap`, or `double_tap`.");
             }
 
-            let actions_def = expand_morse_actions(morse_actions, profiles);
+            let actions_def = expand_morse_actions(morse_actions, profiles, sticky_profiles);
 
             quote! {
                 ::rmk::types::morse::Morse {
@@ -325,7 +410,7 @@ fn expand_morses(
             let tap_actions_def = match &morse.tap_actions {
                 Some(tap_actions) => {
                     let actions = tap_actions.iter().map(|action| {
-                        let parsed_action = parse_key(action.clone(), profiles);
+                        let parsed_action = parse_key(action.clone(), profiles, sticky_profiles);
                         quote! { #parsed_action }
                     });
                     quote! { ::rmk::heapless::Vec::from_iter([#(#actions.to_action()),*]) }
@@ -336,7 +421,7 @@ fn expand_morses(
             let hold_actions_def = match &morse.hold_actions {
                 Some(hold_actions) => {
                     let actions = hold_actions.iter().map(|action| {
-                        let parsed_action = parse_key(action.clone(), profiles);
+                        let parsed_action = parse_key(action.clone(), profiles, sticky_profiles);
                         quote! { #parsed_action }
                     });
                     quote! { ::rmk::heapless::Vec::from_iter([#(#actions.to_action()),*]) }
@@ -352,10 +437,10 @@ fn expand_morses(
                 )
             }
         } else {
-            let tap = parse_key(morse.tap.clone().unwrap_or_else(|| "No".to_string()), profiles);
-            let hold = parse_key(morse.hold.clone().unwrap_or_else(|| "No".to_string()), profiles);
-            let hold_after_tap = parse_key(morse.hold_after_tap.clone().unwrap_or_else(|| "No".to_string()), profiles);
-            let double_tap = parse_key(morse.double_tap.clone().unwrap_or_else(|| "No".to_string()), profiles);
+            let tap = parse_key(morse.tap.clone().unwrap_or_else(|| "No".to_string()), profiles, sticky_profiles);
+            let hold = parse_key(morse.hold.clone().unwrap_or_else(|| "No".to_string()), profiles, sticky_profiles);
+            let hold_after_tap = parse_key(morse.hold_after_tap.clone().unwrap_or_else(|| "No".to_string()), profiles, sticky_profiles);
+            let double_tap = parse_key(morse.double_tap.clone().unwrap_or_else(|| "No".to_string()), profiles, sticky_profiles);
 
             quote! {
                 ::rmk::types::morse::Morse::new_from_vial(
@@ -492,14 +577,15 @@ fn parse_state_combination(states_str: &str) -> StateBitsMacro {
 fn expand_forks(
     forks: &Option<Forks>,
     profiles: &Option<HashMap<String, MorseProfile>>,
+    sticky_profiles: &Option<HashMap<String, StickyKeyProfile>>,
 ) -> proc_macro2::TokenStream {
     let default = quote! { ::core::default::Default::default() };
     match forks {
         Some(forks) => {
             let forks_def = forks.forks.iter().map(|fork| {
-                let trigger = parse_key(fork.trigger.to_owned(), profiles);
-                let negative_output = parse_key(fork.negative_output.to_owned(), profiles);
-                let positive_output = parse_key(fork.positive_output.to_owned(), profiles);
+                let trigger = parse_key(fork.trigger.to_owned(), profiles, sticky_profiles);
+                let negative_output = parse_key(fork.negative_output.to_owned(), profiles, sticky_profiles);
+                let positive_output = parse_key(fork.positive_output.to_owned(), profiles, sticky_profiles);
                 let match_any  = fork.match_any.as_ref().map(|s| parse_state_combination(s)).unwrap_or_default();
                 let match_none = fork.match_none.as_ref().map(|s| parse_state_combination(s)).unwrap_or_default();
                 let kept = fork.kept_modifiers.as_ref().map(|s| parse_state_combination(s)).unwrap_or_default();
@@ -570,14 +656,20 @@ pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenS
         .as_ref()
         .map(|m| m.profiles.clone())
         .filter(|p| !p.is_empty());
+    let sticky_profiles = behavior
+        .sticky_key
+        .as_ref()
+        .map(|sticky| sticky.profiles.clone())
+        .filter(|profiles| !profiles.is_empty());
 
     let tri_layer = expand_tri_layer(&behavior.tri_layer);
     let one_shot = expand_one_shot(&behavior.one_shot_timeout_ms);
     let one_shot_modifiers = expand_one_shot_modifiers(&behavior.one_shot_modifiers);
-    let combos = expand_combos(&behavior.combos, &profiles);
+    let combos = expand_combos(&behavior.combos, &profiles, &sticky_profiles);
     let macros = expand_macros(&behavior.macros);
-    let forks = expand_forks(&behavior.forks, &profiles);
-    let morse = expand_morse(&behavior.morse);
+    let forks = expand_forks(&behavior.forks, &profiles, &sticky_profiles);
+    let morse = expand_morse(&behavior.morse, &sticky_profiles);
+    let sticky_key = expand_sticky_key(behavior);
     let auto_mouse_layer = expand_auto_mouse_layer(&behavior.auto_mouse_layer);
 
     quote! {
@@ -592,6 +684,7 @@ pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenS
             keyboard_macros: #macros,
             mouse_key: ::rmk::config::MouseKeyConfig::default(),
             tap: ::rmk::config::TapConfig::default(),
+            sticky_key: #sticky_key,
             auto_mouse_layer: #auto_mouse_layer,
             ..Default::default()
         };
@@ -601,6 +694,32 @@ pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenS
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sticky_key_profile_inherits_and_overrides_keyup_hold_release() {
+        let fallback = StickyKeyProfile {
+            release_after_hold_ms: Some(300),
+            ..Default::default()
+        };
+        let inherited =
+            expand_sticky_key_profile(&StickyKeyProfile::default(), &fallback).to_string();
+        assert!(inherited.contains("StickyKeyHoldDuration :: from_duration"));
+        assert!(inherited.contains("Duration :: from_millis (300"));
+
+        let override_duration = StickyKeyProfile {
+            release_after_hold_ms: Some(500),
+            ..Default::default()
+        };
+        let overridden = expand_sticky_key_profile(&override_duration, &fallback).to_string();
+        assert!(overridden.contains("Duration :: from_millis (500"));
+
+        let disabled =
+            expand_sticky_key_profile(&StickyKeyProfile::default(), &StickyKeyProfile::default())
+                .to_string();
+        assert!(disabled.contains(
+            "release_after_hold : :: rmk :: config :: StickyKeyHoldDuration :: DISABLED"
+        ));
+    }
 
     #[test]
     fn parse_state_combination_sets_bits_for_valid_states() {

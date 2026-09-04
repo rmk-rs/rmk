@@ -6,14 +6,17 @@
 # `MO(1)` at (0,3) adds a second layer for the rollover cases below: layer 1
 # row 1 pairs a plain keycode with its `SHIFTED()` twin, row 2 is four
 # distinct keycodes as a control.
+# Row 3 contains the Sticky modifier coverage; keeping it separate preserves
+# the rollover fixture and verifies balancing keyboard reports across HID pages.
 
 [layout]
-rows = 3
+rows = 4
 cols = 4
 map = """
 (0,0)  (0,1)  (0,2)  (0,3)
 (1,0)  (1,1)  (1,2)  (1,3)
 (2,0)  (2,1)  (2,2)  (2,3)
+(3,0)  (3,1)  (3,2)  (3,3)
 """
 
 [[keymap.layer]]
@@ -21,6 +24,7 @@ keys = """
 AudioVolUp  SystemSleep  MouseRight  MO(1)
 No          No           No          No
 No          No           No          No
+SK(LShift)  A            SHIFTED(B)  No
 """
 
 [[keymap.layer]]
@@ -28,7 +32,11 @@ keys = """
 No            No            No                      No
 SHIFTED(Dot)  RightBracket  SHIFTED(RightBracket)  SHIFTED(Kc0)
 Minus         Kc7           Kc8                     Kc9
+No            No            No                      No
 """
+
+[behavior.sticky_key]
+activate_on_keypress = true
 
 [[test]]
 name = "consumer_key_reports_on_the_consumer_page"
@@ -107,5 +115,84 @@ expect = [
   ["Kc8"],
   ["Kc8", "Kc9"],
   ["Kc9"],
+  [],
+]
+
+[[test]]
+name = "consumer_key_consumes_visible_sticky_modifier"
+steps = [
+  { tap = { pos = [3, 0], duration = 10 } },
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [3, 1], duration = 10 } },
+]
+expect = [["LShift"], { consumer = ["AudioVolUp"] }, { consumer = [] }, [], ["A"], []]
+
+[[test]]
+name = "system_key_consumes_visible_sticky_modifier"
+steps = [
+  { tap = { pos = [3, 0], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [3, 1], duration = 10 } },
+]
+expect = [["LShift"], { system = ["SystemSleep"] }, { system = [] }, [], ["A"], []]
+
+[[test]]
+name = "mouse_key_consumes_visible_sticky_modifier"
+steps = [
+  { tap = { pos = [3, 0], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [3, 1], duration = 10 } },
+]
+expect = [["LShift"], { mouse = { x = 5 } }, { mouse = {} }, [], ["A"], []]
+
+[[test]]
+name = "live_sticky_release_balances_keyboard_page_while_consumer_stays_down"
+behavior.sticky_key = { activate_on_keypress = true, release_mode = "other_key_release" }
+steps = [
+  { press = [3, 0] },
+  { press = [0, 0] },
+  { release = [3, 0] },
+  { release = [0, 0] },
+]
+expect = [
+  ["LShift"],
+  { consumer = ["AudioVolUp"] },
+  [],
+  { consumer = [] },
+]
+
+[[test]]
+name = "live_sticky_release_balances_keyboard_page_while_system_key_stays_down"
+behavior.sticky_key = { activate_on_keypress = true, release_mode = "other_key_release" }
+steps = [
+  { press = [3, 0] },
+  { press = [0, 1] },
+  { release = [3, 0] },
+  { release = [0, 1] },
+]
+expect = [
+  ["LShift"],
+  { system = ["SystemSleep"] },
+  [],
+  { system = [] },
+]
+
+[[test]]
+name = "consumer_press_refreshes_sticky_ownership_after_clearing_key_with_modifier"
+behavior.sticky_key = { activate_on_keypress = true, release_mode = "other_key_release" }
+steps = [
+  { press = [3, 0] },
+  { press = [3, 2] },
+  { press = [0, 0] },
+  { release = [3, 0] },
+  { release = [0, 0] },
+  { release = [3, 2] },
+]
+expect = [
+  ["LShift"],
+  ["LShift", "B"],
+  { consumer = ["AudioVolUp"] },
+  ["B"],
+  { consumer = [] },
   [],
 ]

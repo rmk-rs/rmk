@@ -53,15 +53,6 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
                 // 0x0
                 // }
             }
-            Action::OneShotLayer(l) => {
-                // One-shot layer
-                if l < 16 { 0x5280 | l as u16 } else { 0x0000 }
-            }
-            Action::OneShotModifier(m) => {
-                // One-shot modifier
-                let modifier_bits = m.into_packed_bits();
-                0x52A0 | modifier_bits as u16
-            }
             Action::LayerOnWithModifier(l, m) => {
                 if l < 16 {
                     0x5000 | ((l as u16) << 5) | ((m.into_packed_bits() & 0b11111) as u16)
@@ -96,6 +87,20 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
                 0
             }
         },
+        KeyAction::Sticky(action, profile) => {
+            if profile != u8::MAX {
+                warn!("Profiled Sticky Key actions are not representable in VIA");
+                return 0;
+            }
+            match action {
+                Action::LayerOn(layer) if layer < 16 => 0x5280 | layer as u16,
+                Action::Modifier(modifiers) => 0x52A0 | modifiers.into_packed_bits() as u16,
+                _ => {
+                    warn!("Sticky Key action {:?} is not representable in VIA", action);
+                    0
+                }
+            }
+        }
         KeyAction::Tap(_) => {
             warn!("Tap action is not supported by via");
             0
@@ -192,12 +197,12 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
         0x5280..=0x529F => {
             // One-shot layer
             let layer = via_keycode as u8 & 0xF;
-            KeyAction::Single(Action::OneShotLayer(layer))
+            KeyAction::Sticky(Action::LayerOn(layer), u8::MAX)
         }
         0x52A0..=0x52BF => {
             // One-shot modifier
             let m = ModifierCombination::from_packed_bits((via_keycode & 0x1F) as u8);
-            KeyAction::Single(Action::OneShotModifier(m))
+            KeyAction::Sticky(Action::Modifier(m), u8::MAX)
         }
         0x52C0..=0x52DF => {
             // TODO: Layer tap toggle
@@ -343,16 +348,17 @@ mod test {
         // OSL(3)
         let via_keycode = 0x5283;
         assert_eq!(
-            KeyAction::Single(Action::OneShotLayer(3)),
+            KeyAction::Sticky(Action::LayerOn(3), u8::MAX),
             from_via_keycode(via_keycode)
         );
 
         // OSM RCtrl
         let via_keycode = 0x52B1;
         assert_eq!(
-            KeyAction::Single(Action::OneShotModifier(ModifierCombination::new_from(
-                true, false, false, false, true
-            ))),
+            KeyAction::Sticky(
+                Action::Modifier(ModifierCombination::new_from(true, false, false, false, true)),
+                u8::MAX,
+            ),
             from_via_keycode(via_keycode)
         );
 
@@ -643,14 +649,27 @@ mod test {
         assert_eq!(0x7C03, to_via_keycode(a));
 
         // OSL(3)
-        let a = KeyAction::Single(Action::OneShotLayer(3));
+        let a = KeyAction::Sticky(Action::LayerOn(3), u8::MAX);
         assert_eq!(0x5283, to_via_keycode(a));
 
         // OSM RCtrl
-        let a = KeyAction::Single(Action::OneShotModifier(ModifierCombination::new_from(
-            true, false, false, false, true,
-        )));
+        let a = KeyAction::Sticky(
+            Action::Modifier(ModifierCombination::new_from(true, false, false, false, true)),
+            u8::MAX,
+        );
         assert_eq!(0x52B1, to_via_keycode(a));
+
+        // VIA has no representation for named Sticky Key profiles.
+        let a = KeyAction::Sticky(Action::Modifier(ModifierCombination::LCTRL), 0);
+        assert_eq!(0, to_via_keycode(a));
+
+        // Tap-key Sticky Keys cannot be down-converted to OSM without losing
+        // their tap key, so they remain deliberately unrepresentable.
+        let a = KeyAction::Sticky(
+            Action::KeyWithModifier(HidKeyCode::Tab, ModifierCombination::LALT),
+            u8::MAX,
+        );
+        assert_eq!(0, to_via_keycode(a));
 
         // DF(3)
         let a = KeyAction::Single(Action::DefaultLayer(3));

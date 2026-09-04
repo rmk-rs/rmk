@@ -27,6 +27,10 @@ pub enum KeyAction {
     TapHold(Action, Action, u8),
     /// Morse action, references a morse configuration by index.
     Morse(u8),
+    /// Sticky activation of a modifier, layer-on, or key-with-modifier action.
+    /// The `u8` indexes the Sticky Key profile table; `u8::MAX` selects the
+    /// default profile. An unavailable index also falls back to the default.
+    Sticky(Action, u8),
 }
 
 impl KeyAction {
@@ -50,8 +54,9 @@ impl KeyAction {
     }
 }
 
-/// Combo and fork trigger matching compares key actions by their "identity" —
-/// the tap/hold actions — ignoring the profile-table index.
+/// Combo and fork trigger matching compares tap/hold actions by their logical
+/// actions while ignoring their timing-profile index. Sticky profiles remain
+/// part of identity because they define release behavior, not only timing.
 ///
 /// This is intentional: a combo or fork may store a trigger with one profile
 /// index, but if the user later rebinds the key's profile, the trigger should
@@ -66,6 +71,7 @@ impl PartialEq for KeyAction {
             (KeyAction::Tap(a), KeyAction::Tap(b)) => a == b,
             (KeyAction::TapHold(a, b, _), KeyAction::TapHold(c, d, _)) => a == c && b == d,
             (KeyAction::Morse(a), KeyAction::Morse(b)) => a == b,
+            (KeyAction::Sticky(a, profile_a), KeyAction::Sticky(b, profile_b)) => a == b && profile_a == profile_b,
             _ => false,
         }
     }

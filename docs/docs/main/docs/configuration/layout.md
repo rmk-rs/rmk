@@ -270,16 +270,14 @@ The `layer.keys` string follows several rules:
 
 4. RMK supports many advanced layer operations:
    1. `DF(n)` — switch the default layer to layer `n`.
-   2. `PDF(n)` — switch the default layer to layer `n` and persist it to storage, so it survives reboots.
-   3. `MO(n)` — momentarily activate layer `n`.
-   4. `LM(n, modifier)` — activate layer `n` with a modifier held. The modifier chains like `WM`.
-   5. `LT(n, key, <profile_name>)` — activate layer `n` on hold, or tap `key` (tap/hold). `key` is an RMK [`KeyCode`](./keymap_configuration/keycodes); the optional `profile_name` sets the key's [profile](./behavior#per-key-profiles-for-morse-tapdance-tap-hold-fine-tuning).
-   6. `OSL(n)` — one-shot layer `n`.
-   7. `OSM(modifier)` — one-shot modifier. The modifier chains like `WM`.
-   8. `TT(n)` — activate layer `n`, or tap-toggle it.
-   9. `TG(n)` — toggle layer `n`.
-   10. `TO(n)` — activate layer `n` and deactivate all other layers.
-
+   2. `MO(n)` — momentarily activate layer `n`.
+   3. `LM(n, modifier)` — activate layer `n` with a modifier held. The modifier chains like `WM`.
+   4. `LT(n, key, <profile_name>)` — activate layer `n` on hold, or tap `key` (tap/hold). `key` is an RMK [`KeyCode`](./keymap_configuration/keycodes); the optional `profile_name` sets the key's [profile](./behavior#per-key-profiles-for-morse-tapdance-tap-hold-fine-tuning).
+   5. `TT(n)` — activate layer `n`, or tap-toggle it.
+   6. `TG(n)` — toggle layer `n`.
+   7. `TO(n)` — activate layer `n` and deactivate all other layers.
+   8. `PDF(n)` — switch the default layer to layer `n` and persist it to storage, so it survives reboots.
+   
    These match QMK's definitions; see the [QMK layer docs](https://docs.qmk.fm/#/feature_layers). If you need another action, please [file an issue](https://github.com/rmk-rs/rmk/issues/new).
 
 5. For modifier-tap-hold, use `MT(key, modifier, <profile_name>)`, where the modifier can be a chain as in rule 1. The optional `profile_name` sets the key's [profile](./behavior#per-key-profiles-for-morse-tapdance-tap-hold-fine-tuning).
@@ -287,7 +285,7 @@ The `layer.keys` string follows several rules:
 
 6. For a generic tap-hold, use `TH(key-tap, key-hold, <profile_name>)`. The optional `profile_name` sets the key's [profile](./behavior#per-key-profiles-for-morse-tapdance-tap-hold-fine-tuning).
 
-   The tap/hold slots of `MT`, `TH`, and `LT` aren't limited to plain keycodes — they accept any single action, so you can nest other actions inside them. For example, `MT(WM(P, RAlt), LShift, HRM)` taps `RAlt+P` and holds `LShift` with the `HRM` profile, and `TH(WM(A, LShift), MO(2))` taps `Shift+A` and holds momentary-layer 2. Composite tap-hold/morse forms (`MT`/`TH`/`LT`/`TT`/`TD`) cannot be nested inside a slot.
+   The tap/hold slots of `MT`, `TH`, and `LT` aren't limited to plain keycodes. They accept a single non-Sticky action, so you can nest actions such as `WM` and `MO`. For example, `MT(WM(P, RAlt), LShift, HRM)` taps `RAlt+P` and holds `LShift` with the `HRM` profile, and `TH(WM(A, LShift), MO(2))` taps `Shift+A` and holds momentary-layer 2. Composite tap-hold/Morse forms (`MT`/`TH`/`LT`/`TT`/`TD`) and Sticky actions (`SK`/`OSM`/`OSL`) cannot be nested inside a slot.
 
 7. For a shifted key, you can use `SHIFTED(key)` as an alternative to with-modifier (`WM(key, LShift)` - see above).
 
@@ -295,7 +293,9 @@ The `layer.keys` string follows several rules:
 
 9. For keyboard macros, use `Macro(n)`.
 
-10. For a [Plover HID steno](../features/steno) key, use `STN(key)`, where `key` is the steno key name (for example `STN(S1)`). Requires the `steno` Cargo feature.
+10. For a configurable Sticky Key, use `SK(modifier)`, `SK(MO(n))`, or `SK(key, [modifiers])`. The tap-key form accepts one HID keyboard key and a bracketed modifier list; it does not accept consumer, system-control, mouse, or nested actions. `SK(MO(n))` is the only layer form. An optional named profile is written as the final `@profile` argument: `SK(LShift, @quick)` or `SK(Tab, [LAlt], @alt_tab)`. `OSM(modifier)` and `OSL(n)` remain compatibility aliases for the first two forms; their named-profile forms are `OSM(modifier, @profile)` and `OSL(n, @profile)`. See [Sticky Keys](./behavior#sticky-keys).
+
+11. For a [Plover HID steno](../features/steno) key, use `STN(key)`, where `key` is the steno key name (for example `STN(S1)`). Requires the `steno` Cargo feature.
 
 ## Aliases
 

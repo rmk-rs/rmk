@@ -205,63 +205,81 @@ impl KeyboardTomlConfig {
     fn alias_resolver(keys: &str, aliases: &HashMap<String, String>) -> Result<String, String> {
         let mut current_keys = keys.to_string();
 
-        let mut iterations = 0;
-
-        loop {
-            let mut next_keys = String::with_capacity(current_keys.capacity());
-            let mut made_replacement = false;
-            let mut last_index = 0;
-
-            while let Some(at_index) = current_keys[last_index..].find('@') {
-                let start_index = last_index + at_index;
-
-                next_keys.push_str(&current_keys[last_index..start_index]);
-
+        for _ in 0..MAX_ALIAS_RESOLUTION_DEPTH {
+            let mut next = String::with_capacity(current_keys.len());
+            let mut replaced = false;
+            let mut cursor = 0;
+            while let Some(offset) = current_keys[cursor..].find('@') {
+                let start = cursor + offset;
+                next.push_str(&current_keys[cursor..start]);
                 // The name ends at the grammar's delimiters, so `LM(1, @mods)`
                 // resolves `mods` — not a bogus `mods)`. Scan by `char` so a
                 // non-ASCII name never produces an invalid UTF-8 slice.
-                let alias_start = start_index + '@'.len_utf8();
+                let alias_start = start + '@'.len_utf8();
                 let alias_len = current_keys[alias_start..]
                     .char_indices()
                     .find_map(|(offset, c)| (c.is_whitespace() || matches!(c, '(' | ')' | ',' | '@')).then_some(offset))
                     .unwrap_or(current_keys.len() - alias_start);
-                let end_index = alias_start + alias_len;
+                let end = alias_start + alias_len;
 
-                let alias_key = &current_keys[alias_start..end_index];
-                if alias_key.is_empty() {
+                let name = &current_keys[alias_start..end];
+                if name.is_empty() {
                     // A bare `@` (trailing, or right before a delimiter) is literal.
-                    next_keys.push('@');
-                    last_index = alias_start;
+                    next.push('@');
+                    cursor = alias_start;
                     continue;
                 }
-                match aliases.get(alias_key) {
-                    Some(value) => {
-                        next_keys.push_str(value);
-                        made_replacement = true;
-                    }
-                    None => return Err(format!("Undefined alias: {}", alias_key)),
+                if Self::is_sticky_profile_reference(&current_keys, start) {
+                    next.push_str(&current_keys[start..end]);
+                } else if let Some(value) = aliases.get(name) {
+                    next.push_str(value);
+                    replaced = true;
+                } else {
+                    return Err(format!("Undefined alias: {name}"));
                 }
-                last_index = end_index;
+                cursor = end;
             }
-
-            next_keys.push_str(&current_keys[last_index..]);
-
-            iterations += 1;
-            if iterations >= MAX_ALIAS_RESOLUTION_DEPTH {
-                return Err(format!(
-                    "Alias resolution exceeded maximum depth ({}), potential infinite loop detected in '{}'",
-                    MAX_ALIAS_RESOLUTION_DEPTH, keys
-                ));
+            next.push_str(&current_keys[cursor..]);
+            if !replaced {
+                return Ok(current_keys);
             }
-
-            if !made_replacement {
-                break;
-            }
-
-            current_keys = next_keys;
+            current_keys = next;
         }
 
-        Ok(current_keys)
+        Err(format!(
+            "Alias resolution exceeded maximum depth ({}), potential infinite loop detected in '{}'",
+            MAX_ALIAS_RESOLUTION_DEPTH, keys
+        ))
+    }
+
+    fn is_sticky_profile_reference(input: &str, at: usize) -> bool {
+        let Some(previous) = input[..at].chars().rev().find(|c| !c.is_whitespace()) else {
+            return false;
+        };
+        if previous != ',' {
+            return false;
+        }
+
+        let bytes = input.as_bytes();
+        let mut depth = 0usize;
+        for index in (0..at).rev() {
+            match bytes[index] {
+                b')' => depth += 1,
+                b'(' if depth > 0 => depth -= 1,
+                b'(' => {
+                    let mut name_start = index;
+                    while name_start > 0 && bytes[name_start - 1].is_ascii_alphabetic() {
+                        name_start -= 1;
+                    }
+                    return matches!(
+                        input[name_start..index].to_ascii_lowercase().as_str(),
+                        "sk" | "osm" | "osl"
+                    );
+                }
+                _ => {}
+            }
+        }
+        false
     }
 
     /// Reconstruct an action string from a parsed pair, resolving every named
@@ -421,6 +439,26 @@ mod tests {
                 separator as u32
             );
         }
+    }
+
+    #[test]
+    fn unicode_alias_resolution_preserves_sticky_profile_references() {
+        let aliases = HashMap::from([("ö".to_string(), "Kc0".to_string())]);
+
+        for action in [
+            "SK(LShift,\u{3000}@profile)",
+            "OSM(LShift,\u{3000}@profile)",
+            "OSL(1,\u{3000}@profile)",
+        ] {
+            assert_eq!(
+                KeyboardTomlConfig::alias_resolver(action, &aliases),
+                Ok(action.to_string())
+            );
+        }
+        assert_eq!(
+            KeyboardTomlConfig::alias_resolver("@ö", &aliases),
+            Ok("Kc0".to_string())
+        );
     }
 
     #[test]

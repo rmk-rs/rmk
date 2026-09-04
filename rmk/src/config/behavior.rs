@@ -3,11 +3,12 @@ use heapless::Vec;
 use rmk_types::fork::Fork;
 use rmk_types::keycode::KeyCode;
 use rmk_types::morse::{Morse, MorseMode, MorseProfile};
+pub use rmk_types::sticky_key::StickyKeyReleaseMode;
 
 use crate::keyboard::combo::Combo;
 use crate::{
     AUTO_MOUSE_LAYER_MAX_NUM, COMBO_MAX_NUM, FORK_MAX_NUM, MACRO_SPACE_SIZE, MORSE_MAX_NUM, MORSE_PROFILE_MAX_NUM,
-    MOUSE_KEY_INTERVAL, MOUSE_WHEEL_INTERVAL,
+    MOUSE_KEY_INTERVAL, MOUSE_WHEEL_INTERVAL, STICKY_KEY_PROFILE_MAX_NUM,
 };
 
 /// Config for configurable action behavior
@@ -17,13 +18,19 @@ pub struct BehaviorConfig {
     pub default_layer: u8,
     pub tri_layer: Option<[u8; 3]>,
     pub tap: TapConfig,
+    /// Legacy timeout state retained for configuration and host compatibility.
+    /// New Rust configurations should set [`Self::sticky_key`] instead.
     pub one_shot: OneShotConfig,
+    /// Legacy modifier controls retained for configuration compatibility.
+    /// Runtime release policy still reads `quick_release` when the canonical
+    /// default has no explicit release mode.
     pub one_shot_modifiers: OneShotModifiersConfig,
     pub combo: CombosConfig,
     pub fork: ForksConfig,
     pub morse: MorsesConfig,
     pub keyboard_macros: KeyboardMacrosConfig,
     pub mouse_key: MouseKeyConfig,
+    pub sticky_key: StickyKeyConfig,
     pub auto_mouse_layer: Vec<AutoMouseLayerConfig, AUTO_MOUSE_LAYER_MAX_NUM>,
 }
 
@@ -148,10 +155,86 @@ impl Default for MorsesConfig {
     }
 }
 
-/// Config for one shot behavior
+/// Compact runtime representation of the optional physical-hold threshold.
+///
+/// Configuration parsing keeps using `Option`, while firmware profiles use one
+/// `Duration`-sized value instead of a niche-less `Option<Duration>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StickyKeyHoldDuration(u64);
+
+const _: [(); core::mem::size_of::<Duration>()] = [(); core::mem::size_of::<StickyKeyHoldDuration>()];
+
+impl StickyKeyHoldDuration {
+    const DISABLED_TICKS: u64 = u64::MAX;
+
+    pub const DISABLED: Self = Self(Self::DISABLED_TICKS);
+
+    pub const fn from_duration(duration: Duration) -> Self {
+        Self(duration.as_ticks())
+    }
+
+    pub(crate) const fn duration(self) -> Option<Duration> {
+        if self.0 == Self::DISABLED_TICKS {
+            None
+        } else {
+            Some(Duration::from_ticks(self.0))
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct StickyKeyProfile {
+    /// Maximum idle time after the physical Sticky key is released and latched.
+    pub timeout: Duration,
+    /// Send a pure modifier report as soon as the Sticky key is pressed.
+    pub activate_on_keypress: bool,
+    /// Release a held modifier or layer on physical key-up after this duration,
+    /// instead of latching it. Sticky tap keys ignore this field.
+    pub release_after_hold: StickyKeyHoldDuration,
+    /// Maximum emissions in one Sticky tap-key sequence, including the first.
+    /// Zero is unlimited; modifier and layer actions ignore this field.
+    pub max_repeat: u16,
+    /// Release triggers. `None` selects the default for the action shape.
+    pub release_mode: Option<StickyKeyReleaseMode>,
+}
+
+impl Default for StickyKeyProfile {
+    fn default() -> Self {
+        Self {
+            timeout: Duration::from_secs(1),
+            activate_on_keypress: false,
+            release_after_hold: StickyKeyHoldDuration::DISABLED,
+            max_repeat: 0,
+            release_mode: None,
+        }
+    }
+}
+
+/// Sticky Key default policy and indexed custom profiles.
+#[derive(Clone, Debug)]
+pub struct StickyKeyConfig {
+    /// Policy used when `KeyAction::Sticky` carries `u8::MAX` or an unavailable index.
+    pub default_profile: StickyKeyProfile,
+    /// Profiles selected by the numeric index stored in `KeyAction::Sticky`.
+    pub profiles: Vec<StickyKeyProfile, STICKY_KEY_PROFILE_MAX_NUM>,
+}
+
+impl Default for StickyKeyConfig {
+    fn default() -> Self {
+        Self {
+            default_profile: StickyKeyProfile::default(),
+            profiles: Vec::new(),
+        }
+    }
+}
+
+/// Compatibility control for the default Sticky Key timeout.
+///
+/// New Rust configurations should set [`BehaviorConfig::sticky_key`] directly.
 #[derive(Clone, Copy, Debug)]
 pub struct OneShotConfig {
-    /// Timeout after which modifiers/layers are canceled/released
+    /// Legacy timeout copy used by compatibility configuration and host APIs.
+    /// Runtime Sticky policies read [`BehaviorConfig::sticky_key`] instead.
     pub timeout: Duration,
 }
 
@@ -162,12 +245,17 @@ impl Default for OneShotConfig {
         }
     }
 }
-/// Config for one-shot behavior
+
+/// Compatibility controls for the default Sticky modifier policy.
+///
+/// New Rust configurations should set [`BehaviorConfig::sticky_key`] directly.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OneShotModifiersConfig {
-    /// Should modifiers be active from keypress (sticky modifiers)
+    /// Legacy activation copy used while generating `keyboard.toml` firmware.
+    /// Pure Rust configurations should set the default Sticky Key profile.
     pub activate_on_keypress: bool,
-    /// If true, OSM releases on next key press (ZMK skq); if false, on next key release (ZMK skn)
+    /// Selects release on the next key press when the canonical default has no
+    /// explicit release mode. Otherwise, the default releases on key-up.
     pub quick_release: bool,
 }
 

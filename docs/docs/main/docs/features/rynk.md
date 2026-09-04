@@ -32,6 +32,8 @@ device info (RMK version, USB IDs, names) and the physical layout, so a tool can
 draw your keyboard. Finally it can reboot the keyboard, enter the bootloader,
 and reset stored settings.
 
+Rynk can read and write every Sticky action shape already present in the keymap, including its numeric profile index. Its behavior endpoint edits only the default Sticky timeout; profile definitions and the other Sticky profile fields remain firmware configuration. See [Sticky Keys](../configuration/behavior#host-tools-and-storage) for details.
+
 ## Enable Rynk
 
 Rynk and Vial are mutually exclusive — pick one. For `keyboard.toml` projects,

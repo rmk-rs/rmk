@@ -20,7 +20,7 @@ unlock_keys = [[0, 1]]
 [[test]]
 name = "version_is_the_frozen_handshake"
 steps = [
-  { rynk = { cmd = "GetVersion", reply = { major = 0, minor = 1 } } },
+  { rynk = { cmd = "GetVersion", reply = { major = 1, minor = 0 } } },
 ]
 
 # Layout counts come from the live keymap; the rest are compile-time constants

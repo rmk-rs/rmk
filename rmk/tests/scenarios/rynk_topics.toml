@@ -22,7 +22,7 @@ keys = "B  _"
 name = "no_topic_is_pushed_before_the_handshake"
 steps = [
   # A served request that is not `GetCapabilities` must not open the gate.
-  { rynk = { cmd = "GetVersion", reply = { major = 0, minor = 1 } } },
+  { rynk = { cmd = "GetVersion", reply = { major = 1, minor = 0 } } },
   { press = [0, 1] },
   { rynk_no_reply = 50 },
   { release = [0, 1] },

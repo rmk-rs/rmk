@@ -5,10 +5,18 @@ use rmk_types::morse::{HOLD, MorseMode, MorsePattern, TAP};
 use crate::event::KeyboardEvent;
 use crate::keyboard::Keyboard;
 use crate::keyboard::held_buffer::{HeldKey, KeyState};
+use crate::keyboard::sticky_key::StickyKeyDispatch;
 use crate::keymap::KeyMap;
 
 // 'morse' is an alias for the superset of tap dance and tap hold keys, since their handling have many similarities
-impl<'a> Keyboard<'a> {
+// Morse can flush buffered Sticky combo actions back through the canonical Sticky
+// dispatcher, so all of its private helpers share the same internal bound.
+#[allow(private_bounds)]
+impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP_KEY: bool>
+    Keyboard<'a, STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>
+where
+    (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
+{
     // When a morse key reaches timeout after press / release
     pub(crate) async fn handle_morse_timeout(&mut self, key: &HeldKey) {
         assert!(key.action.is_morse());
@@ -263,6 +271,17 @@ impl<'a> Keyboard<'a> {
         // Trigger all non morse keys in the buffer
         while let Some(key) = self.held_buffer.remove_if(|k| !k.action.is_morse()) {
             debug!("Trigger non-morse key: {:?}", key);
+            if let Some(combo_index) = key.sticky_combo_index {
+                self.prepare_key_action_dispatch(key.event);
+                self.process_non_morse_key_action_inner(
+                    key.action,
+                    key.event,
+                    Some(usize::from(combo_index)),
+                    key.press_time,
+                )
+                .await;
+                continue;
+            }
             let action = self.keymap.get_action_with_layer_cache(key.event);
             match action {
                 KeyAction::Single(action) => self.process_key_action_normal(action, key.event).await,

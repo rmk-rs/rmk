@@ -1,5 +1,95 @@
 use std::collections::HashMap;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StickyKeyReleaseMode {
+    pub other_key_press: bool,
+    pub other_key_release: bool,
+    pub layer_enter: bool,
+    pub layer_exit: bool,
+    pub double_tap: bool,
+}
+
+impl StickyKeyReleaseMode {
+    pub const OTHER_KEY_PRESS: Self = Self {
+        other_key_press: true,
+        ..Self::default_const()
+    };
+    pub const OTHER_KEY_RELEASE: Self = Self {
+        other_key_release: true,
+        ..Self::default_const()
+    };
+    pub const LAYER_ENTER: Self = Self {
+        layer_enter: true,
+        ..Self::default_const()
+    };
+    pub const LAYER_EXIT: Self = Self {
+        layer_exit: true,
+        ..Self::default_const()
+    };
+    pub const DOUBLE_TAP: Self = Self {
+        double_tap: true,
+        ..Self::default_const()
+    };
+
+    const fn default_const() -> Self {
+        Self {
+            other_key_press: false,
+            other_key_release: false,
+            layer_enter: false,
+            layer_exit: false,
+            double_tap: false,
+        }
+    }
+
+    pub const fn into_bits(self) -> u8 {
+        (self.other_key_press as u8)
+            | ((self.other_key_release as u8) << 1)
+            | ((self.layer_enter as u8) << 2)
+            | ((self.layer_exit as u8) << 3)
+            | ((self.double_tap as u8) << 4)
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let mut mode = Self::default();
+        for part in value.split('|').map(str::trim).filter(|part| !part.is_empty()) {
+            match part {
+                "other_key_press" => mode.other_key_press = true,
+                "other_key_release" => mode.other_key_release = true,
+                "layer_enter" => mode.layer_enter = true,
+                "layer_exit" => mode.layer_exit = true,
+                "double_tap" => mode.double_tap = true,
+                _ => {
+                    return Err(format!(
+                        "unknown Sticky Key release_mode `{part}`; expected other_key_press, other_key_release, layer_enter, layer_exit, or double_tap"
+                    ));
+                }
+            }
+        }
+        if mode == Self::default() {
+            return Err("Sticky Key release_mode must contain at least one trigger".to_string());
+        }
+        Ok(mode)
+    }
+}
+
+pub struct StickyKeyConfig {
+    pub timeout_ms: Option<u64>,
+    pub activate_on_keypress: Option<bool>,
+    pub release_after_hold_ms: Option<u64>,
+    pub max_repeat: Option<u16>,
+    pub release_mode: Option<StickyKeyReleaseMode>,
+    pub profiles: HashMap<String, StickyKeyProfile>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct StickyKeyProfile {
+    pub timeout_ms: Option<u64>,
+    pub activate_on_keypress: Option<bool>,
+    pub release_after_hold_ms: Option<u64>,
+    pub max_repeat: Option<u16>,
+    pub release_mode: Option<StickyKeyReleaseMode>,
+}
+
 /// Resolved behavioral configuration.
 pub struct Behavior {
     pub tri_layer: Option<[u8; 3]>,
@@ -9,6 +99,7 @@ pub struct Behavior {
     pub macros: Option<Macros>,
     pub forks: Option<Forks>,
     pub morse: Option<Morse>,
+    pub sticky_key: Option<StickyKeyConfig>,
     pub auto_mouse_layer: Vec<AutoMouseLayer>,
 }
 
@@ -239,6 +330,42 @@ impl crate::KeyboardTomlConfig {
             ));
         }
 
+        let sticky_key = toml_behavior
+            .sticky_key
+            .map(|sticky| -> Result<StickyKeyConfig, String> {
+                let parse_profile = |profile: crate::StickyKeyProfile| -> Result<StickyKeyProfile, String> {
+                    Ok(StickyKeyProfile {
+                        timeout_ms: profile.timeout.map(|timeout| timeout.0),
+                        activate_on_keypress: profile.activate_on_keypress,
+                        release_after_hold_ms: profile.release_after_hold.map(|duration| duration.0),
+                        max_repeat: profile.max_repeat,
+                        release_mode: profile
+                            .release_mode
+                            .as_deref()
+                            .map(StickyKeyReleaseMode::parse)
+                            .transpose()?,
+                    })
+                };
+                let profiles = sticky
+                    .profiles
+                    .into_iter()
+                    .map(|(name, profile)| parse_profile(profile).map(|profile| (name, profile)))
+                    .collect::<Result<HashMap<_, _>, _>>()?;
+                Ok(StickyKeyConfig {
+                    timeout_ms: sticky.timeout.map(|timeout| timeout.0),
+                    activate_on_keypress: sticky.activate_on_keypress,
+                    release_after_hold_ms: sticky.release_after_hold.map(|duration| duration.0),
+                    max_repeat: sticky.max_repeat,
+                    release_mode: sticky
+                        .release_mode
+                        .as_deref()
+                        .map(StickyKeyReleaseMode::parse)
+                        .transpose()?,
+                    profiles,
+                })
+            })
+            .transpose()?;
+
         let auto_mouse_layer = toml_behavior
             .auto_mouse_layer
             .unwrap_or_default()
@@ -262,6 +389,7 @@ impl crate::KeyboardTomlConfig {
             macros,
             forks,
             morse,
+            sticky_key,
             auto_mouse_layer,
         })
     }
@@ -297,6 +425,7 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use super::StickyKeyReleaseMode;
     use crate::KeyboardTomlConfig;
 
     #[test]
@@ -382,5 +511,39 @@ hold_timeout = "300ms"
             Err(e) => e,
         };
         assert!(err.contains("morse_profile_max_num"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn sticky_profiles_and_release_modes_resolve() {
+        let config: KeyboardTomlConfig = toml::from_str(
+            r#"
+[behavior.sticky_key]
+release_after_hold = "300ms"
+release_mode = "other_key_release | layer_exit | double_tap"
+
+[behavior.sticky_key.profiles.alt_tab]
+timeout = "5s"
+release_after_hold = "500ms"
+release_mode = "other_key_press | layer_enter"
+"#,
+        )
+        .unwrap();
+
+        let sticky = config.behavior().unwrap().sticky_key.unwrap();
+        assert_eq!(sticky.timeout_ms, None);
+        assert_eq!(sticky.release_after_hold_ms, Some(300));
+        assert_eq!(
+            sticky.release_mode.unwrap().into_bits(),
+            StickyKeyReleaseMode::OTHER_KEY_RELEASE.into_bits()
+                | StickyKeyReleaseMode::LAYER_EXIT.into_bits()
+                | StickyKeyReleaseMode::DOUBLE_TAP.into_bits()
+        );
+        let alt_tab = &sticky.profiles["alt_tab"];
+        assert_eq!(alt_tab.timeout_ms, Some(5000));
+        assert_eq!(alt_tab.release_after_hold_ms, Some(500));
+        assert_eq!(
+            alt_tab.release_mode.unwrap().into_bits(),
+            StickyKeyReleaseMode::OTHER_KEY_PRESS.into_bits() | StickyKeyReleaseMode::LAYER_ENTER.into_bits()
+        );
     }
 }

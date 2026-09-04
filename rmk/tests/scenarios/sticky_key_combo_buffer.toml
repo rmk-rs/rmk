@@ -1,0 +1,65 @@
+[layout]
+rows = 1
+cols = 5
+map = "(0,0) (0,1) (0,2) (0,3) (0,4)"
+
+[keymap]
+layers = 2
+
+[[keymap.layer]]
+keys = "SK(LShift) A SK(MO(1)) C D"
+
+[[keymap.layer]]
+keys = "SK(LShift) B SK(MO(1)) C E"
+
+[behavior.sticky_key]
+activate_on_keypress = true
+release_after_hold = "75ms"
+
+[behavior.combo]
+timeout = "100ms"
+combos = [{ actions = ["SK(LShift)", "A"], output = "B" }]
+
+[[test]]
+name = "hold_threshold_uses_press_time_before_combo_buffering"
+steps = [
+  { press = [0, 0] },
+  { delay = 150 },
+  { release = [0, 0] },
+  { tap = { pos = [0, 1], duration = 10 } },
+]
+expect = [["LShift"], [], ["A"], []]
+
+# A physical press claims an armed Sticky Key before combo buffering can wait
+# past the Sticky timeout. When the incomplete combo eventually dispatches A,
+# the claimed modifier still applies to it.
+[[test]]
+name = "combo_candidate_claims_sticky_before_short_timeout"
+behavior.sticky_key = { activate_on_keypress = false, timeout = "50ms", release_mode = "other_key_press" }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { press = [0, 1] },
+  { delay = 120 },
+  { release = [0, 1] },
+]
+expect = [["LShift", "A"], ["A"], []]
+
+# Re-pressing one constituent of a held, already-triggered combo is swallowed.
+# It must not claim the Sticky layer because no action will later finish that
+# claim. The layer should therefore keep its finite deadline and expire.
+[[test]]
+name = "reasserted_combo_press_does_not_suspend_sticky_timeout"
+behavior.sticky_key = { activate_on_keypress = false, timeout = "50ms", release_mode = "other_key_press" }
+behavior.combo = { timeout = "100ms", combos = [{ actions = ["B", "C"], output = "No" }] }
+steps = [
+  { tap = { pos = [0, 2], duration = 10 } },
+  { press = [0, 1] },
+  { press = [0, 3] },
+  { release = [0, 1] },
+  { press = [0, 1] },
+  { delay = 100 },
+  { tap = { pos = [0, 4], duration = 10 } },
+  { release = [0, 3] },
+  { release = [0, 1] },
+]
+expect = [["D"], []]

@@ -1,0 +1,197 @@
+# Boundaries for live Sticky-modifier release against other modifier owners and
+# the independent Sticky-layer lifecycle.
+
+[layout]
+rows = 2
+cols = 7
+map = """
+(0,0) (0,1) (0,2) (0,3) (0,4) (0,5) (0,6)
+(1,0) (1,1) (1,2) (1,3) (1,4) (1,5) (1,6)
+"""
+
+[keymap]
+layers = 2
+
+[[keymap.layer]]
+keys = """
+SK(LCtrl) SK(LCtrl | LShift) LCtrl A SHIFTED(B) OSL(1) SK(LShift)
+CapsWordToggle AudioVolUp SystemSleep MouseRight D No No
+"""
+
+[[keymap.layer]]
+keys = """
+Trns Trns Trns C Trns Trns Trns
+Trns Trns Trns Trns Trns Trns Trns
+"""
+
+[behavior.sticky_key]
+activate_on_keypress = false
+
+[behavior.fork]
+forks = [
+  { trigger = "D", negative_output = "D", positive_output = "AudioVolUp", match_any = "LShift" },
+]
+
+[[test]]
+name = "overlapping_sticky_masks_keep_shared_bits_until_last_owner_releases"
+steps = [
+  { press = [0, 0] },
+  { press = [0, 1] },
+  { press = [0, 3] },
+  { release = [0, 0] },
+  { release = [0, 1] },
+  { release = [0, 3] },
+]
+expect = [
+  ["LShift", "LCtrl", "A"],
+  ["A"],
+  [],
+]
+
+[[test]]
+name = "ordinary_modifier_ownership_survives_matching_sticky_release"
+steps = [
+  { press = [0, 2] },
+  { press = [0, 0] },
+  { press = [0, 3] },
+  { release = [0, 0] },
+  { release = [0, 2] },
+  { release = [0, 3] },
+]
+expect = [
+  ["LCtrl"],
+  ["LCtrl", "A"],
+  ["A"],
+  [],
+]
+
+[[test]]
+name = "key_with_modifier_ownership_survives_matching_sticky_release"
+steps = [
+  { press = [0, 6] },
+  { press = [0, 4] },
+  { release = [0, 6] },
+  { release = [0, 4] },
+]
+expect = [
+  ["LShift", "B"],
+  [],
+]
+
+[[test]]
+name = "caps_word_ownership_survives_matching_sticky_release"
+steps = [
+  { tap = { pos = [1, 0], duration = 10 } },
+  { press = [0, 6] },
+  { press = [0, 3] },
+  { release = [0, 6] },
+  { release = [0, 3] },
+]
+expect = [
+  ["LShift", "A"],
+  [],
+]
+
+[[test]]
+name = "live_modifier_release_does_not_release_held_osl"
+steps = [
+  { press = [0, 5] },
+  { press = [0, 0] },
+  { press = [0, 3] },
+  { release = [0, 0] },
+  { release = [0, 3] },
+  { release = [0, 5] },
+]
+expect = [
+  ["LCtrl", "C"],
+  ["C"],
+  [],
+]
+
+# Caps Word and SHIFTED(B) both supplied Shift in the last keyboard report.
+# The consumer event clears both without emitting a keyboard-page report, so
+# releasing SK(LShift) must still remove the Shift it contributed.
+[[test]]
+name = "caps_word_consumer_silent_change_preserves_sticky_cleanup_attribution"
+behavior.sticky_key = { activate_on_keypress = true, release_mode = "other_key_release" }
+steps = [
+  { tap = { pos = [1, 0], duration = 10 } },
+  { press = [0, 6] },
+  { press = [0, 4] },
+  { press = [1, 1] },
+  { release = [0, 6] },
+  { release = [1, 1] },
+  { release = [0, 4] },
+]
+expect = [
+  ["LShift"],
+  ["LShift", "B"],
+  { consumer = ["AudioVolUp"] },
+  ["B"],
+  { consumer = [] },
+  [],
+]
+
+[[test]]
+name = "caps_word_system_silent_change_preserves_sticky_cleanup_attribution"
+behavior.sticky_key = { activate_on_keypress = true, release_mode = "other_key_release" }
+steps = [
+  { tap = { pos = [1, 0], duration = 10 } },
+  { press = [0, 6] },
+  { press = [0, 4] },
+  { press = [1, 2] },
+  { release = [0, 6] },
+  { release = [1, 2] },
+  { release = [0, 4] },
+]
+expect = [
+  ["LShift"],
+  ["LShift", "B"],
+  { system = ["SystemSleep"] },
+  ["B"],
+  { system = [] },
+  [],
+]
+
+[[test]]
+name = "caps_word_mouse_silent_change_preserves_sticky_cleanup_attribution"
+behavior.sticky_key = { activate_on_keypress = true, release_mode = "other_key_release" }
+steps = [
+  { tap = { pos = [1, 0], duration = 10 } },
+  { press = [0, 6] },
+  { press = [0, 4] },
+  { press = [1, 3] },
+  { release = [0, 6] },
+  { release = [1, 3] },
+  { release = [0, 4] },
+]
+expect = [
+  ["LShift"],
+  ["LShift", "B"],
+  { mouse = { x = 5 } },
+  ["B"],
+  { mouse = {} },
+  [],
+]
+
+# The fork becomes active after the last keyboard report. Its Shift suppression
+# must not erase the report's Sticky attribution before SK(LShift) releases.
+[[test]]
+name = "silent_fork_activation_preserves_sticky_cleanup_attribution"
+behavior.sticky_key = { activate_on_keypress = true, release_mode = "other_key_release" }
+steps = [
+  { press = [0, 6] },
+  { press = [0, 4] },
+  { press = [1, 4] },
+  { release = [0, 6] },
+  { release = [1, 4] },
+  { release = [0, 4] },
+]
+expect = [
+  ["LShift"],
+  ["LShift", "B"],
+  { consumer = ["AudioVolUp"] },
+  ["B"],
+  { consumer = [] },
+  [],
+]

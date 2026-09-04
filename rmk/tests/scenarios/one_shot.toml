@@ -55,11 +55,11 @@ expect = [
   [],
 ]
 
-# Rollover: a second key goes down before the first shifted key comes up.
-# `update_osm` in oneshot.rs consumes the one-shot state on that first key's
-# press, so a key rolled over before the release doesn't also get shifted.
+# Chain mode (`quick_release = false`) keeps the one-shot modifier in the HID
+# report until the first key releases. A second rolled key therefore shares the
+# modifier while both keys are held, then remains down without it.
 [[test]]
-name = "osm_rollover_second_key_not_shifted"
+name = "osm_rollover_keeps_modifier_until_first_key_release"
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift)
   { press = [0, 2] },  # Press A
@@ -69,21 +69,22 @@ steps = [
 ]
 expect = [
   ["LShift", "A"],  # A gets the one-shot modifier
-  ["A", "W"],        # W does not, even though A is still held
+  ["LShift", "A", "W"],
   ["W"],
   [],
 ]
 
-# OSM released while the tap-hold key is still down: the tap still carries it.
+# Releasing OSM while a tap-hold key is physically down does not create a new
+# latch. The later tap therefore has no Sticky modifier.
 [[test]]
-name = "osm_rolling_with_tap_hold"
+name = "osm_live_release_while_tap_hold_is_down"
 steps = [
   { press = [0, 0] },    # Press OSM(LShift)
   { press = [0, 3] },    # Press TH(B, C)
   { release = [0, 0] },  # Release OSM(LShift)
   { release = [0, 3] },  # Release TH(B, C)
 ]
-expect = [["LShift", "B"], []]
+expect = [["B"], []]
 
 # Two OSMs stack onto the same next key.
 [[test]]
@@ -162,6 +163,37 @@ expect = [
   [],
 ]
 
+# An OSL held beyond its key-up hold threshold does not latch the layer again
+# when physically released, even though its normal timeout has not elapsed.
+[[test]]
+name = "osl_releases_on_keyup_after_hold_threshold"
+behavior.sticky_key = { timeout = "1s", release_after_hold = "100ms" }
+steps = [
+  { press = [0, 1] },
+  { delay = 150 },
+  { release = [0, 1] },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  ["A"],  # A from layer 0 because releasing OSL also released layer 1
+  [],
+]
+
+# The default remains compatible: releasing a held, timed-out OSL starts a new
+# timeout and leaves layer 1 latched for the next key.
+[[test]]
+name = "osl_default_restarts_timeout_on_keyup_after_elapsed_timeout"
+steps = [
+  { press = [0, 1] },
+  { delay = 1100 },
+  { release = [0, 1] },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  ["C"],  # C from the still-latched layer 1
+  [],
+]
+
 # Only the first key after the OSL sees layer 1.
 [[test]]
 name = "osl_multiple_keys"
@@ -172,7 +204,7 @@ steps = [
 ]
 expect = [["C"], [], ["B"], []]
 
-# OSM consumed by the OSL keypress, so the layer-1 key arrives unshifted.
+# Sticky modifier and layer latches coexist, so the layer-1 key is shifted.
 [[test]]
 name = "osm_then_osl"
 steps = [
@@ -180,11 +212,12 @@ steps = [
   { tap = { pos = [0, 1], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
 ]
-expect = [["C"], []]
+expect = [["LShift", "C"], []]
 
-# A held (not tapped) OSL consumes a pending OSM at the OSL's own press, same
-# as the tapped case above. The key typed under the held layer must not see
-# the modifier either.
+# OSL first, so (0,0) resolves to layer 1's OSM(LShift | LCtrl). The modifier
+# and layer latches coexist, so the next key still comes from layer 1.
+# A held (not tapped) OSL also coexists with a pending OSM. This characterizes
+# the same independent Sticky modifier/layer behavior as the tapped case above.
 [[test]]
 name = "osm_then_held_osl"
 steps = [
@@ -194,12 +227,12 @@ steps = [
   { release = [0, 1] },  # Release OSL(1)
 ]
 expect = [
-  ["C"],  # OSM already consumed by the OSL press
+  ["LShift", "C"],
   [],
 ]
 
-# OSL first, so (0,0) resolves to layer 1's OSM(LShift | LCtrl); the layer is
-# spent by then, so the next key comes from layer 0.
+# OSL first, so (0,0) resolves to layer 1's OSM(LShift | LCtrl). The modifier
+# and layer latches coexist, so the next key still comes from layer 1.
 [[test]]
 name = "osl_then_osm"
 steps = [
@@ -207,7 +240,7 @@ steps = [
   { tap = { pos = [0, 0], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
 ]
-expect = [["LShift", "LCtrl", "A"], []]
+expect = [["LShift", "LCtrl", "C"], []]
 
 # Both the OSM and the OSL expire before the next key.
 [[test]]
@@ -250,35 +283,35 @@ expect = [
 name = "osm_armed_does_not_stall_mouse_repeats"
 behavior.one_shot = { timeout = "600ms" }
 steps = [
-  { press = [0, 8] },   # Hold MouseWheelUp: initial delta, first repeat due at +100ms
   { press = [0, 0] },   # OSM(LShift) down
-  { release = [0, 0] }, # OSM(LShift) up and still armed; repeats must continue regardless
+  { release = [0, 0] }, # OSM(LShift) up and armed before another physical key is held
+  { press = [0, 8] },   # Hold MouseWheelUp: initial delta, first repeat due at +100ms
   { delay = 280 },      # covers the repeat ticks at +100/+180/+260ms
+  { tap = { pos = [0, 2], duration = 10 } },  # Control: OSM is still armed while the mouse key is held
   { release = [0, 8] },
-  { tap = { pos = [0, 2], duration = 10 } },  # Control: OSM still armed here
 ]
 expect = [
   { mouse = { wheel = -1 } },
   { mouse = { wheel = -1 } },  # repeat while OSM armed
   { mouse = { wheel = -1 } },  # repeat while OSM armed
   { mouse = { wheel = -1 } },  # repeat while OSM armed
-  { mouse = {} },
   ["LShift", "A"],
   [],
+  { mouse = {} },
 ]
 
 # Quick-release mode (quick_release = true): the modifier drops on key PRESS,
 # so each key report is followed by an unmodified one.
 #
-# Rolling into a morse/tap-hold key keeps the modifier applied: the expiry
-# deadline runs alongside the pending tap resolution instead of firing before
-# the tap resolves.
 [[test]]
-name = "osm_quick_release_rolling"
+name = "osm_quick_release_rolling_with_tap_hold"
+behavior.one_shot = { timeout = "100ms" }
 behavior.one_shot_modifiers = { quick_release = true }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },
-  { tap = { pos = [0, 3], duration = 10 } },  # TH(B, C) tapped
+  { press = [0, 3] },
+  { delay = 150 },
+  { release = [0, 3] },
 ]
 expect = [["LShift", "B"], ["B"], []]
 
@@ -331,3 +364,109 @@ steps = [
   { tap = { pos = [0, 2], duration = 10 } },
 ]
 expect = [["LShift"], ["LShift", "LCtrl"], ["LShift", "LCtrl", "A"], ["A"], []]
+
+# Releasing one physically held OSM removes only that producer's modifier from
+# the current report. Other held modifiers and keys stay down.
+[[test]]
+name = "osm_live_release_ctrl_while_shift_and_key_remain"
+behavior.one_shot_modifiers = { activate_on_keypress = false }
+steps = [
+  { press = [0, 4] },
+  { press = [0, 0] },
+  { press = [0, 2] },
+  { release = [0, 4] },
+  { release = [0, 0] },
+  { release = [0, 2] },
+]
+expect = [
+  ["LShift", "LCtrl", "A"],
+  ["LShift", "A"],
+  ["A"],
+  [],
+]
+
+[[test]]
+name = "osm_live_release_shift_while_ctrl_and_key_remain"
+steps = [
+  { press = [0, 4] },
+  { press = [0, 0] },
+  { press = [0, 2] },
+  { release = [0, 0] },
+  { release = [0, 4] },
+  { release = [0, 2] },
+]
+expect = [
+  ["LShift", "LCtrl", "A"],
+  ["LCtrl", "A"],
+  ["A"],
+  [],
+]
+
+[[test]]
+name = "osm_live_release_after_target_keyup"
+steps = [
+  { press = [0, 4] },
+  { press = [0, 0] },
+  { press = [0, 2] },
+  { release = [0, 2] },
+  { release = [0, 4] },
+  { release = [0, 0] },
+]
+expect = [
+  ["LShift", "LCtrl", "A"],
+  ["LShift", "LCtrl"],
+  ["LShift"],
+  [],
+]
+
+[[test]]
+name = "osm_release_before_target_leaves_only_held_producer"
+steps = [
+  { press = [0, 4] },
+  { press = [0, 0] },
+  { release = [0, 4] },
+  { press = [0, 2] },
+  { release = [0, 2] },
+  { release = [0, 0] },
+]
+expect = [
+  ["LShift", "A"],
+  ["LShift"],
+  [],
+]
+
+[[test]]
+name = "osm_live_release_with_activate_on_keypress"
+behavior.one_shot_modifiers = { activate_on_keypress = true }
+steps = [
+  { press = [0, 4] },
+  { press = [0, 0] },
+  { press = [0, 2] },
+  { release = [0, 4] },
+  { release = [0, 0] },
+  { release = [0, 2] },
+]
+expect = [
+  ["LCtrl"],
+  ["LShift", "LCtrl"],
+  ["LShift", "LCtrl", "A"],
+  ["LShift", "A"],
+  ["A"],
+  [],
+]
+
+[[test]]
+name = "osm_release_while_mouse_key_is_down_does_not_latch"
+steps = [
+  { press = [0, 0] },
+  { press = [0, 8] },
+  { release = [0, 0] },
+  { release = [0, 8] },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  { mouse = { wheel = -1 } },
+  { mouse = {} },
+  ["A"],
+  [],
+]

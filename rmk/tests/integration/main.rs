@@ -1,7 +1,8 @@
 //! rmk's only test target, named `integration` after this directory.
 //!
 //! [`simulator`] is the harness every case runs on. `run_tests!` expands each
-//! `scenarios/*.toml` into a `mod` of keyboard-behavior tests;
+//! `scenarios/*.toml` into a `mod` of keyboard-behavior tests, including
+//! canonical and compatibility spellings for Sticky Keys;
 //! `scenarios/README.md` documents their syntax. [`rynk`] and [`vial`] hold what
 //! a scenario file cannot express: wire-protocol writes interleaved with matrix
 //! input.

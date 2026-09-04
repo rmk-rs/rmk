@@ -61,12 +61,6 @@ pub enum Action {
     TriLayerUpper,
     /// Triggers the Macro at the 'index'.
     TriggerMacro(u8),
-    /// Oneshot layer, keep the layer active until the next key is triggered.
-    OneShotLayer(u8),
-    /// Oneshot modifier, keep the modifier active until the next key is triggered.
-    OneShotModifier(ModifierCombination),
-    /// Oneshot key, keep the key active until the next key is triggered.
-    OneShotKey(HidKeyCode),
     /// Actions for controlling lights
     Light(LightAction),
     /// Actions for controlling the keyboard
@@ -84,4 +78,9 @@ pub enum Action {
     /// sent to the host as a vendor HID report.
     #[cfg(feature = "steno")]
     Steno(StenoKey),
+    /// Reserved so later variants keep identical postcard discriminants when
+    /// the `steno` feature is disabled.
+    #[cfg(not(feature = "steno"))]
+    #[doc(hidden)]
+    ReservedSteno,
 }
