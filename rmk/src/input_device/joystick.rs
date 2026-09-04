@@ -4,6 +4,7 @@ use usbd_hid::descriptor::MouseReport;
 use crate::channel::send_hid_report;
 use crate::event::PointingEvent;
 use crate::hid::Report;
+use crate::input_device::joystick_power::{IdleReportFilter, apply_deadzone};
 use crate::input_device::pointing::ALL_POINTING_DEVICES;
 use crate::keymap::KeyMap;
 
@@ -16,6 +17,8 @@ pub struct JoystickProcessor<'a, const N: usize> {
     keymap: &'a KeyMap<'a>,
     record: [i16; N],
     resolution: u16,
+    deadzone: u16,
+    idle_report_filter: IdleReportFilter,
 }
 
 impl<'a, const N: usize> JoystickProcessor<'a, N> {
@@ -33,7 +36,14 @@ impl<'a, const N: usize> JoystickProcessor<'a, N> {
             resolution,
             keymap,
             record: [0; N],
+            deadzone: 0,
+            idle_report_filter: IdleReportFilter::default(),
         }
+    }
+
+    pub fn with_deadzone(mut self, deadzone: u16) -> Self {
+        self.deadzone = deadzone;
+        self
     }
 
     async fn on_pointing_event(&mut self, event: PointingEvent) {
@@ -52,7 +62,7 @@ impl<'a, const N: usize> JoystickProcessor<'a, N> {
 
         debug!("JoystickProcessor::generate_report: record = {:?}", self.record);
         for (rec, b) in self.record.iter_mut().zip(self.bias.iter()) {
-            *rec = rec.saturating_add(*b);
+            *rec = apply_deadzone(rec.saturating_add(*b), self.deadzone);
         }
 
         for (rep, transform) in report.iter_mut().zip(self.transform.iter()) {
@@ -77,7 +87,21 @@ impl<'a, const N: usize> JoystickProcessor<'a, N> {
             pan: 0,
         };
 
-        // Send mouse report directly
+        // Do not remember reports dropped while no host is selected.
+        let epoch = crate::state::CONNECTION_EPOCH.lock(|epoch| epoch.get());
+        if crate::state::active_transport().is_none() {
+            self.idle_report_filter = IdleReportFilter::default();
+            return;
+        }
+        let moving = mouse_report.x != 0 || mouse_report.y != 0 || mouse_report.wheel != 0 || mouse_report.pan != 0;
+        if !self.idle_report_filter.should_send(epoch, buttons, moving) {
+            return;
+        }
+
         send_hid_report(Report::MouseReport(mouse_report)).await;
+        // A transport change can abort queueing while this task is waiting for capacity.
+        if crate::state::CONNECTION_EPOCH.lock(|current| current.get()) == epoch {
+            self.idle_report_filter.record_queued(epoch, buttons, moving);
+        }
     }
 }
