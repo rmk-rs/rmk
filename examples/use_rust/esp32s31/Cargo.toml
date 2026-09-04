@@ -1,0 +1,56 @@
+[package]
+name = "rmk-esp32s31"
+version = "0.2.0"
+authors = ["Haobo Gu <haobogu@outlook.com>"]
+description = "Keyboard firmware written in Rust"
+homepage = "https://github.com/rmk-rs/rmk"
+repository = "https://github.com/rmk-rs/rmk"
+readme = "../../README.md"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rmk = { path = "../../../rmk", default-features = false, features = [
+    "esp32s31",
+    "log",
+    "storage",
+    "vial",
+] }
+embassy-executor = { version = "0.10" }
+esp-backtrace = { version = "0.20", features = [
+    "esp32s31",
+    "panic-handler",
+    "println",
+] }
+esp-hal = { version = "1.2", features = ["esp32s31", "unstable"] }
+esp-storage = { version = "0.10", features = ["embedded-storage", "esp32s31"] }
+esp-println = { version = "0.18", features = ["esp32s31", "log-04"] }
+esp-rtos = { version = "0.4", features = ["esp32s31", "embassy"] }
+esp-bootloader-esp-idf = { version = "0.6", features = ["esp32s31", "log-04"] }
+
+[build-dependencies]
+xz2 = "0.1.7"
+json = "0.12"
+const-gen = "1.6"
+
+[[bin]]
+name = "rmk-esp32s31"
+test = false
+bench = false
+
+[profile.dev.package.esp-storage]
+opt-level = 3
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1        # LLVM can perform better optimizations using a single thread
+debug = 2
+debug-assertions = false
+incremental = false
+lto = 'thin'
+opt-level = 3
+overflow-checks = false

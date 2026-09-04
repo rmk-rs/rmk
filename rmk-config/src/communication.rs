@@ -93,6 +93,14 @@ impl KeyboardTomlConfig {
             None
         };
         let ble_config = self.ble.clone();
+        // Every other esp32 chip has esp-radio BLE, so an enabled `[ble]` here would otherwise
+        // surface as a missing `esp_radio` crate in the expanded macro.
+        if chip.chip == "esp32s31" && ble_config.as_ref().is_some_and(|c| c.enabled) {
+            return Err(
+                "`[ble]` is enabled, but esp32s31 has no BLE support: esp-radio does not support ESP32-S31 yet"
+                    .to_string(),
+            );
+        }
 
         match (usb_info, ble_config) {
             (Some(usb_info), None) => Ok(CommunicationConfig::Usb(usb_info)),

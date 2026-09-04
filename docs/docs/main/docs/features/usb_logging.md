@@ -27,4 +27,4 @@ Some microcontrollers (like ESP32S3) don't have enough USB endpoints, so USB log
 `usb_log` fails to compile on two groups of chips:
 
 - Chips without USB, such as `nrf52832_ble`, `nrf52810_ble`, `nrf52811_ble`, `nrf54l15_ble`, `esp32c3_ble`, `esp32c6_ble` and `esp32h2_ble`.
-- High-speed USB chips, currently `nrf54lm20_ble`: `embassy-usb-logger` only handles 64-byte packets, which high-speed bulk endpoints can't use. Use `defmt` on these chips.
+- High-speed USB chips, currently `nrf54lm20_ble` and `esp32s31`: `embassy-usb-logger` only handles 64-byte packets, which high-speed bulk endpoints can't use. Use `defmt` on these chips.

@@ -1,0 +1,14 @@
+[target.'cfg(all(any(target_arch = "riscv32", target_arch = "xtensa"), target_os = "none"))']
+runner = "espflash flash --monitor"
+
+[build]
+target = "riscv32imafc-unknown-none-elf"
+rustflags = [
+  # Required to obtain backtraces (e.g. when using the "esp-backtrace" crate.)
+  # NOTE: May negatively impact performance of produced code
+  "-C", "force-frame-pointers",
+]
+
+[env]
+ESP_LOG = "info"
+KEYBOARD_TOML_PATH = { value = "keyboard.toml", relative = true }

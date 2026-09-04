@@ -142,7 +142,6 @@ pub(crate) fn expand_imports_and_constants(
     // Generate extra imports, panic handler and logger
     let imports = match hardware.chip.series {
         ChipSeries::Esp32 => quote! {
-            use esp_alloc as _;
             use esp_backtrace as _;
             ::esp_bootloader_esp_idf::esp_app_desc!();
         },

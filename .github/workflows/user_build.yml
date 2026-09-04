@@ -75,7 +75,7 @@ jobs:
         if: ${{ startsWith(needs.get_chip_name.outputs.chip_name, 'nrf') }}
         run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
       # esp32s3 is the only Xtensa esp chip RMK builds, so it alone needs the
-      # espup toolchain. RISC-V esp32 chips (c3/c6/h2) build with the standard
+      # espup toolchain. RISC-V esp32 chips (c3/c6/h2/s31) build with the standard
       # toolchain and let cargo-make pull cargo-espflash on demand.
       - name: Install esp toolchain (esp32s3 / Xtensa)
         if: ${{ needs.get_chip_name.outputs.chip_name == 'esp32s3' }}

@@ -111,6 +111,7 @@ fn expand_i2c_init(chip_series: &ChipSeries, i2c: &I2cConfig) -> TokenStream {
                 let display_i2c = ::esp_hal::i2c::master::I2c::new(
                     p.#instance, ::esp_hal::i2c::master::Config::default()
                 )
+                .unwrap()
                 .with_sda(p.#sda)
                 .with_scl(p.#scl);
             }

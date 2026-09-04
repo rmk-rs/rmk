@@ -1066,7 +1066,7 @@ dependencies = [
 [[package]]
 name = "esp-alloc"
 version = "0.11.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "allocator-api2",
  "document-features",
@@ -1081,7 +1081,7 @@ dependencies = [
 [[package]]
 name = "esp-backtrace"
 version = "0.20.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "document-features",
  "esp-config",
@@ -1095,7 +1095,7 @@ dependencies = [
 [[package]]
 name = "esp-bootloader-esp-idf"
 version = "0.6.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "document-features",
  "esp-config",
@@ -1112,7 +1112,7 @@ dependencies = [
 [[package]]
 name = "esp-config"
 version = "0.8.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "document-features",
  "esp-metadata-generated",
@@ -1123,8 +1123,8 @@ dependencies = [
 
 [[package]]
 name = "esp-hal"
-version = "1.2.0-rc.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+version = "1.2.0"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "bitfield 0.19.5",
  "bytemuck",
@@ -1181,7 +1181,7 @@ dependencies = [
 [[package]]
 name = "esp-hal-procmacros"
 version = "0.23.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "document-features",
  "object",
@@ -1194,13 +1194,13 @@ dependencies = [
 
 [[package]]
 name = "esp-metadata-generated"
-version = "0.5.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+version = "0.5.1"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 
 [[package]]
 name = "esp-phy"
 version = "0.2.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "document-features",
  "embassy-sync 0.8.0",
@@ -1215,7 +1215,7 @@ dependencies = [
 [[package]]
 name = "esp-println"
 version = "0.18.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "document-features",
  "esp-metadata-generated",
@@ -1227,7 +1227,7 @@ dependencies = [
 [[package]]
 name = "esp-radio"
 version = "1.0.0-beta.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "allocator-api2",
  "bt-hci 0.9.0",
@@ -1260,8 +1260,8 @@ dependencies = [
 
 [[package]]
 name = "esp-radio-rtos-driver"
-version = "0.4.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+version = "0.4.1"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "esp-sync",
  "portable-atomic",
@@ -1270,7 +1270,7 @@ dependencies = [
 [[package]]
 name = "esp-riscv-rt"
 version = "0.15.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "document-features",
  "riscv",
@@ -1280,7 +1280,7 @@ dependencies = [
 [[package]]
 name = "esp-rom-sys"
 version = "0.1.5"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "document-features",
  "esp-metadata-generated",
@@ -1290,7 +1290,7 @@ dependencies = [
 [[package]]
 name = "esp-rtos"
 version = "0.4.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "allocator-api2",
  "defmt",
@@ -1315,7 +1315,7 @@ dependencies = [
 [[package]]
 name = "esp-storage"
 version = "0.10.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "document-features",
  "embedded-storage",
@@ -1330,7 +1330,7 @@ dependencies = [
 [[package]]
 name = "esp-sync"
 version = "0.3.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "document-features",
  "embassy-sync 0.6.2",
@@ -3265,7 +3265,7 @@ dependencies = [
 [[package]]
 name = "xtensa-lx"
 version = "0.13.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "critical-section",
 ]
@@ -3273,7 +3273,7 @@ dependencies = [
 [[package]]
 name = "xtensa-lx-rt"
 version = "0.23.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "document-features",
  "xtensa-lx",
@@ -3283,7 +3283,7 @@ dependencies = [
 [[package]]
 name = "xtensa-lx-rt-proc-macros"
 version = "0.5.0"
-source = "git+https://github.com/esp-rs/esp-hal.git?rev=5363c4c493f5f11654696ff192028cf45f04ba72#5363c4c493f5f11654696ff192028cf45f04ba72"
+source = "git+https://github.com/esp-rs/esp-hal.git?rev=dbd951f78c1276461ea3050c2ba71f552a3508ef#dbd951f78c1276461ea3050c2ba71f552a3508ef"
 dependencies = [
  "proc-macro2",
  "quote",

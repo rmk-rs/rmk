@@ -45,7 +45,7 @@ esp-backtrace = { version = "0.20", features = [
     "println",
 ] }
 esp-storage = { version = "0.10", features = ["embedded-storage"] }
-esp-hal = { version = "1.2.0-rc.0", features = ["unstable"] }
+esp-hal = { version = "1.2", features = ["unstable"] }
 esp-alloc = { version = "0.11" }
 esp-println = { version = "0.18", features = ["log-04"] }
 esp-radio = { version = "1.0.0-beta.0", features = ["ble", "unstable"] }
@@ -90,14 +90,14 @@ opt-level = 3
 overflow-checks = false
 
 # Released esp-radio (1.0.0-beta.0) pins bt-hci 0.8, which predates the shared
-# bt-hci-transport trait rmk/trouble-host need. Pin the whole esp graph to esp-rs/esp-hal
-# main, which pairs esp-hal 1.2.0-rc.0 with an esp-radio that speaks bt-hci-transport.
+# bt-hci-transport trait rmk/trouble-host need. Pin the whole esp graph to the esp-hal 1.2.0
+# release commit (tag esp-hal-v1.2.0), whose esp-radio speaks bt-hci-transport.
 [patch.crates-io]
-esp-alloc = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5363c4c493f5f11654696ff192028cf45f04ba72" }
-esp-backtrace = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5363c4c493f5f11654696ff192028cf45f04ba72" }
-esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5363c4c493f5f11654696ff192028cf45f04ba72" }
-esp-hal = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5363c4c493f5f11654696ff192028cf45f04ba72" }
-esp-println = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5363c4c493f5f11654696ff192028cf45f04ba72" }
-esp-radio = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5363c4c493f5f11654696ff192028cf45f04ba72" }
-esp-rtos = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5363c4c493f5f11654696ff192028cf45f04ba72" }
-esp-storage = { git = "https://github.com/esp-rs/esp-hal.git", rev = "5363c4c493f5f11654696ff192028cf45f04ba72" }
+esp-alloc = { git = "https://github.com/esp-rs/esp-hal.git", rev = "dbd951f78c1276461ea3050c2ba71f552a3508ef" }
+esp-backtrace = { git = "https://github.com/esp-rs/esp-hal.git", rev = "dbd951f78c1276461ea3050c2ba71f552a3508ef" }
+esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal.git", rev = "dbd951f78c1276461ea3050c2ba71f552a3508ef" }
+esp-hal = { git = "https://github.com/esp-rs/esp-hal.git", rev = "dbd951f78c1276461ea3050c2ba71f552a3508ef" }
+esp-println = { git = "https://github.com/esp-rs/esp-hal.git", rev = "dbd951f78c1276461ea3050c2ba71f552a3508ef" }
+esp-radio = { git = "https://github.com/esp-rs/esp-hal.git", rev = "dbd951f78c1276461ea3050c2ba71f552a3508ef" }
+esp-rtos = { git = "https://github.com/esp-rs/esp-hal.git", rev = "dbd951f78c1276461ea3050c2ba71f552a3508ef" }
+esp-storage = { git = "https://github.com/esp-rs/esp-hal.git", rev = "dbd951f78c1276461ea3050c2ba71f552a3508ef" }

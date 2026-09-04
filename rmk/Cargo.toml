@@ -83,7 +83,7 @@ embassy-boot-rp = { version = "0.10.0", optional = true }
 embassy-boot = { version = "0.7", optional = true, default-features = false }
 
 # ESP32 dependencies
-esp-hal = { version = "1.2.0-rc.0", optional = true }
+esp-hal = { version = "1.2", optional = true }
 
 # Document feature
 document-features = "0.2"
@@ -250,6 +250,11 @@ rp2040 = [
     "dep:fixed",
 ]
 
+## Enable feature if you want to use ESP32-S31. USB only: esp-radio has no ESP32-S31 support yet, so BLE is unavailable.
+esp32s31 = ["_esp", "_usb_high_speed"]
+## Internal marker for esp-hal chips; pulls `esp-hal` for reboot and watchdog support
+_esp = ["dep:esp-hal"]
+
 ## Enable feature if you're using Adafruit nRF52 bootloader and want bootloader jumping key
 adafruit_bl = ["_nrf_ble"]
 
@@ -314,7 +319,7 @@ esp32c6_ble = ["_esp_ble", "_no_usb"]
 esp32h2_ble = ["_esp_ble", "_no_usb"]
 ## Enable feature if you want to use ESP32S3 with BLE.
 esp32s3_ble = ["_esp_ble"]
-_esp_ble = ["_ble", "dep:esp-hal"]
+_esp_ble = ["_ble", "_esp"]
 
 ## Enable feature if you want to use RP2040W with BLE.
 pico_w_ble = ["_ble", "_no_subrating", "dep:embassy-rp"]

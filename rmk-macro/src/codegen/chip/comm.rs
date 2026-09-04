@@ -69,11 +69,17 @@ pub(crate) fn usb_config_default(hardware: &Hardware) -> TokenStream2 {
                 let driver = ::embassy_rp::usb::Driver::new(p.#peripheral_name, Irqs);
             },
             ChipSeries::Esp32 => {
-                let dp = format_ident!("{}", usb_info.dp);
-                let dm = format_ident!("{}", usb_info.dm);
+                // The high-speed OTG port (ESP32-S31) has dedicated pins, so it takes no GPIOs.
+                let usb = if usb_info.peripheral_name == "USB_HS" {
+                    quote! { ::esp_hal::usb::otg::Usb::new_hs(p.#peripheral_name) }
+                } else {
+                    let dp = format_ident!("{}", usb_info.dp);
+                    let dm = format_ident!("{}", usb_info.dm);
+                    quote! { ::esp_hal::usb::otg::Usb::new_fs(p.#peripheral_name, p.#dp, p.#dm) }
+                };
                 quote! {
                     static mut EP_MEMORY: [u8; 1024] = [0; 1024];
-                    let usb = ::esp_hal::usb::otg::Usb::new_fs(p.#peripheral_name, p.#dp, p.#dm);
+                    let usb = #usb;
                     let usb_config = ::esp_hal::usb::otg::embassy_usb_device::Config::default();
                     let driver = ::esp_hal::usb::otg::embassy_usb_device::Driver::new(usb, unsafe { &mut *core::ptr::addr_of_mut!(EP_MEMORY) }, usb_config);
                 }

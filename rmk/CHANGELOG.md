@@ -10,8 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Make Trouble BLE roles explicit, document environment-variable memory tuning, update the nRF52832 examples to peripheral-only SDC, and derive split notification capacity from Trouble's configured packet-pool MTU.
+- Add ESP32-S31 support (`esp32s31` Cargo feature, `chip = "esp32s31"` in `keyboard.toml`). USB only, over the chip's high-speed OTG port; esp-radio has no ESP32-S31 BLE support yet. See [examples/use_config/esp32s31](https://github.com/rmk-rs/rmk/tree/main/examples/use_config/esp32s31) and [examples/use_rust/esp32s31](https://github.com/rmk-rs/rmk/tree/main/examples/use_rust/esp32s31)
+
+### Changed
+
+- Update `esp-hal` to 1.2.0. The ESP32 BLE examples now pin the esp-hal graph to the `esp-hal-v1.2.0` release commit, because the released esp-radio still speaks bt-hci 0.8
+- ESP32 keyboards with `[ble]` disabled no longer create the BLE controller or the esp-alloc heap. A USB-only ESP32-S3 build that keeps `esp-radio` in `esp-rtos`'s features now fails to link for lack of a global allocator: drop that feature and the `esp-alloc`/`esp-radio` dependencies, as in the esp32s31 examples
 
 ### Fixed
+
+- Fix ESP32 display initialization in `#[rmk_keyboard]`, which called `with_sda` on the `Result` returned by esp-hal's `I2c::new`
 
 - Fix UTF-8 panics when non-ASCII names are used in `keyboard.toml` aliases, and accept Unicode whitespace between keymap actions
 - Honour `SET_PROTOCOL` on the boot-subclass keyboard interface. v0.9.0 advertises the boot keyboard protocol in the descriptor, but the device rejected the switch to boot mode and `GET_PROTOCOL` always answered report mode, so a host that requires the switch before using the keyboard — a BIOS/UEFI setup screen, a KVM switch, a BMC — could be left without a working keyboard. The keyboard interface now accepts both modes and reports the selected one

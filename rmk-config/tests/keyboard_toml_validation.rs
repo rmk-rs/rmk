@@ -25,7 +25,27 @@ rows = 2
 cols = 2
 "#;
 
+const ESP32S31_KEYBOARD_TOML: &str = r#"
+[keyboard]
+name = "RMK Test"
+vendor_id = 0x4c4b
+product_id = 0x4643
+chip = "esp32s31"
+
+[matrix]
+row_pins = ["GPIO2", "GPIO3"]
+col_pins = ["GPIO6", "GPIO7"]
+
+[layout]
+rows = 2
+cols = 2
+"#;
+
 fn write_temp_keyboard_toml(name: &str, extra_toml: &str) -> std::path::PathBuf {
+    write_temp_toml(name, &format!("{MINIMAL_KEYBOARD_TOML}\n{extra_toml}"))
+}
+
+fn write_temp_toml(name: &str, contents: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "rmk-{name}-{}-{}.toml",
         std::process::id(),
@@ -34,7 +54,7 @@ fn write_temp_keyboard_toml(name: &str, extra_toml: &str) -> std::path::PathBuf 
             .unwrap()
             .as_nanos()
     ));
-    std::fs::write(&path, format!("{MINIMAL_KEYBOARD_TOML}\n{extra_toml}")).unwrap();
+    std::fs::write(&path, contents).unwrap();
     path
 }
 
@@ -272,4 +292,35 @@ fn dfu_storage_conflict_absent_without_user_storage() {
 
         assert!(config.dfu_storage_conflict().is_none(), "{name}: expected no conflict");
     }
+}
+
+#[test]
+fn esp32s31_defaults_to_high_speed_usb_without_ble() {
+    let path = write_temp_toml("esp32s31-usb", ESP32S31_KEYBOARD_TOML);
+    let config = KeyboardTomlConfig::new_from_toml_path(&path);
+    std::fs::remove_file(path).ok();
+
+    let hardware = config.hardware().unwrap_or_else(|e| panic!("hardware(): {e}"));
+    let usb = hardware
+        .communication
+        .get_usb_info()
+        .expect("the esp32s31 chip default must enable USB");
+    assert_eq!(usb.peripheral_name, "USB_HS");
+    assert!(!hardware.communication.ble_enabled());
+}
+
+#[test]
+fn esp32s31_rejects_ble() {
+    let path = write_temp_toml(
+        "esp32s31-ble",
+        &format!("{ESP32S31_KEYBOARD_TOML}\n[ble]\nenabled = true\n"),
+    );
+    let config = KeyboardTomlConfig::new_from_toml_path(&path);
+    std::fs::remove_file(path).ok();
+
+    let err = config
+        .hardware()
+        .err()
+        .expect("esp32s31 with [ble] enabled must be rejected");
+    assert!(err.contains("esp32s31 has no BLE support"), "unexpected error: {err}");
 }

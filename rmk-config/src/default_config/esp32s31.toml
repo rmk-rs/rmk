@@ -1,0 +1,7 @@
+[keyboard]
+usb_enable = true
+
+[storage]
+enabled = true
+start_addr = 0x3f0000
+num_sectors = 16

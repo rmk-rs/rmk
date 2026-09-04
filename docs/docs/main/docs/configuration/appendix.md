@@ -620,6 +620,7 @@ Available chip names in `chip` field:
 - esp32c6
 - esp32h2
 - esp32s3
+- esp32s31
 - ALL stm32s supported by [embassy-stm32](https://github.com/embassy-rs/embassy/blob/main/embassy-stm32/Cargo.toml) with USB
 
 ### Available board names

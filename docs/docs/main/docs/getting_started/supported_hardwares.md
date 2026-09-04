@@ -11,6 +11,7 @@ Below is a (non-exhaustive) list of the currently supported hardware. The `keybo
 | ESP32C6     | RISC-V            | BLE          | ✅                 | ✅                    | ✅              | ESP32-C6 lacks full USB functionality         |
 | ESP32H2     | RISC-V            | BLE          | ✅                 | ✅                    | ✅              | ESP32-H2 lacks full USB functionality         |
 | ESP32S3     | Xtensa            | USB + BLE    | ✅                 | ✅                    | ✅              |                                               |
+| ESP32S31    | RISC-V            | USB          | -                  | ✅                    | ✅              | High-speed USB only; no BLE, no rmkit template yet |
 | RP2040      | Cortex-M0+        | USB + BLE    | ✅                 | ✅                    | ✅              | BLE is available on the Raspberry Pi Pico W   |
 | RP2350      | Cortex-M33/RISC-V | USB + BLE    | ✅                 | ✅                    | -               | BLE is available on the Raspberry Pi Pico 2 W |
 | nRF54LM20   | Cortex-M33        | USB + BLE    | ✅                 | ✅                    | -               | -                                             |

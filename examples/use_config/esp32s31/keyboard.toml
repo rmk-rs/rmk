@@ -1,0 +1,59 @@
+[keyboard]
+# Replace with your keyboard identity.
+name = "RMK Keyboard"
+product_name = "RMK Keyboard"
+vendor_id = 0x4c4b
+product_id = 0x4643
+manufacturer = "haobo"
+chip = "esp32s31"
+usb_enable = true
+
+[matrix]
+# Matrix pins are required.
+row_pins = ["GPIO2", "GPIO3", "GPIO4", "GPIO5"]
+col_pins = ["GPIO6", "GPIO7", "GPIO8"]
+# Default diode direction is col2row; set `row2col = true` if needed.
+# row2col = true
+
+[layout]
+rows = 4
+cols = 3
+map = """
+(0,0)  (0,1)  (0,2)
+(1,0)  (1,1)  (1,2)
+(2,0)  (2,1)  (2,2)
+(3,0)  (3,1)  (3,2)
+"""
+
+[keymap]
+layers = 3
+
+[[keymap.layer]] # layer 0
+keys = """
+A       B           C
+Kc1     Kc2         Kc3
+LCtrl   MO(1)       LShift
+OSL(1)  LT(2, Kc9)  LM(1, LShift | LGui)
+"""
+
+[[keymap.layer]] # layer 1
+keys = """
+_  TT(1)  TG(2)
+_  _      _
+_  _      _
+_  _      _
+"""
+
+[light]
+# All light pins are high-active by default, uncomment if you want it to be low-active
+# capslock.pin = "GPIO9"
+# capslock.low_active = true
+# scrolllock.pin = "GPIO10"
+# scrolllock.low_active = true
+# Just ignore if no light pin is used for it
+# numslock.pin = "GPIO11"
+# numslock.low_active = true
+
+[storage]
+# Storage is enabled by default.
+# enabled = false
