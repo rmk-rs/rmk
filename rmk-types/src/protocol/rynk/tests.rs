@@ -347,11 +347,11 @@ fn exemplars() -> Exemplars {
 /// intentional, regenerate the snapshot and bump `ProtocolVersion::CURRENT`.
 ///
 /// One exemplar per Rynk wire type, plus every variant of the positional
-/// enums (`KeyAction`, `Action`, and the status enums) so a reordered or
-/// inserted variant flips the bytes. Postcard tags enums by declaration
-/// order, *not* the `#[repr]` discriminant, so the keycode exemplars also
-/// pin variant ordinals. Structs use distinct per-field values so a field
-/// swap is caught too. Only feature-independent values belong here: the
+/// enums (`KeyAction`, `Action`, its nested `KeyboardAction`, and the status
+/// enums) so a reordered or inserted variant flips the bytes. Postcard tags
+/// enums by declaration order, *not* the `#[repr]` discriminant, so the keycode
+/// exemplars also pin variant ordinals. Structs use distinct per-field values
+/// so a field swap is caught too. Only feature-independent values belong here: the
 /// gated `Action::Steno`, the `bulk` request/response payloads, and
 /// `PeripheralStatus` are excluded so every `rynk` feature set yields the
 /// same snapshot. Full frames are pinned separately in `wire_frames_locked`.
@@ -439,6 +439,30 @@ fn wire_values_locked() {
         (
             "Action::KeyboardControl(Bootloader)",
             encode(&Action::KeyboardControl(KeyboardAction::Bootloader)),
+        ),
+        (
+            "Action::KeyboardControl(Reboot)",
+            encode(&Action::KeyboardControl(KeyboardAction::Reboot)),
+        ),
+        (
+            "Action::KeyboardControl(ClearEeprom)",
+            encode(&Action::KeyboardControl(KeyboardAction::ClearEeprom)),
+        ),
+        (
+            "Action::KeyboardControl(ComboOn)",
+            encode(&Action::KeyboardControl(KeyboardAction::ComboOn)),
+        ),
+        (
+            "Action::KeyboardControl(ComboOff)",
+            encode(&Action::KeyboardControl(KeyboardAction::ComboOff)),
+        ),
+        (
+            "Action::KeyboardControl(ComboToggle)",
+            encode(&Action::KeyboardControl(KeyboardAction::ComboToggle)),
+        ),
+        (
+            "Action::KeyboardControl(CapsWordToggle)",
+            encode(&Action::KeyboardControl(KeyboardAction::CapsWordToggle)),
         ),
         (
             "Action::Special(GraveEscape)",
