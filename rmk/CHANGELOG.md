@@ -64,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `[host].insecure` (renamed from `vial_insecure`, which still parses) to start the host configurator unlocked
 - Embed a version stamp in the USB serial number, so a host can tell which firmware build it is talking to
 - Shrink the in-RAM keymap by storing each tap-hold's timing profile as a `u8` index into a small deduplicated morse profile table (`MorsesConfig::profiles`) instead of an inline 8-byte `MorseProfile`. `KeyAction::TapHold` drops from 16 to 7 bytes, which also removes the profile's 8-byte alignment padding across every `KeyAction`-sized buffer — roughly a 3 KB RAM saving on a 5×14×5 board at no flash cost. An index with no table entry falls back to the default profile. Table capacity is configurable via `[rmk] morse_profile_max_num` (default 16, max 255); `keyboard.toml` users keep referencing profiles by name (the macro interns them automatically)
+- Add `matrix_idle_scan_ms` config option (default 10): non-`async_matrix` matrix scans sleep this long between passes once no key is pressed or debouncing, instead of busy-polling continuously. Cuts CPU wakeups and power draw on polling boards; `async_matrix` builds are unaffected since they already idle via GPIO interrupt
 
 #### Input devices
 

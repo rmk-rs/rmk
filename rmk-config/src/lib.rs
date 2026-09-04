@@ -313,6 +313,9 @@ pub(crate) struct RmkConstantsConfig {
     /// Default debounce time in ms
     #[serde_inline_default(20)]
     pub debounce_time: u16,
+    /// Matrix idle scan interval (ms) when no key is pressed or debouncing
+    #[serde_inline_default(10)]
+    pub matrix_idle_scan_ms: u16,
     /// Report channel size
     #[serde_inline_default(16)]
     pub report_channel_size: usize,
@@ -428,6 +431,7 @@ impl Default for RmkConstantsConfig {
             max_patterns_per_key: 8,
             macro_space_size: 256,
             debounce_time: 20,
+            matrix_idle_scan_ms: 10,
             report_channel_size: 16,
             vial_channel_size: 4,
             flash_channel_size: 4,
