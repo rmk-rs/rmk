@@ -11,7 +11,10 @@ use {
 };
 
 use crate::MACRO_SPACE_SIZE;
-use crate::config::{BehaviorConfig, Hand, MouseKeyConfig, OneShotModifiersConfig, PositionalConfig};
+use crate::config::{
+    BehaviorConfig, HOLD_TRIGGER_DEFAULT_PROFILE, Hand, HoldTriggerPositions, MouseKeyConfig, OneShotModifiersConfig,
+    PositionalConfig,
+};
 use crate::event::{KeyboardEvent, KeyboardEventPos, LayerChangeEvent, publish_event};
 use crate::input_device::rotary_encoder::Direction;
 use crate::keyboard::combo::Combo;
@@ -625,6 +628,40 @@ impl<'a> KeyMap<'a> {
             .unwrap_or(morse.default_profile)
     }
 
+    /// Whether the key at `(row, col)` is allowed to trigger the hold of the tap-hold key
+    /// using morse profile `idx`.
+    ///
+    /// Returns `None` when that profile configures no `hold_trigger_key_positions`, which is
+    /// how callers tell "no positional restriction" apart from "restricted, and this position
+    /// is not in the list".
+    pub(crate) fn hold_trigger_allows(&self, idx: u8, row: u8, col: u8) -> Option<bool> {
+        let inner = self.inner.borrow();
+        let entries = &inner.behavior.morse.hold_trigger_positions;
+
+        // The default profile's list only applies to keys with no list of their own, so which
+        // key the scan below reads is settled once, up front, rather than per entry.
+        let key = if entries.iter().any(|(p, _, _)| *p == idx) {
+            idx
+        } else {
+            HOLD_TRIGGER_DEFAULT_PROFILE
+        };
+
+        // A profile with no entry is unrestricted, so "restricted" and "allowed" both fall out
+        // of the same scan.
+        let mut restricted = false;
+        for (profile, r, c) in entries {
+            if *profile != key {
+                continue;
+            }
+            restricted = true;
+            if (*r, *c) == (row, col) {
+                return Some(true);
+            }
+        }
+
+        restricted.then_some(false)
+    }
+
     pub(crate) fn mouse_key_config(&self) -> MouseKeyConfig {
         self.inner.borrow().behavior.mouse_key
     }
@@ -659,6 +696,14 @@ impl<'a> KeyMap<'a> {
 
     pub(crate) fn set_morse_prior_idle_time(&self, time: Duration) {
         self.inner.borrow_mut().behavior.morse.prior_idle_time = time;
+    }
+
+    pub(crate) fn morse_hold_trigger_positions(&self) -> HoldTriggerPositions {
+        self.inner.borrow().behavior.morse.hold_trigger_positions.clone()
+    }
+
+    pub(crate) fn set_morse_hold_trigger_positions(&self, positions: HoldTriggerPositions) {
+        self.inner.borrow_mut().behavior.morse.hold_trigger_positions = positions;
     }
 
     pub(crate) fn get_morse(&self, idx: usize) -> Option<Morse> {

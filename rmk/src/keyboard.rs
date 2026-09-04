@@ -752,6 +752,25 @@ impl<'a> Keyboard<'a> {
                             continue;
                         }
 
+                        // A key outside the profile's hold trigger positions can never trigger
+                        // the held key's hold, so the mode's own hold rules are skipped for it.
+                        if matches!(held_key.state, KeyState::Pressed(_))
+                            && Self::hold_trigger_allows(self.keymap, &held_key.action, event.pos) == Some(false)
+                        {
+                            if Self::is_hold_trigger_on_release(self.keymap, &held_key.action) {
+                                // The tap is produced when this key is *released* instead, so
+                                // buffer it: a next key that is only held leaves the hold
+                                // reachable, which is what lets same-hand modifiers combine.
+                                debug!("Hold trigger positions exclude the pressed key, waiting for its release");
+                                decision_for_current_key = KeyBehaviorDecision::Buffer;
+                            } else {
+                                debug!("Hold trigger positions exclude the pressed key, resolving as tap");
+                                let _ = decisions.push((held_key.event.pos, HeldKeyDecision::UnilateralTap));
+                                decision_for_current_key = KeyBehaviorDecision::CleanBuffer;
+                            }
+                            continue;
+                        }
+
                         // Check morse key mode
                         match mode {
                             MorseMode::PermissiveHold => {
@@ -790,6 +809,18 @@ impl<'a> Keyboard<'a> {
                             }
                         }
                     } else {
+                        // The deferred half of the positional check: an excluded key that was
+                        // let through on press produces the tap now, on its release.
+                        if matches!(held_key.state, KeyState::Pressed(_))
+                            && decision_for_current_key != KeyBehaviorDecision::Release
+                            && Self::is_hold_trigger_on_release(self.keymap, &held_key.action)
+                            && Self::hold_trigger_allows(self.keymap, &held_key.action, event.pos) == Some(false)
+                        {
+                            debug!("Hold trigger positions exclude the released key, resolving as tap");
+                            let _ = decisions.push((held_key.event.pos, HeldKeyDecision::UnilateralTap));
+                            continue;
+                        }
+
                         let unilateral_tap = Self::is_unilateral_tap_enabled(self.keymap, &held_key.action);
 
                         // 1. Check unilateral tap of held key

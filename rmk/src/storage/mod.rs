@@ -13,7 +13,7 @@ use sequential_storage::cache::{Cache, Uncached};
 use sequential_storage::map::{Key, MapConfig, MapStorage, PostcardValue, SerializationError};
 #[cfg(feature = "host")]
 use {
-    crate::{MACRO_SPACE_SIZE, keyboard::combo::ComboConfig},
+    crate::{MACRO_SPACE_SIZE, config::HoldTriggerPositions, keyboard::combo::ComboConfig},
     rmk_types::action::{EncoderAction, KeyAction},
     rmk_types::fork::Fork,
     rmk_types::morse::Morse,
@@ -138,6 +138,8 @@ pub(crate) enum FlashOperationMessage {
         idx: u8,
         morse: Morse,
     },
+    #[cfg(feature = "host")]
+    MorseHoldTriggerPositions(HoldTriggerPositions),
     // Current saved connection type
     ConnectionType(ConnectionType),
     // Timeout time for combos
@@ -202,6 +204,10 @@ pub(crate) enum StorageKey {
     ActiveBleProfile,
     #[cfg(feature = "_ble")]
     BondInfo(u8),
+    // Append-only: postcard encodes enum variants by ordinal, so placing new
+    // persistent keys before existing variants would orphan old records.
+    #[cfg(feature = "host")]
+    MorseHoldTriggerPositions,
 }
 
 impl StorageKey {
@@ -283,6 +289,10 @@ pub(crate) enum StorageData {
     BondInfo(ProfileInfo),
     #[cfg(feature = "_ble")]
     ActiveBleProfile(u8),
+    // Append-only for the same persisted-enum compatibility reason as
+    // StorageKey::MorseHoldTriggerPositions.
+    #[cfg(feature = "host")]
+    MorseHoldTriggerPositions(HoldTriggerPositions),
 }
 
 impl<'a> PostcardValue<'a> for StorageData {}
@@ -528,6 +538,16 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
             behavior_config.tap.tap_capslock_interval = c.tap_capslock_interval;
         }
 
+        #[cfg(feature = "host")]
+        if let Some(StorageData::MorseHoldTriggerPositions(positions)) = self
+            .flash
+            .fetch_item(&mut self.buffer, &StorageKey::MorseHoldTriggerPositions)
+            .await
+            .map_err(|e| print_storage_error::<F>(e))?
+        {
+            behavior_config.morse.hold_trigger_positions = positions;
+        }
+
         Ok(())
     }
 
@@ -563,6 +583,14 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
         self.store_data(StorageKey::BehaviorConfig, &StorageData::from(behavior))
             .await
             .map_err(|e| print_storage_error::<F>(e))?;
+
+        #[cfg(feature = "host")]
+        self.store_data(
+            StorageKey::MorseHoldTriggerPositions,
+            &StorageData::MorseHoldTriggerPositions(behavior.morse.hold_trigger_positions.clone()),
+        )
+        .await
+        .map_err(|e| print_storage_error::<F>(e))?;
 
         #[cfg(feature = "host")]
         for (layer, layer_data) in keymap.iter().enumerate() {
@@ -613,6 +641,11 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
         .await?;
         self.store_data(StorageKey::BehaviorConfig, &StorageData::from(behavior))
             .await?;
+        self.store_data(
+            StorageKey::MorseHoldTriggerPositions,
+            &StorageData::MorseHoldTriggerPositions(behavior.morse.hold_trigger_positions.clone()),
+        )
+        .await?;
 
         // TODO: Generic reset for vial and other hosts
         for (layer, layer_data) in keymap.iter().enumerate() {
@@ -748,6 +781,14 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                 FlashOperationMessage::Morse { idx, morse } => {
                     self.store_data(StorageKey::morse(idx), &StorageData::Morse(morse))
                         .await
+                }
+                #[cfg(feature = "host")]
+                FlashOperationMessage::MorseHoldTriggerPositions(positions) => {
+                    self.store_data(
+                        StorageKey::MorseHoldTriggerPositions,
+                        &StorageData::MorseHoldTriggerPositions(positions),
+                    )
+                    .await
                 }
                 FlashOperationMessage::ConnectionType(ty) => {
                     self.store_data(StorageKey::ConnectionType, &StorageData::ConnectionType(ty))

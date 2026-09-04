@@ -2,7 +2,7 @@ use embassy_time::{Duration, Instant};
 use rmk_types::action::{Action, KeyAction};
 use rmk_types::morse::{HOLD, MorseMode, MorsePattern, TAP};
 
-use crate::event::KeyboardEvent;
+use crate::event::{KeyboardEvent, KeyboardEventPos};
 use crate::keyboard::Keyboard;
 use crate::keyboard::held_buffer::{HeldKey, KeyState};
 use crate::keymap::KeyMap;
@@ -400,6 +400,38 @@ impl<'a> Keyboard<'a> {
 
         // Use the global default
         keymap.morse_default_profile().unilateral_tap().unwrap_or(false)
+    }
+
+    /// Whether the key at `other` may trigger the hold of `key_action`.
+    ///
+    /// `None` means the key's profile sets no `hold_trigger_key_positions`, so there is no
+    /// positional restriction. Positions only exist for profile-indexed tap-holds; a morse
+    /// key carries its profile inline with no index to look the position list up by, so it
+    /// is never restricted.
+    pub fn hold_trigger_allows(keymap: &KeyMap, key_action: &KeyAction, other: KeyboardEventPos) -> Option<bool> {
+        let KeyAction::TapHold(_, _, idx) = key_action else {
+            return None;
+        };
+        let KeyboardEventPos::Key(pos) = other else {
+            return None;
+        };
+
+        keymap.hold_trigger_allows(*idx, pos.row, pos.col)
+    }
+
+    /// Whether a key outside `hold_trigger_key_positions` settles this tap-hold as a tap when
+    /// it is released rather than when it is pressed. Same as ZMK's `hold-trigger-on-release`.
+    pub fn is_hold_trigger_on_release(keymap: &KeyMap, key_action: &KeyAction) -> bool {
+        if let KeyAction::TapHold(_, _, idx) = key_action
+            && let Some(enabled) = keymap.morse_profile(*idx).hold_trigger_on_release()
+        {
+            return enabled;
+        }
+
+        keymap
+            .morse_default_profile()
+            .hold_trigger_on_release()
+            .unwrap_or(false)
     }
 
     pub fn is_flow_tap_enabled(keymap: &KeyMap, key_action: &KeyAction) -> bool {
