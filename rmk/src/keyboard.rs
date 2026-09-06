@@ -417,18 +417,19 @@ impl<'a> Keyboard<'a> {
             }
             KeyBehaviorDecision::Buffer => {
                 debug!("Current key is buffered");
-                let timeout_time = if key_action.is_morse() {
-                    event_time + Self::morse_timeout(self.keymap, key_action, true)
+                if key_action.is_morse() {
+                    // The morse press path continues a pattern already at this position;
+                    // pushing here would leave two entries for one key.
+                    self.process_key_action_morse(key_action, event, event_time).await;
                 } else {
-                    event_time
-                };
-                self.held_buffer.push(HeldKey::new(
-                    event,
-                    *key_action,
-                    KeyState::Pressed(MorsePattern::default()),
-                    event_time,
-                    timeout_time,
-                ));
+                    self.held_buffer.push(HeldKey::new(
+                        event,
+                        *key_action,
+                        KeyState::Pressed(MorsePattern::default()),
+                        event_time,
+                        event_time,
+                    ));
+                }
             }
             KeyBehaviorDecision::Ignore => {
                 debug!("Current key is ignored or not buffered, process normally: {:?}", event);
