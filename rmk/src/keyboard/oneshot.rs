@@ -9,9 +9,8 @@ use crate::keyboard::Keyboard;
 pub enum OneShotState<T> {
     /// First one shot key press
     Initial(T),
-    /// One shot key was released before any other key, normal one shot behavior.
-    /// Armed until the expiry deadline; `None` while the one shot key is
-    /// pressed again, where only its release re-arms a fresh deadline.
+    /// The one shot key was tapped: the next key press uses it, or it times out at the deadline.
+    /// `None` while the one shot key is held down again; releasing it sets a new deadline.
     Single(T, Option<Instant>),
     /// Another key was pressed before one shot key was released, treat as a normal modifier/layer
     Held(T),
