@@ -15,6 +15,10 @@ pub(crate) fn expand_adc_device(
             let mut channel_cfg = vec![];
             let mut adc_type = vec![];
             let mut event_device_ids: Vec<u8> = vec![];
+            let mut power_pins = vec![];
+            let mut axis_bias = vec![];
+            let mut deadzones = vec![];
+            let power_config = joystick_config.first().cloned();
             let mut default_polling_interval = 30000u16; // default 30s
             let mut light_sleep: Option<u16> = None;
             // TODO: deep sleep
@@ -42,6 +46,9 @@ pub(crate) fn expand_adc_device(
                 });
                 // Battery event slot: device_id unused, fill with 0
                 event_device_ids.push(0u8);
+                power_pins.push(quote! { None });
+                axis_bias.push(quote! { [0i16; 3] });
+                deadzones.push(0u16);
 
                 let (adc_divider_measured, adc_divider_total) = if adc_pin == "vddh" {
                     (1, 5)
@@ -68,6 +75,40 @@ pub(crate) fn expand_adc_device(
             }
 
             for (joy_idx, joystick) in joystick_config.into_iter().enumerate() {
+                joystick
+                    .validate_power_config()
+                    .unwrap_or_else(|e| panic!("{e}"));
+                if let Some(first) = &power_config {
+                    assert!(
+                        (
+                            first.polling_rate_hz,
+                            first.idle_polling_rate_hz,
+                            first.sample_settle_us,
+                            first.boot_settle_ms
+                        ) == (
+                            joystick.polling_rate_hz,
+                            joystick.idle_polling_rate_hz,
+                            joystick.sample_settle_us,
+                            joystick.boot_settle_ms
+                        ),
+                        "joysticks sharing one SAADC must use the same polling/settling parameters"
+                    );
+                }
+                power_pins.push(match &joystick.power_pin {
+                    Some(pin) => {
+                        let pin = format_ident!("{}", pin);
+                        quote! { Some(embassy_nrf::gpio::Output::new(
+                        p.#pin, embassy_nrf::gpio::Level::Low,
+                        embassy_nrf::gpio::OutputDrive::Standard)) }
+                    }
+                    None => quote! { None },
+                });
+                let mut bias = [0i16; 3];
+                for (dst, src) in bias.iter_mut().zip(&joystick.bias) {
+                    *dst = *src;
+                }
+                axis_bias.push(quote! { [#(#bias),*] });
+                deadzones.push(joystick.deadzone);
                 // Assign device id: use configured id or fall back to sequential index
                 let device_id: u8 = joystick.id.unwrap_or(joy_idx as u8);
                 event_device_ids.push(device_id);
@@ -82,6 +123,19 @@ pub(crate) fn expand_adc_device(
                     });
                     cnt += 1;
                 }
+                assert!(
+                    (2..=3).contains(&cnt),
+                    "joystick must have X/Y, and optionally Z"
+                );
+                assert!(
+                    joystick.bias.len() == cnt as usize
+                        && joystick.transform.len() == cnt as usize
+                        && joystick
+                            .transform
+                            .iter()
+                            .all(|row| row.len() == cnt as usize),
+                    "joystick bias/transform dimensions must match its ADC axes"
+                );
 
                 adc_type.push(quote! {
                     ::rmk::input_device::adc::AnalogEventType::Joystick(#cnt)
@@ -91,11 +145,12 @@ pub(crate) fn expand_adc_device(
                     transform,
                     bias,
                     resolution,
+                    deadzone,
                     ..
                 } = joystick;
                 let joystick_processor = Initializer {
                     initializer: quote! {
-                        let mut #joy_ident = rmk::input_device::joystick::JoystickProcessor::new(#device_id, [#([#(#transform),*]),*], [#(#bias),*], #resolution, &keymap);
+                        let mut #joy_ident = rmk::input_device::joystick::JoystickProcessor::new(#device_id, [#([#(#transform),*]),*], [#(#bias),*], #resolution, &keymap).with_deadzone(#deadzone);
                     },
                     var_name: joy_ident,
                 };
@@ -103,6 +158,23 @@ pub(crate) fn expand_adc_device(
             }
 
             if !processors.is_empty() {
+                let power_builder = power_config.map(|c| {
+                    let JoystickConfig {
+                        polling_rate_hz,
+                        idle_polling_rate_hz,
+                        sample_settle_us,
+                        boot_settle_ms,
+                        ..
+                    } = c;
+                    quote! {
+                        .with_power_management(
+                            rmk::input_device::joystick::JoystickPowerConfig {
+                                polling_rate_hz: #polling_rate_hz,
+                                idle_polling_rate_hz: #idle_polling_rate_hz,
+                                sample_settle_us: #sample_settle_us, boot_settle_ms: #boot_settle_ms,
+                            }, [#(#power_pins),*], [#(#axis_bias),*], [#(#deadzones),*])
+                    }
+                });
                 let light_sleep_option = if let Some(light_sleep_interval) = light_sleep {
                     quote! {Some(Duration::from_millis(#light_sleep_interval as u64))}
                 } else {
@@ -129,6 +201,7 @@ pub(crate) fn expand_adc_device(
                                 Duration::from_millis(#default_polling_interval as u64),
                                 #light_sleep_option,
                             )
+                            #power_builder
                         };
                     },
                     var_name: format_ident!("adc_device"),

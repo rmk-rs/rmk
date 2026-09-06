@@ -583,7 +583,11 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                             if data_len == 1 {
                                 match data[0] {
                                     0 => request_sleep(),
-                                    1 => report_activity(),
+                                    1 => {
+                                        report_activity();
+                                        crate::state::CONNECTION_EPOCH
+                                            .lock(|epoch| epoch.set(epoch.get().wrapping_add(1)));
+                                    }
                                     _ => {}
                                 }
                             }
@@ -613,6 +617,8 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
 
                 // Update CCCD table after processing the event
                 if cccd_updated {
+                    // A report queued before subscription may have been discarded by GATT.
+                    crate::state::CONNECTION_EPOCH.lock(|epoch| epoch.set(epoch.get().wrapping_add(1)));
                     // When macOS wakes up from sleep mode, it won't send EXIT SUSPEND command
                     // So we need to monitor the sleep state by using CCCD write event
                     report_activity();
@@ -840,6 +846,8 @@ async fn serve_keyboard_connection<
         loop {
             let report = BLE_REPORT_CHANNEL.receive().await;
             if let Err(e) = ble_hid_server.write_report(&report).await {
+                // Let stationary input resynchronize after a failed notification.
+                crate::state::CONNECTION_EPOCH.lock(|epoch| epoch.set(epoch.get().wrapping_add(1)));
                 error!("Failed to send report: {:?}", e);
             }
         }
