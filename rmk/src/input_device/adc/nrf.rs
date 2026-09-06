@@ -5,7 +5,7 @@ use rmk_macro::{Event, input_device};
 
 use super::{AdcState, AnalogEventType};
 use crate::event::{Axis, AxisEvent, AxisValType, BatteryAdcEvent, PointingEvent};
-use crate::input_device::joystick_power::{IdleTracker, JoystickPowerConfig, adc_axis, apply_deadzone};
+use crate::input_device::joystick::{IdleTracker, JoystickPowerConfig, adc_axis, apply_deadzone};
 
 struct PowerSampling<'a, const N: usize> {
     config: JoystickPowerConfig,
@@ -24,15 +24,12 @@ struct PowerSampling<'a, const N: usize> {
 /// A cancelled sampling future must not leave a switched joystick powered.
 struct SupplyGuard<'s, 'a, const N: usize> {
     pins: &'s mut [Option<Output<'a>>; N],
-    keep_on: bool,
 }
 
 impl<const N: usize> Drop for SupplyGuard<'_, '_, N> {
     fn drop(&mut self) {
-        if !self.keep_on {
-            for pin in self.pins.iter_mut().flatten() {
-                pin.set_low();
-            }
+        for pin in self.pins.iter_mut().flatten() {
+            pin.set_low();
         }
     }
 }
@@ -257,15 +254,10 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
         let power = self.power.as_mut().unwrap();
         embassy_time::Timer::at(power.next_sample).await;
         let config = power.config;
-        let was_idle = power.idle.idle;
-        let switched = power.pins.iter().any(Option::is_some);
         power.sample_valid = false;
         power.battery_ready = false;
 
-        let mut supply = SupplyGuard {
-            pins: &mut power.pins,
-            keep_on: false,
-        };
+        let supply = SupplyGuard { pins: &mut power.pins };
         for pin in supply.pins.iter_mut().flatten() {
             pin.set_high();
         }
@@ -275,21 +267,11 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
         }
 
         let started = Instant::now();
-        let window = if switched {
-            config.on_us(was_idle)
-        } else {
-            config.period_us(was_idle)
-        };
-        let sample_deadline = started + Duration::from_micros(window);
-        if config.can_sample(was_idle, switched) {
-            // nRF52's core runs at 64 MHz. Interrupts remain enabled; a preemption can extend this wait.
-            cortex_m::asm::delay(config.sample_settle_us.saturating_mul(64));
-            if Instant::now() < sample_deadline {
-                power.sample_valid = embassy_time::with_deadline(sample_deadline, self.saadc.sample(&mut self.buf[0]))
-                    .await
-                    .is_ok();
-            }
-        }
+        // nRF52's core runs at 64 MHz. Interrupts remain enabled; a preemption can extend this wait.
+        cortex_m::asm::delay(config.sample_settle_us.saturating_mul(64));
+        power.sample_valid = embassy_time::with_timeout(Duration::from_millis(5), self.saadc.sample(&mut self.buf[0]))
+            .await
+            .is_ok();
 
         if power.sample_valid {
             let mut channel = 0usize;
@@ -307,16 +289,14 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                 }
             }
             power.idle.observe(Instant::now().as_micros(), centered);
-            // Use the newly selected mode, including when entering idle from continuous power.
-            supply.keep_on = config.duty(power.idle.idle) == 1000;
         } else {
             power.idle.observe(Instant::now().as_micros(), false);
             if !power.warned {
-                warn!("Joystick sample skipped: settling/ADC did not fit supply window");
+                warn!("Joystick ADC sample timed out");
                 power.warned = true;
             }
         }
-        // ADC is finished: switch off before any further await, without filling the duty budget.
+        // ADC is finished: switch off before any further await.
         drop(supply);
 
         // One SAADC owns all channels. Battery scans use a separate buffer and cannot wake the joystick.

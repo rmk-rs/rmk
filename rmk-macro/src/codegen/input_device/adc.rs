@@ -18,7 +18,6 @@ pub(crate) fn expand_adc_device(
             let mut power_pins = vec![];
             let mut axis_bias = vec![];
             let mut deadzones = vec![];
-            let mut timing_warnings = vec![];
             let power_config = joystick_config.first().cloned();
             let mut default_polling_interval = 30000u16; // default 30s
             let mut light_sleep: Option<u16> = None;
@@ -76,36 +75,23 @@ pub(crate) fn expand_adc_device(
             }
 
             for (joy_idx, joystick) in joystick_config.into_iter().enumerate() {
-                let warnings = joystick
+                joystick
                     .validate_power_config()
                     .unwrap_or_else(|e| panic!("{e}"));
-                for (warning_idx, message) in warnings.iter().enumerate() {
-                    let warning =
-                        format_ident!("JOYSTICK_TIMING_WARNING_{}_{}", joy_idx, warning_idx);
-                    timing_warnings.push(quote! {
-                        #[deprecated(note = #message)]
-                        const #warning: () = ();
-                        const _: () = #warning;
-                    });
-                }
                 if let Some(first) = &power_config {
                     assert!(
                         (
                             first.polling_rate_hz,
-                            first.power_on_duty,
                             first.idle_polling_rate_hz,
-                            first.idle_power_on_duty,
                             first.sample_settle_us,
                             first.boot_settle_ms
                         ) == (
                             joystick.polling_rate_hz,
-                            joystick.power_on_duty,
                             joystick.idle_polling_rate_hz,
-                            joystick.idle_power_on_duty,
                             joystick.sample_settle_us,
                             joystick.boot_settle_ms
                         ),
-                        "joysticks sharing one SAADC must use the same polling/duty/settling parameters"
+                        "joysticks sharing one SAADC must use the same polling/settling parameters"
                     );
                 }
                 power_pins.push(match &joystick.power_pin {
@@ -175,18 +161,16 @@ pub(crate) fn expand_adc_device(
                 let power_builder = power_config.map(|c| {
                     let JoystickConfig {
                         polling_rate_hz,
-                        power_on_duty,
                         idle_polling_rate_hz,
-                        idle_power_on_duty,
                         sample_settle_us,
                         boot_settle_ms,
                         ..
                     } = c;
                     quote! {
                         .with_power_management(
-                            rmk::input_device::joystick_power::JoystickPowerConfig {
-                                polling_rate_hz: #polling_rate_hz, power_on_duty: #power_on_duty,
-                                idle_polling_rate_hz: #idle_polling_rate_hz, idle_power_on_duty: #idle_power_on_duty,
+                            rmk::input_device::joystick::JoystickPowerConfig {
+                                polling_rate_hz: #polling_rate_hz,
+                                idle_polling_rate_hz: #idle_polling_rate_hz,
                                 sample_settle_us: #sample_settle_us, boot_settle_ms: #boot_settle_ms,
                             }, [#(#power_pins),*], [#(#axis_bias),*], [#(#deadzones),*])
                     }
@@ -199,7 +183,6 @@ pub(crate) fn expand_adc_device(
                 let adc_device = Initializer {
                     initializer: quote! {
                         let mut adc_device = {
-                        #(#timing_warnings)*
                         use embassy_time::Duration;
                         use embassy_nrf::saadc::{self, Input as _};
                         ::embassy_nrf::bind_interrupts!(struct SaadcIrqs {
