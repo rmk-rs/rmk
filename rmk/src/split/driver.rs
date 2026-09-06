@@ -121,6 +121,13 @@ mod tests {
             level: Some(73),
         };
 
+        set_peripheral_battery(
+            0,
+            rmk_types::battery::BatteryStatus::Available {
+                charge_state: ChargeState::Discharging,
+                level: Some(74),
+            },
+        );
         set_peripheral_battery(0, status);
 
         assert_eq!(current_peripheral_battery_status(0), Some(status));
