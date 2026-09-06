@@ -299,3 +299,38 @@ steps = [
   { release = [1, 8] },
 ]
 expect = [["A"], [], ["Kp2"], []]
+
+# A tap-dance key re-pressed within its gap while a permissive-hold key is
+# unresolved: the press must continue the pattern in place, not add a second
+# entry at the same position that splits it into a lone tap plus a fresh hold.
+[[test]]
+name = "tap_dance_continues_behind_permissive_hold_key"
+behavior.morse.morses = [{ tap = "A", hold = "B", hold_after_tap = "C", double_tap = "D" }]
+steps = [
+  { tap = { pos = [1, 2], duration = 50 } },  # TD(0) tap: pattern "0", gap due at +250
+  { press = [1, 1] },                         # MT(B, LShift): unresolved, permissive hold
+  { press = [1, 2] },                         # TD(0) again, inside the gap
+  { delay = 300 },                            # MT hold, then TD(0) hold-after-tap
+  { release = [1, 2] },
+  { release = [1, 1] },
+]
+expect = [["LShift"], ["LShift", "C"], ["LShift"], []]
+
+
+# Same shape with a gap longer than the hold timeout: the re-press is due
+# before the first tap's gap, so a duplicate entry would be the one picked by
+# next_timeout, and its lone hold fires as B instead of the hold-after-tap
+# that the continued pattern resolves to.
+[[test]]
+name = "tap_dance_continues_behind_permissive_hold_key_short_hold"
+behavior.morse.profiles.p0 = { hold_timeout = "100ms", gap_timeout = "400ms" }
+behavior.morse.morses = [{ tap = "A", hold = "B", hold_after_tap = "C", double_tap = "D", profile = "p0" }]
+steps = [
+  { tap = { pos = [1, 2], duration = 50 } },  # TD(0) tap: pattern "0", gap due at +400
+  { press = [1, 1] },                         # MT(B, LShift): unresolved, hold due at +250
+  { press = [1, 2] },                         # TD(0) again, hold due at +100
+  { delay = 300 },                            # TD(0) hold-after-tap, then MT hold
+  { release = [1, 2] },
+  { release = [1, 1] },
+]
+expect = [["C"], ["C", "LShift"], ["LShift"], []]

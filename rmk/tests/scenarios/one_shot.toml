@@ -85,6 +85,34 @@ steps = [
 ]
 expect = [["LShift", "B"], []]
 
+# A tap-hold pressed inside the window keeps the OSM even if the deadline passes
+# while it is still unresolved. Regression: the expiry fired during that wait, so
+# the tap came out unshifted.
+[[test]]
+name = "osm_outlives_deadline_while_tap_hold_unresolved"
+behavior.one_shot = { timeout = "100ms" }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift), deadline at 110ms
+  { delay = 40 },
+  { press = [0, 3] },                         # TH(B, C) at 50ms, unresolved
+  { delay = 100 },                            # deadline passes at 110ms
+  { release = [0, 3] },                       # tap at 150ms
+]
+expect = [["LShift", "B"], []]
+
+# Same, resolved as a hold by its own timeout instead of a release.
+[[test]]
+name = "osm_outlives_deadline_while_tap_hold_unresolved_hold"
+behavior.one_shot = { timeout = "100ms" }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift), deadline at 110ms
+  { delay = 40 },
+  { press = [0, 3] },                         # TH(B, C) at 50ms, hold fires at 300ms
+  { delay = 300 },
+  { release = [0, 3] },
+]
+expect = [["LShift", "C"], []]
+
 # Two OSMs stack onto the same next key.
 [[test]]
 name = "osm_combined_modifiers"

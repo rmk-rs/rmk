@@ -64,7 +64,8 @@ splits by resolution mode. Those all start with `morse_`, so
 | `morse_combo_*` | One combo table over morse keys, under each of those modes |
 | `morse_tap_dance`, `morse_bilateral`, `morse_rollover`, `morse_layer_release`, `morse_quick_tap` | Morse behavior that isn't mode-specific |
 | `rynk_*` | The Rynk host protocol, one file per endpoint group |
-| everything else | One feature each — `combo`, `one_shot`, `layer`, `encoder`, `macros`, `hid_reports`, `passkey`, `steno` |
+| `deadline_race` | Deadlines that must keep firing while a key is buffered |
+| everything else | One feature each — `combo`, `one_shot`, `layer`, `encoder`, `macros`, `hid_reports`, `passkey`, `steno`, `user_hold` |
 
 Cases that only differ by mode share a name across files, so
 `nextest run two_key_misses_window` runs that case under every mode at once —

@@ -13,6 +13,7 @@ pub mod flash;
 
 use core::future::Future;
 use core::pin::Pin;
+use std::cell::RefCell;
 
 #[cfg(feature = "storage")]
 use embassy_embedded_hal::adapter::BlockingAsync;
@@ -134,6 +135,7 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             rmk_config: self.rmk_config,
             steps: Vec::new(),
             storage: None,
+            ble_profile_actions: Vec::new(),
         }
     }
 
@@ -159,6 +161,7 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             rmk_config: self.rmk_config,
             steps: Vec::new(),
             storage: Some(Box::pin(async move { storage.run().await })),
+            ble_profile_actions: Vec::new(),
         }
     }
 }
@@ -196,6 +199,7 @@ pub struct SimKeyboard {
     rmk_config: RmkConfig<'static>,
     steps: Vec<SimStep>,
     storage: Option<Pin<Box<dyn Future<Output = ()>>>>,
+    ble_profile_actions: Vec<String>,
 }
 
 impl SimKeyboard {
@@ -364,6 +368,13 @@ impl SimKeyboard {
                 None => rmk::channel::drain_flash_channel_for_test().await,
             }
         };
+        // Likewise for the BLE profile task; what it received is kept for assertions.
+        let profile_actions = RefCell::new(Vec::new());
+        #[cfg(feature = "_ble")]
+        let profiles =
+            rmk::channel::drain_ble_profile_channel_for_test(|action| profile_actions.borrow_mut().push(action));
+        #[cfg(not(feature = "_ble"))]
+        let profiles = core::future::pending::<()>();
 
         // A host connection is just a byte stream: drive the production
         // `run_session` over an in-memory duplex, exactly as a USB/BLE transport
@@ -385,22 +396,23 @@ impl SimKeyboard {
         // None of these ever return; the timeline does, and dropping them is how
         // a run ends. One resolving first means a task died or, for the session,
         // that a framing guard rejected the stream.
-        let background = select(keyboard.run(), select(flash, session));
+        let background = select(keyboard.run(), select(select(flash, profiles), session));
         match select(background, run_steps(steps, &to_device, &from_device)).await {
             Either::First(_) => panic!("a background task ended before the scripted steps finished"),
             Either::Second(()) => {}
         }
+        self.ble_profile_actions = profile_actions.into_inner();
 
         assert!(
             self.keyboard.held_buffer.is_empty(),
             "leak after buffer cleanup, buffer contains {:?}",
             self.keyboard.held_buffer
         );
-        assert!(
-            self.keyboard.unprocessed_events.is_empty(),
-            "simulator ended with unprocessed keyboard events: {:?}",
-            self.keyboard.unprocessed_events
-        );
+    }
+
+    /// What the keyboard sent the BLE profile task during `run`, in `Debug` form.
+    pub fn ble_profile_actions(&self) -> &[String] {
+        &self.ble_profile_actions
     }
 }
 
