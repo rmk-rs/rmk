@@ -81,6 +81,7 @@ impl Default for ProfileInfo {
 }
 
 /// BLE profile switch action
+#[derive(Debug)]
 pub(crate) enum BleProfileAction {
     Switch(u8),
     Previous,
