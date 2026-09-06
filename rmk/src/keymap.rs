@@ -239,6 +239,8 @@ impl KeyMapInner<'_> {
             }
         }
 
+        // Keep release on the same transparent default-layer action as press.
+        self.save_layer_cache(event.pos, self.behavior.default_layer);
         KeyAction::No
     }
 

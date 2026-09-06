@@ -22,3 +22,13 @@ steps = [
   { tap = { pos = [0, 11], duration = 10 } },
 ]
 expect = [["A"], [], ["B"], []]
+
+# After PDF(1), (3,2) is transparent on the default layer. Its release must
+# not fall back to layer 0's A action and emit a stray all-up report.
+[[test]]
+name = "transparent_default_layer_key_has_no_release_action"
+steps = [
+  { tap = { pos = [0, 10], duration = 10 } },
+  { tap = { pos = [3, 2], duration = 10 } },
+  { no_report = 100 },
+]
