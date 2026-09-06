@@ -34,13 +34,8 @@ pub fn clear_flash_channel() {
 }
 
 #[cfg(feature = "storage")]
-pub fn reset_flash_operation() {
-    crate::storage::FLASH_OPERATION_FINISHED.reset();
-}
-
-#[cfg(feature = "storage")]
-pub async fn flash_operation_finished() -> bool {
-    crate::storage::FLASH_OPERATION_FINISHED.wait().await
+pub async fn flush_storage() -> bool {
+    crate::storage::flush().await
 }
 
 const STEP: Duration = Duration::from_micros(100);

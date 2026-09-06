@@ -6,12 +6,12 @@ use embassy_futures::select::{Either3, select3};
 use embassy_sync::signal::Signal;
 use trouble_host::prelude::*;
 use trouble_host::{BondInformation, LongTermKey};
-#[cfg(feature = "storage")]
-use {crate::channel::FLASH_CHANNEL, crate::storage::FLASH_OPERATION_FINISHED};
 
 use super::ble_server::CCCD_TABLE_SIZE;
 use crate::NUM_BLE_PROFILE;
 use crate::channel::BLE_PROFILE_CHANNEL;
+#[cfg(feature = "storage")]
+use crate::channel::FLASH_CHANNEL;
 use crate::state::{current_profile, set_ble_profile};
 
 pub(crate) static UPDATED_PROFILE: Signal<crate::RawMutex, ProfileInfo> = Signal::new();
@@ -310,8 +310,7 @@ where
     /// Wait for profile switch event and update active profile
     ///
     /// This function will wait for profile switch operation, then update the active profile
-    /// based on the operation type. After completing the operation, it will wait for a period
-    /// to ensure the flash operation is completed.
+    /// based on the operation type, and return once the profile write has landed.
     pub(crate) async fn update_profile(&mut self) {
         // Wait for profile switch or updated profile event
         loop {
@@ -323,8 +322,6 @@ where
             .await
             {
                 Either3::First(action) => {
-                    #[cfg(feature = "storage")]
-                    FLASH_OPERATION_FINISHED.reset();
                     match action {
                         BleProfileAction::Switch(profile) => {
                             if !self.switch_profile(profile).await {
@@ -358,7 +355,7 @@ where
                         }
                     }
                     #[cfg(feature = "storage")]
-                    FLASH_OPERATION_FINISHED.wait().await;
+                    crate::storage::flush().await;
                     info!("Update profile done");
                     break;
                 }
