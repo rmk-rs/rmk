@@ -1,64 +1,56 @@
 //! # DFU — Device Firmware Update
 //!
-//! This module implements USB DFU firmware updates for RMK keyboards.
+//! This module implements DFU firmware updates for RMK keyboards. DFU is
+//! available over USB (via `ProxyUsbDfuHandler`) and over BLE via the rynk
+//! protocol (via `ProxyRynkDfuHandler`). Both paths feed into the same
+//! `DFU_CHANNEL` and `FlashDfuHandler`.
 //!
 //! ## Data flow
 //!
 //! ```text
-//!                                  ┌──────────────────────┐
-//!                                  │  Host (dfu-util)     │
-//!                                  └──────────┬───────────┘
-//!                                             │ USB DFU_DNLOAD
-//!                          ┌──────────────────┴──────────────────┐
-//!                          ▼                                     ▼
-//!               ┌──────────────────┐               ┌───────────────────────┐
-//!               │  CENTRAL USB     │               │  PERIPHERAL USB (opt) │
-//!               │  alt 0 = Central │               │  alt 0 = Central      │
-//!               │  alt 1 = FwdPeri │               └─────────────┬─────────┘
-//!               └────────┬─────────┘                             │
-//!                        │ publish_event                         │ publish_event
-//!                        │                                       │ DfuCmdEvent(Write(Central))
-//!                        │ DfuCmdEvent(Write(Central))           │ DfuCmdEvent(Write(Central))
-//!                        └───────┐                               │
-//!    DfuCmdEvent(Write(Central)) │    DfuCmdEvent(Write(FwdPeri))│          
-//!               ┌────────────────┴──────────────┐                │
-//!               ▼                               ▼                │
-//!  ┌────────────────────────┐     ┌──────────────────┐           │
-//!  │ FlashDfuHandler        │     │ PeripheralManager│           │
-//!  │ (central Runnable)     │     │ (central loop)   │           │
-//!  │                        │     │                  │           │
-//!  │ Match: Central →       │     │ Match:           │           │
-//!  │   handle_cmd()         │     │   ForwardPeri →  │           │
-//!  │   write_chunk()        │     │   UART forward   │           │
-//!  └────────────────────────┘     └────────┬─────────┘           │
-//!                                          │ FirmwareChunk       │
-//!                                   ┌──────┴──────┐              │
-//!                                   │  UART link  │              │
-//!                                   └──────┬──────┘              │
-//!                                          │                     │
-//!                                          ▼                     │
-//!  ┌─────────────────────────────────────────────────────┐       │
-//!  │ SplitPeripheral::run()                              │       │
-//!  │                                                     │       │
-//!  │ SplitMessage::FirmwareChunk →                       │       │
-//!  │   publish_event(DfuCmdEvent(Write(Local, ...))) ────┼───┐   │
-//!  │   ↓ wait for SPLIT_RESPONSE_CHANNEL                 │   │   │
-//!  │   ← SplitResponse::Write(result)                    │   │   │
-//!  │   → UART FirmwareChunkAck                           │   │   │
-//!  └─────────────────────────────────────────────────────┘   │   │
-//!                                                            │   │
-//!   DfuCmdEvent(Write(Local)) ┌──────────────────────────────┘   │
-//!                             │                                  │
-//!                             │ DfuCmdEvent(Write(Central)) ◄────┘
-//!                             ▼
-//!  ┌─────────────────────────────────────────────────────┐
-//!  │ FlashDfuHandler (peripheral Runnable)               │
-//!  │                                                     │
-//!  │ Match: Local → write_chunk() + signal channel       │
-//!  │ Match: Central → handle_cmd() (direct USB)          │
-//!  │ ComputeCrc → SPLIT_RESPONSE_CHANNEL                 │
-//!  │ Finish(Local) → sanity check + mark_updated_reset(  │
-//!  └─────────────────────────────────────────────────────┘
+//! ┌──────────────────────────────────────────────────────────────────┐
+//! │  Host (dfu-util / WebUSB / rynk-wtf)                             │
+//! │    USB Control Transfer (GET_DESCRIPTOR / DFU_DNLOAD)            │
+//! │    OR BLE rynk DFU commands                                      │
+//! └──────────────┬──────────────────────────────────┬────────────-───┘
+//!                │ USB                              │ BLE (rynk)
+//!                ▼                                  ▼
+//! ┌─-─────────────────────────┐        ┌──────────────────────────────┐
+//! │  UsbDfuIface              │        │  ProxyRynkDfuHandler          │
+//! │  (USB control handler)    │        │  (DFU commands → publish_event)│
+//! │                           │        │  CRC checkpoint/rewind state  │
+//! │  alt 0 → Central          │        └──────────┬───────────────────┘
+//! │  alt 1 → Peripheral(0)    │                   │
+//! │  alt 2 → Peripheral(1)    │                   │
+//! │  ...                      │                   │
+//! └──-────────────────────────┘                   │
+//!                                                 │
+//!                          DfuCmdEvent (PubSub)   ▼
+//! ┌───────────────────────────────────────────────────────────────┐
+//! │                                                               │
+//! │  ┌─── PeripheralManager (central event loop) ──────────────┐  │
+//! │  │  DfuCmdEvent::subscriber() → filter Peripheral(id)      │  │
+//! │  │  forward as SplitMessage::FirmwareChunk → split link    │──────────┐
+//! │  │  → peripheral FlashDfuHandler                           │  │       │
+//! │  └─────────────────────────────────────────────────────────┘  │       │
+//! │                                                               │       │
+//! │  ┌─── FlashDfuHandler (central) ─────────────────────────-─┐  │       │
+//! │  │  DfuCmdEvent::subscriber() → filter Central             │  │       │
+//! │  │  start → write_chunk(offset, data[512]) → finish        │  │       │
+//! │  │  erase on demand, NorFlash::write to DFU partition      │  │       │
+//! │  │  finish → sanity check (MSP+reset vector)               │  │       │
+//! │  │         → mark_updated_and_reset()                      │  │       │
+//! │  └──────────────────────────────────────────────────────-──┘  │       │
+//! └───────────────────────────────────────────────────────────────┘       │
+//!                                                                         │
+//!                                                ┌─────split link (UART)──┘
+//!                                                ▼                         
+//! ┌─── Peripheral (direct calls, no channel) ─────────────────────┐       
+//! │  FlashDfuHandler::write_chunk(offset, data)                   │       
+//! │  FlashDfuHandler::compute_dfu_crc() → FirmwareCrcReport       │       
+//!  mark_updated_and_reset() only on FirmwareCrcOk               │       
+//! └───────────────────────────────────────────────────────────────┘
+//!
 //! ```
 
 use core::sync::atomic::{AtomicBool, Ordering};

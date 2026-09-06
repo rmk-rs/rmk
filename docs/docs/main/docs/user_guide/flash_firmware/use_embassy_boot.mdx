@@ -298,7 +298,7 @@ In order for this to work, both, central and peripheral need to be flashed with 
 
 ::: note
 
-This feature currently only works for split keyboards that use UART (serial) as the interface between them. Split BLE and updates over the air wont work.
+This feature currently only works for split keyboards that use UART (serial) as the interface between them. Split BLE and updates over the air wont work — use [`dfu_ble`](#ble-dfu-dfu_ble) instead.
 
 :::
 
@@ -476,3 +476,70 @@ This setup also enables DFU updates via USB for the peripheral, if a USB connect
 |---|---|
 | Peripheral DFU LED flashes 3 times after update | Firmware crashed before `mark_booted()` was called automatically. Build with the `dfu_rp`/`dfu_nrf` feature (using config) or ensure `FlashDfuHandler` is used (using Rust). |
 | `dfu-util -a 1` shows `dfuERROR` or hangs at 0% | Peripheral not connected or its firmware is built without the `dfu_split` feature. |
+
+## BLE DFU (dfu_ble)
+
+`dfu_ble` enables over-the-air firmware updates for BLE keyboards.
+When a split peripheral can't find its central after boot, it enters DFU advertising mode — a BLE host ([rynk-wtf](https://github.com/rmk-rs/rynk)) can
+discover it and transfer a new firmware image directly.
+
+### Feature flags
+
+```toml title="Cargo.toml"
+[dependencies]
+rmk = { features = [ "dfu_nrf", "dfu_ble", "split" ] }
+```
+
+`dfu_ble` implies `rynk` and requires a chip-specific DFU feature
+(`dfu_nrf` or `dfu_rp`). It is not compatible with `dfu_split`.
+
+### Peripheral flashing on split keyboard
+During normal operation the peripheral is not connected to the host via bluetooth.
+To be able to flash the peripheral via BLE, after booing the peripheral advertises as `"{product_name} per{N}"` for 60 seconds if it can not find it's central. If no host connects, it enters soft sleep and wakes on any keypress —
+returning to normal operation if the central is now available.
+
+So to flash a peripheral via `dfu_ble`, follow this:
+1. switch off central, switch off peripheral
+2. switch on peripheral
+3. try to find peripheral using bluetooth on the host
+4. flash the peripheral using `rmk-wtf`
+5. `rmk-boot` does its swapping
+6. switch central back on, peripheral should connect to it again
+
+### Rust API
+
+For the central side, the configuration is the same like with dfu but without `dfu_ble` feature. See above for details.
+
+```rust title="peripheral.rs"
+use rmk::dfu::{FlashDfuHandler, FlashMutex, partitions_from_linkerscript};
+
+let flash = Flash::take(mpsl, p.NVMC);
+let flash_mutex = FlashMutex::new(flash);
+let (_, state_partition, dfu_partition) = partitions_from_linkerscript(&flash_mutex);
+
+let mut dfu_handler = FlashDfuHandler::new(dfu_partition, state_partition);
+
+join3(
+    run_all!(matrix, storage, dfu_handler, watchdog_runner),
+    run_all!(battery_processor),
+    run_rmk_split_peripheral(0, sdc, ble_addr()),
+)
+.await;
+```
+
+Using the TOML configuration only the feature activation in `Cargo.toml` and the [dfu] section in `keyboard.toml` is needed.
+
+### Using rynk-wtf
+
+[rynk-wtf](https://github.com/rmk-rs/rynk) is the host-side tool for
+BLE DFU.
+
+```bash
+rynk-wtf my-firmware.bin
+```
+This let's you pick a bluetooth device interactively.
+
+CRC-32 checks are performed periodically during transfer —
+on mismatch, rynk-wtf rewinds to the last checkpoint and retransmits.
+The chunk at with a CRC check is performed can be set using the parameter `--crc-interval`.
+Omit the checks by setting `crc-interval` to 0.

@@ -55,6 +55,16 @@ impl Crc32 {
     pub const fn finalize(&self) -> u32 {
         !self.state
     }
+
+    /// Restore a CRC calculator from a previously finalized value.
+    ///
+    /// This is the inverse of [`finalize`](Self::finalize): since
+    /// `finalize()` returns `!self.state`, the internal state is recovered as
+    /// `!finalized`. Useful for checkpoint/rollback in DFU transfer
+    /// verification.
+    pub const fn from_state(finalized: u32) -> Self {
+        Self { state: !finalized }
+    }
 }
 
 /// Compute the CRC-32 of `data` in one shot.

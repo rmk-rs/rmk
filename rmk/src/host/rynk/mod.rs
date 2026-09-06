@@ -4,7 +4,7 @@
 //! [`run_session`](RynkService::run_session) creates its own authorization gate
 //! ([`HostLock`]) and topic subscriptions, so transports never share either.
 
-mod handlers;
+pub(crate) mod handlers;
 mod topics;
 
 use embassy_futures::select::{Either, select};
@@ -50,6 +50,8 @@ impl<'a> RynkService<'a> {
     fn requires_unlock(&self, cmd: Cmd) -> bool {
         match cmd {
             Cmd::BootloaderJump | Cmd::StorageReset | Cmd::GetMatrixState => true,
+            // DFU start requires unlock for physical-presence gate.
+            Cmd::DfuStart => true,
             // Deleting a bond opens a re-pair hijack window; BLE-only command.
             #[cfg(feature = "_ble")]
             Cmd::ClearBleProfile => true,
@@ -135,6 +137,31 @@ impl<'a> RynkService<'a> {
             Cmd::GetLedIndicator => serve::<command::GetLedIndicator, _>(self, msg).await,
 
             Cmd::GetLayout => serve::<command::GetLayout, _>(self, msg).await,
+
+            // DFU commands — routed to ProxyRynkDfuHandler.
+            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
+            Cmd::DfuStart => serve::<command::DfuStart, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
+            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
+            Cmd::DfuWrite => serve::<command::DfuWrite, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
+            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
+            Cmd::DfuCrcSync => serve::<command::DfuCrcSync, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
+            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
+            Cmd::DfuCrcRewind => serve::<command::DfuCrcRewind, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
+            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
+            Cmd::DfuVerify => serve::<command::DfuVerify, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
+            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
+            Cmd::DfuFinish => serve::<command::DfuFinish, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
+            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
+            Cmd::DfuReset => serve::<command::DfuReset, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
+            // DFU commands when the feature is disabled — return UnknownCmd.
+            #[cfg(not(all(feature = "dfu_ble", feature = "_dfu")))]
+            Cmd::DfuStart
+            | Cmd::DfuWrite
+            | Cmd::DfuCrcSync
+            | Cmd::DfuCrcRewind
+            | Cmd::DfuVerify
+            | Cmd::DfuFinish
+            | Cmd::DfuReset => Err(RynkError::UnknownCmd),
 
             _ => Err(RynkError::UnknownCmd),
         }

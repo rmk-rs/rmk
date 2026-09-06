@@ -1,0 +1,140 @@
+[keyboard]
+# Replace with your keyboard identity.
+name = "RMK Keyboard"
+product_name = "RMK Keyboard"
+vendor_id = 0x4c4b
+product_id = 0x4643
+manufacturer = "haobo"
+chip = "nrf52840"
+
+[layout]
+rows = 4
+cols = 3
+map = """
+(0,0)  (0,1)  (0,2)
+(1,0)  (1,1)  (1,2)
+(2,0)  (2,1)  (2,2)
+(3,0)  (3,1)  (3,2)
+"""
+
+[keymap]
+layers = 3
+
+[[keymap.layer]]
+keys = """
+A       B           C
+Kc1     Kc2         Kc3
+LCtrl   MO(1)       LShift
+OSL(1)  LT(2, Kc9)  LM(1, LShift | LGui)
+"""
+
+[[keymap.layer]]
+keys = """
+TD(1)  TT(1)  TG(2)
+TD(0)  _      _
+_      _      _
+_      _      _
+"""
+
+[storage]
+
+[ble]
+enabled = true
+
+[light]
+# All light pins are high-active by default, uncomment if you want it to be low-active
+capslock.pin = "P0_00"
+capslock.low_active = true
+numslock.pin = "P0_01"
+numslock.low_active = false
+
+[behavior.combo]
+timeout = "150ms"
+combos = [
+  # Press J and K keys simultaneously to output "L"
+  { actions = ["J", "K"], output = "L" },
+  # Press F and D keys simultaneously to switch to layer 2, but only valid on layer 0
+  { actions = ["F", "D"], output = "TO(1)", layer = 0 },
+  # Three-key combo, press A, S, and D keys to output "X"
+  { actions = ["A", "S", "D"], output = "X" }
+]
+
+# default profile for morse, tap dance and tap-hold keys:
+[behavior.morse]
+enable_flow_tap = true
+prior_idle_time = "120ms"
+hold_timeout = "240ms"
+gap_timeout = "230ms"
+
+[behavior.morse.profiles]
+# Named [behavior.morse] profiles used by morse keys or tap-hold args.
+H1 = { permissive_hold = true, unilateral_tap = true, hold_timeout = "250ms", gap_timeout = "250ms" }
+H2 = { permissive_hold = true, unilateral_tap = true, hold_timeout = "200ms", gap_timeout = "200ms" }
+
+# list of morse (tap dance) keys:
+[[behavior.morse.morses]]
+tap = "A"
+hold = "WM(A, LShift)"
+double_tap = "CapsLock"
+hold_after_tap = "A"
+profile = "H2"
+
+[[behavior.morse.morses]]
+tap = "Space"
+hold = "LCtrl"
+
+[[behavior.morse.morses]]
+tap_actions = ["F1", "F2", "F3", "F4"]  # 1 tap = F1, 2 taps = F2, 3 taps = F3, 4 taps = F4
+hold_actions = ["MO(1)", "MO(2)", "MO(3)", "MO(4)"]  # Hold after 1 tap = layer 1, etc.
+
+[[behavior.morse.morses]]
+tap_actions = ["Tab", "Escape", "CapsLock"]  # 1 tap = Tab, 2 taps = Escape, 3 taps = CapsLock
+hold_actions = ["LCtrl", "LAlt", "LShift"]  # Hold after 1 tap = Ctrl, etc.
+
+[split]
+connection = "ble"
+
+[dfu]
+led = "P0_15"
+
+[split.central]
+rows = 2
+cols = 2
+row_offset = 0
+col_offset = 0
+ble_addr = [0x18, 0xe2, 0x21, 0x80, 0xc0, 0xc7]
+# Battery monitoring configuration for central device
+battery_adc_pin = "P0_05"
+adc_divider_measured = 2000
+adc_divider_total = 2806
+
+[split.central.matrix]
+matrix_type = "normal"
+# Default diode direction is col2row; set `row2col = true` if needed.
+# row2col = true
+row_pins = ["P0_12", "P0_13"]
+col_pins = ["P0_14", "P0_15"]
+
+[[split.peripheral]]
+rows = 2
+cols = 1
+row_offset = 2
+col_offset = 2
+ble_addr = [0x7e, 0xfe, 0x73, 0x9e, 0x66, 0xe3]
+# Battery monitoring for peripheral
+battery_adc_pin = "P0_05"
+adc_divider_measured = 2000
+adc_divider_total = 2806
+[split.peripheral.matrix]
+matrix_type = "normal"
+row_pins = ["P1_11", "P1_10"]
+col_pins = ["P0_30"]
+
+# [[split.peripheral]]
+# rows = 2
+# cols = 1
+# row_offset = 2
+# col_offset = 2
+# serial = [{ instance = "UART0", tx_pin = "PIN_0", rx_pin = "PIN_1" }]
+# row_pins = ["PIN_9", "PIN_11"]
+# col_pins = ["PIN_10"]

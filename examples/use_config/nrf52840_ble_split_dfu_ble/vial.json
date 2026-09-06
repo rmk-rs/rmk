@@ -1,0 +1,79 @@
+{
+    "name": "RMK Keyboard",
+    "vendorId": "0x4C4B",
+    "productId": "0x4643",
+    "lighting": "none",
+    "matrix": {
+        "rows": 4,
+        "cols": 3
+    },
+    "customKeycodes": [
+        {
+            "name": "BT0",
+            "title": "Bluetooth Channel 0",
+            "shortName": "BT0"
+        },
+        {
+            "name": "BT1",
+            "title": "Bluetooth Channel 1",
+            "shortName": "BT1"
+        },
+        {
+            "name": "BT2",
+            "title": "Bluetooth Channel 2",
+            "shortName": "BT2"
+        },
+        {
+            "name": "NEXT_BT",
+            "title": "Switch to the next Bluetooth channel",
+            "shortName": "Next\nBT"
+        },
+        {
+            "name": "PREV_BT",
+            "title": "Switch to the previous Bluetooth channel",
+            "shortName": "Prev\nBT"
+        },
+        {
+            "name": "CLR_BT",
+            "title": "Clear bond info for current channel",
+            "shortName": "Clear\nBT"
+        },
+        {
+            "name": "SWITCH",
+            "title": "Switch default output mode between USB/BLE",
+            "shortName": "Switch\nOutput"
+        },
+        {
+            "name": "CLR_PEER",
+            "title": "Forget the current bonded split peer(central or peripheral)",
+            "shortName": "Clear\nPeer"
+        }
+    ],
+    "layouts": {
+        "keymap": [
+            [
+                "0,0",
+                "0,1",
+                "0,2"
+            ],
+            [
+                "1,0",
+                "1,1",
+                "1,2"
+            ],
+            [
+                "2,0",
+                "2,1",
+                "2,2"
+            ],
+            [
+                {
+                    "y": -2,
+                    "x": 4
+                },
+                "3,0",
+                "3,2"
+            ]
+        ]
+    }
+}

@@ -53,6 +53,8 @@ compile_error!("feature `dfu_split` requires the `_dfu` feature — enable `dfu_
 compile_error!("feature `dfu_ext` requires the `_dfu` feature — enable `dfu_rp` or `dfu_nrf`");
 #[cfg(all(feature = "dfu_lock", not(feature = "_dfu")))]
 compile_error!("feature `dfu_lock` requires the `_dfu` feature — enable `dfu_rp` or `dfu_nrf`");
+#[cfg(all(feature = "dfu_ble", not(any(feature = "dfu_rp", feature = "dfu_nrf"))))]
+compile_error!("feature `dfu_ble` requires `dfu_rp` or `dfu_nrf`");
 
 // Re-export self as ::rmk for macro-generated code to work both inside and outside the crate
 extern crate self as rmk;

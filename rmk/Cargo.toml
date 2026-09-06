@@ -265,6 +265,11 @@ dfu_nrf = ["_dfu", "dep:embassy-boot", "dep:embassy-nrf", "rmk-macro/dfu_nrf"]
 ## split link. Requires `dfu_rp` or `dfu_nrf`. Wired split only.
 dfu_split = ["rmk-macro/dfu_split", "rmk-types/dfu_split"]
 
+## **Experimental.** Enable DFU over BLE via the rynk protocol. Requires a chip backend
+## (`dfu_rp` or `dfu_nrf`) — they activate `_dfu` which provides the flash updater.
+## DFU over USB is automatically available too (shared `DFU_CHANNEL`).
+dfu_ble = ["rynk"]
+
 ## Enable DFU writing to external SPI flash instead of internal DFU partition.
 ## Requires `dfu_rp` or `dfu_nrf`
 dfu_ext = ["rmk-macro/dfu_ext"]
