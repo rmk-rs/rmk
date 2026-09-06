@@ -37,7 +37,7 @@ pin_b = "P0_03"
 
 [[keymap.layer]]
 keys = """
-OSM(LShift)    OSL(1)         A            TH(B, C)  OSM(LCtrl)  WM(B, LGui)   MACRO(0)           MACRO(1)           MouseWheelUp  MouseAccel2  PDF(1)     A      LM(1, LShift)  No
+OSM(LShift)    OSL(1)         A            TH(B, C)  OSM(LCtrl)  WM(B, LGui)   MACRO(0)           MACRO(1)           MouseWheelUp  MouseAccel2  PDF(1)     A      LM(1, LShift)  User0
 A              MT(B, LShift)  TD(0)        W         E           R             T                  MT(C, LGui)        LT(1, D)      MT(E, LAlt)  Y          U      I              O
 TH(A, LShift)  TH(S, LGui)    TH(Z, LAlt)  V         B           N             D                  M                  Comma         Dot          L          X      C              F
 MO(1)          No             A            A         Space       LT(1, D, p0)  MT(B, LShift, p0)  MT(B, LShift, p1)  TD(1)         Enter        Backspace  TD(2)  No             No

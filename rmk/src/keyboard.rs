@@ -2320,9 +2320,7 @@ mod test {
 
             // Here release event should make again into hold
 
-            // Under embassy-time/mock-driver (the test config), `Timer::after`
-            // would never resolve here because nothing else drives the clock.
-            // Bump virtual time directly.
+            // Skip ahead 200ms of virtual time.
             embassy_time::MockDriver::get().advance(Duration::from_millis(200));
             // after another key is pressed, that key is repeated
             keyboard.process_inner(KeyboardEvent::key(0, 0, true)).await;
@@ -2591,9 +2589,7 @@ mod test {
             assert_eq!(keyboard.resolve_modifiers(false), ModifierCombination::new());
             assert_eq!(keyboard.mouse.report.buttons, 0);
 
-            // Under embassy-time/mock-driver (the test config), `Timer::after`
-            // would never resolve here because nothing else drives the clock.
-            // Bump virtual time directly.
+            // Skip ahead 200ms of virtual time.
             embassy_time::MockDriver::get().advance(Duration::from_millis(200));
 
             // Press Z key, by itself it should emit 'MouseBtn5'
