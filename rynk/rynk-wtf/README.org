@@ -1,0 +1,114 @@
+#+title: rynk-wtf
+#+subtitle: Wireless Transmission of Firmware
+#+options: toc:2
+
+* Overview
+
+=rynk-wtf= is a host-side BLE DFU tool for [[https://github.com/rmk-rs/rmk][RMK]] keyboards.
+It connects to an RMK keyboard over Bluetooth using the rynk protocol
+and transfers a firmware image for OTA update.
+
+* Installation
+
+#+begin_src sh
+cargo install --path rynk/rynk-wtf
+#+end_src
+
+* Usage
+
+#+begin_src text
+rynk-wtf [OPTIONS] <firmware>
+
+Arguments:
+  <firmware>  Path to firmware file (.bin, .uf2, or .elf)
+
+Options:
+  --reset              Reset device after successful update
+  --crc-interval N     CRC check every N packets [default: 10]
+  --device <NAME>      Connect to specific device name (interactive picker if omitted)
+  -h, --help           Print help
+#+end_src
+
+** Examples
+
+Flash a binary, reset when done:
+
+#+begin_src sh
+rynk-wtf --reset firmware.bin
+#+end_src
+
+Flash a UF2 file, check CRC every 20 packets:
+
+#+begin_src sh
+rynk-wtf --crc-interval 20 firmware.uf2
+#+end_src
+
+Pick a specific device by name:
+
+#+begin_src sh
+rynk-wtf --device "My Keyboard" firmware.bin
+#+end_src
+
+** Peripheral DFU
+
+When a split peripheral cannot find its central, it enters DFU advertising
+mode and advertises as =rmk per<=N>=.  To update a peripheral directly:
+
+#+begin_src sh
+rynk-wtf --device "rmk per0" peripheral_firmware.bin
+#+end_src
+
+The peripheral's DFU GATT service is automatically discovered — no need to
+know the service UUID.
+
+* Supported Firmware Formats
+
+| Format | Extension | Notes                                    |
+|--------+-----------+------------------------------------------|
+| Binary | =.bin=    | Raw firmware image                       |
+| UF2    | =.uf2=    | Microsoft UF2 format (RP2040 etc.)       |
+| ELF    | =.elf=    | Extracts =PT_LOAD= segments, fills BSS   |
+
+If the file has no extension, it is treated as ELF.
+
+* How It Works
+
+1. =rynk-wtf= scans for BLE keyboards (connected and advertising) and lets you pick one.
+2. If the device is locked, it prompts you to hold the unlock keys.
+3. The firmware image is sent in chunks sized to the device's max payload.
+4. Every =--crc-interval= packets, a CRC-32 checkpoint is verified.
+   On mismatch, the tool rolls back to the last good checkpoint and
+   retransmits from there.
+5. After all data is sent, the full-image CRC is verified.
+6. Optionally, the device is reset with =--reset=.
+
+For split peripherals, the same flow applies.  The peripheral advertises
+with name =rmk per<=N>= when in DFU mode, and =rynk-wtf= discovers it
+via the standard DFU GATT service.
+
+* Firmware-Side Setup
+
+Your RMK firmware must enable DFU support.  In =Cargo.toml=:
+
+#+begin_src toml
+[dependencies.rmk]
+features = ["dfu_ble", "dfu_nrf"]  # or "dfu_rp" for RP2040
+#+end_src
+
+- =dfu_ble= enables DFU commands over the rynk BLE protocol.
+- =dfu_nrf= / =dfu_rp= activates the chip-specific flash updater
+  (implies =_dfu=).
+
+Both are required — =dfu_ble= alone will produce a compile error.
+
+* Error Messages
+
+| Message                               | Cause                                         |
+|---------------------------------------+-----------------------------------------------|
+| No BLE keyboards found                | Keyboard not in pairing mode or out of range  |
+| Device does not support DFU           | Firmware compiled without =dfu_ble=           |
+| Device is permanently locked          | No unlock keys configured in firmware config  |
+| Unlock required. Hold keys: [...]     | Press and hold the listed keys                |
+| CRC mismatch at offset N              | Retransmission in progress (normal)           |
+| connection failed                     | BLE connection dropped, try again             |
+| neither Rynk nor DFU GATT service     | Device is not an RMK keyboard or DFU peripheral |

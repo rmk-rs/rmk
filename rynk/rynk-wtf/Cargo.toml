@@ -1,0 +1,24 @@
+[package]
+name = "rynk-wtf"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Wireless Transmission of Firmware — BLE DFU tool for RMK keyboards"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rynk = { path = "..", features = ["std", "alloc"] }
+rynk-ble = { path = "../rynk-ble" }
+rmk-types = { path = "../../rmk-types", features = ["host", "_ble"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "fs", "io-util"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+
+# Optional: ELF parsing
+goblin = { version = "0.9", optional = true, default-features = false, features = ["elf64", "elf32", "endian_fd", "std"] }
+
+[features]
+default = ["elf"]
+elf = ["dep:goblin"]
