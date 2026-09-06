@@ -1702,6 +1702,8 @@ impl<'a> Keyboard<'a> {
                     self.user_hold = Some((Instant::now() + Self::USER_HOLD_DURATION, id));
                 }
             } else {
+                // A replayed press and release must not leave the gesture armed.
+                self.user_hold = None;
                 // Other user keys are processed when released.
                 // Slots 0..NUM_BLE_PROFILE select a profile directly; the next four are
                 // fixed actions stacked on top.

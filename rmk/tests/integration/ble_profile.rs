@@ -39,3 +39,15 @@ fn intervening_key_cancels_the_hold() {
         assert_eq!(keyboard.ble_profile_actions(), ["Switch(0)"]);
     });
 }
+
+// Regression: the tap side of a tap-hold armed the hold on its synthesized
+// press, nothing disarmed it, and the bond was wiped after 5s of idle.
+#[test]
+fn tapped_profile_key_action_does_not_clear_its_bond() {
+    test_block_on(async {
+        let tap_hold = KeyAction::TapHold(Action::User(0), Action::Key(KeyCode::Hid(HidKeyCode::Z)), u8::MAX);
+        let mut keyboard = SimKeyboard::builder([[[tap_hold]]]).build().await;
+        keyboard.tap(0, 0, 20).delay(5200).run().await;
+        assert_eq!(keyboard.ble_profile_actions(), ["Switch(0)"]);
+    });
+}
