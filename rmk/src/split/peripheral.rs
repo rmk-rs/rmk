@@ -4,6 +4,8 @@ use bt_hci::{cmd::le::LeSetHostFeature, controller::ControllerCmdSync};
 use embassy_futures::select::{Either, select};
 #[cfg(not(feature = "_ble"))]
 use embedded_io_async::{Read, Write};
+#[cfg(all(feature = "dfu_split", not(feature = "_ble")))]
+use embedded_storage_async::nor_flash::NorFlash;
 use futures::FutureExt;
 #[cfg(all(feature = "_ble", feature = "storage"))]
 use {super::ble::PeerAddress, crate::channel::FLASH_CHANNEL};
@@ -30,27 +32,47 @@ use crate::state::update_status;
 /// whole BLE stack, sized to its single link (the central) — nothing else
 /// uses it.
 ///
+/// On serial (`dfu_split`) builds the peripheral also takes its DFU download
+/// and boot state partitions so over-the-split-link firmware updates can
+/// write to them directly (no global registry).
+///
 /// # Arguments
 ///
 /// * `id` - (optional) The id of the peripheral
 /// * `controller` - (optional) The BLE controller
 /// * `address` - (optional) The BLE address of this peripheral
 /// * `serial` - (optional) serial port used to send peripheral split message. This argument is enabled only for serial split now
+/// * `dfu_partition`/`state_partition` - (optional) the peripheral's DFU download and boot state partitions
 pub async fn run_rmk_split_peripheral<
     #[cfg(all(feature = "_ble", feature = "subrating"))] C: Controller + ControllerCmdSync<LeSetHostFeature>,
     #[cfg(all(feature = "_ble", not(feature = "subrating")))] C: Controller,
     #[cfg(not(feature = "_ble"))] S: Write + Read,
+    #[cfg(all(feature = "dfu_split", not(feature = "_ble")))] DFU: NorFlash + Clone,
+    #[cfg(all(feature = "dfu_split", not(feature = "_ble")))] STATE: NorFlash + Clone,
 >(
     #[cfg(feature = "_ble")] id: usize,
     #[cfg(feature = "_ble")] controller: C,
     #[cfg(feature = "_ble")] address: [u8; 6],
     #[cfg(not(feature = "_ble"))] serial: S,
+    #[cfg(all(feature = "dfu_split", not(feature = "_ble")))] dfu_partition: DFU,
+    #[cfg(all(feature = "dfu_split", not(feature = "_ble")))] state_partition: STATE,
 ) {
     #[cfg(not(feature = "_ble"))]
     {
         let mut peripheral = SplitPeripheral::new(SerialSplitDriver::new(serial));
+
+        #[cfg(all(feature = "dfu_split", not(feature = "_ble")))]
+        let mut dfu_handler = crate::dfu::FlashDfuHandler::new(dfu_partition, state_partition);
+        #[cfg(all(feature = "dfu_split", not(feature = "_ble")))]
+        dfu_handler.mark_booted().await;
+
         loop {
-            peripheral.run().await;
+            peripheral
+                .run(
+                    #[cfg(all(feature = "dfu_split", not(feature = "_ble")))]
+                    &mut dfu_handler,
+                )
+                .await;
         }
     }
 
@@ -68,29 +90,33 @@ pub async fn run_rmk_split_peripheral<
 /// The split peripheral instance.
 pub(crate) struct SplitPeripheral<S: SplitWriter + SplitReader> {
     split_driver: S,
-    #[cfg(feature = "dfu_split")]
-    dfu_handler: Option<crate::dfu::SplitDfuHandler>,
 }
 
 impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
     pub(crate) fn new(split_driver: S) -> Self {
-        Self {
-            split_driver,
-            #[cfg(feature = "dfu_split")]
-            dfu_handler: None,
-        }
+        Self { split_driver }
     }
 
     /// Run the peripheral keyboard service.
     ///
     /// The peripheral uses the general matrix, does scanning and sends key events through `SplitWriter`.
     /// It also receives split messages from the central through `SplitReader`.
-    pub(crate) async fn run(&mut self) {
+    pub(crate) async fn run<
+        #[cfg(all(feature = "dfu_split", not(feature = "_ble")))] DFU: NorFlash + Clone,
+        #[cfg(all(feature = "dfu_split", not(feature = "_ble")))] STATE: NorFlash + Clone,
+    >(
+        &mut self,
+        #[cfg(all(feature = "dfu_split", not(feature = "_ble")))] dfu_handler: &mut crate::dfu::FlashDfuHandler<
+            DFU,
+            STATE,
+        >,
+    ) {
         // Proactively announce our firmware hash so the central can detect
         // us even when it booted first and already gave up waiting for a query response.
         #[cfg(feature = "dfu_split")]
         {
             let hash = crate::dfu::read_embedded_firmware_hash();
+            info!("dfu_split: announcing firmware hash {:#x}", hash);
             self.split_driver
                 .write(&SplitMessage::FirmwareHashResponse(hash))
                 .await
@@ -177,17 +203,9 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                         }
                         #[cfg(feature = "dfu_split")]
                         SplitMessage::FirmwareChunk { offset, len, data } => {
-                            if self.dfu_handler.is_none() {
-                                self.dfu_handler = crate::dfu::SplitDfuHandler::new();
-                                if self.dfu_handler.is_none() {
-                                    error!("dfu_split: FlashManager not initialized, skipping chunk");
-                                    continue;
-                                }
-                            }
-                            let handler = self.dfu_handler.as_mut().unwrap();
                             let actual_len = len as usize;
                             let chunk_data = &data.0[..actual_len];
-                            match handler.write_chunk(offset as u32, chunk_data) {
+                            match dfu_handler.write_chunk(offset as u32, chunk_data).await {
                                 Ok(()) => {
                                     debug!("dfu_split: wrote {} bytes at offset {}", actual_len, offset);
                                     let ack = SplitMessage::FirmwareChunkAck {
@@ -201,46 +219,54 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                         }
                         #[cfg(feature = "dfu_split")]
                         SplitMessage::FirmwareUpdateComplete => {
-                            if let Some(ref mut handler) = self.dfu_handler {
-                                let dfu_crc = handler.compute_dfu_crc();
-                                info!("dfu_split: DFU partition CRC: {:#010x}", dfu_crc);
-                                let crc_msg = SplitMessage::FirmwareCrcReport(dfu_crc);
-                                self.split_driver.write(&crc_msg).await.ok();
-                                info!("dfu_split: CRC report sent");
-
-                                let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_secs(5);
-                                let ok = loop {
-                                    match select(self.split_driver.read(), embassy_time::Timer::at(deadline)).await {
-                                        Either::First(Ok(SplitMessage::FirmwareCrcOk)) => {
-                                            info!("dfu_split: central confirmed CRC, resetting");
-                                            break true;
-                                        }
-                                        Either::First(Ok(SplitMessage::FirmwareCrcFail)) => {
-                                            warn!("dfu_split: central rejected CRC, stopping update");
-                                            break false;
-                                        }
-                                        Either::First(Ok(_)) => {}
-                                        Either::First(Err(e)) => {
-                                            error!("read error: {:?}", e);
-                                            break false;
-                                        }
-                                        Either::Second(_) => {
-                                            error!("timeout");
-                                            break false;
-                                        }
-                                    }
-                                };
-
-                                if ok {
-                                    self.split_driver.write(&SplitMessage::FirmwareUpdateConfirm).await.ok();
-                                    embassy_time::Timer::after_millis(50).await;
-                                    handler.mark_updated_and_reset().ok();
-                                } else {
-                                    self.dfu_handler = None;
+                            let dfu_crc = match dfu_handler.compute_dfu_crc().await {
+                                Ok(crc) => crc,
+                                Err(()) => {
+                                    // No CRC report: the central's verification
+                                    // times out and aborts the update, so a flash
+                                    // that cannot be read back never gets booted.
+                                    error!("dfu_split: reading back DFU partition failed, aborting verification");
+                                    continue;
                                 }
-                            } else {
-                                error!("dfu_split: no active DFU session");
+                            };
+                            info!("dfu_split: DFU partition CRC: {:#010x}", dfu_crc);
+                            let crc_msg = SplitMessage::FirmwareCrcReport(dfu_crc);
+                            self.split_driver.write(&crc_msg).await.ok();
+                            info!("dfu_split: CRC report sent");
+
+                            let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_secs(5);
+                            let ok = loop {
+                                match select(self.split_driver.read(), embassy_time::Timer::at(deadline)).await {
+                                    Either::First(Ok(SplitMessage::FirmwareCrcOk)) => {
+                                        info!("dfu_split: central confirmed CRC, resetting");
+                                        break true;
+                                    }
+                                    Either::First(Ok(SplitMessage::FirmwareCrcFail)) => {
+                                        warn!("dfu_split: central rejected CRC, stopping update");
+                                        break false;
+                                    }
+                                    Either::First(Ok(_)) => {}
+                                    Either::First(Err(e)) => {
+                                        error!("read error: {:?}", e);
+                                        break false;
+                                    }
+                                    Either::Second(_) => {
+                                        error!("timeout");
+                                        break false;
+                                    }
+                                }
+                            };
+
+                            if ok {
+                                self.split_driver.write(&SplitMessage::FirmwareUpdateConfirm).await.ok();
+                                embassy_time::Timer::after_millis(50).await;
+                                dfu_handler.mark_updated_and_reset().await.ok();
                             }
+                        }
+                        #[cfg(feature = "dfu_split")]
+                        SplitMessage::SystemReset => {
+                            info!("dfu_split: received system reset from central");
+                            cortex_m::peripheral::SCB::sys_reset();
                         }
                         _ => (),
                     },

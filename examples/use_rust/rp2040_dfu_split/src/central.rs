@@ -10,6 +10,7 @@ mod vial;
 use defmt::info;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
+use embassy_rp::flash::Flash;
 use embassy_rp::gpio::{Input, Level, Output};
 use embassy_rp::peripherals::{UART0, USB};
 use embassy_rp::uart::{self, BufferedUart};
@@ -18,6 +19,7 @@ use embassy_rp::{bind_interrupts, dma};
 use panic_probe as _;
 use rmk::config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
+use rmk::dfu::{partitions_from_linkerscript, FlashDfuHandler, FlashMutex};
 use rmk::futures::future::join;
 use rmk::host::HostService;
 use rmk::keyboard::Keyboard;
@@ -26,7 +28,6 @@ use rmk::processor::builtin::dfu_led::DfuLedProcessor;
 use rmk::processor::builtin::wpm::WpmProcessor;
 use rmk::split::central::run_peripheral_manager;
 use rmk::split::{PeripheralMatrixConfig, SPLIT_MESSAGE_MAX_SIZE};
-use rmk::storage::async_flash_wrapper;
 use rmk::usb::UsbTransport;
 use rmk::watchdog::Rp2040Watchdog;
 use rmk::{initialize_keymap_and_storage, run_all, KeymapData};
@@ -53,7 +54,12 @@ async fn main(_spawner: Spawner) {
 
     let (row_pins, col_pins) = config_matrix_pins_rp!(peripherals: p, input: [PIN_6, PIN_7], output: [PIN_19, PIN_20]);
 
-    let flash = async_flash_wrapper(rmk::dfu::init_flash_from_linkerscript(p.FLASH));
+    let flash_mutex = FlashMutex::new(rmk::storage::async_flash_wrapper(Flash::<
+        _,
+        embassy_rp::flash::Blocking,
+        { rmk::dfu::FLASH_SIZE },
+    >::new_blocking(p.FLASH)));
+    let (storage_partition, state_partition, dfu_partition) = partitions_from_linkerscript(&flash_mutex);
 
     let keyboard_device_config = DeviceConfig {
         vid: 0x4c4b,
@@ -82,15 +88,12 @@ async fn main(_spawner: Spawner) {
     let per_key_config = PositionalConfig::default();
     let (keymap, mut storage) = initialize_keymap_and_storage(
         &mut keymap_data,
-        flash,
+        storage_partition,
         &storage_config,
         &mut behavior_config,
         &per_key_config,
     )
     .await;
-
-    // mark the firmware as booted otherwise the bootloader thinks it didn't and will revert to the old firmware
-    rmk::dfu::mark_booted();
 
     // DFU LED processor, optional. Flashes the LED when DFU is active
     let mut dfu_led_processor = DfuLedProcessor::new(Output::new(p.PIN_25, Level::Low), false);
@@ -105,7 +108,8 @@ async fn main(_spawner: Spawner) {
     let mut keyboard = Keyboard::new(&keymap);
     let host_service = HostService::new(&keymap, &rmk_config);
 
-    let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config).with_host_service(&host_service);
+    let mut dfu_iface = FlashDfuHandler::new(dfu_partition, state_partition);
+    let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config, 1).with_host_service(&host_service);
     let mut wpm_processor = WpmProcessor::new();
 
     let mut watchdog_runner = Rp2040Watchdog::default_runner(embassy_rp::watchdog::Watchdog::new(p.WATCHDOG));
@@ -122,6 +126,7 @@ async fn main(_spawner: Spawner) {
             matrix,
             storage,
             usb_transport,
+            dfu_iface,
             wpm_processor,
             dfu_led_processor,
             keyboard,

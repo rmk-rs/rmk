@@ -273,3 +273,163 @@ fn dfu_storage_conflict_absent_without_user_storage() {
         assert!(config.dfu_storage_conflict().is_none(), "{name}: expected no conflict");
     }
 }
+
+#[test]
+fn split_side_dfu_replaces_global_per_side() {
+    let path = write_temp_keyboard_toml(
+        "split-side-dfu",
+        r#"
+[split]
+connection = "serial"
+
+[split.central]
+rows = 1
+cols = 2
+row_offset = 0
+col_offset = 0
+[split.central.matrix]
+matrix_type = "normal"
+row_pins = ["PIN_0"]
+col_pins = ["PIN_1"]
+
+[[split.peripheral]]
+rows = 1
+cols = 1
+row_offset = 1
+col_offset = 2
+[split.peripheral.matrix]
+matrix_type = "normal"
+row_pins = ["PIN_2"]
+col_pins = ["PIN_3"]
+
+[dfu]
+led = "PIN_4"
+[dfu.external_flash]
+driver = "w25q"
+flash_size = 8388608
+spi = { instance = "SPI0", sck = "PIN_5", mosi = "PIN_6", miso = "PIN_7", cs = "PIN_8" }
+
+[split.peripheral.dfu]
+led = "PIN_9"
+"#,
+    );
+    let config = KeyboardTomlConfig::new_from_toml_path(&path);
+    std::fs::remove_file(path).ok();
+
+    // Central: global [dfu] with external flash.
+    let central = config.split_side_dfu(None).unwrap().unwrap();
+    assert_eq!(central.led.map(|l| l.pin), Some("PIN_4".into()));
+    assert!(
+        central.external_flash.is_some(),
+        "central should keep the external flash"
+    );
+
+    // Peripheral: own section completely replaces the global one.
+    let peripheral = config.split_side_dfu(Some(0)).unwrap().unwrap();
+    assert_eq!(peripheral.led.map(|l| l.pin), Some("PIN_9".into()));
+    assert!(
+        peripheral.external_flash.is_none(),
+        "peripheral's own [split.peripheral.dfu] must drop the external flash"
+    );
+}
+
+#[test]
+fn split_side_dfu_falls_back_to_global() {
+    let path = write_temp_keyboard_toml(
+        "split-side-dfu-fallback",
+        r#"
+[split]
+connection = "serial"
+
+[split.central]
+rows = 1
+cols = 2
+row_offset = 0
+col_offset = 0
+[split.central.matrix]
+matrix_type = "normal"
+row_pins = ["PIN_0"]
+col_pins = ["PIN_1"]
+
+[[split.peripheral]]
+rows = 1
+cols = 1
+row_offset = 1
+col_offset = 2
+[split.peripheral.matrix]
+matrix_type = "normal"
+row_pins = ["PIN_2"]
+col_pins = ["PIN_3"]
+
+[dfu]
+led = "PIN_4"
+"#,
+    );
+    let config = KeyboardTomlConfig::new_from_toml_path(&path);
+    std::fs::remove_file(path).ok();
+
+    // No per-side section: both sides use the global [dfu].
+    let central = config.split_side_dfu(None).unwrap().unwrap();
+    let peripheral = config.split_side_dfu(Some(0)).unwrap().unwrap();
+    assert_eq!(central.led.map(|l| l.pin), Some("PIN_4".into()));
+    assert_eq!(peripheral.led.map(|l| l.pin), Some("PIN_4".into()));
+}
+
+#[test]
+fn split_central_dfu_replaces_global_for_central_only() {
+    let path = write_temp_keyboard_toml(
+        "split-central-dfu",
+        r#"
+[split]
+connection = "serial"
+
+[split.central]
+rows = 1
+cols = 2
+row_offset = 0
+col_offset = 0
+[split.central.matrix]
+matrix_type = "normal"
+row_pins = ["PIN_0"]
+col_pins = ["PIN_1"]
+
+[[split.peripheral]]
+rows = 1
+cols = 1
+row_offset = 1
+col_offset = 2
+[split.peripheral.matrix]
+matrix_type = "normal"
+row_pins = ["PIN_2"]
+col_pins = ["PIN_3"]
+
+[dfu]
+led = "PIN_4"
+[dfu.external_flash]
+driver = "w25q"
+flash_size = 8388608
+spi = { instance = "SPI0", sck = "PIN_5", mosi = "PIN_6", miso = "PIN_7", cs = "PIN_8" }
+
+[split.central.dfu]
+led = "PIN_9"
+"#,
+    );
+    let config = KeyboardTomlConfig::new_from_toml_path(&path);
+    std::fs::remove_file(path).ok();
+
+    // Central: own [split.central.dfu] completely replaces the global one.
+    let central = config.split_side_dfu(None).unwrap().unwrap();
+    assert_eq!(central.led.map(|l| l.pin), Some("PIN_9".into()));
+    assert!(
+        central.external_flash.is_none(),
+        "central's own [split.central.dfu] must drop the external flash"
+    );
+
+    // Peripheral: no own section, falls back to the global [dfu].
+    let peripheral = config.split_side_dfu(Some(0)).unwrap().unwrap();
+    assert_eq!(peripheral.led.map(|l| l.pin), Some("PIN_4".into()));
+    assert!(
+        peripheral.external_flash.is_some(),
+        "peripheral should keep the global external flash"
+    );
+}

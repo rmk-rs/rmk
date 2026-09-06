@@ -3,15 +3,15 @@ use quote::{format_ident, quote};
 use rmk_config::SplitConnection;
 use rmk_config::resolved::Hardware;
 use rmk_config::resolved::hardware::{
-    BleConfig, BoardConfig, ChipModel, ChipSeries, CommunicationConfig, InputDeviceConfig,
-    MatrixType, SplitBoardConfig, SplitConfig,
+    BleConfig, BoardConfig, ChipModel, ChipSeries, CommunicationConfig, DfuConfig,
+    InputDeviceConfig, MatrixType, SplitBoardConfig, SplitConfig,
 };
 use syn::ItemMod;
 
 use super::central::expand_serial_init;
 use crate::codegen::chip::chip_init::expand_chip_init;
 use crate::codegen::chip::comm::expand_usb_init;
-use crate::codegen::chip::flash::expand_flash_init;
+use crate::codegen::chip::flash::{expand_dfu_interface, expand_flash_init};
 use crate::codegen::chip::gpio::expand_output_initialization;
 use crate::codegen::display::{expand_display_config, expand_display_interrupt};
 use crate::codegen::entry::join_all_tasks;
@@ -55,9 +55,11 @@ pub(crate) fn parse_split_peripheral_mod(
     let identity = toml_config
         .identity()
         .expect("failed to resolve identity config");
+    let dfu = toml_config
+        .split_side_dfu(Some(id))
+        .expect("failed to resolve split-side dfu config");
 
-    let dfu_enabled =
-        is_feature_enabled(&rmk_features, "dfu_rp") || is_feature_enabled(&rmk_features, "dfu_nrf");
+    let dfu_enabled = cfg!(feature = "_dfu");
     let usb_log_enabled = is_feature_enabled(&rmk_features, "usb_log");
     let device_config = if dfu_enabled || usb_log_enabled {
         let vid = identity.vendor_id;
@@ -81,10 +83,22 @@ pub(crate) fn parse_split_peripheral_mod(
         quote! {}
     };
 
-    let main_function = expand_split_peripheral(id, &identity, &hardware, item_mod, &rmk_features);
+    let main_function = expand_split_peripheral(
+        id,
+        &identity,
+        &hardware,
+        item_mod,
+        &rmk_features,
+        dfu.as_ref(),
+    );
 
-    let bind_interrupts =
-        expand_bind_interrupt_for_split_peripheral(&hardware.chip, &hardware, id, &rmk_features);
+    let bind_interrupts = expand_bind_interrupt_for_split_peripheral(
+        &hardware.chip,
+        &hardware,
+        id,
+        &rmk_features,
+        dfu.as_ref(),
+    );
 
     let chip = &hardware.chip;
     let main_function_sig = if chip.series == ChipSeries::Esp32 {
@@ -120,8 +134,28 @@ fn expand_bind_interrupt_for_split_peripheral(
     hardware: &Hardware,
     peripheral_id: usize,
     rmk_features: &Option<Vec<String>>,
+    dfu: Option<&DfuConfig>,
 ) -> TokenStream2 {
     let communication = &hardware.communication;
+
+    // External DFU flash SPI interrupt for nRF52 — the peripheral's DFU
+    // config can differ from the central's, so this uses the per-side one.
+    let ext_flash_spi_interrupt = {
+        let ext_flash = dfu.and_then(|d| d.external_flash.as_ref());
+        if let Some(ext_flash) = ext_flash {
+            match chip.series {
+                ChipSeries::Nrf52 => {
+                    let instance = format_ident!("{}", ext_flash.spi.instance);
+                    quote! {
+                        #instance => ::embassy_nrf::spim::InterruptHandler<::embassy_nrf::peripherals::#instance>;
+                    }
+                }
+                _ => quote! {},
+            }
+        } else {
+            quote! {}
+        }
+    };
 
     let display_interrupt = match &hardware.board {
         BoardConfig::Split(split_config) => {
@@ -145,8 +179,7 @@ fn expand_bind_interrupt_for_split_peripheral(
     };
     let iqs5xx_interrupt = expand_iqs5xx_interrupts(&chip.series, &iqs5xx_config_for_irq);
 
-    let dfu_enabled =
-        is_feature_enabled(rmk_features, "dfu_rp") || is_feature_enabled(rmk_features, "dfu_nrf");
+    let dfu_enabled = cfg!(feature = "_dfu");
     let usb_log_enabled = is_feature_enabled(rmk_features, "usb_log");
     let usb_enabled = dfu_enabled || usb_log_enabled;
 
@@ -239,6 +272,7 @@ fn expand_bind_interrupt_for_split_peripheral(
                     TIMER0 => ::nrf_sdc::mpsl::HighPrioInterruptHandler;
                     RTC0 => ::nrf_sdc::mpsl::HighPrioInterruptHandler;
                     #pmw33xx_spi_interrupts
+                    #ext_flash_spi_interrupt
                     #iqs5xx_interrupt
                     #display_interrupt
                 });
@@ -299,10 +333,28 @@ fn expand_bind_interrupt_for_split_peripheral(
                     }
                 }
             } else if !display_interrupt.is_empty() || !iqs5xx_interrupt.is_empty() || dfu_enabled {
+                // DFU external SPI flash DMA channels
+                let dfu_dma_channels = dfu
+                    .and_then(|d| d.external_flash.as_ref())
+                    .map(|ext| {
+                        let tx = format_ident!(
+                            "{}",
+                            ext.spi.tx_dma.as_ref().expect("dfu.external_flash.spi.tx_dma is required for RP2040")
+                        );
+                        let rx = format_ident!(
+                            "{}",
+                            ext.spi.rx_dma.as_ref().expect("dfu.external_flash.spi.rx_dma is required for RP2040")
+                        );
+                        quote! {
+                            DMA_IRQ_0 => ::embassy_rp::dma::InterruptHandler<::embassy_rp::peripherals::#tx>, ::embassy_rp::dma::InterruptHandler<::embassy_rp::peripherals::#rx>;
+                        }
+                    })
+                    .unwrap_or_default();
                 quote! {
                     use ::embassy_rp::bind_interrupts;
                     bind_interrupts!(struct Irqs {
                         #usb_int
+                        #dfu_dma_channels
                         #iqs5xx_interrupt
                         #display_interrupt
                     });
@@ -321,6 +373,7 @@ fn expand_split_peripheral(
     hardware: &Hardware,
     item_mod: ItemMod,
     rmk_features: &Option<Vec<String>>,
+    dfu: Option<&DfuConfig>,
 ) -> TokenStream2 {
     // Check whether keyboard.toml contains split section
     let split_config = match &hardware.board {
@@ -330,45 +383,63 @@ fn expand_split_peripheral(
         }
     };
 
-    let dfu_enabled =
-        is_feature_enabled(rmk_features, "dfu_rp") || is_feature_enabled(rmk_features, "dfu_nrf");
-
     let peripheral_config = split_config
         .peripheral
         .get(id)
         .expect("Missing peripheral config");
 
+    // True exactly when the flash init defines `state_partition`/`dfu_partition`.
+    let dfu_enabled = cfg!(feature = "_dfu");
+
     let imports = expand_custom_imports(&item_mod);
     let mut chip_init = expand_chip_init(hardware, Some(id), &item_mod);
     if split_config.connection == SplitConnection::Ble {
         // Add storage when using BLE split
-        let flash_init = expand_flash_init(hardware);
+        let flash_init = expand_flash_init(hardware, dfu);
         chip_init.extend(quote! {
             #flash_init
-            let mut storage = ::rmk::storage::new_storage_without_keymap(flash, storage_config).await;
+            let mut storage = ::rmk::storage::new_storage_without_keymap(storage_partition, storage_config).await;
         });
     } else if dfu_enabled {
-        let flash_init = expand_flash_init(hardware);
+        let flash_init = expand_flash_init(hardware, dfu);
         chip_init.extend(quote! { #flash_init });
     }
 
-    // Mark booted when DFU is enabled so the bootloader doesn't
-    // revert the previous update.
-    if dfu_enabled {
-        chip_init.extend(quote! { ::rmk::dfu::mark_booted(); });
+    // Clone the partitions for over-the-split-link firmware updates so the
+    // originals can still be moved into the USB DFU updater below.
+    let dfu_split_enabled = is_feature_enabled(rmk_features, "dfu_split");
+    if dfu_enabled && dfu_split_enabled {
+        chip_init.extend(quote! {
+            let split_dfu_partition = dfu_partition.clone();
+            let split_state_partition = state_partition.clone();
+        });
     }
     let usb_log_enabled = is_feature_enabled(rmk_features, "usb_log");
     let usb_enabled = dfu_enabled || usb_log_enabled;
 
     // Run usb device if dfu or usb_log is enabled.
-    let usb_task_future = if usb_enabled {
+    let (usb_task_future, dfu_task) = if usb_enabled {
         let usb_init = expand_usb_init(hardware, &item_mod);
         chip_init.extend(usb_init);
-        Some(quote! {
-            ::rmk::usb::run_peripheral_usb(driver, KEYBOARD_DEVICE_CONFIG)
-        })
+        if dfu_enabled {
+            let dfu_interface = expand_dfu_interface(dfu);
+            chip_init.extend(quote! { #dfu_interface });
+            (
+                Some(quote! {
+                    ::rmk::usb::run_peripheral_usb(driver, KEYBOARD_DEVICE_CONFIG)
+                }),
+                Some(quote! { dfu_iface.run() }),
+            )
+        } else {
+            (
+                Some(quote! {
+                    ::rmk::usb::run_peripheral_usb(driver, KEYBOARD_DEVICE_CONFIG)
+                }),
+                None,
+            )
+        }
     } else {
-        None
+        (None, None)
     };
 
     // Debouncer config
@@ -465,7 +536,7 @@ fn expand_split_peripheral(
 
     // Add processor support for peripherals
     let (registered_processor_initializers, mut registered_processors) =
-        expand_registered_processor_init(hardware, &item_mod, rmk_features);
+        expand_registered_processor_init(hardware, &item_mod);
 
     // Display configuration for this peripheral
     let display_init = if let Some(display_config) = &peripheral_config.display {
@@ -483,11 +554,12 @@ fn expand_split_peripheral(
 
     let (watchdog_init, watchdog_task) = expand_watchdog_init(hardware);
 
-    let runnable_import = if !registered_processors.is_empty() || watchdog_task.is_some() {
-        quote! { use ::rmk::core_traits::Runnable; }
-    } else {
-        quote! {}
-    };
+    let runnable_import =
+        if !registered_processors.is_empty() || watchdog_task.is_some() || dfu_task.is_some() {
+            quote! { use ::rmk::core_traits::Runnable; }
+        } else {
+            quote! {}
+        };
 
     let run_rmk_peripheral = expand_split_peripheral_entry(
         id,
@@ -499,6 +571,8 @@ fn expand_split_peripheral(
         registered_processors,
         watchdog_task,
         usb_task_future,
+        dfu_task,
+        dfu_enabled && dfu_split_enabled,
     );
 
     quote! {
@@ -527,6 +601,8 @@ fn expand_split_peripheral_entry(
     registered_processors: Vec<TokenStream2>,
     watchdog_task: Option<TokenStream2>,
     usb_task_future: Option<TokenStream2>,
+    dfu_task: Option<TokenStream2>,
+    dfu_split_enabled: bool,
 ) -> TokenStream2 {
     // Add matrix to devices, and run all devices
     let mut devs = devices.clone();
@@ -574,6 +650,9 @@ fn expand_split_peripheral_entry(
             if let Some(t) = &usb_task_future {
                 tasks.push(t.clone());
             }
+            if let Some(t) = &dfu_task {
+                tasks.push(t.clone());
+            }
 
             let run_rmk_peripheral = join_all_tasks(tasks);
             quote! {
@@ -601,8 +680,18 @@ fn expand_split_peripheral_entry(
                     .instance
                     .to_lowercase()
             );
-            let peripheral_run = quote! {
-                ::rmk::split::peripheral::run_rmk_split_peripheral(#uart_instance)
+            let peripheral_run = if dfu_split_enabled {
+                quote! {
+                    ::rmk::split::peripheral::run_rmk_split_peripheral(
+                        #uart_instance,
+                        split_dfu_partition,
+                        split_state_partition,
+                    )
+                }
+            } else {
+                quote! {
+                    ::rmk::split::peripheral::run_rmk_split_peripheral(#uart_instance)
+                }
             };
             let mut tasks = vec![device_task, peripheral_run];
             tasks.extend(registered_processors);
@@ -611,6 +700,9 @@ fn expand_split_peripheral_entry(
             }
 
             if let Some(t) = &usb_task_future {
+                tasks.push(t.clone());
+            }
+            if let Some(t) = &dfu_task {
                 tasks.push(t.clone());
             }
 

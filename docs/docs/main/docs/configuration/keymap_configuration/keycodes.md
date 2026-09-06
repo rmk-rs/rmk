@@ -291,7 +291,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 
 | Keycode          | Aliases | Usage                                                                 |
 | ---------------- | ------- | --------------------------------------------------------------------- |
-| `Bootloader`     |         | Jump to the bootloader on release                                     |
+| `Bootloader`     |         | Jump to the bootloader on release. Requires a bootloader feature: `adafruit_bl`, `rp2040`, or `zsa_voyager_bl` |
 | `Reboot`         |         | Reboot the keyboard on release                                        |
 | `ClearEeprom`    |         | Reset the stored settings on release (requires the `storage` feature) |
 | `ComboOn`        |         | Enable combos                                                         |

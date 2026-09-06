@@ -1,0 +1,9 @@
+rmk-rp2040-dfu-split-dfu-ext-*.bin
+rmk-rp2040-dfu-split-dfu-ext-*.hex
+rmk-rp2040-dfu-split-dfu-ext-*.uf2
+peripheral.bin
+central.bin
+central.hex
+peripheral.hex
+central.uf2
+peripheral.uf2

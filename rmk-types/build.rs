@@ -24,7 +24,7 @@ fn main() {
     let feature_refs: Vec<&str> = active_features.iter().map(|s| s.as_str()).collect();
 
     if let Some(conflict) = config.dfu_storage_conflict()
-        && active_features.iter().any(|f| f == "dfu")
+        && active_features.iter().any(|f| f == "_dfu")
     {
         let keys = match (conflict.start_addr_set, conflict.num_sectors_set) {
             (true, true) => "[storage] start_addr and num_sectors",

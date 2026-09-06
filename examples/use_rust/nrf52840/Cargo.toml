@@ -13,6 +13,8 @@ license = "MIT OR Apache-2.0"
 rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog"] }
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7.5"
+# For rmk-boot with noswap activate set-vtor
+# cortex-m-rt = { version = "0.7.5", features = ["set-vtor"] }
 embassy-time = { version = "0.5", features = ["tick-hz-32_768", "defmt"] }
 embassy-nrf = { version = "0.11", features = [
     "defmt",

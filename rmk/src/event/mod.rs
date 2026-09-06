@@ -48,7 +48,7 @@ macro_rules! impl_payload_wrapper {
 mod action;
 mod battery;
 mod connection;
-#[cfg(feature = "dfu")]
+#[cfg(feature = "_dfu")]
 mod dfu;
 #[cfg(feature = "dongle")]
 mod dongle;
@@ -60,7 +60,7 @@ mod state;
 pub use action::ActionEvent;
 pub use battery::{BatteryAdcEvent, BatteryStatusEvent, ChargingStateEvent};
 pub use connection::{ConnectionStatus, ConnectionStatusChangeEvent, ConnectionType};
-#[cfg(feature = "dfu")]
+#[cfg(feature = "_dfu")]
 pub use dfu::DfuStatusEvent;
 #[cfg(feature = "dongle")]
 pub use dongle::{DongleState, DongleStateEvent};

@@ -134,6 +134,53 @@ serial = [
 serial = [{ instance = "PIO0", tx_pin = "PIN_0", rx_pin = "PIN_0" }]
 ```
 
+## Split keyboard DFU configuration
+
+DFU (see [Bootloader Configuration](./bootloader.mdx)) is configured globally via `[dfu]`. On a split keyboard, each side can additionally define its own `[split.central.dfu]` or `[split.peripheral.dfu]` section — for example to give the central an external flash DFU partition while the peripheral keeps an internal one, since each side may use different SPI pins or flash chips.
+
+A side's `[dfu]` section **completely replaces** the global `[dfu]` for that side; options from the global section are not merged into it. When a side has no own `[dfu]` section, it falls back to the global `[dfu]`.
+
+```toml
+[split.central]
+rows = 2
+cols = 2
+
+[split.central.matrix]
+matrix_type = "normal"
+row_pins = ["PIN_12", "PIN_13"]
+col_pins = ["PIN_14", "PIN_15"]
+
+# The central's DFU config: full replacement of the global [dfu] for this side.
+[split.central.dfu]
+led = "PIN_16"
+
+# The central's DFU download slot lives on an external SPI flash.
+[split.central.dfu.external_flash]
+driver = "w25q"
+flash_size = 8388608
+
+[split.central.dfu.external_flash.spi]
+instance = "SPI0"
+sck = "PIN_18"
+mosi = "PIN_19"
+miso = "PIN_20"
+cs = "PIN_17"
+
+[[split.peripheral]]
+rows = 2
+cols = 1
+row_offset = 2
+col_offset = 2
+
+# An empty [dfu] section means: internal DFU partition for this side —
+# no external flash, no DFU LED. The global [dfu] is ignored for it.
+[split.peripheral.dfu]
+```
+
+The empty `[split.peripheral.dfu]` above disables all DFU behaviour for the peripheral (no external flash, no LED); use `[split.peripheral.dfu.external_flash]` to give the peripheral its own external flash instead. A peripheral without a `dfu` section simply uses the global `[dfu]`.
+
+See `examples/use_config/rp2040_dfu_split_dfu_ext` for a complete example (central with external flash DFU, peripheral with internal DFU).
+
 ## Define central and peripherals via Rust
 
 ::: info

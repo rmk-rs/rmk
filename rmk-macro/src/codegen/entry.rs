@@ -6,6 +6,7 @@ use rmk_config::resolved::{Behavior, Hardware, Host};
 use syn::{ItemFn, ItemMod};
 
 use super::override_helper::Overwritten;
+use crate::codegen::chip::flash::expand_dfu_interface;
 use crate::codegen::feature::{get_rmk_features, is_feature_enabled};
 
 #[allow(clippy::too_many_arguments)]
@@ -124,8 +125,28 @@ pub(crate) fn rmk_entry_select(
         }
         _ => quote! {},
     };
-    let (transport_prelude, transport_tasks) =
-        transport_setup(host, communication, split_peripheral_matrices);
+    // The DFU updater task only attaches to a USB transport. Split centrals
+    // seed the transport's passthrough alt slots from the peripheral count.
+    let communication_uses_usb = matches!(
+        communication,
+        CommunicationConfig::Usb(_) | CommunicationConfig::Both(_, _)
+    );
+    let (dfu_interface, num_peripherals) = if cfg!(feature = "_dfu") && communication_uses_usb {
+        let num_peripherals = match board {
+            BoardConfig::Split(split) => split.peripheral.len(),
+            BoardConfig::UniBody(_) => 0,
+        };
+        (expand_dfu_interface(hardware.dfu.as_ref()), num_peripherals)
+    } else {
+        (quote! {}, 0)
+    };
+    let (transport_prelude, transport_tasks) = transport_setup(
+        host,
+        communication,
+        split_peripheral_matrices,
+        &dfu_interface,
+        num_peripherals,
+    );
 
     let entry = match board {
         BoardConfig::Split(split_config) => {
@@ -180,8 +201,8 @@ pub(crate) fn rmk_entry_select(
                             let rmk_features = get_rmk_features();
                             let dfu_split_enabled = is_feature_enabled(&rmk_features, "dfu_split");
                             let policy = if dfu_split_enabled {
-                                match p.update_policy.as_deref() {
-                                    Some("force") => {
+                                match p.update_policy {
+                                    Some(rmk_config::UpdatePolicy::Force) => {
                                         quote! { ::rmk::split::central::UpdatePolicy::Force }
                                     }
                                     _ => quote! { ::rmk::split::central::UpdatePolicy::MatchHash },
@@ -267,6 +288,8 @@ fn transport_setup(
     host: &Host,
     communication: &CommunicationConfig,
     split_peripheral_matrices: TokenStream2,
+    dfu_interface: &TokenStream2,
+    num_peripherals: usize,
 ) -> (TokenStream2, Vec<TokenStream2>) {
     let wpm_prelude = quote! {
         let mut wpm_processor = ::rmk::processor::builtin::wpm::WpmProcessor::new();
@@ -281,13 +304,37 @@ fn transport_setup(
         quote! {}
     };
 
-    let usb_prelude = quote! {
-        let mut usb_transport = ::rmk::usb::UsbTransport::new(driver, rmk_config.device_config)#with_host;
+    let dfu_split_enabled = is_feature_enabled(&get_rmk_features(), "dfu_split");
+    let usb_prelude = if dfu_split_enabled && !dfu_interface.is_empty() {
+        quote! {
+            #dfu_interface
+            let mut usb_transport = ::rmk::usb::UsbTransport::new(
+                driver,
+                rmk_config.device_config,
+                #num_peripherals,
+            )#with_host;
+        }
+    } else if !dfu_interface.is_empty() {
+        quote! {
+            #dfu_interface
+            let mut usb_transport = ::rmk::usb::UsbTransport::new(driver, rmk_config.device_config)#with_host;
+        }
+    } else {
+        quote! {
+            let mut usb_transport = ::rmk::usb::UsbTransport::new(driver, rmk_config.device_config)#with_host;
+        }
     };
     let ble_prelude = quote! {
         let mut ble_transport = ::rmk::ble::BleTransport::new(ble_controller, ble_addr, rmk_config #split_peripheral_matrices) #with_host;
     };
     let ble_task = quote! { ble_transport.run() };
+
+    // The DFU updater task runs alongside the transport it feeds.
+    let dfu_task = if dfu_interface.is_empty() {
+        quote! {}
+    } else {
+        quote! { dfu_iface.run() }
+    };
 
     match communication {
         CommunicationConfig::Usb(_) => {
@@ -295,7 +342,11 @@ fn transport_setup(
                 #wpm_prelude
                 #usb_prelude
             };
-            (prelude, vec![quote! { usb_transport.run() }, wpm_task])
+            let mut tasks = vec![quote! { usb_transport.run() }, wpm_task];
+            if !dfu_task.is_empty() {
+                tasks.push(dfu_task);
+            }
+            (prelude, tasks)
         }
         CommunicationConfig::Ble(_) => {
             let prelude = quote! {
@@ -310,10 +361,11 @@ fn transport_setup(
                 #usb_prelude
                 #ble_prelude
             };
-            (
-                prelude,
-                vec![quote! { usb_transport.run() }, ble_task, wpm_task],
-            )
+            let mut tasks = vec![quote! { usb_transport.run() }, ble_task, wpm_task];
+            if !dfu_task.is_empty() {
+                tasks.insert(1, dfu_task);
+            }
+            (prelude, tasks)
         }
         CommunicationConfig::None => panic!("USB and BLE are both disabled"),
     }

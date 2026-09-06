@@ -41,7 +41,7 @@ pub mod ble;
 pub mod combo;
 pub mod connection;
 pub mod constants;
-#[cfg(feature = "dfu")]
+#[cfg(feature = "_dfu")]
 pub mod dfu;
 pub mod fmt;
 pub mod fork;

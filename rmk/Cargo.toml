@@ -88,9 +88,6 @@ esp-hal = { version = "1.2.0-rc.0", optional = true }
 # Document feature
 document-features = "0.2"
 
-# for DFU firmware update
-embassy-usb-dfu = { version = "0.3.0", optional = true, features = ["cortex-m", "dfu"] }
-
 [dev-dependencies]
 # A hack for enabling 'std' feature in testing, ref: https://github.com/rust-lang/cargo/issues/2911
 rmk = { path = ".", default-features = false, features = ["std", "log"] }
@@ -258,14 +255,19 @@ zsa_voyager_bl = []
 
 ## **Experimental.** Enable DFU firmware update support (USB DFU interface).
 ## The flash layout, config, and API can change in any release.
-dfu = ["dep:embassy-usb-dfu", "dep:embassy-embedded-hal", "rmk-types/dfu"]
+## Requires a chip backend (`dfu_rp` or `dfu_nrf`).
+_dfu = ["dep:embedded-storage", "dep:embedded-storage-async", "dep:embassy-embedded-hal", "dep:embassy-boot", "rmk-types/_dfu", "rmk-macro/_dfu"]
 ## **Experimental.** Enable RP2040-specific DFU with embassy-boot-rp (implies `dfu` and `rp2040`)
-dfu_rp = ["dfu", "dep:embassy-boot-rp", "dep:embassy-boot", "rp2040", "rmk-macro/dfu_rp"]
+dfu_rp = ["_dfu", "dep:embassy-boot-rp", "dep:embassy-boot", "rp2040", "rmk-macro/dfu_rp"]
 ## **Experimental.** Enable nRF DFU firmware update support (add a chip feature like `nrf52840` too)
-dfu_nrf = ["dfu", "dep:embassy-boot", "dep:embassy-nrf", "rmk-macro/dfu_nrf"]
+dfu_nrf = ["_dfu", "dep:embassy-boot", "dep:embassy-nrf", "rmk-macro/dfu_nrf"]
 ## **Experimental.** Enable split firmware update support — forward firmware to peripherals over
-## split link. Wired split only; see the guard in `lib.rs` for BLE.
-dfu_split = ["dfu", "rmk-macro/dfu_split"]
+## split link. Requires `dfu_rp` or `dfu_nrf`. Wired split only.
+dfu_split = ["rmk-macro/dfu_split"]
+
+## Enable DFU writing to external SPI flash instead of internal DFU partition.
+## Requires `dfu_rp` or `dfu_nrf`
+dfu_ext = ["rmk-macro/dfu_ext"]
 
 ## Enable Plover HID stenography support: adds the steno HID descriptor,
 ## the steno USB writer endpoint, and the `Action::Steno` variant.

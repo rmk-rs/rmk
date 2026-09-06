@@ -43,6 +43,17 @@ compile_error!(
      runs over the wired split transport. Disable `dfu_split` on BLE builds."
 );
 
+// The DFU features are layered: `dfu` is the base, and everything on top of
+// it needs a chip backend (`dfu_rp` or `dfu_nrf`) to provide the updater.
+#[cfg(all(feature = "_dfu", not(any(feature = "dfu_rp", feature = "dfu_nrf"))))]
+compile_error!("feature `_dfu` requires `dfu_rp` or `dfu_nrf`");
+#[cfg(all(feature = "dfu_split", not(feature = "_dfu")))]
+compile_error!("feature `dfu_split` requires the `_dfu` feature — enable `dfu_rp` or `dfu_nrf`");
+#[cfg(all(feature = "dfu_ext", not(feature = "_dfu")))]
+compile_error!("feature `dfu_ext` requires the `_dfu` feature — enable `dfu_rp` or `dfu_nrf`");
+#[cfg(all(feature = "dfu_lock", not(feature = "_dfu")))]
+compile_error!("feature `dfu_lock` requires the `_dfu` feature — enable `dfu_rp` or `dfu_nrf`");
+
 // Re-export self as ::rmk for macro-generated code to work both inside and outside the crate
 extern crate self as rmk;
 
@@ -88,7 +99,7 @@ pub mod core_traits;
 #[cfg(feature = "dfu_split")]
 pub mod crc32;
 pub mod debounce;
-#[cfg(feature = "dfu")]
+#[cfg(feature = "_dfu")]
 pub mod dfu;
 #[cfg(feature = "display")]
 pub mod display;
