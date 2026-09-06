@@ -458,8 +458,6 @@ async fn run_steps(steps: Vec<SimStep>, to_device: &Link, from_device: &Link) {
                 }
             }
             SimStep::HostSend(request) => {
-                #[cfg(feature = "storage")]
-                rmk::test_support::reset_flash_operation();
                 let blocked = format!(
                     "host request of {} bytes blocked for {TIMEOUT_SECS}s: {}",
                     request.len(),
@@ -509,7 +507,7 @@ async fn run_steps(steps: Vec<SimStep>, to_device: &Link, from_device: &Link) {
             #[cfg(feature = "storage")]
             SimStep::WaitStorage => {
                 let waiting = format!("no storage write within {TIMEOUT_SECS}s");
-                let written = with_timeout(rmk::test_support::flash_operation_finished(), &waiting).await;
+                let written = with_timeout(rmk::test_support::flush_storage(), &waiting).await;
                 assert!(written, "storage write failed");
             }
             #[cfg(feature = "passkey_entry")]

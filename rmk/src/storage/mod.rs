@@ -28,9 +28,17 @@ use crate::config::StorageConfig;
 use crate::split::ble::PeerAddress;
 use crate::{BUILD_HASH, config};
 
-/// Signal to synchronize the flash operation status, usually used outside of the flash task.
-/// True if the flash operation is finished correctly, false if the flash operation is finished with error.
-pub(crate) static FLASH_OPERATION_FINISHED: Signal<crate::RawMutex, bool> = Signal::new();
+/// Reply to a `Flush` request: `false` if a write failed since the previous flush.
+static FLUSHED: Signal<crate::RawMutex, bool> = Signal::new();
+
+/// Wait until every write queued before this call has been processed.
+/// Returns `false` if any write failed since the previous flush.
+/// `FLUSHED` has a single waiter slot, so calls must not overlap.
+pub(crate) async fn flush() -> bool {
+    FLUSHED.reset();
+    FLASH_CHANNEL.send(FlashOperationMessage::Flush).await;
+    FLUSHED.wait().await
+}
 
 // Request/response over `FLASH_CHANNEL`. One `Signal` per read variant; the
 // storage task fires the matching one once it has the result.
@@ -74,13 +82,12 @@ pub(crate) async fn read_active_ble_profile() -> Option<u8> {
     .await
 }
 
-/// Send a peer address to be persisted; wait for the storage task to finish.
+/// Persist a peer address and wait for it to land.
 /// Returns `true` if the write completed successfully.
 #[cfg(all(feature = "_ble", feature = "split"))]
 pub(crate) async fn write_peer_address(addr: PeerAddress) -> bool {
-    FLASH_OPERATION_FINISHED.reset();
     FLASH_CHANNEL.send(FlashOperationMessage::PeerAddress(addr)).await;
-    FLASH_OPERATION_FINISHED.wait().await
+    flush().await
 }
 
 // Message send from other tasks, which will do saving or clearing operation
@@ -168,6 +175,8 @@ pub(crate) enum FlashOperationMessage {
     #[cfg(feature = "_ble")]
     // Read the persisted active BLE profile number; storage task replies via `ACTIVE_BLE_PROFILE_RESPONSE`.
     ReadActiveBleProfile,
+    // Barrier: storage task replies via `FLUSHED` once every earlier message is processed.
+    Flush,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -658,11 +667,17 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
     crate::core_traits::Runnable for Storage<F, ROW, COL, NUM_LAYER, NUM_ENCODER>
 {
     async fn run(&mut self) -> ! {
+        let mut failed = false;
         loop {
             let info: FlashOperationMessage = FLASH_CHANNEL.receive().await;
             debug!("Flash operation: {:?}", info);
 
             let write_result: Result<(), SSError<F::Error>> = match info {
+                FlashOperationMessage::Flush => {
+                    FLUSHED.signal(!failed);
+                    failed = false;
+                    continue;
+                }
                 #[cfg(feature = "_ble")]
                 FlashOperationMessage::ReadBleBondInfo(slot_num) => {
                     let resp = match self.fetch_data(StorageKey::bond_info(slot_num)).await {
@@ -821,12 +836,9 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                 }
             };
 
-            match write_result {
-                Ok(()) => FLASH_OPERATION_FINISHED.signal(true),
-                Err(e) => {
-                    print_storage_error::<F>(e);
-                    FLASH_OPERATION_FINISHED.signal(false);
-                }
+            if let Err(e) = write_result {
+                print_storage_error::<F>(e);
+                failed = true;
             }
         }
     }
@@ -1007,6 +1019,38 @@ mod tests {
             assert_eq!(decoded, key);
             assert_eq!(used, size);
         }
+    }
+
+    #[cfg(all(feature = "_ble", feature = "split"))]
+    #[test]
+    fn peer_address_write_waits_for_its_own_flush() {
+        use core::future::Future;
+        use core::pin::pin;
+        use core::task::{Context, Poll, Waker};
+
+        let mut cx = Context::from_waker(Waker::noop());
+        FLASH_CHANNEL.clear();
+        FLUSHED.reset();
+        FLASH_CHANNEL
+            .try_send(FlashOperationMessage::LayoutOptions(42))
+            .unwrap();
+
+        let mut write = pin!(write_peer_address(PeerAddress::new(0, true, [1; 6])));
+        assert!(matches!(write.as_mut().poll(&mut cx), Poll::Pending));
+
+        // The storage task sees the older write, the peer address, then the barrier.
+        assert!(matches!(
+            FLASH_CHANNEL.try_receive(),
+            Ok(FlashOperationMessage::LayoutOptions(42))
+        ));
+        assert!(matches!(
+            FLASH_CHANNEL.try_receive(),
+            Ok(FlashOperationMessage::PeerAddress(_))
+        ));
+        assert!(matches!(write.as_mut().poll(&mut cx), Poll::Pending));
+        assert!(matches!(FLASH_CHANNEL.try_receive(), Ok(FlashOperationMessage::Flush)));
+        FLUSHED.signal(true);
+        assert!(matches!(write.as_mut().poll(&mut cx), Poll::Ready(true)));
     }
 
     #[test]
