@@ -1501,13 +1501,32 @@ impl<'a> Keyboard<'a> {
             return;
         }
 
+        let owners_before = self.usage_owners(key);
+
         if event.pressed {
             self.register_key(key, event);
         } else {
             self.unregister_key(key, event);
         }
 
+        // A press that adds another owner to a held usage needs one report without
+        // that usage first, or the host never sees the absent->present transition.
+        if event.pressed && owners_before > 0 && self.usage_owners(key) > owners_before {
+            self.send_keyboard_report_suppressing(event.pressed, key).await;
+        }
+
         self.send_keyboard_report_with_resolved_modifiers(event.pressed).await;
+    }
+
+    /// How many report slots hold `key`.
+    ///
+    /// Two matrix positions can map to one HID usage, and the report collapses
+    /// the duplicates, so only the slot count separates a re-strike from a hold.
+    fn usage_owners(&self, key: HidKeyCode) -> usize {
+        if key == HidKeyCode::No {
+            return 0;
+        }
+        self.held_keycodes.iter().filter(|&&held| held == key).count()
     }
 
     // Process action special keys
@@ -1884,13 +1903,13 @@ impl<'a> Keyboard<'a> {
     }
 
     /// Build the keyboard report for the current held keycodes with modifiers
-    /// resolved.
+    /// resolved, holding `suppressed` out of the keycode array.
     ///
     /// Multiple slots can hold the same HID usage, but the host only tracks
     /// each usage as up or down, so duplicates are collapsed to the first slot
     /// that holds them. This keeps the shared usage down until the last holder
-    /// releases it.
-    pub(crate) fn build_keyboard_report(&mut self, pressed: bool) -> KeyboardReport {
+    /// releases it. `HidKeyCode::No` suppresses nothing.
+    pub(crate) fn build_keyboard_report(&mut self, pressed: bool, suppressed: HidKeyCode) -> KeyboardReport {
         let modifiers = self.resolve_modifiers(pressed);
         info!(
             "Sending keyboard report, modifiers: {:?}, keycodes: {:?}",
@@ -1900,7 +1919,7 @@ impl<'a> Keyboard<'a> {
         let mut n = 0;
         for k in self.held_keycodes {
             let code = k as u8;
-            if code != 0 && !keycodes[..n].contains(&code) {
+            if code != 0 && k != suppressed && !keycodes[..n].contains(&code) {
                 keycodes[n] = code;
                 n += 1;
             }
@@ -1915,7 +1934,12 @@ impl<'a> Keyboard<'a> {
 
     /// Send the keyboard report with resolved modifiers to the host.
     pub(crate) async fn send_keyboard_report_with_resolved_modifiers(&mut self, pressed: bool) {
-        let report = self.build_keyboard_report(pressed);
+        self.send_keyboard_report_suppressing(pressed, HidKeyCode::No).await;
+    }
+
+    /// Send the keyboard report with `suppressed` held out of the keycode array.
+    async fn send_keyboard_report_suppressing(&mut self, pressed: bool, suppressed: HidKeyCode) {
+        let report = self.build_keyboard_report(pressed, suppressed);
         self.send_report(Report::KeyboardReport(report)).await;
 
         // Yield once after sending the report to channel
