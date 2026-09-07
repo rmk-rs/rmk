@@ -86,7 +86,12 @@ impl<'a> Keyboard<'a> {
 
                     // Release modifier
                     self.update_osl(event);
-                    self.osm_state = OneShotState::None;
+                    let remaining = cur_modifiers & !new_modifiers;
+                    self.osm_state = if remaining.into_bits() == 0 {
+                        OneShotState::None
+                    } else {
+                        OneShotState::Held(remaining)
+                    };
 
                     // This sends a separate hid report with the
                     // currently registered modifiers except the
