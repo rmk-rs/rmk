@@ -40,6 +40,27 @@ expect = [
   [],
 ]
 
+# Releasing one held OSM must leave another physically held OSM active.
+# Regression: the first release cleared the aggregate state and dropped both.
+[[test]]
+name = "releasing_one_held_osm_keeps_the_other"
+steps = [
+  { press = [0, 0] },    # Hold OSM(LShift)
+  { press = [0, 4] },    # Hold OSM(LCtrl)
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [0, 0] },  # LCtrl is still physically held
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [0, 4] },
+]
+expect = [
+  ["LShift", "LCtrl", "A"],
+  ["LShift", "LCtrl"],
+  ["LCtrl"],
+  ["LCtrl", "A"],
+  ["LCtrl"],
+  [],
+]
+
 # Only the first key after the OSM gets the modifier.
 [[test]]
 name = "osm_multiple_keys"
