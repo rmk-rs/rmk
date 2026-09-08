@@ -1,19 +1,18 @@
 use core::sync::atomic::Ordering;
 
-use embassy_futures::join::join;
 use embassy_futures::select::{Either, select};
 use embassy_sync::pubsub::Subscriber;
+use embassy_sync::watch::Receiver as WatchReceiver;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
 
 use super::ble_server::Server;
-use crate::ble::sleep::SLEEPING_STATE;
+use crate::ble::sleep::{LAST_ACTIVITY_TIMESTAMP, SLEEPING_STATE};
 use crate::core_traits::Runnable;
 #[cfg(feature = "split")]
 use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
-use crate::keyboard::LAST_KEY_TIMESTAMP;
 
 const CHARACTERISTIC_PRESENTATION_FORMAT_UINT8: u8 = 0x04;
 const CHARACTERISTIC_PRESENTATION_FORMAT_EXPONENT_ZERO: u8 = 0x00;
@@ -122,6 +121,7 @@ fn peripheral_battery_presentation_format(peripheral_id: usize) -> [u8; 7] {
 pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
     battery_level: Characteristic<u8>,
     conn: &'conn GattConnection<'stack, 'server, P>,
+    last_activity_timestamp: WatchReceiver<'static, crate::RawMutex, u32, 2>,
     sub: Subscriber<
         'static,
         crate::RawMutex,
@@ -137,6 +137,9 @@ impl<'stack, 'server, 'conn, P: PacketPool> BleBatteryServer<'stack, 'server, 'c
         Self {
             battery_level: server.battery_service.level,
             conn,
+            last_activity_timestamp: LAST_ACTIVITY_TIMESTAMP
+                .receiver()
+                .expect("battery activity timestamp receiver limit reached"),
             sub: BatteryStatusEvent::subscriber(),
         }
     }
@@ -178,56 +181,65 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
         with_timeout(Duration::from_secs(30), first_report).await.ok();
 
         // Report the battery level.
+        let mut next_timeout = Instant::now() + Duration::from_secs(1800);
+        let mut battery_status = self.sub.next_message_pure().await;
         loop {
-            let battery_status = self.wait_until_battery_status_available().await;
-
-            // Check if there's a newer event, if not, use original battery status event
-            let state = self.sub.try_next_message_pure().unwrap_or(battery_status);
-            if let BatteryStatus::Available { level: Some(level), .. } = state.0
-                && let Err(e) = self.battery_level.notify(self.conn, &level, true).await
-            {
-                error!("Failed to notify battery level: {:?}", e);
+            match wait_for_central_battery_report_decision(&mut self.last_activity_timestamp, next_timeout).await {
+                BatteryReportDecision::Notify => {
+                    // Check if there's a newer event, if not, use original battery status event
+                    let state = self.sub.try_next_message_pure().unwrap_or(battery_status);
+                    if let BatteryStatus::Available { level: Some(level), .. } = state.0
+                        && let Err(e) = self.battery_level.notify(self.conn, &level, true).await
+                    {
+                        error!("Failed to notify battery level: {:?}", e);
+                    }
+                    next_timeout = Instant::now() + Duration::from_secs(1800);
+                }
+                BatteryReportDecision::Drop => {}
             }
+            battery_status = self.sub.next_message_pure().await;
         }
     }
 }
 
-impl<P: PacketPool> BleBatteryServer<'_, '_, '_, P> {
-    /// Wait until the battery status is available.
-    /// To avoid unexpected wakeup, before reporting battery level, all conditions should be satistied:
-    ///
-    /// 1. There's a battery status update
-    /// 2. There's a key press in last 1 minute, or timeout(30 minutes)
-    /// 3. The keyboard is not in the sleep mode
-    async fn wait_until_battery_status_available(&mut self) -> BatteryStatusEvent {
-        loop {
-            // Calculate timeout when reporting battery level
-            let timeout = async {
-                loop {
-                    embassy_time::Timer::after_secs(1800).await;
-                    // 30 minutes passed and the keyboard isn't in sleep mode: timeout
-                    if !SLEEPING_STATE.load(Ordering::Acquire) {
-                        break;
-                    }
-                }
-            };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BatteryReportDecision {
+    Notify,
+    Drop,
+}
 
-            // Wait until there are both battery status update and key pressing or timeout
-            let (battery_status, last_press) =
-                join(self.sub.next_message_pure(), select(timeout, LAST_KEY_TIMESTAMP.wait())).await;
-
-            // Then check the value last press time
-            let last_press = match last_press {
-                Either::First(_) => Instant::now().as_secs() as u32,
-                Either::Second(last_press) => last_press,
-            };
-
-            // Only report battery status if the last key action is less than 60 seconds ago
-            let current_time = Instant::now().as_secs() as u32;
-            if current_time.saturating_sub(last_press) < 60 {
-                return battery_status;
-            }
+/// Wait until a central battery notification is allowed or the current event must be dropped.
+async fn wait_for_central_battery_report_decision<M: embassy_sync::blocking_mutex::raw::RawMutex>(
+    last_activity_timestamp: &mut WatchReceiver<'_, M, u32, 2>,
+    timeout_at: Instant,
+) -> BatteryReportDecision {
+    loop {
+        let deadline_passed = Instant::now() >= timeout_at;
+        if !SLEEPING_STATE.load(Ordering::Acquire) && deadline_passed {
+            return BatteryReportDecision::Notify;
         }
+
+        let activity = if let Some(activity) = last_activity_timestamp.try_changed() {
+            activity
+        } else if deadline_passed {
+            last_activity_timestamp.changed().await
+        } else {
+            match select(Timer::at(timeout_at), last_activity_timestamp.changed()).await {
+                Either::First(_) => continue,
+                Either::Second(activity) => activity,
+            }
+        };
+
+        if SLEEPING_STATE.load(Ordering::Acquire) {
+            continue;
+        }
+
+        let current_time = Instant::now().as_secs() as u32;
+        return if current_time.saturating_sub(activity) < 60 {
+            BatteryReportDecision::Notify
+        } else {
+            BatteryReportDecision::Drop
+        };
     }
 }
 
@@ -468,4 +480,50 @@ mod tests {
         assert_eq!(find_peripheral_battery_slot(&configured_ids, 1), None);
         assert_eq!(find_peripheral_battery_slot(&configured_ids, 2), Some(1));
     }
+
+    #[test]
+    fn activity_timestamp_watch_supports_multiple_receivers() {
+        let watch = embassy_sync::watch::Watch::<NoopRawMutex, u32, 2>::new();
+        let mut first = watch.receiver().unwrap();
+        let mut second = watch.receiver().unwrap();
+        watch.sender().send(42);
+
+        crate::test_support::test_block_on(async {
+            assert_eq!(first.changed().await, 42);
+            assert_eq!(second.changed().await, 42);
+        });
+    }
+
+    #[test]
+    fn activity_timestamp_is_consumed_once_per_receiver() {
+        let watch = embassy_sync::watch::Watch::<NoopRawMutex, u32, 2>::new();
+        let mut receiver = watch.receiver().unwrap();
+        watch.sender().send(42);
+
+        assert_eq!(receiver.try_changed(), Some(42));
+        assert_eq!(receiver.try_changed(), None);
+
+        watch.sender().send(43);
+        assert_eq!(receiver.try_changed(), Some(43));
+    }
+
+    #[test]
+    fn central_battery_report_gate_drops_stale_activity() {
+        use embassy_time::{Duration, Instant, MockDriver};
+
+        let watch = embassy_sync::watch::Watch::<NoopRawMutex, u32, 2>::new();
+        let mut receiver = watch.receiver().unwrap();
+        crate::ble::sleep::SLEEPING_STATE.store(false, core::sync::atomic::Ordering::Release);
+
+        let decision = crate::test_support::test_block_on(async {
+            watch.sender().send(0);
+            let timeout = Instant::now() + Duration::from_secs(1800);
+            MockDriver::get().advance(Duration::from_secs(60));
+            super::wait_for_central_battery_report_decision(&mut receiver, timeout).await
+        });
+        assert_eq!(decision, super::BatteryReportDecision::Drop);
+    }
+
+
+
 }
