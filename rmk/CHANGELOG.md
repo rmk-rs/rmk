@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix UTF-8 panics when non-ASCII names are used in `keyboard.toml` aliases, and accept Unicode whitespace between keymap actions
 - Honour `SET_PROTOCOL` on the boot-subclass keyboard interface. The keyboard interface now accepts both modes and reports the selected one
 - Reboot instead of re-running trouble's host runner after it stops, and when a split link the host still holds is unknown to the controller.
+- Expand central BLE battery notification gating beyond recent key input to recent activity
+- Suppress split peripheral BLE battery notifications while the keyboard is sleeping
+- Keep central and split peripheral BLE GATT battery values current while sleeping, then report the latest value after wake
 
 ## [0.9.0] - 2026-08-27
 
