@@ -141,6 +141,11 @@ async fn client_against_run_session() {
             matches!(ev, TopicEvent::LayerChange(1)),
             "expected LayerChange(1), got {ev:?}"
         );
+        let ev = client.next_topic().await;
+        assert!(
+            matches!(ev, TopicEvent::LayerChange(1)),
+            "default-layer changes publish LayerChange, got {ev:?}"
+        );
 
         // Round-trip representative remaining domains.
         client.set_key(0, 1, 1, KeyAction::Morse(2)).await.unwrap();

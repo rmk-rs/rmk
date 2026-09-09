@@ -14,6 +14,8 @@ mod simulator;
 
 #[cfg(feature = "rynk")]
 mod rynk;
+#[cfg(all(feature = "rynk", feature = "lighting"))]
+mod rynk_lighting;
 #[cfg(feature = "vial")]
 mod vial;
 

@@ -8,6 +8,7 @@ pub(crate) mod import;
 pub(crate) mod input_device;
 pub(crate) mod keyboard_config;
 pub(crate) mod keymap;
+pub(crate) mod lighting;
 pub(crate) mod matrix;
 pub(crate) mod orchestrator;
 pub(crate) mod override_helper;

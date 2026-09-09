@@ -67,6 +67,13 @@ events = [
     { name = "connection_status_change" },
     { name = "sleep_state" },
     { name = "led_indicator" },
+    { name = "modifier" },
+]
+
+[[subscriber]]
+features = ["rynk", "lighting"]
+events = [
+    { name = "lighting_changed" },
 ]
 
 [[subscriber]]
@@ -81,6 +88,7 @@ events = [
     { name = "connection_status_change" },
     { name = "sleep_state" },
     { name = "led_indicator" },
+    { name = "modifier" },
 ]
 
 # --- Dongle-gated internal subscribers (both binaries enable `dongle`) ---
@@ -104,6 +112,24 @@ features = ["dongle", "display"]
 events = [
     # display/mod.rs: DisplayProcessor subscribes on a dongle with a screen.
     { name = "dongle_state" },
+]
+
+[[subscriber]]
+features = ["rynk", "lighting", "_ble"]
+events = [
+    # Second Rynk session slot on dual-transport boards.
+    { name = "lighting_changed" },
+]
+
+[[subscriber]]
+features = ["lighting"]
+events = [
+    # lighting/processor.rs: LightingProcessor subscribes to authoritative
+    # keyboard-state invalidations on every lighting-enabled board.
+    { name = "layer_change" },
+    { name = "connection_status_change" },
+    { name = "led_indicator" },
+    { name = "sleep_state" },
 ]
 
 # --- Split-gated internal subscribers ---

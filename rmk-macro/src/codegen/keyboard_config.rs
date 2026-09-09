@@ -79,11 +79,13 @@ pub(crate) fn expand_lock_config(host: &Host) -> proc_macro2::TokenStream {
     let unlock_keys = unlock_keys_tokens(host);
     let insecure = host.insecure;
     let write_requires_unlock = host.write_requires_unlock;
+    let bootloader_requires_unlock = host.bootloader_requires_unlock;
     quote! {
         const LOCK_CONFIG: ::rmk::config::LockConfig = ::rmk::config::LockConfig {
             unlock_keys: #unlock_keys,
             insecure: #insecure,
             write_requires_unlock: #write_requires_unlock,
+            bootloader_requires_unlock: #bootloader_requires_unlock,
         };
     }
 }

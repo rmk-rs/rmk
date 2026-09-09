@@ -1,5 +1,3 @@
-use core::sync::atomic::Ordering;
-
 use embassy_futures::join::join;
 use embassy_futures::select::{Either, select};
 use embassy_sync::pubsub::Subscriber;
@@ -8,7 +6,6 @@ use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
 
 use super::ble_server::Server;
-use crate::ble::sleep::SLEEPING_STATE;
 use crate::core_traits::Runnable;
 #[cfg(feature = "split")]
 use crate::event::PeripheralBatteryEvent;
@@ -206,7 +203,7 @@ impl<P: PacketPool> BleBatteryServer<'_, '_, '_, P> {
                 loop {
                     embassy_time::Timer::after_secs(1800).await;
                     // 30 minutes passed and the keyboard isn't in sleep mode: timeout
-                    if !SLEEPING_STATE.load(Ordering::Acquire) {
+                    if !crate::state::current_sleeping() {
                         break;
                     }
                 }

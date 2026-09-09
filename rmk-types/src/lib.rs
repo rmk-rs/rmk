@@ -45,6 +45,7 @@ pub mod constants;
 pub mod dfu;
 pub mod fmt;
 pub mod fork;
+pub mod key;
 pub mod keycode;
 pub mod led_indicator;
 pub mod modifier;

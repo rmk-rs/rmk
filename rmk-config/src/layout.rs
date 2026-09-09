@@ -113,6 +113,12 @@ impl LayoutInfo {
     }
 }
 
+pub(crate) struct ResolvedLayout {
+    pub blob: Vec<u8>,
+    pub keys: Vec<[u8; 2]>,
+    pub physical: crate::resolved::PhysicalLayout,
+}
+
 /// A resolved shape: every default applied. `rect2` is the L-key's second
 /// rectangle stored as center-relative offsets — its `x`/`y` are offsets from
 /// the primary center, not absolute positions (the walk resolves them).
@@ -666,6 +672,101 @@ pub(crate) fn build_layout_blob(
         postcard::to_allocvec(&info).map_err(|e| format!("keyboard.toml: layout blob serialize failed: {e}"))?;
     // Compression runs at build time; hosts use the matching raw DEFLATE decoder.
     Ok(miniz_oxide::deflate::compress_to_vec(&bytes, 10))
+}
+
+/// Resolve both host-facing KLE data and the compact firmware geometry from
+/// one parse/walk. This keeps `[layout].map` the only board-layout authority.
+pub(crate) fn build_resolved_layout(
+    layout: &LayoutTomlConfig,
+    expected_encoders: Option<usize>,
+) -> Result<ResolvedLayout, String> {
+    let Some(info) = build_layout_info(layout, expected_encoders)? else {
+        return Ok(ResolvedLayout {
+            blob: Vec::new(),
+            keys: Vec::new(),
+            physical: crate::resolved::PhysicalLayout::default(),
+        });
+    };
+
+    let bytes =
+        postcard::to_allocvec(&info).map_err(|e| format!("keyboard.toml: layout blob serialize failed: {e}"))?;
+    let blob = miniz_oxide::deflate::compress_to_vec(&bytes, 10);
+    let keys = parse_map(layout.map.as_deref().unwrap_or_default(), layout.rows, layout.cols)?
+        .into_iter()
+        .filter_map(|token| match token {
+            MapToken::Key { row, col, .. } => Some([row, col]),
+            _ => None,
+        })
+        .collect();
+    let variant = &info.variants[info.default_variant as usize];
+    let physical = crate::resolved::PhysicalLayout {
+        keys: variant
+            .keys
+            .iter()
+            .map(|key| {
+                let center = fixed_point(key.rect.x, key.rect.y)
+                    .map_err(|reason| format!("layout.map key ({},{}) center {reason}", key.row, key.col))?;
+                let size = fixed_size(key.rect.w, key.rect.h)
+                    .map_err(|reason| format!("layout.map key ({},{}) size {reason}", key.row, key.col))?;
+                let rotation_centidegrees = centidegrees(key.r)
+                    .map_err(|reason| format!("layout.map key ({},{}) rotation {reason}", key.row, key.col))?;
+                Ok(crate::resolved::PhysicalKey {
+                    matrix: [key.row, key.col],
+                    center,
+                    size,
+                    rotation_centidegrees,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+    };
+
+    Ok(ResolvedLayout { blob, keys, physical })
+}
+
+fn fixed_point(x: f32, y: f32) -> Result<crate::resolved::FixedPoint3, &'static str> {
+    fn axis(value: f32) -> Result<i16, &'static str> {
+        if !value.is_finite() {
+            return Err("must be finite");
+        }
+        let raw = (value * 256.0).round();
+        if raw < i16::MIN as f32 || raw > i16::MAX as f32 {
+            return Err("does not fit signed Q8.8 key-pitch units");
+        }
+        Ok(raw as i16)
+    }
+    Ok(crate::resolved::FixedPoint3 {
+        x: axis(x)?,
+        y: axis(y)?,
+        z: 0,
+    })
+}
+
+fn fixed_size(width: f32, height: f32) -> Result<crate::resolved::FixedSize2, &'static str> {
+    fn axis(value: f32) -> Result<u16, &'static str> {
+        if !value.is_finite() || value <= 0.0 {
+            return Err("must be finite and positive");
+        }
+        let raw = (value * 256.0).round();
+        if raw < 1.0 || raw > u16::MAX as f32 {
+            return Err("does not fit unsigned Q8.8 key-pitch units");
+        }
+        Ok(raw as u16)
+    }
+    Ok(crate::resolved::FixedSize2 {
+        width: axis(width)?,
+        height: axis(height)?,
+    })
+}
+
+fn centidegrees(degrees: f32) -> Result<i16, &'static str> {
+    if !degrees.is_finite() {
+        return Err("must be finite");
+    }
+    let raw = (degrees * 100.0).round();
+    if raw < i16::MIN as f32 || raw > i16::MAX as f32 {
+        return Err("does not fit signed centidegrees");
+    }
+    Ok(raw as i16)
 }
 
 #[cfg(test)]

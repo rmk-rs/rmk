@@ -39,6 +39,12 @@ channel_size = 1
 pubs = 1
 subs = 1
 
+# Unit invalidation published after authoritative lighting state changes.
+[event.lighting_changed]
+channel_size = 1
+pubs = 1
+subs = 1
+
 # Power events
 [event.battery_status]
 channel_size = 1

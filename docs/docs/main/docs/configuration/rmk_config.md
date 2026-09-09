@@ -38,6 +38,9 @@ split_peripherals_num = 0
 ble_profiles_num = 3
 # BLE Split Central sleep timeout in seconds (0 = disabled)
 split_central_sleep_timeout_seconds = 0
+# Maximum skipped 7.5 ms split connection events while active
+split_central_max_latency_powered = 30
+split_central_max_latency_battery = 30
 # Maximum macro data bytes in one Rynk macro request or response
 protocol_macro_chunk_size = 64
 # Maximum number of auto mouse layer entries (auto-derived from [[behavior.auto_mouse_layer]] if unset)
@@ -101,6 +104,7 @@ These tune the [Rynk](../features/rynk) protocol and rarely need changing.
 - `ble_profiles_num`: The number of available Bluetooth profiles, default value is 3. This parameter defines how many Bluetooth paired devices the keyboard can store. This value must be between 0 and 255.
 - `split_central_sleep_timeout_seconds`: Sleep timeout for BLE split central in seconds, default value is 0 (disabled). When set to a non-zero value, the split central will enter sleep mode after this many seconds of inactivity to save power. Set to 0 to disable automatic sleep.
 - `dongle_pairing_window_secs`: Length of one dongle pairing window in seconds, default value is 30. Used only by builds with the `dongle` feature. A dongle without a bonded keyboard repeats the window until one pairs. A bonded dongle opens it exactly once, at power-on, and afterwards reconnects only its bonded keyboard.
+- `split_central_max_latency_powered` / `split_central_max_latency_battery`: Maximum number of BLE connection events the split peripheral may skip while active, selected by whether USB power is present. Both default to 30. Lower values reduce worst-case split input and central-to-peripheral update latency at the cost of more radio wakeups and peripheral battery use. Set to 0 for the lowest latency. Sleep mode uses its own low-power connection parameters. Rynk can replace these volatile values or force/clear a runtime override with `GetSplitCentralLatency` and `SetSplitCentralLatency`; reboot restores the build-time values.
 
 ### Auto Mouse Layer Configuration
 

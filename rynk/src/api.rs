@@ -19,13 +19,34 @@ use rmk_types::combo::Combo;
 use rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rmk_types::fork::Fork;
 use rmk_types::led_indicator::LedIndicator;
+use rmk_types::modifier::ModifierCombination;
 use rmk_types::morse::Morse;
 use rmk_types::protocol::rynk::{
-    BehaviorConfig, Cmd, DeviceCapabilities, DeviceInfo, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest,
-    GetKeymapBulkRequest, GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse,
-    KeyPosition, LockStatus, MacroData, MatrixState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest,
-    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest,
-    SetMorseBulkRequest, SetMorseRequest, StorageResetMode, command,
+    AbortLightingOverlayReplaceRequest, AbortLightingRuntimeConditionalSceneReplaceRequest,
+    AbortLightingSceneReplaceRequest, BeginLightingOverlayReplaceRequest,
+    BeginLightingRuntimeConditionalSceneReplaceRequest, BeginLightingSceneReplaceRequest, BehaviorConfig, BuildInfo,
+    ClearLightingOverlayRequest, Cmd, CommitLightingOverlayReplaceRequest,
+    CommitLightingRuntimeConditionalSceneReplaceRequest, CommitLightingSceneReplaceRequest, DeviceCapabilities,
+    DeviceInfo, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest, GetKeymapBulkRequest,
+    GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse, KeyPosition, LayerState,
+    LightingCapabilities, LightingCompiledSceneStatus, LightingCompiledScenesPage, LightingConditionalSceneStatus,
+    LightingConditionalScenesPage, LightingExtendedRuntimeConditionalScenesPage, LightingExtension,
+    LightingExtensionLayers, LightingExtensionNameKind, LightingExtensionNamesPage, LightingExtensionNamesRequest,
+    LightingExtensionParamsPage, LightingExtensionParamsRequest, LightingFramePage, LightingFrameRequest,
+    LightingKeysPage, LightingLed, LightingLedsPage, LightingMatrixPosition, LightingOutputModeState,
+    LightingOutputsPage, LightingOverlayPage, LightingOverlayPageRequest, LightingOverlayTransaction,
+    LightingPageRequest, LightingPhysicalKeysPage, LightingReplicaStatus, LightingResult, LightingRoutesPage,
+    LightingRuntimeConditionalScenePageRequest, LightingRuntimeConditionalSceneStatus,
+    LightingRuntimeConditionalSceneTransaction, LightingRuntimeConditionalScenesPage, LightingScenePageRequest,
+    LightingSceneStatus, LightingSceneTransaction, LightingScenesPage, LightingState, LightingZone, LightingZoneId,
+    LightingZoneMembershipsPage, LightingZonesPage, LockStatus, MacroData, MatrixState, PeripheralStatus,
+    ProtocolVersion, PutLightingExtendedRuntimeConditionalSceneChunkRequest, PutLightingOverlayChunkRequest,
+    PutLightingRuntimeConditionalSceneChunkRequest, PutLightingSceneChunkRequest, SetComboBulkRequest, SetComboRequest,
+    SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetLightingExtensionLayersRequest,
+    SetLightingExtensionParamRequest, SetLightingExtensionStateRequest, SetLightingLayerPolicyRequest,
+    SetLightingOutputModeRequest, SetLightingOverlayRequest, SetLightingSceneCellRequest, SetLightingStateRequest,
+    SetMacroRequest, SetMorseBulkRequest, SetMorseRequest, SplitCentralLatencyPolicy, SplitCentralLatencyState,
+    StorageResetMode, UnsetLightingOverlayRequest, UnsetLightingSceneCellRequest, command,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -35,6 +56,8 @@ use serde::Serialize;
 #[cfg(feature = "alloc")]
 use crate::driver::MAX_IN_FLIGHT;
 use crate::driver::{Client, RynkHostError};
+#[cfg(feature = "alloc")]
+use crate::key_topology::KeyTopology;
 #[cfg(feature = "alloc")]
 use crate::layout::LayoutInfo;
 
@@ -64,6 +87,20 @@ impl Client {
         }
     }
 
+    /// Reject a lighting command locally when the handshake says the firmware
+    /// has no lighting service.
+    fn require_lighting(&self, cmd: Cmd) -> Result<(), RynkHostError> {
+        if self.capabilities.lighting_enabled {
+            Ok(())
+        } else {
+            Err(RynkHostError::Unsupported(cmd, "lighting not enabled"))
+        }
+    }
+
+    fn flatten_lighting<T>(result: LightingResult<T>) -> Result<T, RynkHostError> {
+        result.map_err(RynkHostError::LightingRejected)
+    }
+
     /// Read the firmware's protocol version.
     pub async fn get_version(&self) -> Result<ProtocolVersion, RynkHostError> {
         self.request::<command::GetVersion>(&()).await
@@ -80,6 +117,11 @@ impl Client {
         self.request::<command::GetDeviceInfo>(&()).await
     }
 
+    /// Read the application-defined diagnostic build label.
+    pub async fn get_build_info(&self) -> Result<BuildInfo, RynkHostError> {
+        self.request::<command::GetBuildInfo>(&()).await
+    }
+
     /// Reboot the device. The firmware resets before it can reply, so `Ok(())` only
     /// means the request was queued — keep the driver running long enough to write it.
     pub async fn reboot(&self) -> Result<(), RynkHostError> {
@@ -90,6 +132,19 @@ impl Client {
     /// [`reboot`](Self::reboot).
     pub async fn bootloader_jump(&self) -> Result<(), RynkHostError> {
         self.send_no_reply::<command::BootloaderJump>(&()).await
+    }
+
+    /// Ask the application to route a bootloader jump to one split peripheral.
+    /// Unlike the local jump, the central remains online and acknowledges
+    /// whether the board-specific route accepted the request.
+    pub async fn peripheral_bootloader_jump(&self, slot: u8) -> Result<(), RynkHostError> {
+        if !self.capabilities.is_split {
+            return Err(RynkHostError::Unsupported(
+                Cmd::PeripheralBootloaderJump,
+                "not a split keyboard",
+            ));
+        }
+        self.request::<command::PeripheralBootloaderJump>(&slot).await
     }
 
     /// Reset persistent storage. Requires [`DeviceCapabilities::storage_enabled`]:
@@ -322,6 +377,16 @@ impl Client {
         self.request::<command::GetCurrentLayer>(&()).await
     }
 
+    /// Read the default layer and complete active-layer bitmap.
+    pub async fn get_layer_state(&self) -> Result<LayerState, RynkHostError> {
+        self.request::<command::GetLayerState>(&()).await
+    }
+
+    /// Read the final resolved modifier bitmap used by the HID report.
+    pub async fn get_modifier_state(&self) -> Result<ModifierCombination, RynkHostError> {
+        self.request::<command::GetModifierState>(&()).await
+    }
+
     /// Read the matrix state: a bitmap of which keys are physically pressed.
     pub async fn get_matrix_state(&self) -> Result<MatrixState, RynkHostError> {
         self.request::<command::GetMatrixState>(&()).await
@@ -360,6 +425,473 @@ impl Client {
         self.request::<command::GetLedIndicator>(&()).await
     }
 
+    /// Read lighting limits, supported effects, and topology identity.
+    pub async fn get_lighting_capabilities(&self) -> Result<LightingCapabilities, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingCapabilities)?;
+        Self::flatten_lighting(self.request::<command::GetLightingCapabilities>(&()).await?)
+    }
+
+    /// Read authoritative standard lighting state and its concurrency revision.
+    pub async fn get_lighting_state(&self) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingState)?;
+        Self::flatten_lighting(self.request::<command::GetLightingState>(&()).await?)
+    }
+
+    /// Read the configured three-state lighting output policy and its live inputs.
+    pub async fn get_lighting_output_mode(&self) -> Result<LightingOutputModeState, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingOutputMode)?;
+        Self::flatten_lighting(self.request::<command::GetLightingOutputMode>(&()).await?)
+    }
+
+    /// Read one page of the frame a lighting output most recently accepted.
+    pub async fn get_lighting_frame(&self, request: LightingFrameRequest) -> Result<LightingFramePage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingFrame)?;
+        Self::flatten_lighting(self.request::<command::GetLightingFrame>(&request).await?)
+    }
+
+    /// Read the board's cached view of split lighting replication.
+    pub async fn get_lighting_replica_status(&self) -> Result<LightingReplicaStatus, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingReplicaStatus)?;
+        Self::flatten_lighting(self.request::<command::GetLightingReplicaStatus>(&()).await?)
+    }
+
+    pub async fn set_lighting_output_mode(
+        &self,
+        request: SetLightingOutputModeRequest,
+    ) -> Result<LightingOutputModeState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingOutputMode)?;
+        Self::flatten_lighting(self.request::<command::SetLightingOutputMode>(&request).await?)
+    }
+
+    /// Atomically replace standard mutable state when the revision still matches.
+    pub async fn set_lighting_state(&self, request: SetLightingStateRequest) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingState)?;
+        Self::flatten_lighting(self.request::<command::SetLightingState>(&request).await?)
+    }
+
+    pub async fn get_lighting_physical_keys(
+        &self,
+        request: LightingPageRequest,
+    ) -> Result<LightingPhysicalKeysPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingPhysicalKeys)?;
+        Self::flatten_lighting(self.request::<command::GetLightingPhysicalKeys>(&request).await?)
+    }
+
+    /// Read real logical matrix keys, including keys with no measured geometry.
+    pub async fn get_lighting_keys(&self, request: LightingPageRequest) -> Result<LightingKeysPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingKeys)?;
+        Self::flatten_lighting(self.request::<command::GetLightingKeys>(&request).await?)
+    }
+
+    pub async fn get_lighting_leds(&self, request: LightingPageRequest) -> Result<LightingLedsPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingLeds)?;
+        Self::flatten_lighting(self.request::<command::GetLightingLeds>(&request).await?)
+    }
+
+    pub async fn get_lighting_zones(&self, request: LightingPageRequest) -> Result<LightingZonesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingZones)?;
+        Self::flatten_lighting(self.request::<command::GetLightingZones>(&request).await?)
+    }
+
+    pub async fn get_lighting_zone_memberships(
+        &self,
+        request: LightingPageRequest,
+    ) -> Result<LightingZoneMembershipsPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingZoneMemberships)?;
+        Self::flatten_lighting(self.request::<command::GetLightingZoneMemberships>(&request).await?)
+    }
+
+    pub async fn get_lighting_outputs(
+        &self,
+        request: LightingPageRequest,
+    ) -> Result<LightingOutputsPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingOutputs)?;
+        Self::flatten_lighting(self.request::<command::GetLightingOutputs>(&request).await?)
+    }
+
+    pub async fn get_lighting_routes(&self, request: LightingPageRequest) -> Result<LightingRoutesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingRoutes)?;
+        Self::flatten_lighting(self.request::<command::GetLightingRoutes>(&request).await?)
+    }
+
+    /// Set one transient overlay cell when the state revision matches.
+    pub async fn set_lighting_overlay(
+        &self,
+        request: SetLightingOverlayRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingOverlay)?;
+        Self::flatten_lighting(self.request::<command::SetLightingOverlay>(&request).await?)
+    }
+
+    /// Remove one transient overlay cell when the state revision matches.
+    pub async fn unset_lighting_overlay(
+        &self,
+        request: UnsetLightingOverlayRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::UnsetLightingOverlay)?;
+        Self::flatten_lighting(self.request::<command::UnsetLightingOverlay>(&request).await?)
+    }
+
+    /// Clear the transient overlay when the state revision matches.
+    pub async fn clear_lighting_overlay(
+        &self,
+        request: ClearLightingOverlayRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::ClearLightingOverlay)?;
+        Self::flatten_lighting(self.request::<command::ClearLightingOverlay>(&request).await?)
+    }
+
+    /// Reserve a bounded staging transaction for atomic overlay replacement.
+    pub async fn begin_lighting_overlay_replace(
+        &self,
+        request: BeginLightingOverlayReplaceRequest,
+    ) -> Result<LightingOverlayTransaction, RynkHostError> {
+        self.require_lighting(Cmd::BeginLightingOverlayReplace)?;
+        Self::flatten_lighting(self.request::<command::BeginLightingOverlayReplace>(&request).await?)
+    }
+
+    /// Stage one ordered chunk. It does not mutate the live overlay.
+    pub async fn put_lighting_overlay_chunk(
+        &self,
+        request: PutLightingOverlayChunkRequest,
+    ) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::PutLightingOverlayChunk)?;
+        Self::flatten_lighting(self.request::<command::PutLightingOverlayChunk>(&request).await?)
+    }
+
+    /// Atomically publish a complete staged overlay replacement.
+    pub async fn commit_lighting_overlay_replace(
+        &self,
+        request: CommitLightingOverlayReplaceRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::CommitLightingOverlayReplace)?;
+        Self::flatten_lighting(self.request::<command::CommitLightingOverlayReplace>(&request).await?)
+    }
+
+    /// Discard a staged overlay replacement without changing live state.
+    pub async fn abort_lighting_overlay_replace(
+        &self,
+        request: AbortLightingOverlayReplaceRequest,
+    ) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::AbortLightingOverlayReplace)?;
+        Self::flatten_lighting(self.request::<command::AbortLightingOverlayReplace>(&request).await?)
+    }
+
+    /// Read one page of transient overlay cells, pinned to a state revision.
+    pub async fn get_lighting_overlay(
+        &self,
+        request: LightingOverlayPageRequest,
+    ) -> Result<LightingOverlayPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingOverlay)?;
+        Self::flatten_lighting(self.request::<command::GetLightingOverlay>(&request).await?)
+    }
+
+    /// Read scene limits and occupancy. Scene support is discovered through
+    /// [`LightingCapabilities::features`] (`LAYER_SCENES`) plus this endpoint;
+    /// firmware without a scene table rejects it with `Unsupported`.
+    pub async fn get_lighting_scene_status(&self) -> Result<LightingSceneStatus, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingSceneStatus)?;
+        Self::flatten_lighting(self.request::<command::GetLightingSceneStatus>(&()).await?)
+    }
+
+    /// Read one page of stored scene cells, pinned to a state revision.
+    pub async fn get_lighting_scenes(
+        &self,
+        request: LightingScenePageRequest,
+    ) -> Result<LightingScenesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingScenes)?;
+        Self::flatten_lighting(self.request::<command::GetLightingScenes>(&request).await?)
+    }
+
+    /// Discover the immutable board-compiled scene source, including empty sources.
+    pub async fn get_lighting_compiled_scene_status(&self) -> Result<LightingCompiledSceneStatus, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingCompiledSceneStatus)?;
+        Self::flatten_lighting(self.request::<command::GetLightingCompiledSceneStatus>(&()).await?)
+    }
+
+    /// Read one topology-revision-pinned page of board-compiled scene cells.
+    pub async fn get_lighting_compiled_scenes(
+        &self,
+        request: LightingPageRequest,
+    ) -> Result<LightingCompiledScenesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingCompiledScenes)?;
+        Self::flatten_lighting(self.request::<command::GetLightingCompiledScenes>(&request).await?)
+    }
+
+    /// Discover immutable conditional lighting compiled from board config.
+    pub async fn get_lighting_conditional_scene_status(&self) -> Result<LightingConditionalSceneStatus, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingConditionalSceneStatus)?;
+        Self::flatten_lighting(self.request::<command::GetLightingConditionalSceneStatus>(&()).await?)
+    }
+
+    /// Read one topology-revision-pinned conditional-scene page.
+    pub async fn get_lighting_conditional_scenes(
+        &self,
+        request: LightingPageRequest,
+    ) -> Result<LightingConditionalScenesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingConditionalScenes)?;
+        Self::flatten_lighting(self.request::<command::GetLightingConditionalScenes>(&request).await?)
+    }
+
+    /// Discover the animated extension band: name-list sizes plus the live
+    /// selection. Extension support is discovered through
+    /// [`LightingCapabilities::features`] (`EXTENSION_EFFECTS`); firmware
+    /// without a selectable extension source rejects it with `Unsupported`.
+    pub async fn get_lighting_extension(&self) -> Result<LightingExtension, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingExtension)?;
+        Self::flatten_lighting(self.request::<command::GetLightingExtension>(&()).await?)
+    }
+
+    /// Read one page of extension effect or palette names. Names are static
+    /// per firmware build, so pages carry no revision pin.
+    pub async fn get_lighting_extension_names(
+        &self,
+        request: LightingExtensionNamesRequest,
+    ) -> Result<LightingExtensionNamesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingExtensionNames)?;
+        Self::flatten_lighting(self.request::<command::GetLightingExtensionNames>(&request).await?)
+    }
+
+    /// Replace the extension selection when the state revision matches.
+    pub async fn set_lighting_extension_state(
+        &self,
+        request: SetLightingExtensionStateRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingExtensionState)?;
+        Self::flatten_lighting(self.request::<command::SetLightingExtensionState>(&request).await?)
+    }
+
+    /// Read the optional second effect layered over the primary extension.
+    pub async fn get_lighting_extension_layers(&self) -> Result<LightingExtensionLayers, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingExtensionLayers)?;
+        Self::flatten_lighting(self.request::<command::GetLightingExtensionLayers>(&()).await?)
+    }
+
+    /// Replace the optional second effect when the state revision matches.
+    pub async fn set_lighting_extension_layers(
+        &self,
+        request: SetLightingExtensionLayersRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingExtensionLayers)?;
+        Self::flatten_lighting(self.request::<command::SetLightingExtensionLayers>(&request).await?)
+    }
+
+    /// Read one page of an extension effect's tunable parameters. Unlike name
+    /// pages these carry live values, so they are pinned to
+    /// `LightingState.revision`.
+    pub async fn get_lighting_extension_params(
+        &self,
+        request: LightingExtensionParamsRequest,
+    ) -> Result<LightingExtensionParamsPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingExtensionParams)?;
+        Self::flatten_lighting(self.request::<command::GetLightingExtensionParams>(&request).await?)
+    }
+
+    /// Set one effect parameter when the state revision matches. The effect
+    /// need not be the active one.
+    pub async fn set_lighting_extension_param(
+        &self,
+        request: SetLightingExtensionParamRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingExtensionParam)?;
+        Self::flatten_lighting(self.request::<command::SetLightingExtensionParam>(&request).await?)
+    }
+
+    pub async fn get_lighting_runtime_conditional_scene_status(
+        &self,
+    ) -> Result<LightingRuntimeConditionalSceneStatus, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingRuntimeConditionalSceneStatus)?;
+        Self::flatten_lighting(
+            self.request::<command::GetLightingRuntimeConditionalSceneStatus>(&())
+                .await?,
+        )
+    }
+
+    pub async fn get_lighting_runtime_conditional_scenes(
+        &self,
+        request: LightingRuntimeConditionalScenePageRequest,
+    ) -> Result<LightingRuntimeConditionalScenesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingRuntimeConditionalScenes)?;
+        Self::flatten_lighting(
+            self.request::<command::GetLightingRuntimeConditionalScenes>(&request)
+                .await?,
+        )
+    }
+
+    pub async fn begin_lighting_runtime_conditional_scene_replace(
+        &self,
+        request: BeginLightingRuntimeConditionalSceneReplaceRequest,
+    ) -> Result<LightingRuntimeConditionalSceneTransaction, RynkHostError> {
+        self.require_lighting(Cmd::BeginLightingRuntimeConditionalSceneReplace)?;
+        Self::flatten_lighting(
+            self.request::<command::BeginLightingRuntimeConditionalSceneReplace>(&request)
+                .await?,
+        )
+    }
+
+    pub async fn put_lighting_runtime_conditional_scene_chunk(
+        &self,
+        request: PutLightingRuntimeConditionalSceneChunkRequest,
+    ) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::PutLightingRuntimeConditionalSceneChunk)?;
+        Self::flatten_lighting(
+            self.request::<command::PutLightingRuntimeConditionalSceneChunk>(&request)
+                .await?,
+        )
+    }
+
+    pub async fn commit_lighting_runtime_conditional_scene_replace(
+        &self,
+        request: CommitLightingRuntimeConditionalSceneReplaceRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::CommitLightingRuntimeConditionalSceneReplace)?;
+        Self::flatten_lighting(
+            self.request::<command::CommitLightingRuntimeConditionalSceneReplace>(&request)
+                .await?,
+        )
+    }
+
+    pub async fn abort_lighting_runtime_conditional_scene_replace(
+        &self,
+        request: AbortLightingRuntimeConditionalSceneReplaceRequest,
+    ) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::AbortLightingRuntimeConditionalSceneReplace)?;
+        Self::flatten_lighting(
+            self.request::<command::AbortLightingRuntimeConditionalSceneReplace>(&request)
+                .await?,
+        )
+    }
+
+    /// Read connection- and effects-aware runtime conditional cells. The
+    /// extended cell's encoding is described by
+    /// `RUNTIME_EFFECTS_CONDITIONS`, so callers that cannot see that bit
+    /// should use the legacy endpoints rather than risk a misparse against
+    /// firmware speaking the earlier extended cell.
+    pub async fn get_lighting_extended_runtime_conditional_scene_status(
+        &self,
+    ) -> Result<LightingRuntimeConditionalSceneStatus, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingExtendedRuntimeConditionalSceneStatus)?;
+        Self::flatten_lighting(
+            self.request::<command::GetLightingExtendedRuntimeConditionalSceneStatus>(&())
+                .await?,
+        )
+    }
+
+    pub async fn get_lighting_extended_runtime_conditional_scenes(
+        &self,
+        request: LightingRuntimeConditionalScenePageRequest,
+    ) -> Result<LightingExtendedRuntimeConditionalScenesPage, RynkHostError> {
+        self.require_lighting(Cmd::GetLightingExtendedRuntimeConditionalScenes)?;
+        Self::flatten_lighting(
+            self.request::<command::GetLightingExtendedRuntimeConditionalScenes>(&request)
+                .await?,
+        )
+    }
+
+    pub async fn begin_lighting_extended_runtime_conditional_scene_replace(
+        &self,
+        request: BeginLightingRuntimeConditionalSceneReplaceRequest,
+    ) -> Result<LightingRuntimeConditionalSceneTransaction, RynkHostError> {
+        self.require_lighting(Cmd::BeginLightingExtendedRuntimeConditionalSceneReplace)?;
+        Self::flatten_lighting(
+            self.request::<command::BeginLightingExtendedRuntimeConditionalSceneReplace>(&request)
+                .await?,
+        )
+    }
+
+    pub async fn put_lighting_extended_runtime_conditional_scene_chunk(
+        &self,
+        request: PutLightingExtendedRuntimeConditionalSceneChunkRequest,
+    ) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::PutLightingExtendedRuntimeConditionalSceneChunk)?;
+        Self::flatten_lighting(
+            self.request::<command::PutLightingExtendedRuntimeConditionalSceneChunk>(&request)
+                .await?,
+        )
+    }
+
+    pub async fn commit_lighting_extended_runtime_conditional_scene_replace(
+        &self,
+        request: CommitLightingRuntimeConditionalSceneReplaceRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::CommitLightingExtendedRuntimeConditionalSceneReplace)?;
+        Self::flatten_lighting(
+            self.request::<command::CommitLightingExtendedRuntimeConditionalSceneReplace>(&request)
+                .await?,
+        )
+    }
+
+    pub async fn abort_lighting_extended_runtime_conditional_scene_replace(
+        &self,
+        request: AbortLightingRuntimeConditionalSceneReplaceRequest,
+    ) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::AbortLightingExtendedRuntimeConditionalSceneReplace)?;
+        Self::flatten_lighting(
+            self.request::<command::AbortLightingExtendedRuntimeConditionalSceneReplace>(&request)
+                .await?,
+        )
+    }
+
+    /// Insert or update one durable scene cell when the revision matches.
+    pub async fn set_lighting_scene_cell(
+        &self,
+        request: SetLightingSceneCellRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingSceneCell)?;
+        Self::flatten_lighting(self.request::<command::SetLightingSceneCell>(&request).await?)
+    }
+
+    /// Remove one durable scene cell when the revision matches.
+    pub async fn unset_lighting_scene_cell(
+        &self,
+        request: UnsetLightingSceneCellRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::UnsetLightingSceneCell)?;
+        Self::flatten_lighting(self.request::<command::UnsetLightingSceneCell>(&request).await?)
+    }
+
+    /// Set the scene layer-composition policy when the revision matches.
+    pub async fn set_lighting_layer_policy(
+        &self,
+        request: SetLightingLayerPolicyRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::SetLightingLayerPolicy)?;
+        Self::flatten_lighting(self.request::<command::SetLightingLayerPolicy>(&request).await?)
+    }
+
+    /// Reserve the bounded staging transaction for atomic scene replacement.
+    pub async fn begin_lighting_scene_replace(
+        &self,
+        request: BeginLightingSceneReplaceRequest,
+    ) -> Result<LightingSceneTransaction, RynkHostError> {
+        self.require_lighting(Cmd::BeginLightingSceneReplace)?;
+        Self::flatten_lighting(self.request::<command::BeginLightingSceneReplace>(&request).await?)
+    }
+
+    /// Stage one ordered scene chunk. It does not mutate the live table.
+    pub async fn put_lighting_scene_chunk(&self, request: PutLightingSceneChunkRequest) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::PutLightingSceneChunk)?;
+        Self::flatten_lighting(self.request::<command::PutLightingSceneChunk>(&request).await?)
+    }
+
+    /// Atomically publish a complete staged scene replacement.
+    pub async fn commit_lighting_scene_replace(
+        &self,
+        request: CommitLightingSceneReplaceRequest,
+    ) -> Result<LightingState, RynkHostError> {
+        self.require_lighting(Cmd::CommitLightingSceneReplace)?;
+        Self::flatten_lighting(self.request::<command::CommitLightingSceneReplace>(&request).await?)
+    }
+
+    /// Discard a staged scene replacement without changing live state.
+    pub async fn abort_lighting_scene_replace(
+        &self,
+        request: AbortLightingSceneReplaceRequest,
+    ) -> Result<(), RynkHostError> {
+        self.require_lighting(Cmd::AbortLightingSceneReplace)?;
+        Self::flatten_lighting(self.request::<command::AbortLightingSceneReplace>(&request).await?)
+    }
+
     /// Read the active connection type (USB / BLE).
     pub async fn get_connection_type(&self) -> Result<ConnectionType, RynkHostError> {
         self.request::<command::GetConnectionType>(&()).await
@@ -370,6 +902,19 @@ impl Client {
     /// push.
     pub async fn get_connection_status(&self) -> Result<ConnectionStatus, RynkHostError> {
         self.request::<command::GetConnectionStatus>(&()).await
+    }
+
+    /// Read active split BLE latency defaults, override, and effective value.
+    pub async fn get_split_central_latency(&self) -> Result<SplitCentralLatencyState, RynkHostError> {
+        self.request::<command::GetSplitCentralLatency>(&()).await
+    }
+
+    /// Replace the volatile active split BLE latency policy.
+    pub async fn set_split_central_latency(
+        &self,
+        policy: SplitCentralLatencyPolicy,
+    ) -> Result<SplitCentralLatencyState, RynkHostError> {
+        self.request::<command::SetSplitCentralLatency>(&policy).await
     }
 
     /// Read BLE status (active profile, connection state). Requires
@@ -457,6 +1002,608 @@ impl Client {
                 configs,
             })
             .await
+        })
+        .await
+    }
+
+    /// Read and validate the semantic key-to-emitter topology under one
+    /// firmware topology revision. The existing paged wire endpoints stay
+    /// low-level; this assembles their relational view for host selectors.
+    pub async fn read_lighting_key_topology(&self) -> Result<KeyTopology, RynkHostError> {
+        let capabilities = self.get_lighting_capabilities().await?;
+        let revision = capabilities.topology_revision;
+
+        let mut keys: Vec<LightingMatrixPosition> = Vec::with_capacity(capabilities.logical_key_count as usize);
+        let mut offset = 0u16;
+        while offset < capabilities.logical_key_count {
+            let page = self
+                .get_lighting_keys(LightingPageRequest {
+                    topology_revision: revision,
+                    offset,
+                })
+                .await?;
+            if page.topology_revision != revision
+                || page.total_count != capabilities.logical_key_count
+                || page.items.is_empty()
+                || usize::from(offset) + page.items.len() > usize::from(page.total_count)
+            {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingKeys,
+                    reason: "logical-key page does not match the pinned topology",
+                });
+            }
+            offset += page.items.len() as u16;
+            keys.extend(page.items.iter().copied());
+        }
+
+        let mut leds: Vec<LightingLed> = Vec::with_capacity(capabilities.led_count as usize);
+        let mut offset = 0u16;
+        while offset < capabilities.led_count {
+            let page = self
+                .get_lighting_leds(LightingPageRequest {
+                    topology_revision: revision,
+                    offset,
+                })
+                .await?;
+            if page.topology_revision != revision
+                || page.total_count != capabilities.led_count
+                || page.items.is_empty()
+                || usize::from(offset) + page.items.len() > usize::from(page.total_count)
+            {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingLeds,
+                    reason: "LED page does not match the pinned topology",
+                });
+            }
+            offset += page.items.len() as u16;
+            leds.extend(page.items.iter().copied());
+        }
+
+        let mut zones: Vec<LightingZone> = Vec::with_capacity(capabilities.zone_count as usize);
+        let mut offset = 0u16;
+        while offset < capabilities.zone_count {
+            let page = self
+                .get_lighting_zones(LightingPageRequest {
+                    topology_revision: revision,
+                    offset,
+                })
+                .await?;
+            if page.topology_revision != revision
+                || page.total_count != capabilities.zone_count
+                || page.items.is_empty()
+                || usize::from(offset) + page.items.len() > usize::from(page.total_count)
+            {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingZones,
+                    reason: "zone page does not match the pinned topology",
+                });
+            }
+            offset += page.items.len() as u16;
+            zones.extend(page.items.iter().cloned());
+        }
+
+        let mut zone_memberships: Vec<LightingZoneId> = Vec::with_capacity(capabilities.zone_membership_count as usize);
+        let mut offset = 0u16;
+        while offset < capabilities.zone_membership_count {
+            let page = self
+                .get_lighting_zone_memberships(LightingPageRequest {
+                    topology_revision: revision,
+                    offset,
+                })
+                .await?;
+            if page.topology_revision != revision
+                || page.total_count != capabilities.zone_membership_count
+                || page.items.is_empty()
+                || usize::from(offset) + page.items.len() > usize::from(page.total_count)
+            {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingZoneMemberships,
+                    reason: "zone-membership page does not match the pinned topology",
+                });
+            }
+            offset += page.items.len() as u16;
+            zone_memberships.extend(page.items.iter().copied());
+        }
+
+        KeyTopology::new(revision, keys, leds, zones, zone_memberships).map_err(|_| {
+            RynkHostError::InconsistentResponse {
+                cmd: Cmd::GetLightingKeys,
+                reason: "key, LED, and zone metadata do not form a valid topology",
+            }
+        })
+    }
+
+    /// Read the whole transient overlay under one state revision. Expiry or a
+    /// concurrent mutation restarts the snapshot, bounded to a few attempts.
+    pub async fn read_all_lighting_overlay(
+        &self,
+    ) -> Result<(u32, Vec<rmk_types::protocol::rynk::LightingOverlayCell>), RynkHostError> {
+        const ATTEMPTS: usize = 4;
+        let mut last_error = None;
+        for _ in 0..ATTEMPTS {
+            let state = self.get_lighting_state().await?;
+            let mut cells = Vec::new();
+            let mut offset: u16 = 0;
+            let mut first_page = true;
+            let mut conflicted = false;
+            while first_page || offset < state.overlay_len {
+                first_page = false;
+                match self
+                    .get_lighting_overlay(LightingOverlayPageRequest {
+                        revision: state.revision,
+                        offset,
+                    })
+                    .await
+                {
+                    Ok(page) => {
+                        if page.revision != state.revision || page.total_count != state.overlay_len {
+                            return Err(RynkHostError::InconsistentResponse {
+                                cmd: Cmd::GetLightingOverlay,
+                                reason: "page revision/count disagrees with the pinned state",
+                            });
+                        }
+                        if offset >= state.overlay_len {
+                            if !page.items.is_empty() {
+                                return Err(RynkHostError::InconsistentResponse {
+                                    cmd: Cmd::GetLightingOverlay,
+                                    reason: "empty snapshot returned unexpected cells",
+                                });
+                            }
+                            break;
+                        }
+                        if page.items.is_empty() || offset as usize + page.items.len() > state.overlay_len as usize {
+                            return Err(RynkHostError::InconsistentResponse {
+                                cmd: Cmd::GetLightingOverlay,
+                                reason: "page is empty or extends beyond the advertised count",
+                            });
+                        }
+                        offset += page.items.len() as u16;
+                        cells.extend(page.items.iter().copied());
+                    }
+                    Err(
+                        error @ RynkHostError::LightingRejected(
+                            rmk_types::protocol::rynk::LightingError::StateRevisionConflict { .. },
+                        ),
+                    ) => {
+                        last_error = Some(error);
+                        conflicted = true;
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if !conflicted {
+                if cells.len() != state.overlay_len as usize {
+                    return Err(RynkHostError::InconsistentResponse {
+                        cmd: Cmd::GetLightingOverlay,
+                        reason: "pagination ended before the advertised count",
+                    });
+                }
+                return Ok((state.revision, cells));
+            }
+        }
+        Err(last_error.expect("a retried read only exits with a recorded conflict"))
+    }
+
+    /// Read every immutable board-compiled scene cell under one topology revision.
+    pub async fn read_all_lighting_compiled_scenes(
+        &self,
+    ) -> Result<
+        (
+            LightingCompiledSceneStatus,
+            Vec<rmk_types::protocol::rynk::LightingSceneCell>,
+        ),
+        RynkHostError,
+    > {
+        let status = self.get_lighting_compiled_scene_status().await?;
+        let mut cells = Vec::new();
+        let mut offset: u16 = 0;
+        let mut first_page = true;
+        while first_page || offset < status.scene_len {
+            first_page = false;
+            let page = self
+                .get_lighting_compiled_scenes(LightingPageRequest {
+                    topology_revision: status.topology_revision,
+                    offset,
+                })
+                .await?;
+            if page.topology_revision != status.topology_revision || page.total_count != status.scene_len {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingCompiledScenes,
+                    reason: "page topology revision/count disagrees with status",
+                });
+            }
+            if offset >= status.scene_len {
+                if !page.items.is_empty() {
+                    return Err(RynkHostError::InconsistentResponse {
+                        cmd: Cmd::GetLightingCompiledScenes,
+                        reason: "empty compiled source returned unexpected cells",
+                    });
+                }
+                break;
+            }
+            if page.items.is_empty()
+                || page.items.len() > status.chunk_capacity as usize
+                || offset as usize + page.items.len() > status.scene_len as usize
+            {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingCompiledScenes,
+                    reason: "page is empty, oversized, or extends beyond the advertised count",
+                });
+            }
+            offset += page.items.len() as u16;
+            cells.extend(page.items.iter().copied());
+        }
+        if cells.len() != status.scene_len as usize {
+            return Err(RynkHostError::InconsistentResponse {
+                cmd: Cmd::GetLightingCompiledScenes,
+                reason: "pagination ended before the advertised count",
+            });
+        }
+        Ok((status, cells))
+    }
+
+    /// Read every immutable conditional cell under one topology revision.
+    pub async fn read_all_lighting_conditional_scenes(
+        &self,
+    ) -> Result<
+        (
+            LightingConditionalSceneStatus,
+            Vec<rmk_types::protocol::rynk::LightingConditionalSceneCell>,
+        ),
+        RynkHostError,
+    > {
+        let status = self.get_lighting_conditional_scene_status().await?;
+        let mut cells = Vec::new();
+        let mut offset: u16 = 0;
+        let mut first_page = true;
+        while first_page || offset < status.cell_len {
+            first_page = false;
+            let page = self
+                .get_lighting_conditional_scenes(LightingPageRequest {
+                    topology_revision: status.topology_revision,
+                    offset,
+                })
+                .await?;
+            if page.topology_revision != status.topology_revision || page.total_count != status.cell_len {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingConditionalScenes,
+                    reason: "conditional page topology revision/count disagrees with status",
+                });
+            }
+            if offset >= status.cell_len {
+                if !page.items.is_empty() {
+                    return Err(RynkHostError::InconsistentResponse {
+                        cmd: Cmd::GetLightingConditionalScenes,
+                        reason: "empty conditional source returned unexpected cells",
+                    });
+                }
+                break;
+            }
+            if page.items.is_empty()
+                || page.items.len() > status.chunk_capacity as usize
+                || offset as usize + page.items.len() > status.cell_len as usize
+            {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingConditionalScenes,
+                    reason: "conditional page is empty, oversized, or exceeds advertised count",
+                });
+            }
+            offset += page.items.len() as u16;
+            cells.extend(page.items.iter().copied());
+        }
+        if cells.len() != status.cell_len as usize {
+            return Err(RynkHostError::InconsistentResponse {
+                cmd: Cmd::GetLightingConditionalScenes,
+                reason: "conditional pagination ended before advertised count",
+            });
+        }
+        Ok((status, cells))
+    }
+
+    /// Read the whole stored scene table by paging `GetLightingScenes` under
+    /// one pinned revision. A concurrent lighting mutation invalidates the
+    /// pin; the read restarts from a fresh status, bounded by a few attempts.
+    pub async fn read_all_lighting_scenes(
+        &self,
+    ) -> Result<(u32, Vec<rmk_types::protocol::rynk::LightingSceneCell>), RynkHostError> {
+        const ATTEMPTS: usize = 4;
+        let mut last_error = None;
+        for _ in 0..ATTEMPTS {
+            let status = self.get_lighting_scene_status().await?;
+            let mut cells = Vec::new();
+            let mut offset: u16 = 0;
+            let mut conflicted = false;
+            while offset < status.scene_len {
+                match self
+                    .get_lighting_scenes(LightingScenePageRequest {
+                        revision: status.revision,
+                        offset,
+                    })
+                    .await
+                {
+                    Ok(page) => {
+                        if page.items.is_empty() {
+                            break;
+                        }
+                        offset += page.items.len() as u16;
+                        cells.extend(page.items.iter().copied());
+                    }
+                    Err(
+                        error @ RynkHostError::LightingRejected(
+                            rmk_types::protocol::rynk::LightingError::StateRevisionConflict { .. },
+                        ),
+                    ) => {
+                        last_error = Some(error);
+                        conflicted = true;
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if !conflicted {
+                return Ok((status.revision, cells));
+            }
+        }
+        Err(last_error.expect("a retried read only exits with a recorded conflict"))
+    }
+
+    /// Read every extension name of one kind by paging
+    /// `GetLightingExtensionNames`. Names are static per firmware build, so no
+    /// revision pin is needed: the read simply walks offsets until the
+    /// advertised total, and non-advancing pages are rejected so it is bounded.
+    pub async fn read_all_lighting_extension_names(
+        &self,
+        kind: LightingExtensionNameKind,
+    ) -> Result<Vec<heapless::String<{ rmk_types::protocol::rynk::LIGHTING_EXTENSION_NAME_SIZE }>>, RynkHostError> {
+        let mut names = Vec::new();
+        let mut offset: u8 = 0;
+        loop {
+            let page = self
+                .get_lighting_extension_names(LightingExtensionNamesRequest { kind, offset })
+                .await?;
+            if offset >= page.total {
+                break;
+            }
+            if page.items.is_empty() || offset as usize + page.items.len() > page.total as usize {
+                return Err(RynkHostError::InconsistentResponse {
+                    cmd: Cmd::GetLightingExtensionNames,
+                    reason: "names page is empty or extends beyond the advertised total",
+                });
+            }
+            offset += page.items.len() as u8;
+            names.extend(page.items.iter().cloned());
+            if offset >= page.total {
+                break;
+            }
+        }
+        Ok(names)
+    }
+
+    /// Read the whole runtime conditional table by paging
+    /// `GetLightingRuntimeConditionalScenes` under one pinned revision. Order
+    /// is meaningful — matching rules compose in table order — so pages are
+    /// stitched in offset order and never sorted.
+    pub async fn read_all_lighting_runtime_conditional_scenes(
+        &self,
+    ) -> Result<(u32, Vec<rmk_types::protocol::rynk::LightingConditionalSceneCell>), RynkHostError> {
+        const ATTEMPTS: usize = 4;
+        let mut last_error = None;
+        for _ in 0..ATTEMPTS {
+            let status = self.get_lighting_runtime_conditional_scene_status().await?;
+            let mut cells = Vec::new();
+            let mut offset: u16 = 0;
+            let mut conflicted = false;
+            while offset < status.cell_len {
+                match self
+                    .get_lighting_runtime_conditional_scenes(LightingRuntimeConditionalScenePageRequest {
+                        revision: status.revision,
+                        offset,
+                    })
+                    .await
+                {
+                    Ok(page) => {
+                        if page.items.is_empty() {
+                            break;
+                        }
+                        offset += page.items.len() as u16;
+                        cells.extend(page.items.iter().cloned());
+                    }
+                    Err(
+                        error @ RynkHostError::LightingRejected(
+                            rmk_types::protocol::rynk::LightingError::StateRevisionConflict { .. },
+                        ),
+                    ) => {
+                        last_error = Some(error);
+                        conflicted = true;
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if !conflicted {
+                return Ok((status.revision, cells));
+            }
+        }
+        Err(last_error.expect("a retried read only exits with a recorded conflict"))
+    }
+
+    /// Atomically replace the whole runtime conditional table, in the order
+    /// given. Shaped like [`Self::replace_all_lighting_scenes`], including the
+    /// best-effort abort when staging fails.
+    pub async fn replace_all_lighting_runtime_conditional_scenes(
+        &self,
+        expected_revision: u32,
+        cells: &[rmk_types::protocol::rynk::LightingConditionalSceneCell],
+    ) -> Result<LightingState, RynkHostError> {
+        let transaction = self
+            .begin_lighting_runtime_conditional_scene_replace(BeginLightingRuntimeConditionalSceneReplaceRequest {
+                expected_revision,
+                cell_count: cells.len() as u16,
+            })
+            .await?;
+        let mut offset: u16 = 0;
+        for chunk in cells.chunks(rmk_types::protocol::rynk::LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE) {
+            let mut request = PutLightingRuntimeConditionalSceneChunkRequest {
+                transaction_id: transaction.id,
+                offset,
+                cells: Default::default(),
+            };
+            for cell in chunk {
+                request.cells.push(*cell).expect("chunks are chunk-size bounded");
+            }
+            if let Err(error) = self.put_lighting_runtime_conditional_scene_chunk(request).await {
+                let _ = self
+                    .abort_lighting_runtime_conditional_scene_replace(
+                        AbortLightingRuntimeConditionalSceneReplaceRequest {
+                            transaction_id: transaction.id,
+                        },
+                    )
+                    .await;
+                return Err(error);
+            }
+            offset += chunk.len() as u16;
+        }
+        self.commit_lighting_runtime_conditional_scene_replace(CommitLightingRuntimeConditionalSceneReplaceRequest {
+            transaction_id: transaction.id,
+        })
+        .await
+    }
+
+    /// Read the connection-aware runtime table under one pinned revision.
+    pub async fn read_all_lighting_extended_runtime_conditional_scenes(
+        &self,
+    ) -> Result<
+        (
+            u32,
+            Vec<rmk_types::protocol::rynk::LightingExtendedConditionalSceneCell>,
+        ),
+        RynkHostError,
+    > {
+        const ATTEMPTS: usize = 4;
+        let mut last_error = None;
+        for _ in 0..ATTEMPTS {
+            let status = self.get_lighting_extended_runtime_conditional_scene_status().await?;
+            let mut cells = Vec::new();
+            let mut offset: u16 = 0;
+            let mut conflicted = false;
+            while offset < status.cell_len {
+                match self
+                    .get_lighting_extended_runtime_conditional_scenes(LightingRuntimeConditionalScenePageRequest {
+                        revision: status.revision,
+                        offset,
+                    })
+                    .await
+                {
+                    Ok(page) => {
+                        if page.items.is_empty() {
+                            break;
+                        }
+                        offset += page.items.len() as u16;
+                        cells.extend(page.items.iter().copied());
+                    }
+                    Err(
+                        error @ RynkHostError::LightingRejected(
+                            rmk_types::protocol::rynk::LightingError::StateRevisionConflict { .. },
+                        ),
+                    ) => {
+                        last_error = Some(error);
+                        conflicted = true;
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            if !conflicted {
+                return Ok((status.revision, cells));
+            }
+        }
+        Err(last_error.expect("a retried read only exits with a recorded conflict"))
+    }
+
+    /// Atomically replace the connection-aware runtime conditional table.
+    pub async fn replace_all_lighting_extended_runtime_conditional_scenes(
+        &self,
+        expected_revision: u32,
+        cells: &[rmk_types::protocol::rynk::LightingExtendedConditionalSceneCell],
+    ) -> Result<LightingState, RynkHostError> {
+        let transaction = self
+            .begin_lighting_extended_runtime_conditional_scene_replace(
+                BeginLightingRuntimeConditionalSceneReplaceRequest {
+                    expected_revision,
+                    cell_count: cells.len() as u16,
+                },
+            )
+            .await?;
+        let mut offset: u16 = 0;
+        for chunk in cells.chunks(rmk_types::protocol::rynk::LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE) {
+            let mut request = PutLightingExtendedRuntimeConditionalSceneChunkRequest {
+                transaction_id: transaction.id,
+                offset,
+                cells: Default::default(),
+            };
+            for cell in chunk {
+                request.cells.push(*cell).expect("chunks are chunk-size bounded");
+            }
+            if let Err(error) = self
+                .put_lighting_extended_runtime_conditional_scene_chunk(request)
+                .await
+            {
+                let _ = self
+                    .abort_lighting_extended_runtime_conditional_scene_replace(
+                        AbortLightingRuntimeConditionalSceneReplaceRequest {
+                            transaction_id: transaction.id,
+                        },
+                    )
+                    .await;
+                return Err(error);
+            }
+            offset += chunk.len() as u16;
+        }
+        self.commit_lighting_extended_runtime_conditional_scene_replace(
+            CommitLightingRuntimeConditionalSceneReplaceRequest {
+                transaction_id: transaction.id,
+            },
+        )
+        .await
+    }
+
+    /// Atomically replace the whole stored scene table: begin, stage in
+    /// chunk-sized pages, and commit. A staging failure is followed by a
+    /// best-effort abort so the firmware transaction is not left dangling.
+    pub async fn replace_all_lighting_scenes(
+        &self,
+        expected_revision: u32,
+        cells: &[rmk_types::protocol::rynk::LightingSceneCell],
+    ) -> Result<LightingState, RynkHostError> {
+        let transaction = self
+            .begin_lighting_scene_replace(BeginLightingSceneReplaceRequest {
+                expected_revision,
+                cell_count: cells.len() as u16,
+            })
+            .await?;
+        let mut offset: u16 = 0;
+        for chunk in cells.chunks(rmk_types::protocol::rynk::LIGHTING_SCENE_CHUNK_SIZE) {
+            let mut request = PutLightingSceneChunkRequest {
+                transaction_id: transaction.id,
+                offset,
+                cells: Default::default(),
+            };
+            for cell in chunk {
+                request.cells.push(*cell).expect("chunks are chunk-size bounded");
+            }
+            if let Err(error) = self.put_lighting_scene_chunk(request).await {
+                let _ = self
+                    .abort_lighting_scene_replace(AbortLightingSceneReplaceRequest {
+                        transaction_id: transaction.id,
+                    })
+                    .await;
+                return Err(error);
+            }
+            offset += chunk.len() as u16;
+        }
+        self.commit_lighting_scene_replace(CommitLightingSceneReplaceRequest {
+            transaction_id: transaction.id,
         })
         .await
     }

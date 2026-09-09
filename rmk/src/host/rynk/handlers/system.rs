@@ -2,37 +2,17 @@
 
 use rmk_types::constants;
 use rmk_types::protocol::rynk::command::{
-    BootloaderJump, GetCapabilities, GetDeviceInfo, GetLockStatus, GetVersion, Lock, Reboot, StorageReset, UnlockPoll,
+    BootloaderJump, GetBuildInfo, GetCapabilities, GetDeviceInfo, GetLockStatus, GetVersion, Lock,
+    PeripheralBootloaderJump, Reboot, StorageReset, UnlockPoll,
 };
 use rmk_types::protocol::rynk::{
-    DEVICE_INFO_STRING_SIZE, DeviceCapabilities, DeviceInfo, FirmwareVersion, LockStatus, MAX_BULK_ITEMS,
-    MAX_BULK_KEYS, ProtocolVersion, RYNK_MAX_PAYLOAD_SIZE, RynkError, StorageResetMode,
+    BuildInfo, DeviceCapabilities, DeviceInfo, LockStatus, MAX_BULK_ITEMS, MAX_BULK_KEYS, ProtocolVersion,
+    RYNK_MAX_PAYLOAD_SIZE, RynkError, StorageResetMode,
 };
 
-use super::super::RynkService;
+use super::super::{RMK_VERSION, RynkService, truncated};
 use super::Handle;
 use crate::host::lock::HostLock;
-
-/// The `rmk` crate version baked into the firmware, so hosts can key
-/// version-specific behavior off the library release, not the user's app.
-const RMK_VERSION: FirmwareVersion = {
-    const fn component(s: &str) -> u8 {
-        let bytes = s.as_bytes();
-        let mut i = 0;
-        let mut value = 0u8;
-        while i < bytes.len() {
-            value = value * 10 + (bytes[i] - b'0');
-            i += 1;
-        }
-        value
-    }
-
-    FirmwareVersion {
-        major: component(env!("CARGO_PKG_VERSION_MAJOR")),
-        minor: component(env!("CARGO_PKG_VERSION_MINOR")),
-        patch: component(env!("CARGO_PKG_VERSION_PATCH")),
-    }
-};
 
 impl Handle<GetVersion> for RynkService<'_> {
     async fn handle(&self, _: ()) -> Result<ProtocolVersion, RynkError> {
@@ -60,7 +40,10 @@ impl Handle<GetCapabilities> for RynkService<'_> {
 
             // Feature flags
             storage_enabled: cfg!(feature = "storage"),
-            lighting_enabled: false, // TODO Phase 6: surface light_service
+            #[cfg(feature = "lighting")]
+            lighting_enabled: self.lighting.is_some(),
+            #[cfg(not(feature = "lighting"))]
+            lighting_enabled: false,
 
             // Connectivity
             is_split: cfg!(feature = "split"),
@@ -91,6 +74,12 @@ impl Handle<BootloaderJump> for RynkService<'_> {
         // Fire-and-forget, same reasoning as `Reboot`.
         crate::boot::jump_to_bootloader();
         Ok(())
+    }
+}
+
+impl Handle<PeripheralBootloaderJump> for RynkService<'_> {
+    async fn handle(&self, slot: u8) -> Result<(), RynkError> {
+        self.peripheral_bootloader.ok_or(RynkError::Unimplemented)?(slot)
     }
 }
 
@@ -140,14 +129,8 @@ impl Handle<GetDeviceInfo> for RynkService<'_> {
     }
 }
 
-/// Copy `s` into the bounded wire string; over-long input is cut at the last
-/// whole char that fits, so multi-byte content can never panic or split.
-fn truncated(s: &str) -> heapless::String<DEVICE_INFO_STRING_SIZE> {
-    let mut out = heapless::String::new();
-    for c in s.chars() {
-        if out.push(c).is_err() {
-            break;
-        }
+impl Handle<GetBuildInfo> for RynkService<'_> {
+    async fn handle(&self, _: ()) -> Result<BuildInfo, RynkError> {
+        Ok(self.build_info.clone())
     }
-    out
 }

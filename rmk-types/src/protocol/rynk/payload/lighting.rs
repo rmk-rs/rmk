@@ -1,0 +1,2012 @@
+//! Lighting protocol types.
+//!
+//! The wire model deliberately separates stable, board-visible identities
+//! from dense compositor slots and electrical chain order. Hosts address
+//! lights by [`LightingLedId`]; topology and routing readback explain key
+//! association, geometry, zones, split-node ownership, and physical outputs.
+
+use heapless::{String, Vec};
+use postcard::experimental::max_size::MaxSize;
+use serde::{Deserialize, Serialize};
+
+use crate::ble::BleState;
+
+/// Maximum postcard payload admitted by this first lighting ICD.
+pub const LIGHTING_PAYLOAD_SIZE: usize = 256;
+/// Number of metadata records in one topology page.
+pub const LIGHTING_PAGE_SIZE: usize = 8;
+/// Number of overlay cells in one replacement chunk.
+pub const LIGHTING_OVERLAY_CHUNK_SIZE: usize = 8;
+/// Number of scene cells in one scene page or replacement chunk.
+pub const LIGHTING_SCENE_CHUNK_SIZE: usize = 8;
+/// Number of immutable conditional cells in one readback page.
+pub const LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 7;
+/// Number of extended conditional cells in one page/chunk. Lower than the
+/// legacy chunk because each cell carries the connection, bonded-slot, and
+/// effects predicates and the page still has to fit `LIGHTING_PAYLOAD_SIZE`.
+pub const LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE: usize = 5;
+/// Number of RGB cells in one presented-frame page.
+///
+/// Deliberately far below what [`LIGHTING_PAYLOAD_SIZE`] would allow: a page
+/// for a remote split node has to be assembled from application packets on
+/// the split link, whose per-message ceiling and shallow, lossy queues make a
+/// large page a large number of chances to lose one.
+pub const LIGHTING_FRAME_CHUNK_SIZE: usize = 24;
+/// Maximum UTF-8 byte length of a zone name.
+pub const LIGHTING_ZONE_NAME_SIZE: usize = 24;
+/// Maximum UTF-8 byte length of one extension effect or palette name.
+pub const LIGHTING_EXTENSION_NAME_SIZE: usize = 16;
+/// Number of names in one extension-names page.
+pub const LIGHTING_EXTENSION_NAME_CHUNK: usize = 8;
+/// Number of per-effect parameter rows in one extension-params page.
+pub const LIGHTING_EXTENSION_PARAM_CHUNK: usize = 8;
+
+macro_rules! wire_type {
+    ($item:item) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
+        #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+        #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+        #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+        $item
+    };
+}
+
+wire_type! {
+    /// Stable, board-wide identity of one independently controllable light.
+    #[repr(transparent)]
+    pub struct LightingLedId(pub u16);
+}
+
+wire_type! {
+    /// Stable identity of one semantic lighting zone.
+    #[repr(transparent)]
+    pub struct LightingZoneId(pub u8);
+}
+
+wire_type! {
+    /// Identity of a lighting processor, such as one half of a split keyboard.
+    #[repr(transparent)]
+    pub struct LightingNodeId(pub u8);
+}
+
+wire_type! {
+    /// Identity of one physical output owned by a lighting node.
+    #[repr(transparent)]
+    pub struct LightingOutputId(pub u8);
+}
+
+wire_type! {
+    /// One real key in RMK's logical matrix. Matrix holes have no record.
+    pub struct LightingMatrixPosition {
+        pub row: u8,
+        pub col: u8,
+    }
+}
+
+wire_type! {
+    /// Board-global Q8.8 point in key-pitch units.
+    pub struct LightingPoint3 {
+        pub x: i16,
+        pub y: i16,
+        pub z: i16,
+    }
+}
+
+wire_type! {
+    /// Positive Q8.8 key dimensions in key-pitch units.
+    pub struct LightingKeySize {
+        pub width: u16,
+        pub height: u16,
+    }
+}
+
+wire_type! {
+    /// Shared physical-key geometry consumed by lighting, displays, and hosts.
+    pub struct LightingPhysicalKey {
+        pub matrix: LightingMatrixPosition,
+        pub center: LightingPoint3,
+        pub size: LightingKeySize,
+        /// Clockwise rotation in hundredths of one degree.
+        pub rotation: i16,
+    }
+}
+
+wire_type! {
+    /// One semantic light. It may have key association, explicit geometry,
+    /// both, or neither.
+    pub struct LightingLed {
+        pub id: LightingLedId,
+        pub key: Option<LightingMatrixPosition>,
+        pub position: Option<LightingPoint3>,
+        /// Span into the flat zone-membership table.
+        pub zone_start: u16,
+        pub zone_len: u8,
+    }
+}
+
+/// One named semantic zone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingZone {
+    pub id: LightingZoneId,
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
+    pub name: String<LIGHTING_ZONE_NAME_SIZE>,
+}
+
+impl MaxSize for LightingZone {
+    const POSTCARD_MAX_SIZE: usize =
+        LightingZoneId::POSTCARD_MAX_SIZE + crate::heapless_vec_max_size::<u8, LIGHTING_ZONE_NAME_SIZE>();
+}
+
+wire_type! {
+    /// Color and addressability capabilities of a physical output.
+    #[repr(transparent)]
+    pub struct LightingOutputCapabilities(pub u8);
+}
+
+impl LightingOutputCapabilities {
+    pub const BINARY: u8 = 1 << 0;
+    pub const INTENSITY: u8 = 1 << 1;
+    pub const RGB: u8 = 1 << 2;
+    pub const WHITE: u8 = 1 << 3;
+    pub const ADDRESSABLE: u8 = 1 << 4;
+
+    pub const fn contains(self, bits: u8) -> bool {
+        self.0 & bits == bits
+    }
+}
+
+wire_type! {
+    /// Whether all physical pixels of an output must have a logical route.
+    pub enum LightingOutputCoverage {
+        Complete,
+        Sparse,
+    }
+}
+
+wire_type! {
+    /// One concrete output on one lighting node.
+    pub struct LightingOutput {
+        pub node: LightingNodeId,
+        pub id: LightingOutputId,
+        pub pixel_count: u16,
+        pub capabilities: LightingOutputCapabilities,
+        pub coverage: LightingOutputCoverage,
+    }
+}
+
+wire_type! {
+    /// Stable-light to physical-address mapping. Dense compositor slots are
+    /// intentionally not part of the public protocol.
+    pub struct LightingRoute {
+        pub led_id: LightingLedId,
+        pub node: LightingNodeId,
+        pub output: LightingOutputId,
+        pub physical_index: u16,
+    }
+}
+
+wire_type! {
+    /// Optional capabilities beyond the mandatory state/topology surface.
+    #[repr(transparent)]
+    pub struct LightingFeatureFlags(pub u16);
+}
+
+impl LightingFeatureFlags {
+    pub const PHYSICAL_GEOMETRY: u16 = 1 << 0;
+    pub const ZONES: u16 = 1 << 1;
+    pub const ROUTING: u16 = 1 << 2;
+    pub const OVERLAY_TTL: u16 = 1 << 3;
+    pub const ATOMIC_OVERLAY_REPLACE: u16 = 1 << 4;
+    pub const LAYER_AWARE: u16 = 1 << 5;
+    /// Runtime-configurable per-layer scenes stored on the device.
+    pub const LAYER_SCENES: u16 = 1 << 6;
+    /// Revision-pinned readback of the transient overlay.
+    pub const OVERLAY_READBACK: u16 = 1 << 7;
+    /// Read-only board-compiled layer scenes, separate from runtime scenes.
+    pub const COMPILED_LAYER_SCENES: u16 = 1 << 8;
+    /// Read-only board-compiled rules driven by layer and battery state.
+    pub const COMPILED_CONDITIONAL_SCENES: u16 = 1 << 9;
+    /// Declarative three-state output policy and live readback.
+    pub const OUTPUT_MODE: u16 = 1 << 10;
+    /// Host-selectable animated extension effects served by an effect pack.
+    pub const EXTENSION_EFFECTS: u16 = 1 << 11;
+    /// Persistent, ordered conditional rules authored at runtime.
+    pub const RUNTIME_CONDITIONAL_SCENES: u16 = 1 << 12;
+    /// A second effect from the extension's ordinary effect list can be
+    /// rendered over the primary effect.
+    pub const EXTENSION_LAYERING: u16 = 1 << 13;
+    /// Runtime conditional rules can match transport and BLE connection state
+    /// through the extended conditional-scene endpoints.
+    pub const RUNTIME_CONNECTION_CONDITIONS: u16 = 1 << 14;
+    /// The extended conditional-scene cell also carries an effects predicate.
+    /// This bit describes the cell's encoding, not just an added predicate:
+    /// firmware advertising only `RUNTIME_CONNECTION_CONDITIONS` speaks the
+    /// earlier extended cell, so a host that cannot see this bit must use the
+    /// legacy endpoints rather than risk a misparse.
+    pub const RUNTIME_EFFECTS_CONDITIONS: u16 = 1 << 15;
+
+    pub const fn contains(self, bits: u16) -> bool {
+        self.0 & bits == bits
+    }
+}
+
+wire_type! {
+    /// Built-in effects accepted by this firmware.
+    #[repr(transparent)]
+    pub struct LightingEffectFlags(pub u8);
+}
+
+impl LightingEffectFlags {
+    pub const SOLID: u8 = 1 << 0;
+    pub const BLINK: u8 = 1 << 1;
+    pub const BREATHE: u8 = 1 << 2;
+
+    pub const fn contains(self, bits: u8) -> bool {
+        self.0 & bits == bits
+    }
+}
+
+wire_type! {
+    /// Static limits and topology identity for a lighting-enabled device.
+    pub struct LightingCapabilities {
+        pub topology_revision: u32,
+        /// Real logical matrix keys, including keys without measured geometry.
+        pub logical_key_count: u16,
+        pub physical_key_count: u16,
+        pub led_count: u16,
+        pub zone_count: u16,
+        pub zone_membership_count: u16,
+        pub output_count: u16,
+        pub route_count: u16,
+        pub overlay_capacity: u16,
+        pub page_capacity: u8,
+        pub overlay_chunk_capacity: u8,
+        pub features: LightingFeatureFlags,
+        pub effects: LightingEffectFlags,
+    }
+}
+
+wire_type! {
+    /// Revision-pinned request for one metadata page.
+    pub struct LightingPageRequest {
+        pub topology_revision: u32,
+        pub offset: u16,
+    }
+}
+
+macro_rules! page_type {
+    ($name:ident, $item:ty, $ts:literal) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+        #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+        #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+        #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+        pub struct $name {
+            pub topology_revision: u32,
+            pub total_count: u16,
+            #[cfg_attr(feature = "wasm", tsify(type = $ts))]
+            pub items: Vec<$item, LIGHTING_PAGE_SIZE>,
+        }
+
+        impl MaxSize for $name {
+            const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+                + u16::POSTCARD_MAX_SIZE
+                + crate::heapless_vec_max_size::<$item, LIGHTING_PAGE_SIZE>();
+        }
+    };
+}
+
+page_type!(LightingKeysPage, LightingMatrixPosition, "LightingMatrixPosition[]");
+page_type!(LightingPhysicalKeysPage, LightingPhysicalKey, "LightingPhysicalKey[]");
+page_type!(LightingLedsPage, LightingLed, "LightingLed[]");
+page_type!(LightingZonesPage, LightingZone, "LightingZone[]");
+page_type!(LightingZoneMembershipsPage, LightingZoneId, "LightingZoneId[]");
+page_type!(LightingOutputsPage, LightingOutput, "LightingOutput[]");
+page_type!(LightingRoutesPage, LightingRoute, "LightingRoute[]");
+
+wire_type! {
+    /// Device-independent linear RGB sample.
+    pub struct LightingRgb8 {
+        pub r: u8,
+        pub g: u8,
+        pub b: u8,
+    }
+}
+
+wire_type! {
+    /// Bounded set of standard effects understood by the RMK lighting engine.
+    pub enum LightingEffect {
+        Solid {
+            color: LightingRgb8,
+        },
+        Blink {
+            color: LightingRgb8,
+            period_ms: u32,
+            phase_ms: u32,
+            duty: u8,
+        },
+        Breathe {
+            color: LightingRgb8,
+            period_ms: u32,
+            phase_ms: u32,
+            step_ms: u16,
+        },
+    }
+}
+
+impl LightingEffect {
+    /// Validate parameters before adapting this wire value to the standard
+    /// engine. Invalid effects never partially mutate live lighting state.
+    pub const fn validate(&self) -> LightingResult<()> {
+        match *self {
+            Self::Solid { .. } => Ok(()),
+            Self::Blink { period_ms, duty, .. } if period_ms != 0 && duty <= 100 => Ok(()),
+            Self::Breathe { period_ms, step_ms, .. }
+                if period_ms >= 2 && step_ms != 0 && (step_ms as u32) < period_ms =>
+            {
+                Ok(())
+            }
+            _ => Err(LightingError::InvalidEffect),
+        }
+    }
+}
+
+wire_type! {
+    pub enum LightingBackgroundMode {
+        Solid,
+        Breathe,
+    }
+}
+
+wire_type! {
+    /// VIA-compatible designated background. It is only the lowest standard
+    /// source; disabling it does not disable layers, overlays, or status.
+    pub struct LightingBackgroundState {
+        pub enabled: bool,
+        pub hue: u8,
+        pub saturation: u8,
+        pub value: u8,
+        pub speed: u8,
+        pub mode: LightingBackgroundMode,
+    }
+}
+
+wire_type! {
+    pub struct LightingMutableState {
+        pub output_enabled: bool,
+        pub output_brightness: u8,
+        pub background: LightingBackgroundState,
+    }
+}
+
+wire_type! {
+    /// Authoritative mutable state and optimistic-concurrency revision.
+    pub struct LightingState {
+        pub revision: u32,
+        pub output_enabled: bool,
+        pub output_brightness: u8,
+        pub background: LightingBackgroundState,
+        pub overlay_len: u16,
+    }
+}
+
+wire_type! {
+    pub struct SetLightingStateRequest {
+        pub expected_revision: u32,
+        pub state: LightingMutableState,
+    }
+}
+
+wire_type! {
+    /// One transient overlay cell addressed by stable LED identity.
+pub struct LightingOverlayCell {
+        pub led_id: LightingLedId,
+        pub effect: LightingEffect,
+        /// Relative lifetime. `None` lasts until unset, clear, or reboot;
+        /// `Some(0)` is invalid.
+        pub ttl_ms: Option<u32>,
+    }
+}
+
+wire_type! {
+    /// Revision-pinned request for one transient overlay page.
+    pub struct LightingOverlayPageRequest {
+        /// Expected [`LightingState::revision`].
+        pub revision: u32,
+        pub offset: u16,
+    }
+}
+
+/// One atomically sampled page of transient overlay cells. Cell TTLs are
+/// remaining relative lifetimes at the sample time, never firmware deadlines.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingOverlayPage {
+    pub revision: u32,
+    pub total_count: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingOverlayCell[]"))]
+    pub items: Vec<LightingOverlayCell, LIGHTING_OVERLAY_CHUNK_SIZE>,
+}
+
+impl MaxSize for LightingOverlayPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingOverlayCell, LIGHTING_OVERLAY_CHUNK_SIZE>();
+}
+
+impl LightingOverlayCell {
+    /// Validate the effect and relative lifetime. `None` is persistent and a
+    /// positive TTL expires in firmware time; zero is never ambiguous.
+    pub const fn validate(&self) -> LightingResult<()> {
+        if matches!(self.ttl_ms, Some(0)) {
+            return Err(LightingError::InvalidTtl);
+        }
+        self.effect.validate()
+    }
+}
+
+wire_type! {
+    pub struct SetLightingOverlayRequest {
+        pub expected_revision: u32,
+        pub cell: LightingOverlayCell,
+    }
+}
+
+wire_type! {
+    pub struct UnsetLightingOverlayRequest {
+        pub expected_revision: u32,
+        pub led_id: LightingLedId,
+    }
+}
+
+wire_type! {
+    pub struct ClearLightingOverlayRequest {
+        pub expected_revision: u32,
+    }
+}
+
+wire_type! {
+    /// Begin an atomic, multi-packet overlay replacement.
+    pub struct BeginLightingOverlayReplaceRequest {
+        pub expected_revision: u32,
+        pub cell_count: u16,
+    }
+}
+
+wire_type! {
+    /// Opaque transaction token allocated by the firmware.
+    pub struct LightingOverlayTransaction {
+        pub id: u32,
+        pub cell_count: u16,
+    }
+}
+
+/// One ordered transaction chunk. Chunks are applied only by commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct PutLightingOverlayChunkRequest {
+    pub transaction_id: u32,
+    pub offset: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingOverlayCell[]"))]
+    pub cells: Vec<LightingOverlayCell, LIGHTING_OVERLAY_CHUNK_SIZE>,
+}
+
+impl MaxSize for PutLightingOverlayChunkRequest {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingOverlayCell, LIGHTING_OVERLAY_CHUNK_SIZE>();
+}
+
+wire_type! {
+    pub struct CommitLightingOverlayReplaceRequest {
+        pub transaction_id: u32,
+    }
+}
+
+wire_type! {
+    pub struct AbortLightingOverlayReplaceRequest {
+        pub transaction_id: u32,
+    }
+}
+
+wire_type! {
+    /// Wire mirror of the engine's layer composition policy.
+    pub enum LightingLayerPolicy {
+        /// Only the effective layer contributes scene cells.
+        EffectiveOnly,
+        /// Default first, then the active set in ascending precedence, with
+        /// the effective layer last. Sparse cells fall through.
+        ActiveStack,
+    }
+}
+
+wire_type! {
+    /// One durable scene cell: an effect bound to a stable LED on one layer.
+    pub struct LightingSceneCell {
+        pub layer: u8,
+        pub led_id: LightingLedId,
+        pub effect: LightingEffect,
+    }
+}
+
+impl LightingSceneCell {
+    /// Validate the effect. Layer and LED bounds are checked against the
+    /// live keymap and topology by the firmware service.
+    pub const fn validate(&self) -> LightingResult<()> {
+        self.effect.validate()
+    }
+}
+
+wire_type! {
+    /// Scene limits and current occupancy. Kept out of
+    /// [`LightingCapabilities`]/[`LightingState`] so their postcard layout is
+    /// unchanged for existing hosts; discovery uses
+    /// [`LightingFeatureFlags::LAYER_SCENES`] plus this endpoint.
+pub struct LightingSceneStatus {
+        /// Current [`LightingState::revision`]; scene mutations advance it.
+        pub revision: u32,
+        /// Maximum stored scene cells. `0` means scenes are absent.
+        pub capacity: u16,
+        pub scene_len: u16,
+        pub policy: LightingLayerPolicy,
+        /// Cells per `GetLightingScenes` page and per replacement chunk.
+        pub chunk_capacity: u8,
+    }
+}
+
+wire_type! {
+    /// Occupancy of the immutable board-compiled layer-scene source.
+    ///
+    /// This source is distinct from [`LightingSceneStatus`]'s mutable table
+    /// and is pinned to the topology revision for the firmware build.
+    pub struct LightingCompiledSceneStatus {
+        pub topology_revision: u32,
+        pub scene_len: u16,
+        /// Composition policy of the immutable compiled source. This is
+        /// independent from the mutable runtime scene table's policy.
+        pub policy: LightingLayerPolicy,
+        pub chunk_capacity: u8,
+    }
+}
+
+wire_type! {
+    /// Revision-pinned request for one scene page. `revision` is the expected
+    /// [`LightingState::revision`]; a stale read is rejected so multi-page
+    /// reads stay self-consistent.
+    pub struct LightingScenePageRequest {
+        pub revision: u32,
+        pub offset: u16,
+    }
+}
+
+/// One page of stored scene cells, echoing the pinned state revision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingScenesPage {
+    pub revision: u32,
+    pub total_count: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingSceneCell[]"))]
+    pub items: Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+}
+
+/// One page of immutable board-compiled layer scenes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingCompiledScenesPage {
+    pub topology_revision: u32,
+    pub total_count: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingSceneCell[]"))]
+    pub items: Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for LightingCompiledScenesPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>();
+}
+
+wire_type! {
+    pub struct LightingLayerCondition {
+        pub layer: u8,
+        pub active: bool,
+    }
+}
+
+wire_type! {
+    pub enum LightingChargeCondition {
+        Any,
+        Charging,
+        Discharging,
+        Unknown,
+    }
+}
+
+wire_type! {
+    pub struct LightingBatteryCondition {
+        pub node: LightingNodeId,
+        pub min_level: Option<u8>,
+        pub max_level: Option<u8>,
+        pub charge: LightingChargeCondition,
+    }
+}
+
+wire_type! {
+    /// A conjunction of optional layer, battery and output-mode predicates.
+    pub struct LightingConditionSet {
+        pub layer: Option<LightingLayerCondition>,
+        pub battery: Option<LightingBatteryCondition>,
+        /// Gate on the live output-mode policy. This is what lets the mode
+        /// indicator be an ordinary conditional rule a host can edit, rather
+        /// than something the board has to compile in.
+        pub output_mode: Option<LightingOutputMode>,
+    }
+}
+
+wire_type! {
+    /// One immutable conditional effect compiled from keyboard configuration.
+    pub struct LightingConditionalSceneCell {
+        pub conditions: LightingConditionSet,
+        pub led_id: LightingLedId,
+        pub effect: LightingEffect,
+    }
+}
+
+impl LightingConditionalSceneCell {
+    pub fn validate(&self) -> LightingResult<()> {
+        if let Some(battery) = self.conditions.battery
+            && (battery.min_level.is_some_and(|level| level > 100)
+                || battery.max_level.is_some_and(|level| level > 100)
+                || matches!((battery.min_level, battery.max_level), (Some(min), Some(max)) if min > max))
+        {
+            return Err(LightingError::InvalidRequest);
+        }
+        self.effect.validate()
+    }
+}
+
+wire_type! {
+    /// Active transport selected by `ConnectionStatus::decide_active`.
+    pub enum LightingActiveTransport {
+        Usb,
+        Ble,
+        NoneActive,
+    }
+}
+
+wire_type! {
+    /// Gate on one slot holding (or not holding) a stored bond, regardless of
+    /// which profile is active.
+    pub struct LightingBondedSlotCondition {
+        pub slot: u8,
+        pub bonded: bool,
+    }
+}
+
+wire_type! {
+    /// Optional connection predicates. Present fields form a conjunction; an
+    /// empty condition matches every connection state.
+    pub struct LightingConnectionCondition {
+        pub transport: Option<LightingActiveTransport>,
+        pub profile: Option<u8>,
+        pub ble_state: Option<BleState>,
+        pub bonded: Option<LightingBondedSlotCondition>,
+        /// Gate on USB being plugged and routable, whether or not it is the
+        /// active transport.
+        pub usb_connected: Option<bool>,
+    }
+}
+
+wire_type! {
+    /// Gate on whether the extension band is rendering. An extension is
+    /// enabled while its value is non-zero, so this tracks `RgbTog`.
+    pub struct LightingEffectsCondition {
+        pub enabled: bool,
+    }
+}
+
+wire_type! {
+    /// Additive runtime conditional cell used by the extended endpoints. The
+    /// nested legacy cell keeps its established postcard field order intact.
+    pub struct LightingExtendedConditionalSceneCell {
+        pub cell: LightingConditionalSceneCell,
+        pub connection: Option<LightingConnectionCondition>,
+        pub effects: Option<LightingEffectsCondition>,
+    }
+}
+
+impl LightingExtendedConditionalSceneCell {
+    pub fn validate(&self) -> LightingResult<()> {
+        self.cell.validate()
+    }
+}
+
+wire_type! {
+    /// Key/layer controls that gate the configured lighting presentation.
+    pub struct LightingControls {
+        pub output_toggle_user_action: Option<u8>,
+        /// Layers that wake lighting while held, as a bitmask. A set rather
+        /// than a single layer so waking is not tied to one "magic" layer.
+        pub wake_layers: u64,
+    }
+}
+
+wire_type! {
+    /// Persistent policy selected by the board's configured cycle action.
+    pub enum LightingOutputMode {
+        AlwaysOn,
+        AlwaysOff,
+        PoweredOnly,
+    }
+}
+
+wire_type! {
+    /// Power source used by split renderers in `PoweredOnly` mode.
+    pub enum LightingPoweredOnlyScope {
+        Authority,
+        Local,
+    }
+}
+
+wire_type! {
+    /// Configured status LED and its mode-specific effects.
+    pub struct LightingOutputModeIndicator {
+        pub led_id: LightingLedId,
+        pub always_on: LightingEffect,
+        pub always_off: LightingEffect,
+        pub powered_only: LightingEffect,
+    }
+}
+
+wire_type! {
+    /// Authoritative output policy plus the inputs that determine whether the
+    /// LEDs are physically enabled right now.
+    pub struct LightingOutputModeState {
+        pub mode: LightingOutputMode,
+        pub powered: bool,
+        pub wake_active: bool,
+        pub effective_enabled: bool,
+        pub powered_only_scope: LightingPoweredOnlyScope,
+        pub cycle_user_action: Option<u8>,
+        /// Layers that wake lighting while held, as a bitmask. A set rather
+        /// than a single layer so waking is not tied to one "magic" layer.
+        pub wake_layers: u64,
+        pub indicator: Option<LightingOutputModeIndicator>,
+    }
+}
+
+wire_type! {
+    /// Current selection of the firmware's animated extension band. Indices
+    /// address the name lists served by `GetLightingExtensionNames`.
+    pub struct LightingExtensionState {
+        pub effect: u8,
+        pub palette: u8,
+        pub value: u8,
+        pub speed: u8,
+    }
+}
+
+wire_type! {
+    /// Extension-effects discovery: name-list sizes plus the live selection,
+    /// revision-pinned like every other lighting mutation surface.
+    pub struct LightingExtension {
+        pub revision: u32,
+        pub effect_count: u8,
+        pub palette_count: u8,
+        pub state: LightingExtensionState,
+    }
+}
+
+wire_type! {
+    /// Which extension name list a page request addresses.
+    pub enum LightingExtensionNameKind {
+        Effects,
+        Palettes,
+    }
+}
+
+wire_type! {
+    pub struct LightingExtensionNamesRequest {
+        pub kind: LightingExtensionNameKind,
+        pub offset: u8,
+    }
+}
+
+/// One page of extension effect or palette names. Names are static for a
+/// firmware build, so pages carry no revision pin.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingExtensionNamesPage {
+    pub total: u8,
+    #[cfg_attr(feature = "wasm", tsify(type = "string[]"))]
+    pub items: Vec<String<LIGHTING_EXTENSION_NAME_SIZE>, LIGHTING_EXTENSION_NAME_CHUNK>,
+}
+
+impl MaxSize for LightingExtensionNamesPage {
+    const POSTCARD_MAX_SIZE: usize = u8::POSTCARD_MAX_SIZE
+        + crate::varint_max_size(LIGHTING_EXTENSION_NAME_CHUNK)
+        + LIGHTING_EXTENSION_NAME_CHUNK * crate::heapless_vec_max_size::<u8, LIGHTING_EXTENSION_NAME_SIZE>();
+}
+
+wire_type! {
+    pub struct SetLightingExtensionStateRequest {
+        pub expected_revision: u32,
+        pub state: LightingExtensionState,
+    }
+}
+
+wire_type! {
+    /// Optional second effect layered over the primary extension selection.
+    /// The effect indexes the same list as `LightingExtensionState.effect`.
+    pub struct LightingExtensionLayers {
+        pub revision: u32,
+        pub overlay: Option<u8>,
+    }
+}
+
+wire_type! {
+    pub struct SetLightingExtensionLayersRequest {
+        pub expected_revision: u32,
+        pub overlay: Option<u8>,
+    }
+}
+
+/// One tunable parameter advertised by an extension effect: its static
+/// descriptor plus the source's live value. Descriptor and value travel in
+/// one row so a host can render a control from a single read.
+///
+/// Parameters are generic: firmware names them, bounds them, and applies
+/// them; the protocol ascribes no meaning to any particular name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingExtensionParam {
+    #[cfg_attr(feature = "wasm", tsify(type = "string"))]
+    pub name: String<LIGHTING_EXTENSION_NAME_SIZE>,
+    pub min: u8,
+    pub max: u8,
+    pub default: u8,
+    pub value: u8,
+}
+
+impl MaxSize for LightingExtensionParam {
+    const POSTCARD_MAX_SIZE: usize =
+        crate::heapless_vec_max_size::<u8, LIGHTING_EXTENSION_NAME_SIZE>() + 4 * u8::POSTCARD_MAX_SIZE;
+}
+
+wire_type! {
+    /// Which effect's parameter list a page request addresses. `effect`
+    /// indexes the effect-name list served by `GetLightingExtensionNames`;
+    /// it need not be the active effect.
+    pub struct LightingExtensionParamsRequest {
+        pub effect: u8,
+        pub offset: u8,
+    }
+}
+
+/// One page of an effect's parameters. Unlike name pages these carry live
+/// values, so they are pinned to `LightingState.revision` like every other
+/// mutable lighting read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingExtensionParamsPage {
+    pub revision: u32,
+    pub total: u8,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingExtensionParam[]"))]
+    pub items: Vec<LightingExtensionParam, LIGHTING_EXTENSION_PARAM_CHUNK>,
+}
+
+impl MaxSize for LightingExtensionParamsPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u8::POSTCARD_MAX_SIZE
+        + crate::varint_max_size(LIGHTING_EXTENSION_PARAM_CHUNK)
+        + LIGHTING_EXTENSION_PARAM_CHUNK * LightingExtensionParam::POSTCARD_MAX_SIZE;
+}
+
+wire_type! {
+    /// Set one parameter of one effect. `index` is the ordinal within that
+    /// effect's parameter list. Setting a parameter of an inactive effect is
+    /// allowed if the source accepts it.
+    pub struct SetLightingExtensionParamRequest {
+        pub expected_revision: u32,
+        pub effect: u8,
+        pub index: u8,
+        pub value: u8,
+    }
+}
+
+wire_type! {
+    pub struct LightingConditionalSceneStatus {
+        pub topology_revision: u32,
+        pub cell_len: u16,
+        pub chunk_capacity: u8,
+        pub controls: LightingControls,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingConditionalScenesPage {
+    pub topology_revision: u32,
+    pub total_count: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingConditionalSceneCell[]"))]
+    pub items: Vec<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>,
+}
+
+wire_type! {
+    /// Mutable ordered conditional-table status. Unlike the compiled source,
+    /// this table participates in the lighting state revision.
+    pub struct LightingRuntimeConditionalSceneStatus {
+        pub revision: u32,
+        pub capacity: u16,
+        pub cell_len: u16,
+        pub chunk_capacity: u8,
+    }
+}
+
+wire_type! {
+    pub struct LightingRuntimeConditionalScenePageRequest {
+        pub revision: u32,
+        pub offset: u16,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingRuntimeConditionalScenesPage {
+    pub revision: u32,
+    pub total_count: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingConditionalSceneCell[]"))]
+    pub items: Vec<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for LightingRuntimeConditionalScenesPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>();
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingExtendedRuntimeConditionalScenesPage {
+    pub revision: u32,
+    pub total_count: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingExtendedConditionalSceneCell[]"))]
+    pub items: Vec<LightingExtendedConditionalSceneCell, LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for LightingExtendedRuntimeConditionalScenesPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<
+            LightingExtendedConditionalSceneCell,
+            LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE,
+        >();
+}
+
+wire_type! {
+    pub struct SetLightingOutputModeRequest {
+        pub expected_revision: u32,
+        pub mode: LightingOutputMode,
+    }
+}
+
+wire_type! {
+    /// Replace the set of layers that wake lighting while held. A mask, so any
+    /// combination of layers can wake it rather than one designated layer.
+    pub struct SetLightingWakeLayersRequest {
+        pub expected_revision: u32,
+        pub layers: u64,
+    }
+}
+
+wire_type! {
+    pub struct BeginLightingRuntimeConditionalSceneReplaceRequest {
+        pub expected_revision: u32,
+        pub cell_count: u16,
+    }
+}
+
+wire_type! {
+    pub struct LightingRuntimeConditionalSceneTransaction {
+        pub id: u32,
+        pub cell_count: u16,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct PutLightingRuntimeConditionalSceneChunkRequest {
+    pub transaction_id: u32,
+    pub offset: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingConditionalSceneCell[]"))]
+    pub cells: Vec<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for PutLightingRuntimeConditionalSceneChunkRequest {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>();
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct PutLightingExtendedRuntimeConditionalSceneChunkRequest {
+    pub transaction_id: u32,
+    pub offset: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingExtendedConditionalSceneCell[]"))]
+    pub cells: Vec<LightingExtendedConditionalSceneCell, LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for PutLightingExtendedRuntimeConditionalSceneChunkRequest {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<
+            LightingExtendedConditionalSceneCell,
+            LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE,
+        >();
+}
+
+wire_type! {
+    pub struct CommitLightingRuntimeConditionalSceneReplaceRequest {
+        pub transaction_id: u32,
+    }
+}
+
+wire_type! {
+    pub struct AbortLightingRuntimeConditionalSceneReplaceRequest {
+        pub transaction_id: u32,
+    }
+}
+
+impl MaxSize for LightingConditionalScenesPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>();
+}
+
+impl MaxSize for LightingScenesPage {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>();
+}
+
+wire_type! {
+    pub struct SetLightingSceneCellRequest {
+        pub expected_revision: u32,
+        pub cell: LightingSceneCell,
+    }
+}
+
+wire_type! {
+    pub struct UnsetLightingSceneCellRequest {
+        pub expected_revision: u32,
+        pub layer: u8,
+        pub led_id: LightingLedId,
+    }
+}
+
+wire_type! {
+    pub struct SetLightingLayerPolicyRequest {
+        pub expected_revision: u32,
+        pub policy: LightingLayerPolicy,
+    }
+}
+
+wire_type! {
+    /// Begin an atomic, multi-packet scene-table replacement.
+    pub struct BeginLightingSceneReplaceRequest {
+        pub expected_revision: u32,
+        pub cell_count: u16,
+    }
+}
+
+wire_type! {
+    /// Opaque scene transaction token allocated by the firmware.
+    pub struct LightingSceneTransaction {
+        pub id: u32,
+        pub cell_count: u16,
+    }
+}
+
+/// One ordered scene transaction chunk. Chunks are applied only by commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct PutLightingSceneChunkRequest {
+    pub transaction_id: u32,
+    pub offset: u16,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingSceneCell[]"))]
+    pub cells: Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+}
+
+impl MaxSize for PutLightingSceneChunkRequest {
+    const POSTCARD_MAX_SIZE: usize = u32::POSTCARD_MAX_SIZE
+        + u16::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>();
+}
+
+wire_type! {
+    pub struct CommitLightingSceneReplaceRequest {
+        pub transaction_id: u32,
+    }
+}
+
+wire_type! {
+    pub struct AbortLightingSceneReplaceRequest {
+        pub transaction_id: u32,
+    }
+}
+
+wire_type! {
+    /// Request one page of a lighting node's last presented frame.
+    ///
+    /// `offset` is the first logical frame slot wanted, matching every other
+    /// lighting page request; the reply echoes it as
+    /// [`LightingFramePage::start`]. Frames are not revision-pinned: a stale
+    /// page is the observation being made, not an error, and pinning would
+    /// make the frame unreadable exactly while it is changing.
+    pub struct LightingFrameRequest {
+        pub node: LightingNodeId,
+        pub offset: u16,
+    }
+}
+
+/// One page of the colors a lighting node last presented to its output.
+///
+/// Cells are the post-brightness logical frame: RMK applies output
+/// brightness as a frame transform before the frame is written and
+/// committed, so these are the values the driver received. Any further
+/// scaling a board's driver performs on the way to the wire is below this
+/// layer and is not reflected here.
+///
+/// Cell order is compositor slot order, meaningful only against a validated
+/// topology; `GetLightingRoutes` maps each LED to its node, output, and
+/// physical index.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct LightingFramePage {
+    pub node: LightingNodeId,
+    /// Engine revision the frame was captured at. `None` when the node has
+    /// not presented a frame yet, when the cells are still its fill color.
+    pub revision: Option<u32>,
+    /// Slots in this node's logical frame.
+    pub total_leds: u16,
+    /// Index of `cells[0]` within that frame.
+    pub start: u16,
+    /// How long ago the capture happened. Always `0` for the node serving the
+    /// request; for a remote node it is the round-trip staleness of the
+    /// answer, which is what makes a frozen half distinguishable from a
+    /// correct one.
+    pub age_ms: u32,
+    #[cfg_attr(feature = "wasm", tsify(type = "LightingRgb8[]"))]
+    pub cells: Vec<LightingRgb8, LIGHTING_FRAME_CHUNK_SIZE>,
+}
+
+impl MaxSize for LightingFramePage {
+    const POSTCARD_MAX_SIZE: usize = LightingNodeId::POSTCARD_MAX_SIZE
+        + <Option<u32> as MaxSize>::POSTCARD_MAX_SIZE
+        + 2 * u16::POSTCARD_MAX_SIZE
+        + u32::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<LightingRgb8, LIGHTING_FRAME_CHUNK_SIZE>();
+}
+
+/// Canonical digest schema implemented by the first lighting replica
+/// attestation protocol.
+pub const LIGHTING_REPLICA_DIGEST_SCHEMA_V1: u8 = 1;
+
+wire_type! {
+    /// FNV-1a-32 digests of the durable right-half projection at `revision`.
+    ///
+    /// Expiring-overlay lifetime and fast context such as layers, batteries,
+    /// connection state, and powered/wake state are deliberately excluded.
+    /// They are covered by sequence/revision freshness and direct status
+    /// comparison instead.
+    pub struct LightingReplicaDigests {
+        pub schema: u8,
+        pub revision: u32,
+        pub settings: u32,
+        pub overlay: u32,
+        pub scenes: u32,
+        pub conditional_scenes: u32,
+    }
+}
+
+wire_type! {
+    /// Board-reported state of the replication recovery machine.
+    ///
+    /// Hosts still derive `UNAVAILABLE` from link/report presence and
+    /// `UNATTESTED` from absent digest sets; neither is a recovery-machine
+    /// state in its own right.
+    pub enum LightingReplicationHealth {
+        Healthy,
+        Resynchronizing,
+        Stale,
+        Diverged,
+        Halted,
+    }
+}
+
+wire_type! {
+    /// The lighting authority's own state, as the central half sees it.
+    pub struct LightingCentralReplicaState {
+        /// Live engine revision — what the authority would replicate now.
+        pub revision: u32,
+        /// Engine revision of the last frame the central presented. `None`
+        /// before its output has accepted one.
+        pub presented_revision: Option<u32>,
+        /// Layer state the central's last presented frame was rendered from.
+        /// Zeroed before that first frame.
+        pub effective_layer: u8,
+        pub default_layer: u8,
+        pub active_bits: u64,
+        /// Live USB/VBUS power as the engine sees it.
+        pub powered: bool,
+        /// Whether a configured wake layer currently overrides output policy.
+        pub wake_active: bool,
+        /// Final live output decision after mode, power, and wake inputs.
+        pub effective_output_enabled: bool,
+    }
+}
+
+wire_type! {
+    /// Central-side replication machine, supplied by the board.
+    ///
+    /// This is the half of the handshake the protocol cannot infer: whether a
+    /// snapshot is outstanding, which revision was last acknowledged, and
+    /// whether the application link is up at all.
+    pub struct LightingReplicationMachine {
+        /// Last revision the peripheral acknowledged. `None` when it has
+        /// never acknowledged one since boot.
+        pub last_acked_revision: Option<u32>,
+        /// A snapshot is in flight and its acknowledgement is still pending.
+        pub awaiting_ack: bool,
+        /// Bumped whenever the central restarts replication, so a host can
+        /// tell a resend apart from a stuck retry.
+        pub generation: u8,
+        pub link_up: bool,
+        /// Durable state changed but no full snapshot carrying it has yet
+        /// been acknowledged.
+        pub durable_dirty: bool,
+        /// Fast context changed but no matching update has yet been
+        /// acknowledged.
+        pub context_dirty: bool,
+        pub health: LightingReplicationHealth,
+        /// Digest set the central expects the peripheral to hold. `None`
+        /// means the board or peer does not support attestation yet.
+        pub expected_digests: Option<LightingReplicaDigests>,
+        /// Age of the last successful digest comparison. `None` means no
+        /// attestation has succeeded since boot.
+        pub last_attested_age_ms: Option<u32>,
+        /// Consecutive mismatches observed after a recovery snapshot.
+        pub mismatch_count: u8,
+    }
+}
+
+wire_type! {
+    /// Last state heard from a peripheral renderer.
+    ///
+    /// Deliberately stale-tolerant: the board answers from whatever it last
+    /// received rather than blocking on a round trip, and `age_ms` says how
+    /// old that is. A large age is itself the diagnosis.
+    pub struct LightingPeripheralReplicaState {
+        pub node: LightingNodeId,
+        /// Central revision whose snapshot the peripheral last applied.
+        /// `None` when it has applied none.
+        pub applied_revision: Option<u32>,
+        /// The peripheral engine's own revision, which advances locally as
+        /// well and so is not comparable to `applied_revision`.
+        pub engine_revision: u32,
+        /// Layer state the peripheral is rendering from — the replicated
+        /// context, which is where staleness shows up first.
+        pub effective_layer: u8,
+        pub default_layer: u8,
+        pub active_bits: u64,
+        pub powered: bool,
+        pub wake_active: bool,
+        pub effective_output_enabled: bool,
+        pub age_ms: u32,
+        /// Digest set recomputed from the state this renderer applied.
+        /// `None` distinguishes an older/unattested peer from a zero digest.
+        pub digests: Option<LightingReplicaDigests>,
+    }
+}
+
+wire_type! {
+    /// Both sides of the lighting replication handshake in one read.
+    pub struct LightingReplicaStatus {
+        pub central: LightingCentralReplicaState,
+        /// `None` when the board wired no replication machine, as an
+        /// unsplit build does.
+        pub replication: Option<LightingReplicationMachine>,
+        /// `None` when the board has heard nothing from the peripheral since
+        /// boot, which is distinct from having heard something stale.
+        pub peripheral: Option<LightingPeripheralReplicaState>,
+    }
+}
+
+wire_type! {
+    /// Lighting-domain rejection carried inside Rynk's outer protocol result.
+    pub enum LightingError {
+        Unsupported,
+        InvalidRequest,
+        InvalidEffect,
+        InvalidTtl,
+        TopologyRevisionConflict { expected: u32, current: u32 },
+        StateRevisionConflict { expected: u32, current: u32 },
+        UnknownLed { led_id: LightingLedId },
+        OverlayFull { capacity: u16 },
+        TransactionBusy,
+        InvalidTransaction,
+        TransactionExpired,
+        TransactionIncomplete { expected: u16, received: u16 },
+        // Appended after the first lighting ICD; new variants only surface
+        // from the new scene endpoints, so older hosts never decode them.
+        UnknownLayer { layer: u8 },
+        SceneFull { capacity: u16 },
+        ConditionalSceneFull { capacity: u16 },
+        // Appended for the observability endpoints; only they can produce
+        // these, so older hosts never decode them.
+        /// No lighting node with this id exists in the device's routing.
+        UnknownNode { node: LightingNodeId },
+        /// The node exists but could not answer: the application link is
+        /// down, the reply timed out, or the board wired no source for it.
+        /// Distinct from `Unsupported`, which means the firmware never
+        /// answers this node — retrying is pointless there and reasonable
+        /// here.
+        NodeUnavailable { node: LightingNodeId },
+    }
+}
+
+/// Detailed lighting result nested inside Rynk's transport/protocol result.
+pub type LightingResult<T> = Result<T, LightingError>;
+pub type LightingCapabilitiesResult = LightingResult<LightingCapabilities>;
+pub type LightingStateResult = LightingResult<LightingState>;
+pub type LightingKeysPageResult = LightingResult<LightingKeysPage>;
+pub type LightingPhysicalKeysPageResult = LightingResult<LightingPhysicalKeysPage>;
+pub type LightingLedsPageResult = LightingResult<LightingLedsPage>;
+pub type LightingZonesPageResult = LightingResult<LightingZonesPage>;
+pub type LightingZoneMembershipsPageResult = LightingResult<LightingZoneMembershipsPage>;
+pub type LightingOutputsPageResult = LightingResult<LightingOutputsPage>;
+pub type LightingRoutesPageResult = LightingResult<LightingRoutesPage>;
+pub type LightingOverlayPageResult = LightingResult<LightingOverlayPage>;
+pub type LightingOverlayTransactionResult = LightingResult<LightingOverlayTransaction>;
+pub type LightingSceneStatusResult = LightingResult<LightingSceneStatus>;
+pub type LightingScenesPageResult = LightingResult<LightingScenesPage>;
+pub type LightingCompiledSceneStatusResult = LightingResult<LightingCompiledSceneStatus>;
+pub type LightingCompiledScenesPageResult = LightingResult<LightingCompiledScenesPage>;
+pub type LightingConditionalSceneStatusResult = LightingResult<LightingConditionalSceneStatus>;
+pub type LightingConditionalScenesPageResult = LightingResult<LightingConditionalScenesPage>;
+pub type LightingOutputModeStateResult = LightingResult<LightingOutputModeState>;
+pub type LightingExtensionResult = LightingResult<LightingExtension>;
+pub type LightingExtensionLayersResult = LightingResult<LightingExtensionLayers>;
+pub type LightingExtensionNamesPageResult = LightingResult<LightingExtensionNamesPage>;
+pub type LightingExtensionParamsPageResult = LightingResult<LightingExtensionParamsPage>;
+pub type LightingSceneTransactionResult = LightingResult<LightingSceneTransaction>;
+pub type LightingRuntimeConditionalSceneStatusResult = LightingResult<LightingRuntimeConditionalSceneStatus>;
+pub type LightingRuntimeConditionalScenesPageResult = LightingResult<LightingRuntimeConditionalScenesPage>;
+pub type LightingExtendedRuntimeConditionalScenesPageResult =
+    LightingResult<LightingExtendedRuntimeConditionalScenesPage>;
+pub type LightingRuntimeConditionalSceneTransactionResult = LightingResult<LightingRuntimeConditionalSceneTransaction>;
+pub type LightingFramePageResult = LightingResult<LightingFramePage>;
+pub type LightingReplicaStatusResult = LightingResult<LightingReplicaStatus>;
+pub type LightingUnitResult = LightingResult<()>;
+
+wire_type! {
+    /// Best-effort invalidation marker. Hosts recover current authoritative
+    /// state with `GetLightingState`; events never carry a second state copy.
+    pub struct LightingChanged;
+}
+
+const _: () = {
+    use crate::protocol::rynk::RynkError;
+
+    macro_rules! assert_endpoint_fits {
+        ($req:ty, $resp:ty) => {
+            core::assert!(<$req as MaxSize>::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+            core::assert!(<Result<$resp, RynkError> as MaxSize>::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+        };
+    }
+
+    assert_endpoint_fits!((), LightingCapabilitiesResult);
+    assert_endpoint_fits!((), LightingStateResult);
+    assert_endpoint_fits!(SetLightingStateRequest, LightingStateResult);
+    assert_endpoint_fits!(LightingPageRequest, LightingKeysPageResult);
+    assert_endpoint_fits!(LightingPageRequest, LightingPhysicalKeysPageResult);
+    assert_endpoint_fits!(LightingPageRequest, LightingLedsPageResult);
+    assert_endpoint_fits!(LightingPageRequest, LightingZonesPageResult);
+    assert_endpoint_fits!(LightingPageRequest, LightingZoneMembershipsPageResult);
+    assert_endpoint_fits!(LightingPageRequest, LightingOutputsPageResult);
+    assert_endpoint_fits!(LightingPageRequest, LightingRoutesPageResult);
+    assert_endpoint_fits!(LightingOverlayPageRequest, LightingOverlayPageResult);
+    assert_endpoint_fits!(SetLightingOverlayRequest, LightingStateResult);
+    assert_endpoint_fits!(UnsetLightingOverlayRequest, LightingStateResult);
+    assert_endpoint_fits!(ClearLightingOverlayRequest, LightingStateResult);
+    assert_endpoint_fits!(BeginLightingOverlayReplaceRequest, LightingOverlayTransactionResult);
+    assert_endpoint_fits!(PutLightingOverlayChunkRequest, LightingUnitResult);
+    assert_endpoint_fits!(CommitLightingOverlayReplaceRequest, LightingStateResult);
+    assert_endpoint_fits!(AbortLightingOverlayReplaceRequest, LightingUnitResult);
+    assert_endpoint_fits!((), LightingSceneStatusResult);
+    assert_endpoint_fits!(LightingScenePageRequest, LightingScenesPageResult);
+    assert_endpoint_fits!((), LightingCompiledSceneStatusResult);
+    assert_endpoint_fits!(LightingPageRequest, LightingCompiledScenesPageResult);
+    assert_endpoint_fits!((), LightingConditionalSceneStatusResult);
+    assert_endpoint_fits!(LightingPageRequest, LightingConditionalScenesPageResult);
+    assert_endpoint_fits!((), LightingOutputModeStateResult);
+    assert_endpoint_fits!((), LightingExtensionResult);
+    assert_endpoint_fits!(LightingExtensionNamesRequest, LightingExtensionNamesPageResult);
+    assert_endpoint_fits!(SetLightingExtensionStateRequest, LightingStateResult);
+    assert_endpoint_fits!((), LightingExtensionLayersResult);
+    assert_endpoint_fits!(SetLightingExtensionLayersRequest, LightingStateResult);
+    assert_endpoint_fits!(LightingExtensionParamsRequest, LightingExtensionParamsPageResult);
+    assert_endpoint_fits!(SetLightingExtensionParamRequest, LightingStateResult);
+    assert_endpoint_fits!(SetLightingOutputModeRequest, LightingOutputModeStateResult);
+    assert_endpoint_fits!((), LightingRuntimeConditionalSceneStatusResult);
+    assert_endpoint_fits!(
+        LightingRuntimeConditionalScenePageRequest,
+        LightingRuntimeConditionalScenesPageResult
+    );
+    assert_endpoint_fits!(
+        BeginLightingRuntimeConditionalSceneReplaceRequest,
+        LightingRuntimeConditionalSceneTransactionResult
+    );
+    assert_endpoint_fits!(PutLightingRuntimeConditionalSceneChunkRequest, LightingUnitResult);
+    assert_endpoint_fits!(
+        PutLightingExtendedRuntimeConditionalSceneChunkRequest,
+        LightingUnitResult
+    );
+    assert_endpoint_fits!(
+        LightingRuntimeConditionalScenePageRequest,
+        LightingExtendedRuntimeConditionalScenesPageResult
+    );
+    assert_endpoint_fits!(CommitLightingRuntimeConditionalSceneReplaceRequest, LightingStateResult);
+    assert_endpoint_fits!(AbortLightingRuntimeConditionalSceneReplaceRequest, LightingUnitResult);
+    assert_endpoint_fits!(SetLightingSceneCellRequest, LightingStateResult);
+    assert_endpoint_fits!(UnsetLightingSceneCellRequest, LightingStateResult);
+    assert_endpoint_fits!(SetLightingLayerPolicyRequest, LightingStateResult);
+    assert_endpoint_fits!(BeginLightingSceneReplaceRequest, LightingSceneTransactionResult);
+    assert_endpoint_fits!(PutLightingSceneChunkRequest, LightingUnitResult);
+    assert_endpoint_fits!(CommitLightingSceneReplaceRequest, LightingStateResult);
+    assert_endpoint_fits!(AbortLightingSceneReplaceRequest, LightingUnitResult);
+    assert_endpoint_fits!(LightingFrameRequest, LightingFramePageResult);
+    assert_endpoint_fits!((), LightingReplicaStatusResult);
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::rynk::tests::{assert_max_size_bound, round_trip};
+
+    fn cell(id: u16) -> LightingOverlayCell {
+        LightingOverlayCell {
+            led_id: LightingLedId(id),
+            effect: LightingEffect::Blink {
+                color: LightingRgb8 { r: 1, g: 2, b: 3 },
+                period_ms: u32::MAX,
+                phase_ms: u32::MAX,
+                duty: 100,
+            },
+            ttl_ms: Some(u32::MAX),
+        }
+    }
+
+    #[test]
+    fn geometry_and_key_association_round_trip() {
+        round_trip(&LightingLed {
+            id: LightingLedId(42),
+            key: Some(LightingMatrixPosition { row: 3, col: 7 }),
+            position: Some(LightingPoint3 { x: -128, y: 256, z: 64 }),
+            zone_start: 2,
+            zone_len: 3,
+        });
+        round_trip(&LightingLed {
+            id: LightingLedId(1000),
+            key: None,
+            position: None,
+            zone_start: 0,
+            zone_len: 0,
+        });
+    }
+
+    #[test]
+    fn maximum_overlay_chunk_and_page_respect_bound() {
+        let mut cells = Vec::new();
+        for id in 0..LIGHTING_OVERLAY_CHUNK_SIZE as u16 {
+            cells.push(cell(id)).unwrap();
+        }
+        let request = PutLightingOverlayChunkRequest {
+            transaction_id: u32::MAX,
+            offset: u16::MAX,
+            cells: cells.clone(),
+        };
+        round_trip(&request);
+        assert_max_size_bound(&request);
+        assert!(PutLightingOverlayChunkRequest::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+
+        let page = LightingOverlayPage {
+            revision: u32::MAX,
+            total_count: u16::MAX,
+            items: cells,
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingOverlayPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+    }
+
+    #[test]
+    fn maximum_zone_page_respects_bound() {
+        let mut items = Vec::new();
+        for id in 0..LIGHTING_PAGE_SIZE as u8 {
+            let mut name = String::new();
+            for _ in 0..LIGHTING_ZONE_NAME_SIZE {
+                name.push('x').unwrap();
+            }
+            items
+                .push(LightingZone {
+                    id: LightingZoneId(id),
+                    name,
+                })
+                .unwrap();
+        }
+        let page = LightingZonesPage {
+            topology_revision: u32::MAX,
+            total_count: u16::MAX,
+            items,
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+    }
+
+    fn scene_cell(layer: u8, id: u16) -> LightingSceneCell {
+        LightingSceneCell {
+            layer,
+            led_id: LightingLedId(id),
+            effect: LightingEffect::Breathe {
+                color: LightingRgb8 { r: 4, g: 5, b: 6 },
+                period_ms: u32::MAX,
+                phase_ms: u32::MAX,
+                step_ms: u16::MAX - 1,
+            },
+        }
+    }
+
+    #[test]
+    fn scene_types_round_trip() {
+        round_trip(&LightingLayerPolicy::EffectiveOnly);
+        round_trip(&LightingLayerPolicy::ActiveStack);
+        round_trip(&scene_cell(3, 42));
+        round_trip(&LightingSceneStatus {
+            revision: u32::MAX,
+            capacity: 256,
+            scene_len: 12,
+            policy: LightingLayerPolicy::ActiveStack,
+            chunk_capacity: LIGHTING_SCENE_CHUNK_SIZE as u8,
+        });
+        round_trip(&LightingCompiledSceneStatus {
+            topology_revision: u32::MAX,
+            scene_len: 12,
+            policy: LightingLayerPolicy::EffectiveOnly,
+            chunk_capacity: LIGHTING_SCENE_CHUNK_SIZE as u8,
+        });
+        round_trip(&LightingSceneTransaction {
+            id: u32::MAX,
+            cell_count: u16::MAX,
+        });
+        round_trip(&LightingError::UnknownLayer { layer: 9 });
+        round_trip(&LightingError::SceneFull { capacity: 256 });
+    }
+
+    #[test]
+    fn maximum_scene_chunk_and_page_respect_bounds() {
+        let mut cells = Vec::new();
+        for id in 0..LIGHTING_SCENE_CHUNK_SIZE as u16 {
+            cells.push(scene_cell(u8::MAX, id)).unwrap();
+        }
+        let request = PutLightingSceneChunkRequest {
+            transaction_id: u32::MAX,
+            offset: u16::MAX,
+            cells: cells.clone(),
+        };
+        round_trip(&request);
+        assert_max_size_bound(&request);
+        assert!(PutLightingSceneChunkRequest::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+
+        let page = LightingScenesPage {
+            revision: u32::MAX,
+            total_count: u16::MAX,
+            items: cells.clone(),
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+
+        let compiled_page = LightingCompiledScenesPage {
+            topology_revision: u32::MAX,
+            total_count: u16::MAX,
+            items: cells,
+        };
+        round_trip(&compiled_page);
+        assert_max_size_bound(&compiled_page);
+        assert!(LightingCompiledScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+    }
+
+    #[test]
+    fn frame_page_round_trips_at_capacity() {
+        let mut cells = Vec::new();
+        for index in 0..LIGHTING_FRAME_CHUNK_SIZE as u8 {
+            cells
+                .push(LightingRgb8 {
+                    r: index,
+                    g: u8::MAX - index,
+                    b: u8::MAX,
+                })
+                .unwrap();
+        }
+        let page = LightingFramePage {
+            node: LightingNodeId(u8::MAX),
+            revision: Some(u32::MAX),
+            total_leds: u16::MAX,
+            start: u16::MAX,
+            age_ms: u32::MAX,
+            cells,
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingFramePage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+
+        // The unpresented and empty-tail cases hosts hit while paging.
+        round_trip(&LightingFramePage {
+            revision: None,
+            cells: Vec::new(),
+            ..page
+        });
+        round_trip(&LightingFrameRequest {
+            node: LightingNodeId(1),
+            offset: u16::MAX,
+        });
+    }
+
+    #[test]
+    fn replica_status_round_trips_present_and_absent_sides() {
+        let digests = LightingReplicaDigests {
+            schema: LIGHTING_REPLICA_DIGEST_SCHEMA_V1,
+            revision: u32::MAX - 2,
+            settings: 1,
+            overlay: 2,
+            scenes: 3,
+            conditional_scenes: 4,
+        };
+        let full = LightingReplicaStatus {
+            central: LightingCentralReplicaState {
+                revision: u32::MAX,
+                presented_revision: Some(u32::MAX - 1),
+                effective_layer: 3,
+                default_layer: 1,
+                active_bits: u64::MAX,
+                powered: true,
+                wake_active: true,
+                effective_output_enabled: false,
+            },
+            replication: Some(LightingReplicationMachine {
+                last_acked_revision: Some(u32::MAX - 2),
+                awaiting_ack: true,
+                generation: u8::MAX,
+                link_up: true,
+                durable_dirty: true,
+                context_dirty: false,
+                health: LightingReplicationHealth::Resynchronizing,
+                expected_digests: Some(digests),
+                last_attested_age_ms: Some(u32::MAX),
+                mismatch_count: 1,
+            }),
+            peripheral: Some(LightingPeripheralReplicaState {
+                node: LightingNodeId(1),
+                applied_revision: Some(u32::MAX - 3),
+                engine_revision: u32::MAX - 4,
+                effective_layer: 2,
+                default_layer: 0,
+                active_bits: 1 << 63,
+                powered: false,
+                wake_active: true,
+                effective_output_enabled: false,
+                age_ms: u32::MAX,
+                digests: Some(LightingReplicaDigests {
+                    revision: u32::MAX - 3,
+                    ..digests
+                }),
+            }),
+        };
+        round_trip(&full);
+        assert_max_size_bound(&full);
+        assert!(LightingReplicaStatus::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+
+        // Never-heard-from is encoded as absence, not as a zero snapshot.
+        round_trip(&LightingReplicaStatus {
+            replication: None,
+            peripheral: None,
+            central: LightingCentralReplicaState {
+                presented_revision: None,
+                ..full.central
+            },
+        });
+    }
+
+    #[test]
+    fn node_errors_round_trip() {
+        round_trip(&LightingError::UnknownNode {
+            node: LightingNodeId(u8::MAX),
+        });
+        round_trip(&LightingError::NodeUnavailable {
+            node: LightingNodeId(1),
+        });
+    }
+
+    #[test]
+    fn conditional_scene_page_round_trips_at_capacity() {
+        let mut items = Vec::new();
+        for id in 0..LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE as u16 {
+            items
+                .push(LightingConditionalSceneCell {
+                    conditions: LightingConditionSet {
+                        layer: Some(LightingLayerCondition {
+                            layer: u8::MAX,
+                            active: true,
+                        }),
+                        battery: Some(LightingBatteryCondition {
+                            node: LightingNodeId(u8::MAX),
+                            min_level: Some(1),
+                            max_level: Some(100),
+                            charge: LightingChargeCondition::Charging,
+                        }),
+                        output_mode: None,
+                    },
+                    led_id: LightingLedId(id),
+                    effect: LightingEffect::Solid {
+                        color: LightingRgb8 {
+                            r: u8::MAX,
+                            g: u8::MAX,
+                            b: u8::MAX,
+                        },
+                    },
+                })
+                .unwrap();
+        }
+        let page = LightingConditionalScenesPage {
+            topology_revision: u32::MAX,
+            total_count: u16::MAX,
+            items,
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingConditionalScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+    }
+
+    #[test]
+    fn extended_conditional_scene_types_round_trip_at_capacity() {
+        let base = LightingConditionalSceneCell {
+            conditions: LightingConditionSet {
+                layer: Some(LightingLayerCondition { layer: 2, active: true }),
+                battery: Some(LightingBatteryCondition {
+                    node: LightingNodeId(1),
+                    min_level: Some(20),
+                    max_level: Some(80),
+                    charge: LightingChargeCondition::Discharging,
+                }),
+                output_mode: Some(LightingOutputMode::PoweredOnly),
+            },
+            led_id: LightingLedId(42),
+            effect: LightingEffect::Solid {
+                color: LightingRgb8 { r: 7, g: 8, b: 9 },
+            },
+        };
+        let cell = LightingExtendedConditionalSceneCell {
+            cell: base,
+            connection: Some(LightingConnectionCondition {
+                transport: Some(LightingActiveTransport::Ble),
+                profile: Some(3),
+                ble_state: Some(BleState::Connected),
+                bonded: Some(LightingBondedSlotCondition { slot: 2, bonded: true }),
+                usb_connected: Some(true),
+            }),
+            effects: Some(LightingEffectsCondition { enabled: true }),
+        };
+        round_trip(&cell);
+
+        let mut cells = Vec::new();
+        for _ in 0..LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE {
+            cells.push(cell).unwrap();
+        }
+        let page = LightingExtendedRuntimeConditionalScenesPage {
+            revision: u32::MAX,
+            total_count: u16::MAX,
+            items: cells.clone(),
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingExtendedRuntimeConditionalScenesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+
+        let request = PutLightingExtendedRuntimeConditionalSceneChunkRequest {
+            transaction_id: u32::MAX,
+            offset: u16::MAX,
+            cells,
+        };
+        round_trip(&request);
+        assert_max_size_bound(&request);
+        assert!(PutLightingExtendedRuntimeConditionalSceneChunkRequest::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+    }
+
+    #[test]
+    fn extension_types_round_trip() {
+        round_trip(&LightingExtensionState {
+            effect: 1,
+            palette: 2,
+            value: 3,
+            speed: 4,
+        });
+        round_trip(&LightingExtensionLayers {
+            revision: 5,
+            overlay: Some(6),
+        });
+        round_trip(&LightingExtensionLayers {
+            revision: 5,
+            overlay: None,
+        });
+        round_trip(&SetLightingExtensionLayersRequest {
+            expected_revision: 5,
+            overlay: Some(6),
+        });
+        round_trip(&LightingExtension {
+            revision: u32::MAX,
+            effect_count: 6,
+            palette_count: 16,
+            state: LightingExtensionState {
+                effect: 5,
+                palette: 15,
+                value: u8::MAX,
+                speed: 0,
+            },
+        });
+        round_trip(&LightingExtensionNamesRequest {
+            kind: LightingExtensionNameKind::Effects,
+            offset: 0,
+        });
+        round_trip(&LightingExtensionNamesRequest {
+            kind: LightingExtensionNameKind::Palettes,
+            offset: LIGHTING_EXTENSION_NAME_CHUNK as u8,
+        });
+        round_trip(&SetLightingExtensionStateRequest {
+            expected_revision: u32::MAX,
+            state: LightingExtensionState {
+                effect: 0,
+                palette: 1,
+                value: 2,
+                speed: 3,
+            },
+        });
+    }
+
+    #[test]
+    fn extension_param_types_round_trip() {
+        round_trip(&LightingExtensionParam {
+            name: String::try_from("Density").unwrap(),
+            min: 1,
+            max: 8,
+            default: 3,
+            value: 5,
+        });
+        round_trip(&LightingExtensionParamsRequest { effect: 0, offset: 0 });
+        round_trip(&LightingExtensionParamsRequest {
+            effect: u8::MAX,
+            offset: LIGHTING_EXTENSION_PARAM_CHUNK as u8,
+        });
+        round_trip(&SetLightingExtensionParamRequest {
+            expected_revision: u32::MAX,
+            effect: 2,
+            index: 1,
+            value: u8::MAX,
+        });
+    }
+
+    #[test]
+    fn maximum_extension_params_page_respects_bound() {
+        let mut items = Vec::new();
+        for _ in 0..LIGHTING_EXTENSION_PARAM_CHUNK {
+            let mut name = String::new();
+            for _ in 0..LIGHTING_EXTENSION_NAME_SIZE {
+                name.push('x').unwrap();
+            }
+            items
+                .push(LightingExtensionParam {
+                    name,
+                    min: 0,
+                    max: u8::MAX,
+                    default: u8::MAX,
+                    value: u8::MAX,
+                })
+                .unwrap();
+        }
+        let page = LightingExtensionParamsPage {
+            revision: u32::MAX,
+            total: u8::MAX,
+            items,
+        };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingExtensionParamsPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+    }
+
+    #[test]
+    fn maximum_extension_names_page_respects_bound() {
+        let mut items = Vec::new();
+        for _ in 0..LIGHTING_EXTENSION_NAME_CHUNK {
+            let mut name = String::new();
+            for _ in 0..LIGHTING_EXTENSION_NAME_SIZE {
+                name.push('x').unwrap();
+            }
+            items.push(name).unwrap();
+        }
+        let page = LightingExtensionNamesPage { total: u8::MAX, items };
+        round_trip(&page);
+        assert_max_size_bound(&page);
+        assert!(LightingExtensionNamesPage::POSTCARD_MAX_SIZE <= LIGHTING_PAYLOAD_SIZE);
+    }
+
+    #[test]
+    fn scene_cell_validation_is_effect_validation() {
+        assert_eq!(scene_cell(0, 1).validate(), Ok(()));
+        let invalid = LightingSceneCell {
+            layer: 0,
+            led_id: LightingLedId(1),
+            effect: LightingEffect::Blink {
+                color: LightingRgb8 { r: 1, g: 2, b: 3 },
+                period_ms: 0,
+                phase_ms: 0,
+                duty: 50,
+            },
+        };
+        assert_eq!(invalid.validate(), Err(LightingError::InvalidEffect));
+    }
+
+    #[test]
+    fn effect_and_ttl_validation_is_explicit() {
+        let mut valid = cell(1);
+        assert_eq!(valid.validate(), Ok(()));
+        valid.ttl_ms = Some(0);
+        assert_eq!(valid.validate(), Err(LightingError::InvalidTtl));
+        valid.ttl_ms = None;
+        valid.effect = LightingEffect::Breathe {
+            color: LightingRgb8 { r: 1, g: 2, b: 3 },
+            period_ms: 100,
+            phase_ms: 0,
+            step_ms: 100,
+        };
+        assert_eq!(valid.validate(), Err(LightingError::InvalidEffect));
+    }
+}

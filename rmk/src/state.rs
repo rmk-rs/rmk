@@ -5,15 +5,81 @@ use rmk_types::ble::BleState;
 #[cfg(feature = "_ble")]
 use rmk_types::ble::BleStatus;
 use rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
+use rmk_types::modifier::ModifierCombination;
 
 use crate::RawMutex;
 use crate::event::{ConnectionStatusChangeEvent, publish_event};
+
+/// Final modifier bitmap used by the most recently resolved keyboard report.
+///
+/// This is intentionally distinct from `Keyboard::held_modifiers`: one-shot,
+/// macro, with-modifier, and fork processing all contribute to the value that
+/// is actually sent to the host.
+static MODIFIER_STATE: Mutex<RawMutex, Cell<ModifierCombination>> = Mutex::new(Cell::new(ModifierCombination::new()));
+
+pub(crate) fn current_modifier_state() -> ModifierCombination {
+    MODIFIER_STATE.lock(Cell::get)
+}
+
+pub(crate) fn set_modifier_state(modifiers: ModifierCombination) {
+    let changed = MODIFIER_STATE.lock(|state| {
+        let changed = state.get() != modifiers;
+        state.set(modifiers);
+        changed
+    });
+    if changed {
+        publish_event(crate::event::ModifierEvent { modifier: modifiers });
+    }
+}
+
+/// Authoritative device sleep state shared by display, lighting, host
+/// readback, battery management, and split forwarding. Events invalidate this
+/// value; they are not a second owner of it.
+static SLEEPING: Mutex<RawMutex, Cell<bool>> = Mutex::new(Cell::new(false));
+
+pub(crate) fn current_sleeping() -> bool {
+    SLEEPING.lock(Cell::get)
+}
+
+/// Compatibility spelling used by the existing Rynk status handler.
+pub(crate) fn current_sleep_state() -> bool {
+    current_sleeping()
+}
+
+pub(crate) fn set_sleeping(sleeping: bool) {
+    let changed = SLEEPING.lock(|state| {
+        let changed = state.get() != sleeping;
+        state.set(sleeping);
+        changed
+    });
+    if changed {
+        publish_event(crate::event::SleepStateEvent::new(sleeping));
+    }
+}
 
 /// Single source of truth for transport state and routing. All writes go
 /// through the mutator helpers below so the active-output cascade runs and
 /// change events fire on every transition.
 pub(crate) static CONNECTION_STATUS: Mutex<RawMutex, Cell<ConnectionStatus>> =
     Mutex::new(Cell::new(ConnectionStatus::new()));
+
+/// Bitmap of BLE profile slots holding a stored bond, bit N = slot N.
+/// Maintained by `ProfileManager`; read by lighting so rules can show
+/// paired-versus-empty slots. Freshness rides on ordinary render triggers
+/// (bond changes coincide with connection or layer activity).
+#[cfg(feature = "_ble")]
+static BONDED_SLOTS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// Which BLE profile slots hold a stored bond, as a bitmap (bit N = slot N).
+#[cfg(feature = "_ble")]
+pub fn bonded_slots() -> u8 {
+    BONDED_SLOTS.load(core::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(feature = "_ble")]
+pub(crate) fn set_bonded_slots(mask: u8) {
+    BONDED_SLOTS.store(mask, core::sync::atomic::Ordering::Release);
+}
 
 pub(crate) fn active_transport() -> Option<ConnectionType> {
     CONNECTION_STATUS.lock(|c| c.get().decide_active())
@@ -25,19 +91,6 @@ pub(crate) fn current_connection_status() -> ConnectionStatus {
 
 pub(crate) fn current_usb_state() -> UsbState {
     CONNECTION_STATUS.lock(|c| c.get().usb)
-}
-
-/// Current central sleep state for host polling. Sourced from the BLE sleep
-/// manager's `SLEEPING_STATE`; always `false` in builds without BLE.
-pub(crate) fn current_sleep_state() -> bool {
-    #[cfg(feature = "_ble")]
-    {
-        crate::ble::sleep::SLEEPING_STATE.load(core::sync::atomic::Ordering::Acquire)
-    }
-    #[cfg(not(feature = "_ble"))]
-    {
-        false
-    }
 }
 
 #[cfg(feature = "_ble")]
@@ -70,6 +123,11 @@ pub(crate) fn update_status(f: impl FnOnce(&mut ConnectionStatus)) {
         // the new state and routes to the new channel rather than the one
         // about to be cleared.
         crate::channel::clear_and_release_report_channel(prev_active);
+    }
+
+    #[cfg(all(feature = "_ble", feature = "split"))]
+    if prev.usb != new.usb {
+        crate::split::ble::central::power_source_changed();
     }
 
     publish_event(ConnectionStatusChangeEvent(new));
@@ -145,11 +203,13 @@ mod tests {
 
     use embassy_futures::select::{Either, select};
     use embassy_time::{Duration, Timer};
+    use rmk_types::modifier::ModifierCombination;
 
     use super::{
-        CONNECTION_STATUS, ConnectionStatus, ConnectionType, UsbState, set_preferred_connection, set_usb_state,
+        CONNECTION_STATUS, ConnectionStatus, ConnectionType, MODIFIER_STATE, UsbState, current_modifier_state,
+        set_modifier_state, set_preferred_connection, set_usb_state,
     };
-    use crate::event::{ConnectionStatusChangeEvent, EventSubscriber, SubscribableEvent};
+    use crate::event::{ConnectionStatusChangeEvent, EventSubscriber, ModifierEvent, SubscribableEvent};
     use crate::hid::{KeyboardReport, Report};
     use crate::test_support::test_block_on as block_on;
 
@@ -160,10 +220,30 @@ mod tests {
 
     fn reset_state() {
         CONNECTION_STATUS.lock(|c| c.set(ConnectionStatus::default()));
+        MODIFIER_STATE.lock(|state| state.set(ModifierCombination::new()));
         #[cfg(not(feature = "_no_usb"))]
         crate::channel::USB_REPORT_CHANNEL.clear();
         #[cfg(feature = "_ble")]
         crate::channel::BLE_REPORT_CHANNEL.clear();
+    }
+
+    #[test]
+    fn resolved_modifier_state_is_snapshotted_and_published_once() {
+        let _guard = state_test_lock().lock().unwrap();
+        reset_state();
+        let mut sub = ModifierEvent::subscriber();
+        let modifiers = ModifierCombination::LSHIFT | ModifierCombination::RALT;
+
+        set_modifier_state(modifiers);
+
+        assert_eq!(current_modifier_state(), modifiers);
+        assert_eq!(block_on(sub.next_event()).modifier, modifiers);
+
+        set_modifier_state(modifiers);
+        match block_on(select(Timer::after(Duration::from_millis(1)), sub.next_event())) {
+            Either::First(_) => {}
+            Either::Second(event) => panic!("unexpected modifier event: {:?}", event),
+        }
     }
 
     fn pressed_keyboard_report() -> Report {

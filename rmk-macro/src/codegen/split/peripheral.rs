@@ -23,6 +23,7 @@ use crate::codegen::input_device::iqs5xx::{expand_iqs5xx_device, expand_iqs5xx_i
 use crate::codegen::input_device::pmw33xx::expand_pmw33xx_device;
 use crate::codegen::input_device::pmw3610::expand_pmw3610_device;
 use crate::codegen::keyboard_config::read_keyboard_toml_config;
+use crate::codegen::lighting::expand_lighting_renderer_config;
 use crate::codegen::matrix::{
     expand_bootmagic_check, expand_matrix_direct_pins, expand_matrix_input_output_pins,
 };
@@ -55,6 +56,16 @@ pub(crate) fn parse_split_peripheral_mod(
     let identity = toml_config
         .identity()
         .expect("failed to resolve identity config");
+    let keymap = toml_config
+        .keymap()
+        .expect("failed to resolve keymap config");
+    let layout = toml_config
+        .layout()
+        .expect("failed to resolve layout config");
+    let lighting = toml_config
+        .lighting(&layout, &keymap)
+        .expect("failed to resolve lighting config");
+    let lighting_renderer_config = expand_lighting_renderer_config(lighting.as_ref());
 
     let dfu_enabled =
         is_feature_enabled(&rmk_features, "dfu_rp") || is_feature_enabled(&rmk_features, "dfu_nrf");
@@ -108,6 +119,7 @@ pub(crate) fn parse_split_peripheral_mod(
 
     quote! {
         #device_config
+        #lighting_renderer_config
         #main_function_sig {
             // ::defmt::info!("RMK start!");
             #main_function
