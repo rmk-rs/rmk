@@ -8,9 +8,9 @@
 
 use embassy_time::{Duration, Instant};
 use rmk_types::keycode::HidKeyCode;
-use usbd_hid::descriptor::MouseReport;
 
 use crate::config::MouseKeyConfig;
+use crate::hid::MouseReport;
 
 /// Result of processing a mouse key event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,10 +124,10 @@ impl DirectionState {
     }
 
     /// Compute axis values by applying `unit` magnitude to the active directions.
-    fn axis_values(&self, unit: i8) -> (i8, i8) {
+    fn axis_values(&self, unit: i16) -> (i16, i16) {
         (
-            self.x.signum().saturating_mul(unit),
-            self.y.signum().saturating_mul(unit),
+            (self.x.signum() as i16).saturating_mul(unit),
+            (self.y.signum() as i16).saturating_mul(unit),
         )
     }
 
@@ -306,7 +306,7 @@ impl MouseState {
     /// Two-step speed calculation:
     /// Step 1: acceleration curve based on repeat count
     /// Step 2: accel multiplier (Accel0=0.25x, Accel1=0.5x, Accel2=2.0x, highest wins)
-    fn calculate_unit(accel: u8, repeat: u8, delta: u8, max_speed: u8, ticks_to_max: u8, max: u8) -> i8 {
+    fn calculate_unit(accel: u8, repeat: u8, delta: u8, max_speed: u8, ticks_to_max: u8, max: u8) -> i16 {
         // Step 1: Base value from acceleration curve
         let max_unit = (delta as u16).saturating_mul(max_speed as u16);
         let base: u16 = if repeat == 0 {
@@ -339,7 +339,7 @@ impl MouseState {
             base
         };
 
-        // Step 3: Clamp to [1, max] and i8 range
+        // Step 3: Clamp to [1, max]
         let clamped = if max == 0 {
             1u16
         } else if multiplied > max as u16 {
@@ -349,11 +349,11 @@ impl MouseState {
         } else {
             multiplied
         };
-        clamped.min(i8::MAX as u16) as i8
+        clamped as i16
     }
 
     /// Calculate mouse movement distance based on current repeat count and acceleration settings
-    fn calculate_move_unit(&self, config: &MouseKeyConfig) -> i8 {
+    fn calculate_move_unit(&self, config: &MouseKeyConfig) -> i16 {
         Self::calculate_unit(
             self.accel,
             self.movement.repeat,
@@ -365,7 +365,7 @@ impl MouseState {
     }
 
     /// Calculate mouse wheel movement distance based on current repeat count and acceleration settings
-    fn calculate_wheel_unit(&self, config: &MouseKeyConfig) -> i8 {
+    fn calculate_wheel_unit(&self, config: &MouseKeyConfig) -> i16 {
         Self::calculate_unit(
             self.accel,
             self.wheel.repeat,
@@ -377,23 +377,24 @@ impl MouseState {
     }
 
     /// Apply diagonal movement compensation (approximation of 1/sqrt(2))
-    fn apply_diagonal_compensation(mut x: i8, mut y: i8) -> (i8, i8) {
+    fn apply_diagonal_compensation(mut x: i16, mut y: i16) -> (i16, i16) {
         if x != 0 && y != 0 {
-            let x16 = x as i16;
-            let y16 = y as i16;
-            let x_bias: i16 = if x16 >= 0 { 128 } else { -128 };
-            let y_bias: i16 = if y16 >= 0 { 128 } else { -128 };
-            let x_compensated = (x16 * 181 + x_bias) / 256;
-            let y_compensated = (y16 * 181 + y_bias) / 256;
-            x = if x_compensated == 0 && x != 0 {
+            // Widen so the 181/256 multiply can't overflow.
+            let x32 = x as i32;
+            let y32 = y as i32;
+            let x_bias: i32 = if x32 >= 0 { 128 } else { -128 };
+            let y_bias: i32 = if y32 >= 0 { 128 } else { -128 };
+            let x_compensated = (x32 * 181 + x_bias) / 256;
+            let y_compensated = (y32 * 181 + y_bias) / 256;
+            x = if x_compensated == 0 {
                 if x > 0 { 1 } else { -1 }
             } else {
-                x_compensated as i8
+                x_compensated as i16
             };
-            y = if y_compensated == 0 && y != 0 {
+            y = if y_compensated == 0 {
                 if y > 0 { 1 } else { -1 }
             } else {
-                y_compensated as i8
+                y_compensated as i16
             };
         }
         (x, y)
@@ -762,10 +763,11 @@ mod test {
     }
 
     #[test]
-    fn calculate_unit_i8_max_clamp() {
-        // Very large values should clamp to i8::MAX (127)
+    fn calculate_unit_clamps_to_max() {
+        // `max` is the only cap; the report axes are 16-bit, so a `move_max`
+        // above 127 survives instead of being truncated.
         let result = MouseState::calculate_unit(4, 50, 100, 10, 50, 255);
-        assert_eq!(result, 127);
+        assert_eq!(result, 255);
     }
 
     // -- H. Return value semantics --------------------------------------------

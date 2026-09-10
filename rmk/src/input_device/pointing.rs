@@ -6,11 +6,10 @@ use embedded_hal_async::digital::Wait;
 use futures::future::pending;
 use rmk_macro::{input_device, processor};
 use rmk_types::keycode::HidKeyCode;
-use usbd_hid::descriptor::MouseReport;
 
 use crate::channel::send_hid_report;
 use crate::event::{Axis, AxisEvent, AxisValType, PointingEvent, PointingProcessorEvent, PointingSetCpiEvent};
-use crate::hid::{KeyboardReport, Report};
+use crate::hid::{KeyboardReport, MouseReport, Report};
 use crate::keymap::KeyMap;
 
 pub const ALL_POINTING_DEVICES: u8 = 255;
@@ -573,8 +572,8 @@ impl<'a> PointingProcessor<'a> {
                         let out_y = if cursor_config.invert_y { -out_y } else { out_y };
                         MouseReport {
                             buttons,
-                            x: out_x.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
-                            y: out_y.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
+                            x: out_x,
+                            y: out_y,
                             wheel: 0,
                             pan: 0,
                         }
@@ -598,8 +597,8 @@ impl<'a> PointingProcessor<'a> {
                             buttons,
                             x: 0,
                             y: 0,
-                            wheel: wheel.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
-                            pan: pan.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
+                            wheel,
+                            pan,
                         }
                     }
                     PointingMode::Sniper(sniper_config) => {
@@ -616,8 +615,8 @@ impl<'a> PointingProcessor<'a> {
                         let out_y = if sniper_config.invert_y { -sy } else { sy };
                         MouseReport {
                             buttons,
-                            x: out_x.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
-                            y: out_y.clamp(i8::MIN as i16, i8::MAX as i16) as i8,
+                            x: out_x,
+                            y: out_y,
                             wheel: 0,
                             pan: 0,
                         }

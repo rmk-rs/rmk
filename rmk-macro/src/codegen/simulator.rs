@@ -450,15 +450,15 @@ fn expectation(value: &Value) -> Result<TokenStream2, String> {
             #[serde(deny_unknown_fields, default)]
             struct Mouse {
                 buttons: u8,
-                x: i8,
-                y: i8,
-                wheel: i8,
-                pan: i8,
+                x: i16,
+                y: i16,
+                wheel: i16,
+                pan: i16,
             }
             let m: Mouse = arg(v, op, "{ buttons, x, y, wheel, pan }")?;
             let (buttons, x, y, wheel, pan) = (m.buttons, m.x, m.y, m.wheel, m.pan);
             quote! {
-                .expect_report(::rmk::hid::Report::MouseReport(::usbd_hid::descriptor::MouseReport {
+                .expect_report(::rmk::hid::Report::MouseReport(::rmk::hid::MouseReport {
                     buttons: #buttons,
                     x: #x,
                     y: #y,
