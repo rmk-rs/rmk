@@ -837,6 +837,10 @@ pub struct StickyKeyConfig {
     pub release_after_hold: Option<DurationMillis>,
     pub max_repeat: Option<u16>,
     pub release_mode: Option<String>,
+    /// Keys that use the latch without ending it; every other key ends it.
+    pub keep_keys: Option<Vec<String>>,
+    /// Keys that end the latch; every other key uses it without ending it.
+    pub release_keys: Option<Vec<String>>,
     #[serde(default)]
     pub profiles: HashMap<String, StickyKeyProfile>,
 }
@@ -850,6 +854,10 @@ pub struct StickyKeyProfile {
     pub release_after_hold: Option<DurationMillis>,
     pub max_repeat: Option<u16>,
     pub release_mode: Option<String>,
+    /// Keys that use the latch without ending it; every other key ends it.
+    pub keep_keys: Option<Vec<String>>,
+    /// Keys that end the latch; every other key uses it without ending it.
+    pub release_keys: Option<Vec<String>>,
 }
 
 /// Configurations for auto mouse layer

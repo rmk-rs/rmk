@@ -1,42 +1,50 @@
-# Canonical Sticky Key forms. OSM/OSL compatibility is covered by one_shot.toml.
+# Canonical Sticky Key forms. OSM/OSL compatibility lives in one_shot.toml.
+#
+# A Sticky Key defers the release of an ordinary action, so the fixture covers
+# four different `Action` shapes behind `SK(...)`: a modifier, a layer, a plain
+# keycode and a key-with-modifier.
 #
 # Layer 0:
-#   SK(LShift) SK(Tab,[LAlt],@short) SK(MO(1)) A
-#   SK(LCtrl,@double) SK(B,[LGui],@repeat) SK(LAlt,@short) SK(LGui,@short) MO(2) MO(1)
-#   SK(LShift,@visible) SK(LCtrl,@short)
-# Layers 1/2 leave the behavior keys transparent; col 3 is B/C respectively.
+#   SK(LShift)  SK(MO(1))  A  SK(LCtrl,@double)  SK(LAlt,@alt_tab)  Tab  SK(Z)
+#   SK(WM(Tab,LGui),@visible)  MO(2)  SK(LGui,@short)  SK(LShift,@visible)
+#   SK(RCtrl,@keyup)  MO(1)
+# Layers 1 and 2 resolve col 2 to B and C; every other key stays transparent.
 
 [layout]
 rows = 1
-cols = 12
-map = "(0,0) (0,1) (0,2) (0,3) (0,4) (0,5) (0,6) (0,7) (0,8) (0,9) (0,10) (0,11)"
+cols = 13
+map = "(0,0) (0,1) (0,2) (0,3) (0,4) (0,5) (0,6) (0,7) (0,8) (0,9) (0,10) (0,11) (0,12)"
 
 [keymap]
 layers = 3
 
 [[keymap.layer]]
-keys = "SK(LShift) SK(Tab, [LAlt], @short) SK(MO(1)) A SK(LCtrl, @double) SK(B, [LGui], @repeat) SK(LAlt, @short) SK(LGui, @short) MO(2) MO(1) SK(LShift, @visible) SK(LCtrl, @short)"
+keys = "SK(LShift) SK(MO(1)) A SK(LCtrl, @alt_tab) SK(LAlt, @alt_tab) Tab SK(Z) SK(WM(Tab, LGui), @visible) MO(2) SK(LGui, @short) SK(LShift, @visible) SK(RCtrl, @keyup) MO(1)"
 
 [[keymap.layer]]
-keys = "Trns Trns Trns B Trns Trns Trns Trns Trns Trns Trns Trns"
+keys = "Trns Trns B Trns Trns Trns Trns Trns Trns Trns Trns Trns Trns"
 
 [[keymap.layer]]
-keys = "Trns Trns Trns C Trns Trns Trns Trns Trns Trns Trns Trns"
+keys = "Trns Trns C Trns Trns Trns Trns Trns Trns Trns Trns Trns Trns"
 
 [behavior.sticky_key]
 release_mode = "other_key_press"
+
+[behavior.sticky_key.profiles.keyup]
+timeout = "1s"
+release_mode = "other_key_release"
+
+# No key trigger, so the latch survives its consumers until the repeat cap, a
+# second tap, or the idle timeout ends it. This is the Alt+Tab shape.
+[behavior.sticky_key.profiles.alt_tab]
+timeout = "150ms"
+max_repeat = 2
+release_mode = "double_tap"
 
 [behavior.sticky_key.profiles.short]
 timeout = "100ms"
 release_after_hold = "50ms"
 release_mode = "layer_enter | layer_exit"
-
-[behavior.sticky_key.profiles.double]
-timeout = "100ms"
-release_mode = "double_tap"
-
-[behavior.sticky_key.profiles.repeat]
-max_repeat = 2
 
 [behavior.sticky_key.profiles.visible]
 activate_on_keypress = true
@@ -44,219 +52,149 @@ timeout = "1s"
 release_after_hold = "100ms"
 
 [[test]]
-name = "canonical_modifier_uses_press_policy"
+name = "modifier_applies_to_the_next_key_press"
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },
-  { tap = { pos = [0, 3], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
 ]
 expect = [["LShift", "A"], ["A"], []]
 
+# `other_key_release` keeps the modifier through the target's release, so both
+# leave in one report.
 [[test]]
-name = "canonical_layer_applies_to_one_key"
+name = "keyup_policy_holds_through_the_target_release"
 steps = [
+  { tap = { pos = [0, 11], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
-  { tap = { pos = [0, 3], duration = 10 } },
-  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [["RCtrl", "A"], []]
+
+[[test]]
+name = "layer_applies_to_the_next_key_only"
+steps = [
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
 ]
 expect = [["B"], [], ["A"], []]
 
+# A Sticky Key wraps any action, so a plain keycode stays down until a consumer.
 [[test]]
-name = "sticky_cleanup_is_latest_command_for_shared_layer"
+name = "plain_keycode_can_be_sticky"
 steps = [
+  { tap = { pos = [0, 6], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
-  { press = [0, 9] },
-  { tap = { pos = [0, 3], duration = 10 } },
-  { release = [0, 9] },
-  { tap = { pos = [0, 3], duration = 10 } },
 ]
-expect = [["B"], [], ["A"], []]
+expect = [["Z", "A"], ["A"], []]
 
+# Same for a compound action. `activate_on_keypress` reports it at once, and the
+# idle timeout takes it back.
 [[test]]
-name = "tap_key_holds_modifiers_until_profile_timeout"
+name = "key_with_modifier_can_be_sticky"
 steps = [
-  { tap = { pos = [0, 1], duration = 10 } },
-  { delay = 150 },
-]
-expect = [["LAlt", "Tab"], ["LAlt"], []]
-
-[[test]]
-name = "canonical_modifier_and_layer_latches_coexist"
-steps = [
-  { tap = { pos = [0, 0], duration = 10 } },
-  { tap = { pos = [0, 2], duration = 10 } },
-  { tap = { pos = [0, 3], duration = 10 } },
-]
-expect = [["LShift", "B"], ["B"], []]
-
-[[test]]
-name = "tap_key_replaces_layer_and_releases_owned_layer"
-steps = [
-  { tap = { pos = [0, 2], duration = 10 } },
-  { tap = { pos = [0, 1], duration = 10 } },
-  { delay = 150 },
-  { tap = { pos = [0, 3], duration = 10 } },
-]
-expect = [["LAlt", "Tab"], ["LAlt"], [], ["A"], []]
-
-[[test]]
-name = "tap_key_replaces_pending_modifier"
-steps = [
-  { tap = { pos = [0, 0], duration = 10 } },
-  { tap = { pos = [0, 1], duration = 10 } },
-  { delay = 150 },
-]
-expect = [["LAlt", "Tab"], ["LAlt"], []]
-
-[[test]]
-name = "held_tap_key_displaced_by_modifier_synthesizes_release"
-steps = [
-  { press = [0, 1] },
-  { tap = { pos = [0, 0], duration = 10 } },
-  { release = [0, 1] },
-  { tap = { pos = [0, 3], duration = 10 } },
-]
-expect = [["LAlt", "Tab"], [], ["A"], []]
-
-# Retained and physically held modifier bits keep the existing shared entry
-# lifecycle. Releasing the final producer while A remains down releases the
-# whole entry, including the previously retained Ctrl bit.
-[[test]]
-name = "mixed_retained_and_held_modifiers_keep_shared_lifecycle"
-steps = [
-  { tap = { pos = [0, 4], duration = 10 } },
-  { press = [0, 0] },
-  { press = [0, 3] },
-  { release = [0, 0] },
-  { release = [0, 3] },
-]
-expect = [["LShift", "LCtrl", "A"], ["A"], []]
-
-[[test]]
-name = "held_tap_key_displaced_by_layer_synthesizes_release"
-steps = [
-  { press = [0, 1] },
-  { tap = { pos = [0, 2], duration = 10 } },
-  { release = [0, 1] },
-  { tap = { pos = [0, 3], duration = 10 } },
-]
-expect = [["LAlt", "Tab"], [], ["B"], []]
-
-[[test]]
-name = "held_tap_key_displaced_by_tap_key_synthesizes_release"
-steps = [
-  { press = [0, 1] },
-  { tap = { pos = [0, 5], duration = 10 } },
-  { release = [0, 1] },
+  { tap = { pos = [0, 7], duration = 10 } },
   { delay = 1100 },
 ]
-expect = [["LAlt", "Tab"], [], ["LGui", "B"], ["LGui"], []]
+expect = [["LGui", "Tab"], []]
 
+# Alt+Tab: no key trigger, so each Tab reuses the latch until `max_repeat`.
 [[test]]
-name = "max_repeat_deactivates_tap_key_on_third_press"
+name = "repeat_cap_ends_the_latch_after_its_last_consumer"
 steps = [
+  { tap = { pos = [0, 4], duration = 10 } },
   { tap = { pos = [0, 5], duration = 10 } },
   { tap = { pos = [0, 5], duration = 10 } },
-  { tap = { pos = [0, 5], duration = 10 } },
-  { tap = { pos = [0, 3], duration = 10 } },
 ]
-expect = [["LGui", "B"], ["LGui"], ["LGui", "B"], ["LGui"], [], ["A"], []]
+expect = [["LAlt", "Tab"], ["LAlt"], ["LAlt", "Tab"], []]
 
 [[test]]
-name = "double_tap_cancels_modifier_before_next_key"
+name = "idle_timeout_ends_a_latch_that_survived_its_consumer"
 steps = [
   { tap = { pos = [0, 4], duration = 10 } },
-  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [0, 5], duration = 10 } },
+  { delay = 200 },
+]
+expect = [["LAlt", "Tab"], ["LAlt"], []]
+
+# Four latches over four different action shapes, each ending on its own terms.
+[[test]]
+name = "latches_are_independent"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
   { tap = { pos = [0, 3], duration = 10 } },
+  { tap = { pos = [0, 6], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { delay = 200 },
+]
+expect = [["LShift", "LCtrl", "Z", "B"], ["LCtrl", "B"], ["LCtrl"], []]
+
+[[test]]
+name = "double_tap_cancels_the_latch"
+steps = [
+  { tap = { pos = [0, 3], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
 ]
 expect = [["A"], []]
 
+# Held down, a Sticky Key is an ordinary held key: it ends with its own key-up.
 [[test]]
-name = "late_release_after_double_tap_does_not_consume_new_modifier"
+name = "held_sticky_key_acts_as_an_ordinary_key"
 steps = [
-  { tap = { pos = [0, 4], duration = 10 } },
-  { press = [0, 4] },
   { press = [0, 0] },
-  { release = [0, 4] },
-  { tap = { pos = [0, 3], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
   { release = [0, 0] },
 ]
 expect = [["LShift", "A"], ["LShift"], []]
 
 [[test]]
-name = "mixed_visibility_profiles_release_host_visible_modifiers"
+name = "activate_on_keypress_reports_the_effect_at_once"
 steps = [
   { tap = { pos = [0, 10], duration = 10 } },
-  { tap = { pos = [0, 11], duration = 10 } },
-  { delay = 150 },
-]
-expect = [["LShift"], []]
-
-[[test]]
-name = "timeout_is_deferred_while_sticky_modifier_is_held"
-steps = [
-  { press = [0, 4] },
-  { delay = 150 },
-  { tap = { pos = [0, 3], duration = 10 } },
-  { release = [0, 4] },
-]
-expect = [["LCtrl", "A"], ["LCtrl"], []]
-
-[[test]]
-name = "held_modifier_releases_on_keyup_after_hold_threshold"
-steps = [
-  { press = [0, 10] },
-  { delay = 150 },
-  { release = [0, 10] },
-  { tap = { pos = [0, 3], duration = 10 } },
-]
-expect = [["LShift"], [], ["A"], []]
-
-[[test]]
-name = "short_modifier_tap_gets_full_timeout_after_keyup"
-steps = [
-  { tap = { pos = [0, 10], duration = 50 } },
-  { delay = 150 },
-  { tap = { pos = [0, 3], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
 ]
 expect = [["LShift"], ["LShift", "A"], ["A"], []]
 
 [[test]]
-name = "default_profile_restarts_timeout_on_keyup_after_elapsed_timeout"
+name = "hold_threshold_ends_the_latch_at_key_up"
 steps = [
-  { press = [0, 0] },
-  { delay = 1100 },
-  { release = [0, 0] },
-  { tap = { pos = [0, 3], duration = 10 } },
+  { press = [0, 10] },
+  { delay = 150 },
+  { release = [0, 10] },
+  { tap = { pos = [0, 2], duration = 10 } },
 ]
-expect = [["LShift", "A"], ["A"], []]
+expect = [["LShift"], [], ["A"], []]
 
 [[test]]
-name = "layer_enter_profile_releases_modifier"
+name = "layer_enter_releases_the_latch"
 steps = [
-  { tap = { pos = [0, 6], duration = 10 } },
+  { tap = { pos = [0, 9], duration = 10 } },
   { press = [0, 8] },
-  { tap = { pos = [0, 3], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
   { release = [0, 8] },
 ]
 expect = [["C"], []]
 
 [[test]]
-name = "layer_exit_profile_releases_modifier"
+name = "layer_exit_releases_the_latch"
 steps = [
   { press = [0, 8] },
-  { tap = { pos = [0, 7], duration = 10 } },
+  { tap = { pos = [0, 9], duration = 10 } },
   { release = [0, 8] },
-  { tap = { pos = [0, 3], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
 ]
 expect = [["A"], []]
 
+# A Sticky layer uses RMK's ordinary layer state, so its release turns the layer
+# off even while a plain layer key still holds it.
 [[test]]
-name = "sticky_layer_cleanup_overrides_preexisting_layer_state"
+name = "sticky_layer_release_deactivates_a_shared_layer"
 steps = [
-  { press = [0, 9] },
+  { press = [0, 12] },
+  { tap = { pos = [0, 1], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
-  { tap = { pos = [0, 3], duration = 10 } },
-  { release = [0, 9] },
-  { tap = { pos = [0, 3], duration = 10 } },
+  { release = [0, 12] },
+  { tap = { pos = [0, 2], duration = 10 } },
 ]
 expect = [["B"], [], ["A"], []]

@@ -28,7 +28,7 @@ use crate::keyboard::combo::Combo;
 use crate::keyboard::fork::ActiveFork;
 use crate::keyboard::held_buffer::{HeldBuffer, HeldKey, KeyState};
 use crate::keyboard::mouse::{MouseAction, MouseState};
-use crate::keyboard::sticky_key::{StickyKeyDispatch, StickyKeySource, StickyKeyState};
+use crate::keyboard::sticky_key::StickyKeys;
 use crate::keyboard_macros::MacroOperation;
 use crate::keymap::KeyMap;
 use crate::{COMBO_MAX_NUM, FORK_MAX_NUM, MACRO_SPACE_SIZE, boot};
@@ -54,20 +54,6 @@ pub(crate) static LAST_KEY_TIMESTAMP: Signal<crate::RawMutex, u32> = Signal::new
 /// Led states for the keyboard hid report (its value is received by by the light service in a hid report)
 /// LedIndicator type would be nicer, but that does not have const expr constructor
 pub(crate) static LOCK_LED_STATES: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0u8);
-
-#[derive(Clone, Copy, Debug, Default)]
-struct LastKeyboardModifierReport {
-    modifiers: ModifierCombination,
-    sticky_contributed: ModifierCombination,
-    pressed_intent: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ModifierResolution {
-    modifiers: ModifierCombination,
-    non_sticky: ModifierCombination,
-    sticky_contributed: ModifierCombination,
-}
 
 /// Read the current host-driven lock LED state as a typed [`LedIndicator`].
 ///
@@ -152,11 +138,7 @@ impl CapsWordState {
     }
 }
 
-impl<const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP_KEY: bool> Runnable
-    for Keyboard<'_, STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>
-where
-    (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
-{
+impl Runnable for Keyboard<'_> {
     /// Main keyboard processing task, it receives input devices result, processes keys.
     /// The report is sent using `send_report`.
     async fn run(&mut self) -> ! {
@@ -182,12 +164,7 @@ where
     }
 }
 
-pub struct Keyboard<
-    'a,
-    const STICKY_MODIFIER: bool = true,
-    const STICKY_LAYER: bool = true,
-    const STICKY_TAP_KEY: bool = true,
-> {
+pub struct Keyboard<'a> {
     /// Keymap
     pub(crate) keymap: &'a KeyMap<'a>,
 
@@ -212,14 +189,20 @@ pub struct Keyboard<
     /// Used in repeat-key
     last_key_code: HidKeyCode,
 
-    sticky_key_state: StickyKeyState,
+    /// Sticky Key latches: actions whose release is deferred to a later trigger.
+    sticky: StickyKeys,
 
-    /// Number of physical matrix keys currently down. This is updated only at
-    /// the raw event boundary and is not affected by deferred action dispatch.
+    /// Set while a Sticky latch applies or undoes its action, so the effect
+    /// rides the surrounding report instead of sending one of its own.
+    coalesce_report: bool,
+
+    /// Modifiers and keycodes of the last keyboard report sent. Undoing a Sticky
+    /// latch consults this to tell whether the host still needs a report.
+    last_report: (u8, [HidKeyCode; 6]),
+
+    /// Number of physical keys currently down, counted at the raw event
+    /// boundary so it also sees keys whose dispatch is still buffered.
     physical_keys_down: u16,
-
-    /// Modifier ownership recorded at the last normal keyboard report.
-    last_modifier_report: LastKeyboardModifierReport,
 
     /// The pending User-key hold gesture: when it fires, and the id of the held key.
     /// Any key event cancels it.
@@ -273,26 +256,14 @@ pub struct Keyboard<
 
 impl<'a> Keyboard<'a> {
     pub fn new(keymap: &'a KeyMap<'a>) -> Self {
-        Self::new_with_sticky_shapes(keymap)
-    }
-}
-
-impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP_KEY: bool>
-    Keyboard<'a, STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>
-{
-    /// Construct a keyboard with the Sticky handlers selected by the type.
-    ///
-    /// Macro-generated entry points use this constructor. Pure-Rust callers
-    /// should use [`Keyboard::new`], which retains every Sticky handler.
-    #[doc(hidden)]
-    pub fn new_with_sticky_shapes(keymap: &'a KeyMap<'a>) -> Self {
         Keyboard {
             keymap,
             keyboard_event_subscriber: KeyboardEvent::subscriber(),
             last_press_time: Instant::now(),
-            sticky_key_state: StickyKeyState::default(),
+            sticky: StickyKeys::default(),
+            coalesce_report: false,
+            last_report: (0, [HidKeyCode::No; 6]),
             physical_keys_down: 0,
-            last_modifier_report: LastKeyboardModifierReport::default(),
             #[cfg(feature = "_ble")]
             user_hold: None,
             caps_word: CapsWordState::default(),
@@ -350,7 +321,7 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
         let sticky = if buffered.is_some() {
             None
         } else {
-            self.sticky_key_state.deadline()
+            self.sticky.deadline()
         };
         [
             sticky,
@@ -366,15 +337,12 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
 
     /// Handle every deadline that is due. Each step checks its own deadline, so
     /// calling this too early does nothing.
-    async fn fire_expired(&mut self)
-    where
-        (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
-    {
+    async fn fire_expired(&mut self) {
         match self.next_buffered_key() {
             // `next_deadline` hides the sticky deadline while a key is buffered, so at
             // most one of these two can be due.
             Some(key) => self.fire_buffered_key_timeout(key).await,
-            None => self.release_sticky_key_if_active_on_timeout().await,
+            None => self.sticky_expire().await,
         }
         #[cfg(feature = "_ble")]
         self.fire_user_hold().await;
@@ -384,10 +352,7 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
     /// Resolve `key` if its timeout has passed: dispatch the combo it waits on, or
     /// hand it to the morse timeout. Only one key per call, so `run()` can handle a
     /// queued event before the next timeout.
-    async fn fire_buffered_key_timeout(&mut self, key: HeldKey)
-    where
-        (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
-    {
+    async fn fire_buffered_key_timeout(&mut self, key: HeldKey) {
         if key.timeout_time > Instant::now() {
             return;
         }
@@ -411,7 +376,7 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
                             .filter(|combo| !combo.is_triggered() && combo.config.contains(&key.action))
                             .for_each(Combo::reset);
                     });
-                    self.process_key_action(&key.action, key.event, None, key.press_time)
+                    self.process_key_action(&key.action, key.event, false, key.press_time)
                         .await;
                 }
             }
@@ -423,12 +388,12 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
     }
 
     /// Process key changes at (row, col)
-    #[allow(private_bounds)]
-    pub async fn process_inner(&mut self, event: KeyboardEvent)
-    where
-        (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
-    {
-        self.update_physical_key_count(event);
+    pub async fn process_inner(&mut self, event: KeyboardEvent) {
+        if event.pressed {
+            self.physical_keys_down = self.physical_keys_down.saturating_add(1);
+        } else {
+            self.physical_keys_down = self.physical_keys_down.saturating_sub(1);
+        }
 
         // A User-key hold gesture needs 5s without any key event, so cancel it here.
         #[cfg(feature = "_ble")]
@@ -454,30 +419,11 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
         let key_action = &self.keymap.get_action_with_layer_cache(event);
 
         if self.combo_on {
-            if let (Some(key_action), combo_index) = self.process_combo(key_action, event, event_time).await {
-                self.process_key_action(&key_action, event, combo_index, event_time)
-                    .await
+            if let (Some(key_action), is_combo) = self.process_combo(key_action, event, event_time).await {
+                self.process_key_action(&key_action, event, is_combo, event_time).await
             }
         } else {
-            self.sticky_key_state.claim_buffered_press(event);
-            self.process_key_action(key_action, event, None, event_time).await
-        }
-    }
-
-    fn update_physical_key_count(&mut self, event: KeyboardEvent) {
-        let updated = if event.pressed {
-            self.physical_keys_down.checked_add(1)
-        } else {
-            self.physical_keys_down.checked_sub(1)
-        };
-        if let Some(updated) = updated {
-            self.physical_keys_down = updated;
-        } else {
-            error!(
-                "Physical key count {} on {:?}",
-                if event.pressed { "overflow" } else { "underflow" },
-                event
-            );
+            self.process_key_action(key_action, event, false, event_time).await
         }
     }
 
@@ -485,11 +431,9 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
         &mut self,
         key_action: &KeyAction,
         event: KeyboardEvent,
-        combo_index: Option<usize>,
+        is_combo: bool,
         event_time: Instant,
-    ) where
-        (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
-    {
+    ) {
         // First, make the decision for current key and held keys
         let (decision_for_current_key, decisions) = self.make_decisions_for_keys(key_action, event);
 
@@ -508,13 +452,13 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
         match updated_decision_for_cur_key {
             KeyBehaviorDecision::CleanBuffer | KeyBehaviorDecision::Release => {
                 debug!("Clean buffer, then process current key normally");
-                let key_action = if keyboard_state_updated && combo_index.is_none() {
+                let key_action = if keyboard_state_updated && !is_combo {
                     // The key_action needs to be updated due to the morse key might be triggered
                     &self.keymap.get_action_with_layer_cache(event)
                 } else {
                     key_action
                 };
-                self.process_key_action_inner(key_action, event, combo_index, event_time)
+                self.process_key_action_inner(key_action, event, is_combo, event_time)
                     .await
             }
             KeyBehaviorDecision::Buffer => {
@@ -531,30 +475,32 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
                         event_time,
                         event_time,
                     );
-                    let held_key = combo_index.map_or(held_key, |index| held_key.with_sticky_combo_index(index as u16));
-                    self.held_buffer.push(held_key);
+                    self.held_buffer.push(HeldKey {
+                        from_combo: is_combo,
+                        ..held_key
+                    });
                 }
             }
             KeyBehaviorDecision::Ignore => {
                 debug!("Current key is ignored or not buffered, process normally: {:?}", event);
                 // Process current key normally
-                let key_action = if keyboard_state_updated && combo_index.is_none() {
+                let key_action = if keyboard_state_updated && !is_combo {
                     // The key_action needs to be updated due to the morse key might be triggered
                     &self.keymap.get_action_with_layer_cache(event)
                 } else {
                     key_action
                 };
-                self.process_key_action_inner(key_action, event, combo_index, event_time)
+                self.process_key_action_inner(key_action, event, is_combo, event_time)
                     .await
             }
             KeyBehaviorDecision::FlowTap => {
-                let key_action = if keyboard_state_updated && combo_index.is_none() {
+                let key_action = if keyboard_state_updated && !is_combo {
                     &self.keymap.get_action_with_layer_cache(event)
                 } else {
                     key_action
                 };
                 if !key_action.is_morse() || !Self::is_flow_tap_enabled(self.keymap, key_action) {
-                    self.process_key_action_inner(key_action, event, combo_index, event_time)
+                    self.process_key_action_inner(key_action, event, is_combo, event_time)
                         .await;
                     return;
                 }
@@ -588,10 +534,7 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
         &mut self,
         mut decision_for_current_key: KeyBehaviorDecision,
         decisions: Vec<(KeyboardEventPos, HeldKeyDecision), 16>,
-    ) -> (bool, KeyBehaviorDecision)
-    where
-        (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
-    {
+    ) -> (bool, KeyBehaviorDecision) {
         let mut keyboard_state_updated = false;
         // Fire buffered keys
         for (pos, decision) in decisions {
@@ -680,12 +623,12 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
                         // A buffered Sticky combo output must keep its stable
                         // action and producer identity. Every other buffered
                         // key still follows layer changes while held.
-                        let key_action = if held_key.sticky_combo_index.is_some() {
+                        let key_action = if held_key.from_combo {
                             held_key.action
                         } else {
                             self.keymap.get_action_with_layer_cache(held_key.event)
                         };
-                        if held_key.sticky_combo_index.is_none() && key_action != held_key.action {
+                        if !held_key.from_combo && key_action != held_key.action {
                             keyboard_state_updated = true;
                         }
                         debug!("Processing current key before releasing: {:?}", held_key.event);
@@ -698,15 +641,12 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
                                     self.process_key_action_tap(action, held_key.event).await;
                                 }
                                 KeyAction::Sticky(action, profile) => {
-                                    let source = held_key
-                                        .sticky_combo_index
-                                        .map_or(StickyKeySource::Direct(held_key.event.pos), StickyKeySource::Combo);
-                                    self.process_action_sticky_key(
+                                    self.process_sticky_key(
                                         action,
                                         profile,
                                         held_key.event,
+                                        held_key.from_combo,
                                         held_key.press_time,
-                                        source,
                                     )
                                     .await;
                                 }
@@ -766,7 +706,7 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
 
                     if trigger_normal && let Some(held_key) = self.held_buffer.remove_if(|k| k.event.pos == pos) {
                         debug!("Cleaning buffered normal key");
-                        let action = if keyboard_state_updated && held_key.sticky_combo_index.is_none() {
+                        let action = if keyboard_state_updated && !held_key.from_combo {
                             self.keymap.get_action_with_layer_cache(held_key.event)
                         } else {
                             held_key.action
@@ -778,7 +718,7 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
                         self.process_key_action_inner(
                             &action,
                             held_key.event,
-                            held_key.sticky_combo_index.map(usize::from),
+                            held_key.from_combo,
                             held_key.press_time,
                         )
                         .await;
@@ -800,10 +740,7 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
     ) -> (
         KeyBehaviorDecision,
         Vec<(KeyboardEventPos, HeldKeyDecision), HOLD_BUFFER_SIZE>,
-    )
-    where
-        (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
-    {
+    ) {
         // Decision of current key and held keys
         let mut decision_for_current_key = KeyBehaviorDecision::Ignore;
         let mut decisions: Vec<(_, HeldKeyDecision), HOLD_BUFFER_SIZE> = Vec::new();
@@ -948,18 +885,16 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
         &mut self,
         original_key_action: &KeyAction,
         event: KeyboardEvent,
-        combo_index: Option<usize>,
+        is_combo: bool,
         event_time: Instant,
-    ) where
-        (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
-    {
+    ) {
         // Start forks
         let key_action = self.try_start_forks(original_key_action, event);
 
         self.prepare_key_action_dispatch(event);
 
         if !key_action.is_morse() {
-            self.process_non_morse_key_action_inner(key_action, event, combo_index, event_time)
+            self.process_non_morse_key_action_inner(key_action, event, is_combo, event_time)
                 .await;
         } else {
             self.process_key_action_morse(&key_action, event, event_time).await;
@@ -981,13 +916,11 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
         &mut self,
         key_action: KeyAction,
         event: KeyboardEvent,
-        combo_index: Option<usize>,
-        event_time: Instant,
-    ) where
-        (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
-    {
+        is_combo: bool,
+        pressed_at: Instant,
+    ) {
         match key_action {
-            KeyAction::No | KeyAction::Transparent => self.sticky_key_state.finish_buffered_claim(),
+            KeyAction::No | KeyAction::Transparent => {}
             KeyAction::Single(action) => {
                 debug!("Process Single key action: {:?}, {:?}", action, event);
                 self.process_key_action_normal(action, event).await;
@@ -995,12 +928,8 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
             KeyAction::Tap(action) => self.process_key_action_tap(action, event).await,
             KeyAction::Sticky(action, profile) => {
                 publish_event_async(ActionEvent::new_sticky(action, event)).await;
-                let source = combo_index.map_or(StickyKeySource::Direct(event.pos), |index| {
-                    StickyKeySource::Combo(index as u16)
-                });
-                self.process_action_sticky_key(action, profile, event, event_time, source)
+                self.process_sticky_key(action, profile, event, is_combo, pressed_at)
                     .await;
-                self.sticky_key_state.finish_buffered_claim();
             }
             _ => unreachable!(),
         }
@@ -1033,8 +962,8 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
         }
 
         let mut decision_state = StateBits {
-            // "explicit modifiers" includes Sticky Key modifiers and held modifier keys only
-            modifiers: self.resolve_explicit_modifiers(event.pressed),
+            // "explicit modifiers" are the held modifier keys, Sticky ones included
+            modifiers: self.held_modifiers,
             leds: LedIndicator::from_bits(LOCK_LED_STATES.load(core::sync::atomic::Ordering::Relaxed)),
             mouse: MouseButtons::from_bits(self.mouse.report.buttons),
         };
@@ -1152,33 +1081,23 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
     /// - `key_action`: The action of the key that triggered this function
     /// - `event`: The keyboard event. When pressing (interrupting), trigger any delayed combo.
     ///   When releasing, only trigger combos that contain the key_action.
-    async fn trigger_delayed_combo(&mut self, key_action: &KeyAction, event: KeyboardEvent)
-    where
-        (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
-    {
+    async fn trigger_delayed_combo(&mut self, key_action: &KeyAction, event: KeyboardEvent) {
         // First, find the delayed combo and trigger it
         let triggered_combo = self.keymap.with_combos_mut(|combos| {
             combos
                 .iter_mut()
-                .enumerate()
-                .filter_map(|(combo_index, combo)| combo.as_mut().map(|combo| (combo_index, combo)))
-                .filter_map(|(combo_index, c)| {
-                    if c.is_all_pressed() && !c.is_triggered() {
-                        // When a key is pressed (interrupting a combo wait), trigger any delayed combo.
-                        // When releasing a key, only trigger combos that contain the key_action.
-                        if event.pressed || c.config.contains(key_action) {
-                            // All keys are pressed but the combo is not triggered, trigger it
-                            return Some((c.size(), combo_index, c));
-                        }
-                    }
-                    None
-                }) // Find all delayed combos
-                .max_by_key(|x| x.0) // Find only the longest one
-                .map(|(_, combo_index, c)| (combo_index, c.trigger(), c.config.actions.clone()))
+                .flatten()
+                .filter(|c| {
+                    // When a key is pressed (interrupting a combo wait), trigger any delayed combo.
+                    // When releasing a key, only trigger combos that contain the key_action.
+                    c.is_all_pressed() && !c.is_triggered() && (event.pressed || c.config.contains(key_action))
+                })
+                .max_by_key(|c| c.size()) // Find only the longest one
+                .map(|c| (c.trigger(), c.config.actions.clone()))
         });
 
         // Clean the held buffer, process the combo output action and clear other combos
-        if let Some((combo_index, action, combo_actions)) = triggered_combo {
+        if let Some((action, combo_actions)) = triggered_combo {
             // Only remove keys that are part of the triggered combo from the held buffer
             self.held_buffer.keys.retain(|item| {
                 if item.state != KeyState::WaitingCombo {
@@ -1190,8 +1109,7 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
 
             let mut new_event = event;
             new_event.pressed = true;
-            self.process_key_action(&action, new_event, Some(combo_index), Instant::now())
-                .await;
+            self.process_key_action(&action, new_event, true, Instant::now()).await;
             debug!("[Combo] {:?} triggered", action);
             // Reset other combos shadowed by the one that just fired.
             self.reset_shadowed_combos(&combo_actions);
@@ -1217,17 +1135,14 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
 
     /// Check combo before process keys.
     ///
-    /// This function returns the key action and the stable index of its combo
-    /// when the action is a combo output.
+    /// The flag says whether the returned action is a combo output rather than
+    /// the key's own action, so callers do not re-resolve it from the keymap.
     async fn process_combo(
         &mut self,
         key_action: &KeyAction,
         event: KeyboardEvent,
         event_time: Instant,
-    ) -> (Option<KeyAction>, Option<usize>)
-    where
-        (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
-    {
+    ) -> (Option<KeyAction>, bool) {
         let current_layer = self.keymap.get_activated_layer();
 
         // First, when releasing a key, check whether there's untriggered combo, if so, triggerer it first
@@ -1253,13 +1168,9 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
             });
             if reasserted {
                 debug!("[Combo] re-press of triggered-combo key swallowed: {:?}", key_action);
-                return (None, None);
+                return (None, false);
             }
         }
-
-        // Claim press-triggered Sticky effects only after combo classification.
-        // A swallowed re-press has no eventual action dispatch to finish a claim.
-        self.sticky_key_state.claim_buffered_press(event);
 
         // Combo idle cooldown: skip combo recording if within idle window
         // Equivalent to ZMK's require-prior-idle-ms. Key still dispatches normally.
@@ -1303,28 +1214,24 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
 
             // Only one combo is updated, and triggered
             let triggered = self.keymap.with_combos_mut(|combos| {
-                combos
-                    .iter_mut()
-                    .enumerate()
-                    .filter_map(|(combo_index, combo)| combo.as_mut().map(|combo| (combo_index, combo)))
-                    .find_map(|(combo_index, c)| {
-                        if c.is_all_pressed() && !c.is_triggered() && c.size() == max_size {
-                            Some((combo_index, c.trigger(), c.config.actions.clone()))
-                        } else {
-                            None
-                        }
-                    })
+                combos.iter_mut().flatten().find_map(|c| {
+                    if c.is_all_pressed() && !c.is_triggered() && c.size() == max_size {
+                        Some((c.trigger(), c.config.actions.clone()))
+                    } else {
+                        None
+                    }
+                })
             });
 
-            if let Some((combo_index, next_action, triggered_actions)) = triggered {
+            if let Some((next_action, triggered_actions)) = triggered {
                 debug!("[Combo] {:?} triggered", next_action);
                 self.held_buffer
                     .keys
                     .retain(|item| item.state != KeyState::WaitingCombo || !triggered_actions.contains(&item.action));
                 self.reset_shadowed_combos(&triggered_actions);
-                return (Some(next_action), Some(combo_index));
+                return (Some(next_action), true);
             }
-            (None, None)
+            (None, false)
         } else {
             // No combo is updated, dispatch combos
             if !event.pressed {
@@ -1334,15 +1241,11 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
                 // (e.g. `M+,` and `,+.` both sharing Comma), so collect every combo
                 // output that unwinds — not just the first — otherwise the others
                 // stay stuck on the host.
-                let mut combo_outputs: Vec<(usize, KeyAction), COMBO_MAX_NUM> = Vec::new();
+                let mut combo_outputs: Vec<KeyAction, COMBO_MAX_NUM> = Vec::new();
                 let mut releasing_triggered_combo = false;
 
                 self.keymap.with_combos_mut(|combos| {
-                    for (combo_index, combo) in combos
-                        .iter_mut()
-                        .enumerate()
-                        .filter_map(|(combo_index, combo)| combo.as_mut().map(|combo| (combo_index, combo)))
-                    {
+                    for combo in combos.iter_mut().flatten() {
                         if combo.config.contains(key_action) {
                             // Releasing a combo key in triggered combo
                             releasing_triggered_combo |= combo.is_triggered();
@@ -1351,7 +1254,7 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
                             // Release the combo key, check whether the combo is fully released
                             if combo.update_released(key_action) {
                                 debug!("[Combo] {:?} is released", combo.config.output);
-                                let _ = combo_outputs.push((combo_index, combo.config.output));
+                                let _ = combo_outputs.push(combo.config.output);
                             }
                         }
                     }
@@ -1363,25 +1266,21 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
                 // - Return no action on a partial release too (combo output still
                 //   held), which consumes the release event without sending anything.
                 if releasing_triggered_combo {
-                    for (combo_index, output) in &combo_outputs {
-                        self.process_key_action(output, event, Some(*combo_index), event_time)
-                            .await;
+                    for output in &combo_outputs {
+                        self.process_key_action(output, event, true, event_time).await;
                     }
-                    return (None, None);
+                    return (None, false);
                 }
             }
 
             // When no key is updated(the combo is interruptted), or a key is released,
             self.dispatch_combos(key_action, event).await;
-            (Some(*key_action), None)
+            (Some(*key_action), false)
         }
     }
 
     // Dispatch combo keys buffered in the held buffer when the combo isn't being triggered.
-    async fn dispatch_combos(&mut self, key_action: &KeyAction, event: KeyboardEvent)
-    where
-        (): StickyKeyDispatch<STICKY_MODIFIER, STICKY_LAYER, STICKY_TAP_KEY>,
-    {
+    async fn dispatch_combos(&mut self, key_action: &KeyAction, event: KeyboardEvent) {
         self.trigger_delayed_combo(key_action, event).await;
 
         // Dispatch every waiting key, earliest press first. Dispatching one key can
@@ -1398,7 +1297,7 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
         {
             let key = self.held_buffer.keys.remove(i);
             debug!("[Combo] Dispatching combo: {:?}", key);
-            self.process_key_action(&key.action, key.event, None, key.press_time)
+            self.process_key_action(&key.action, key.event, key.from_combo, key.press_time)
                 .await;
         }
 
@@ -1412,11 +1311,18 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
         });
     }
 
+    /// Dispatch `action`, giving Sticky Key latches a turn on each side of it.
     async fn process_key_action_normal(&mut self, action: Action, event: KeyboardEvent) {
         publish_event_async(ActionEvent::new(action, event)).await;
+        let released = self.sticky_before(action, event).await;
+        let layers = self.keymap.layer_mask();
+        self.dispatch_action(action, event).await;
+        self.sticky_after(event, layers, released).await;
+    }
 
-        let release_sticky_after_action = self.prepare_sticky_key_for_action(action, event).await;
-
+    /// Apply one action to the keyboard state. Sticky Key latches call this
+    /// directly to press and release the action they hold.
+    pub(crate) async fn dispatch_action(&mut self, action: Action, event: KeyboardEvent) {
         match action {
             Action::No => {}
             Action::Key(key) => match key {
@@ -1424,38 +1330,24 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
                 // Consumer/system keys with no HID alias are dispatched directly here.
                 KeyCode::Consumer(consumer) => {
                     self.process_action_consumer_control(consumer, event).await;
-                    if self.finish_sticky_key_for_key(event, false) {
-                        self.send_keyboard_report_with_resolved_modifiers(false).await;
-                    }
                 }
                 KeyCode::SystemControl(system_control) => {
                     self.process_action_system_control(system_control, event).await;
-                    if self.finish_sticky_key_for_key(event, false) {
-                        self.send_keyboard_report_with_resolved_modifiers(false).await;
-                    }
                 }
                 _ => warn!("KeyCode variant not supported: {:?}", key),
             },
-            Action::LayerOn(layer_num) => self.process_action_layer_switch(layer_num, event).await,
+            Action::LayerOn(layer_num) => self.process_action_layer_switch(layer_num, event),
             Action::LayerOff(layer_num) => {
                 // Turn off a layer temporarily when the key is pressed
                 // Reactivate the layer after the key is released
-                if event.pressed && self.keymap.deactivate_layer(layer_num) {
-                    self.release_sticky_key_on_layer_event(crate::config::StickyKeyReleaseMode::LAYER_EXIT)
-                        .await;
+                if event.pressed {
+                    self.keymap.deactivate_layer(layer_num);
                 }
             }
             Action::LayerToggle(layer_num) => {
                 // Toggle a layer when the key is release
-                if !event.pressed
-                    && let Some(active) = self.keymap.toggle_layer(layer_num)
-                {
-                    self.release_sticky_key_on_layer_event(if active {
-                        crate::config::StickyKeyReleaseMode::LAYER_ENTER
-                    } else {
-                        crate::config::StickyKeyReleaseMode::LAYER_EXIT
-                    })
-                    .await;
+                if !event.pressed {
+                    self.keymap.toggle_layer(layer_num);
                 }
             }
             Action::LayerToggleOnly(layer_num) => {
@@ -1465,36 +1357,23 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
                     let default_layer = self.keymap.get_default_layer();
                     let (_, _, num_layer) = self.keymap.get_keymap_config();
                     for i in 0..num_layer as u8 {
-                        if i != default_layer && self.keymap.deactivate_layer(i) {
-                            self.release_sticky_key_on_layer_event(crate::config::StickyKeyReleaseMode::LAYER_EXIT)
-                                .await;
+                        if i != default_layer {
+                            self.keymap.deactivate_layer(i);
                         }
                     }
                     // Activate the target layer
-                    if self.keymap.activate_layer(layer_num) {
-                        self.release_sticky_key_on_layer_event(crate::config::StickyKeyReleaseMode::LAYER_ENTER)
-                            .await;
-                    }
+                    self.keymap.activate_layer(layer_num);
                 }
             }
             Action::DefaultLayer(layer_num) => {
                 // Set the default layer
-                if event.pressed && self.keymap.set_default_layer(layer_num) {
-                    self.release_sticky_key_on_layer_event(crate::config::StickyKeyReleaseMode::LAYER_EXIT)
-                        .await;
-                    self.release_sticky_key_on_layer_event(crate::config::StickyKeyReleaseMode::LAYER_ENTER)
-                        .await;
+                if event.pressed {
+                    self.keymap.set_default_layer(layer_num);
                 }
             }
             Action::PersistentDefaultLayer(layer_num) => {
                 // Set the default layer and persist it so it survives a reboot
                 let changed = event.pressed && self.keymap.set_default_layer(layer_num);
-                if changed {
-                    self.release_sticky_key_on_layer_event(crate::config::StickyKeyReleaseMode::LAYER_EXIT)
-                        .await;
-                    self.release_sticky_key_on_layer_event(crate::config::StickyKeyReleaseMode::LAYER_ENTER)
-                        .await;
-                }
                 // Persist only if the layer was valid (set_default_layer rejects out-of-range)
                 #[cfg(feature = "storage")]
                 if changed && self.keymap.get_default_layer() == layer_num {
@@ -1544,7 +1423,7 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
                     // they will be "released" the same time as the key (in same hid report)
                     self.held_modifiers &= !(modifiers);
                 }
-                self.process_action_layer_switch(layer_num, event).await;
+                self.process_action_layer_switch(layer_num, event);
                 self.send_keyboard_report_with_resolved_modifiers(event.pressed).await
             }
             Action::Light(_light_action) => warn!("Light control is not supported"),
@@ -1553,12 +1432,12 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
             Action::User(id) => self.process_user(id, event).await,
             Action::TriLayerLower => {
                 // Tri-layer lower, turn layer 1 on and update layer state
-                self.process_action_layer_switch(1, event).await;
+                self.process_action_layer_switch(1, event);
                 self.keymap.update_fn_layer_state();
             }
             Action::TriLayerUpper => {
                 // Tri-layer upper, turn layer 2 on and update layer state
-                self.process_action_layer_switch(2, event).await;
+                self.process_action_layer_switch(2, event);
                 self.keymap.update_fn_layer_state();
             }
             #[cfg(feature = "steno")]
@@ -1569,9 +1448,6 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
             }
             _ => warn!("Action variant not supported: {:?}", action),
         }
-
-        self.finish_sticky_key_after_action(release_sticky_after_action).await;
-        self.sticky_key_state.finish_buffered_claim();
     }
 
     /// Tap action, send a key when the key is pressed, then release the key.
@@ -1597,41 +1473,19 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
             .for_each(|(i, k)| info!("\n✅Held buffer {}: {:?}, state: {:?}", i, k.event, k.state));
     }
 
-    /// Calculates the combined effect of "explicit modifiers":
-    /// - registered modifiers
-    /// - Sticky Key modifiers
-    pub fn resolve_explicit_modifiers(&self, pressed: bool) -> ModifierCombination {
-        // If a Sticky Key modifier is active, add it to the keypress HID report.
-        let mut result = self.held_modifiers;
-        result |= self.sticky_key_state.modifiers(pressed);
-
-        result
-    }
-
     /// Calculates the combined effect of all modifiers:
     /// - text macro related modifier suppressions + capitalization
-    /// - registered (held) modifiers keys
-    /// - Sticky Key modifiers
+    /// - registered (held) modifier keys, including those a Sticky Key holds
     /// - effect of Action::KeyWithModifiers (while they are pressed)
     /// - possible fork related modifier suppressions
     pub fn resolve_modifiers(&mut self, pressed: bool) -> ModifierCombination {
-        self.resolve_modifier_breakdown(pressed).modifiers
-    }
-
-    fn resolve_modifier_breakdown(&self, pressed: bool) -> ModifierResolution {
-        let sticky = self.sticky_key_state.modifiers(pressed);
         // Text typing macro should not be affected by any modifiers,
         // only its own capitalization
         if self.macro_texting {
-            let modifiers = if self.macro_caps {
+            return if self.macro_caps {
                 ModifierCombination::new().with_left_shift(true)
             } else {
                 ModifierCombination::new()
-            };
-            return ModifierResolution {
-                modifiers,
-                non_sticky: modifiers,
-                sticky_contributed: ModifierCombination::new(),
             };
         }
 
@@ -1646,23 +1500,18 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
         // by "explicit" modifier key presses - fork_keep_mask collects these:
         fork_suppress &= !self.fork_keep_mask;
 
-        let sticky_contributed = sticky & !fork_suppress;
-        let mut non_sticky = self.held_modifiers & !fork_suppress;
+        let mut modifiers = self.held_modifiers & !fork_suppress;
 
         // Apply the modifiers from Action::KeyWithModifiers
         // the suppression effect of forks should not apply on these
-        non_sticky |= self.with_modifiers;
+        modifiers |= self.with_modifiers;
 
         // Apply Caps Word shift
         if self.caps_word.is_active() && pressed && self.caps_word.is_shift_current() {
-            non_sticky |= ModifierCombination::new().with_left_shift(true);
+            modifiers |= ModifierCombination::new().with_left_shift(true);
         }
 
-        ModifierResolution {
-            modifiers: non_sticky | sticky_contributed,
-            non_sticky,
-            sticky_contributed,
-        }
+        modifiers
     }
 
     // Process a basic keypress/release and apply any active Sticky Key modifiers.
@@ -1789,39 +1638,25 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
             self.caps_word.check(key);
         }
 
-        // Dispatch to the right HID report; only the plain-keyboard branch is "basic".
-        let is_basic_keyboard_key = if let Some(consumer) = key.process_as_consumer() {
+        // Dispatch to the right HID report; a `HidKeyCode` may alias to another page.
+        if let Some(consumer) = key.process_as_consumer() {
             self.process_action_consumer_control(consumer, event).await;
-            false
         } else if let Some(system_control) = key.process_as_system_control() {
             self.process_action_system_control(system_control, event).await;
-            false
         } else if key.is_mouse_key() {
             self.process_action_mouse(key, event).await;
-            false
         } else {
             self.process_hid_keycode(key, event).await;
-            true
-        };
-
-        if self.finish_sticky_key_for_key(event, is_basic_keyboard_key) {
-            self.send_keyboard_report_with_resolved_modifiers(true).await;
         }
     }
 
     /// Process layer switch action.
-    async fn process_action_layer_switch(&mut self, layer_num: u8, event: KeyboardEvent) {
+    fn process_action_layer_switch(&mut self, layer_num: u8, event: KeyboardEvent) {
         // Change layer state only when the key's state is changed
         if event.pressed {
-            if self.keymap.activate_layer(layer_num) {
-                self.release_sticky_key_on_layer_event(crate::config::StickyKeyReleaseMode::LAYER_ENTER)
-                    .await;
-            }
+            self.keymap.activate_layer(layer_num);
         } else {
-            if self.keymap.deactivate_layer(layer_num) {
-                self.release_sticky_key_on_layer_event(crate::config::StickyKeyReleaseMode::LAYER_EXIT)
-                    .await;
-            }
+            self.keymap.deactivate_layer(layer_num);
         }
     }
 
@@ -2075,11 +1910,7 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
     /// that holds them. This keeps the shared usage down until the last holder
     /// releases it.
     pub(crate) fn build_keyboard_report(&mut self, pressed: bool) -> KeyboardReport {
-        let resolution = self.resolve_modifier_breakdown(pressed);
-        self.build_keyboard_report_with_modifiers(resolution.modifiers)
-    }
-
-    fn build_keyboard_report_with_modifiers(&self, modifiers: ModifierCombination) -> KeyboardReport {
+        let modifiers = self.resolve_modifiers(pressed);
         info!(
             "Sending keyboard report, modifiers: {:?}, keycodes: {:?}",
             modifiers, &self.held_keycodes,
@@ -2103,36 +1934,17 @@ impl<'a, const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP
 
     /// Send the keyboard report with resolved modifiers to the host.
     pub(crate) async fn send_keyboard_report_with_resolved_modifiers(&mut self, pressed: bool) {
-        let resolution = self.resolve_modifier_breakdown(pressed);
-        let report = self.build_keyboard_report_with_modifiers(resolution.modifiers);
-        self.send_report(Report::KeyboardReport(report)).await;
-        self.last_modifier_report = LastKeyboardModifierReport {
-            modifiers: resolution.modifiers,
-            sticky_contributed: resolution.sticky_contributed,
-            pressed_intent: pressed,
-        };
-
-        // Yield once after sending the report to channel
-        yield_now().await;
-    }
-
-    pub(crate) async fn send_sticky_modifier_live_release(
-        &mut self,
-        old_effective: ModifierCombination,
-        final_effective: ModifierCombination,
-        current_non_sticky: ModifierCombination,
-    ) {
-        let removed_effective = old_effective & !final_effective;
-        let removed_from_host = removed_effective & self.last_modifier_report.sticky_contributed & !current_non_sticky;
-        if removed_from_host.into_bits() == 0 {
+        // A Sticky latch pressing its action inside a foreign action's dispatch
+        // must not emit its own frame; that action's report carries the effect.
+        if self.coalesce_report {
             return;
         }
-
-        let modifiers = self.last_modifier_report.modifiers & !removed_from_host;
-        let report = self.build_keyboard_report_with_modifiers(modifiers);
+        let report = self.build_keyboard_report(pressed);
+        self.last_report = (report.modifier, self.held_keycodes);
+        self.sticky.mark_reported();
         self.send_report(Report::KeyboardReport(report)).await;
-        self.last_modifier_report.modifiers = modifiers;
-        self.last_modifier_report.sticky_contributed &= !removed_effective;
+
+        // Yield once after sending the report to channel
         yield_now().await;
     }
 
@@ -2390,63 +2202,37 @@ mod test {
     }
 
     #[test]
-    fn buffered_combo_sticky_layer_keeps_action_and_release_identity() {
+    fn buffered_combo_sticky_keeps_its_action_and_releases_at_another_position() {
         let main = async {
-            let mut config = BehaviorConfig::default();
-            config.sticky_key.default_profile.release_after_hold =
-                crate::config::StickyKeyHoldDuration::from_duration(Duration::from_millis(0));
-            let mut keyboard = create_test_keyboard_with_config(config);
+            let mut keyboard = create_test_keyboard();
             let action = osl!(1);
             let press = KeyboardEvent::key(0, 0, true);
 
-            keyboard.held_buffer.push(
-                HeldKey::new(
+            // A combo output does not live at `press.pos`, so the buffered entry
+            // must dispatch the action it carries, not the keymap's.
+            keyboard.held_buffer.push(HeldKey {
+                from_combo: true,
+                ..HeldKey::new(
                     press,
                     action,
                     KeyState::Pressed(MorsePattern::default()),
                     Instant::now(),
                     Instant::now(),
                 )
-                .with_sticky_combo_index(3),
-            );
+            });
             keyboard.fire_held_non_morse_keys().await;
             assert!(keyboard.keymap.is_layer_active(1));
 
+            // The last combo key up carries a different position than the press,
+            // so the latch is matched by action and arms instead of leaking.
             keyboard
-                .process_key_action(&action, KeyboardEvent::key(0, 1, false), Some(3), Instant::now())
+                .process_key_action(&action, KeyboardEvent::key(0, 1, false), true, Instant::now())
                 .await;
+            assert!(keyboard.keymap.is_layer_active(1));
+
+            embassy_time::MockDriver::get().advance(Duration::from_millis(1100));
+            keyboard.sticky_expire().await;
             assert!(!keyboard.keymap.is_layer_active(1));
-        };
-        block_on(main);
-    }
-
-    #[test]
-    fn buffered_combo_sticky_tap_key_keeps_action_and_release_identity() {
-        let main = async {
-            let mut config = BehaviorConfig::default();
-            config.sticky_key.default_profile.release_after_hold =
-                crate::config::StickyKeyHoldDuration::from_duration(Duration::from_millis(0));
-            let mut keyboard = create_test_keyboard_with_config(config);
-            let action = KeyAction::Sticky(Action::KeyWithModifier(HidKeyCode::Tab, ModifierCombination::LALT), 0);
-            let press = KeyboardEvent::key(0, 0, true);
-
-            keyboard.held_buffer.push(
-                HeldKey::new(
-                    press,
-                    action,
-                    KeyState::Pressed(MorsePattern::default()),
-                    Instant::now(),
-                    Instant::now(),
-                )
-                .with_sticky_combo_index(4),
-            );
-            keyboard.fire_held_non_morse_keys().await;
-            assert!(keyboard.held_keycodes.contains(&HidKeyCode::Tab));
-
-            keyboard
-                .process_key_action(&action, KeyboardEvent::key(0, 1, false), Some(4), Instant::now())
-                .await;
-            assert!(!keyboard.held_keycodes.contains(&HidKeyCode::Tab));
         };
         block_on(main);
     }
@@ -2649,9 +2435,7 @@ mod test {
             let mut keyboard = create_test_keyboard();
 
             // Activate layer 1
-            keyboard
-                .process_action_layer_switch(1, KeyboardEvent::key(0, 0, true))
-                .await;
+            keyboard.process_action_layer_switch(1, KeyboardEvent::key(0, 0, true));
 
             // Press Transparent key (Q on lower layer)
             keyboard.process_inner(KeyboardEvent::key(1, 1, true)).await;

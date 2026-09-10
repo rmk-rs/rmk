@@ -7,6 +7,7 @@ pub struct StickyKeyReleaseMode {
     pub layer_enter: bool,
     pub layer_exit: bool,
     pub double_tap: bool,
+    pub before_other_key: bool,
 }
 
 impl StickyKeyReleaseMode {
@@ -30,6 +31,10 @@ impl StickyKeyReleaseMode {
         double_tap: true,
         ..Self::default_const()
     };
+    pub const BEFORE_OTHER_KEY: Self = Self {
+        before_other_key: true,
+        ..Self::default_const()
+    };
 
     const fn default_const() -> Self {
         Self {
@@ -38,6 +43,7 @@ impl StickyKeyReleaseMode {
             layer_enter: false,
             layer_exit: false,
             double_tap: false,
+            before_other_key: false,
         }
     }
 
@@ -47,6 +53,7 @@ impl StickyKeyReleaseMode {
             | ((self.layer_enter as u8) << 2)
             | ((self.layer_exit as u8) << 3)
             | ((self.double_tap as u8) << 4)
+            | ((self.before_other_key as u8) << 5)
     }
 
     pub fn parse(value: &str) -> Result<Self, String> {
@@ -58,9 +65,10 @@ impl StickyKeyReleaseMode {
                 "layer_enter" => mode.layer_enter = true,
                 "layer_exit" => mode.layer_exit = true,
                 "double_tap" => mode.double_tap = true,
+                "before_other_key" => mode.before_other_key = true,
                 _ => {
                     return Err(format!(
-                        "unknown Sticky Key release_mode `{part}`; expected other_key_press, other_key_release, layer_enter, layer_exit, or double_tap"
+                        "unknown Sticky Key release_mode `{part}`; expected other_key_press, other_key_release, before_other_key, layer_enter, layer_exit, or double_tap"
                     ));
                 }
             }
@@ -78,7 +86,31 @@ pub struct StickyKeyConfig {
     pub release_after_hold_ms: Option<u64>,
     pub max_repeat: Option<u16>,
     pub release_mode: Option<StickyKeyReleaseMode>,
+    pub keys: Option<StickyKeyList>,
     pub profiles: HashMap<String, StickyKeyProfile>,
+}
+
+/// The keys a Sticky profile treats specially, and which side of the rule they
+/// are on. `keep_keys` and `release_keys` are two spellings of the same list.
+#[derive(Clone, Debug)]
+pub struct StickyKeyList {
+    pub keys: Vec<String>,
+    /// `true` when the listed keys keep the latch and everything else ends it.
+    pub keep: bool,
+}
+
+impl StickyKeyList {
+    fn from_toml(keep: Option<Vec<String>>, release: Option<Vec<String>>) -> Result<Option<Self>, String> {
+        match (keep, release) {
+            (Some(_), Some(_)) => Err(
+                "Sticky Key profile sets both keep_keys and release_keys; they are two spellings of one list"
+                    .to_string(),
+            ),
+            (Some(keys), None) => Ok(Some(Self { keys, keep: true })),
+            (None, Some(keys)) => Ok(Some(Self { keys, keep: false })),
+            (None, None) => Ok(None),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -88,6 +120,7 @@ pub struct StickyKeyProfile {
     pub release_after_hold_ms: Option<u64>,
     pub max_repeat: Option<u16>,
     pub release_mode: Option<StickyKeyReleaseMode>,
+    pub keys: Option<StickyKeyList>,
 }
 
 /// Resolved behavioral configuration.
@@ -344,6 +377,7 @@ impl crate::KeyboardTomlConfig {
                             .as_deref()
                             .map(StickyKeyReleaseMode::parse)
                             .transpose()?,
+                        keys: StickyKeyList::from_toml(profile.keep_keys, profile.release_keys)?,
                     })
                 };
                 let profiles = sticky
@@ -361,6 +395,7 @@ impl crate::KeyboardTomlConfig {
                         .as_deref()
                         .map(StickyKeyReleaseMode::parse)
                         .transpose()?,
+                    keys: StickyKeyList::from_toml(sticky.keep_keys, sticky.release_keys)?,
                     profiles,
                 })
             })

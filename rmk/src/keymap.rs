@@ -3,6 +3,7 @@ use core::cell::RefCell;
 use embassy_time::Duration;
 use rmk_types::action::{EncoderAction, KeyAction};
 use rmk_types::fork::Fork;
+use rmk_types::keycode::KeyCode;
 use rmk_types::morse::{Morse, MorseProfile};
 #[cfg(all(feature = "storage", feature = "host"))]
 use {
@@ -23,13 +24,6 @@ use crate::matrix::MatrixState;
 
 pub(crate) const HOLD_BUFFER_SIZE: usize = 16;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StickyKeyShape {
-    PureMod,
-    TapKey,
-    Layer,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StickyKeyPolicy {
     pub timeout: Duration,
@@ -37,6 +31,8 @@ pub(crate) struct StickyKeyPolicy {
     pub release_after_hold: StickyKeyHoldDuration,
     pub max_repeat: u16,
     pub release_mode: StickyKeyReleaseMode,
+    pub keys: &'static [KeyCode],
+    pub keys_keep: bool,
 }
 
 /// All allocated data needed to build a [`KeyMap`].
@@ -628,7 +624,7 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow().behavior.sticky_key.default_profile.timeout
     }
 
-    pub(crate) fn sticky_key_profile(&self, index: u8, shape: StickyKeyShape) -> StickyKeyPolicy {
+    pub(crate) fn sticky_key_profile(&self, index: u8) -> StickyKeyPolicy {
         let inner = self.inner.borrow();
         let config = &inner.behavior.sticky_key;
         let uses_default = index as usize >= config.profiles.len();
@@ -637,24 +633,33 @@ impl<'a> KeyMap<'a> {
             .get(index as usize)
             .copied()
             .unwrap_or(config.default_profile);
-        let release_mode = profile.release_mode.unwrap_or_else(|| match shape {
-            StickyKeyShape::TapKey => StickyKeyReleaseMode::OTHER_KEY_PRESS,
-            StickyKeyShape::PureMod if uses_default && inner.behavior.one_shot_modifiers.quick_release => {
+        let release_mode = profile.release_mode.unwrap_or({
+            if uses_default && inner.behavior.one_shot_modifiers.quick_release {
                 StickyKeyReleaseMode::OTHER_KEY_PRESS
+            } else {
+                StickyKeyReleaseMode::OTHER_KEY_RELEASE
             }
-            StickyKeyShape::PureMod | StickyKeyShape::Layer => StickyKeyReleaseMode::OTHER_KEY_RELEASE,
         });
         StickyKeyPolicy {
             timeout: profile.timeout,
             activate_on_keypress: profile.activate_on_keypress,
-            release_after_hold: if shape == StickyKeyShape::TapKey {
-                StickyKeyHoldDuration::DISABLED
-            } else {
-                profile.release_after_hold
-            },
+            release_after_hold: profile.release_after_hold,
             max_repeat: profile.max_repeat,
             release_mode,
+            keys: profile.keys,
+            keys_keep: profile.keys_keep,
         }
+    }
+
+    /// A bit per active layer, for detecting a layer change across one dispatch.
+    pub(crate) fn layer_mask(&self) -> u32 {
+        self.inner
+            .borrow()
+            .layer_state
+            .iter()
+            .take(u32::BITS as usize)
+            .enumerate()
+            .fold(0, |mask, (index, active)| mask | (u32::from(*active) << index))
     }
 
     pub(crate) fn tap_interval(&self) -> u16 {
@@ -988,7 +993,7 @@ mod test {
         use embassy_time::Duration;
 
         use crate::config::{BehaviorConfig, PositionalConfig, StickyKeyProfile};
-        use crate::keymap::{KeyMap, KeymapData, StickyKeyShape};
+        use crate::keymap::{KeyMap, KeymapData};
 
         let mut data = KeymapData::<1, 1, 1>::new([[[k!(A)]]]);
         let mut behavior = BehaviorConfig::default();
@@ -1002,17 +1007,17 @@ mod test {
         let positional = PositionalConfig::<1, 1>::default();
         let keymap = KeyMap::build(&mut data, &mut behavior, &positional);
 
-        let policy = keymap.sticky_key_profile(u8::MAX, StickyKeyShape::PureMod);
+        let policy = keymap.sticky_key_profile(u8::MAX);
         assert_eq!(policy.timeout, Duration::from_secs(1));
         assert!(!policy.activate_on_keypress);
     }
 
     #[test]
-    fn keyup_hold_release_applies_to_modifiers_and_layers_only() {
+    fn keyup_hold_release_reaches_every_action() {
         use embassy_time::Duration;
 
         use crate::config::{BehaviorConfig, PositionalConfig, StickyKeyHoldDuration};
-        use crate::keymap::{KeyMap, KeymapData, StickyKeyShape};
+        use crate::keymap::{KeyMap, KeymapData};
 
         let mut data = KeymapData::<1, 1, 1>::new([[[k!(A)]]]);
         let mut behavior = BehaviorConfig::default();
@@ -1022,22 +1027,8 @@ mod test {
         let keymap = KeyMap::build(&mut data, &mut behavior, &positional);
 
         assert_eq!(
-            keymap
-                .sticky_key_profile(u8::MAX, StickyKeyShape::PureMod)
-                .release_after_hold,
+            keymap.sticky_key_profile(u8::MAX).release_after_hold,
             StickyKeyHoldDuration::from_duration(Duration::from_millis(300))
-        );
-        assert_eq!(
-            keymap
-                .sticky_key_profile(u8::MAX, StickyKeyShape::Layer)
-                .release_after_hold,
-            StickyKeyHoldDuration::from_duration(Duration::from_millis(300))
-        );
-        assert_eq!(
-            keymap
-                .sticky_key_profile(u8::MAX, StickyKeyShape::TapKey)
-                .release_after_hold,
-            StickyKeyHoldDuration::DISABLED
         );
     }
 
@@ -1046,11 +1037,21 @@ mod test {
         use core::mem::size_of;
 
         use embassy_time::Duration;
+        use rmk_types::keycode::KeyCode;
 
         use crate::config::{StickyKeyHoldDuration, StickyKeyReleaseMode};
         use crate::keymap::StickyKeyPolicy;
 
-        type OptionBasedPolicy = (Duration, bool, Option<Duration>, u16, StickyKeyReleaseMode);
+        // The same policy with a niche-less `Option<Duration>` for the hold threshold.
+        type OptionBasedPolicy = (
+            Duration,
+            bool,
+            Option<Duration>,
+            u16,
+            StickyKeyReleaseMode,
+            &'static [KeyCode],
+            bool,
+        );
 
         assert_eq!(size_of::<StickyKeyHoldDuration>(), size_of::<Duration>());
         assert!(size_of::<StickyKeyPolicy>() < size_of::<OptionBasedPolicy>());

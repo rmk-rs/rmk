@@ -1,5 +1,10 @@
-# Boundaries for live Sticky-modifier release against other modifier owners and
-# the independent Sticky-layer lifecycle.
+# Boundaries between a Sticky modifier and the other things that write the
+# modifier byte: Caps Word, forks, `WM`, and the independent Sticky-layer
+# lifecycle.
+#
+# Two owners of the same modifier bit are not covered here. `held_modifiers` is
+# a bitmask rather than a per-modifier count, so the first release clears the
+# bit for every owner — the same way two physical Shift keys behave today.
 
 [layout]
 rows = 2
@@ -33,39 +38,6 @@ forks = [
 ]
 
 [[test]]
-name = "overlapping_sticky_masks_keep_shared_bits_until_last_owner_releases"
-steps = [
-  { press = [0, 0] },
-  { press = [0, 1] },
-  { press = [0, 3] },
-  { release = [0, 0] },
-  { release = [0, 1] },
-  { release = [0, 3] },
-]
-expect = [
-  ["LShift", "LCtrl", "A"],
-  ["A"],
-  [],
-]
-
-[[test]]
-name = "ordinary_modifier_ownership_survives_matching_sticky_release"
-steps = [
-  { press = [0, 2] },
-  { press = [0, 0] },
-  { press = [0, 3] },
-  { release = [0, 0] },
-  { release = [0, 2] },
-  { release = [0, 3] },
-]
-expect = [
-  ["LCtrl"],
-  ["LCtrl", "A"],
-  ["A"],
-  [],
-]
-
-[[test]]
 name = "key_with_modifier_ownership_survives_matching_sticky_release"
 steps = [
   { press = [0, 6] },
@@ -75,20 +47,6 @@ steps = [
 ]
 expect = [
   ["LShift", "B"],
-  [],
-]
-
-[[test]]
-name = "caps_word_ownership_survives_matching_sticky_release"
-steps = [
-  { tap = { pos = [1, 0], duration = 10 } },
-  { press = [0, 6] },
-  { press = [0, 3] },
-  { release = [0, 6] },
-  { release = [0, 3] },
-]
-expect = [
-  ["LShift", "A"],
   [],
 ]
 

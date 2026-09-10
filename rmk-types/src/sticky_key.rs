@@ -12,7 +12,8 @@ pub struct StickyKeyReleaseMode {
     pub layer_enter: bool,
     pub layer_exit: bool,
     pub double_tap: bool,
-    #[bits(3)]
+    pub before_other_key: bool,
+    #[bits(2)]
     __: u8,
 }
 
@@ -22,6 +23,7 @@ impl StickyKeyReleaseMode {
     pub const LAYER_ENTER: Self = Self::new().with_layer_enter(true);
     pub const LAYER_EXIT: Self = Self::new().with_layer_exit(true);
     pub const DOUBLE_TAP: Self = Self::new().with_double_tap(true);
+    pub const BEFORE_OTHER_KEY: Self = Self::new().with_before_other_key(true);
 
     pub const fn intersects(self, other: Self) -> bool {
         self.into_bits() & other.into_bits() != 0

@@ -350,11 +350,11 @@ macro_rules! osm {
     };
 }
 
-/// Create a Sticky Key from a supported action.
+/// Create a Sticky Key from any action.
 ///
-/// Sticky Keys support `Action::Modifier`, `Action::LayerOn`, and
-/// `Action::KeyWithModifier`. Prefer [`crate::sk_mod!`] and [`crate::sk_layer!`] where they
-/// fit. Unsupported actions are ignored with a warning.
+/// The action is pressed when the key goes down and stays held after the key
+/// comes up, until a release trigger ends it. Prefer [`crate::sk_mod!`] and
+/// [`crate::sk_layer!`] where they fit.
 ///
 /// The one-argument form selects the default profile with `u8::MAX`. The
 /// two-argument form takes a zero-based index into

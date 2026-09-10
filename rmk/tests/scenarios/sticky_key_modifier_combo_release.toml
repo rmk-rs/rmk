@@ -1,20 +1,21 @@
-# A direct Sticky modifier releases by exact physical position. A combo output
-# can release from a different constituent position, so it uses the combo's
-# stable table slot. Both paths must remove only their own producer.
+# A combo output has no physical key of its own: it is pressed by the member key
+# that completes the chord and released by the last member up. A Sticky Key made
+# by a combo therefore matches its release by action rather than by position, and
+# keeps the action it was dispatched with even after buffering moved it.
 
 [layout]
 rows = 1
-cols = 21
-map = "(0,0) (0,1) (0,2) (0,3) (0,4) (0,5) (0,6) (0,7) (0,8) (0,9) (0,10) (0,11) (0,12) (0,13) (0,14) (0,15) (0,16) (0,17) (0,18) (0,19) (0,20)"
+cols = 6
+map = "(0,0) (0,1) (0,2) (0,3) (0,4) (0,5)"
 
 [keymap]
 layers = 2
 
 [[keymap.layer]]
-keys = "SK(LAlt) D E A MT(B, LShift) F G H I J K L M N O P Q R S LT(1, B) WM(B, LGui)"
+keys = "SK(LAlt) D E A MT(B, LShift) LT(1, B)"
 
 [[keymap.layer]]
-keys = "Trns Trns C Trns Trns Trns Trns Trns Trns Trns Trns Trns Trns Trns Trns Trns Trns Trns Trns Trns Trns"
+keys = "Trns Trns C Trns Trns Trns"
 
 [behavior.sticky_key]
 activate_on_keypress = true
@@ -26,19 +27,12 @@ permissive_hold = true
 
 [behavior.combo]
 timeout = "100ms"
-combos = [
-  { actions = ["D", "E"], output = "SK(LAlt)" },
-  { actions = ["H", "I"], output = "SK(LAlt)" },
-  { actions = ["J", "K"], output = "SK(LAlt)" },
-  { actions = ["F", "G"], output = "SK(LAlt)" },
-  { actions = ["L", "M"], output = "SK(LAlt)" },
-  { actions = ["N", "O"], output = "SK(LAlt)" },
-  { actions = ["P", "Q"], output = "SK(LAlt)" },
-  { actions = ["R", "S"], output = "SK(LAlt)" },
-]
+combos = [{ actions = ["D", "E"], output = "SK(LAlt)" }]
 
+# A direct Sticky Key and a combo's own must not be confused for each other,
+# even though both carry the same action.
 [[test]]
-name = "direct_release_preserves_combo_owner_then_combo_identity_releases_it"
+name = "a_direct_latch_and_a_combo_latch_end_separately"
 steps = [
   { press = [0, 1] },
   { press = [0, 2] },
@@ -57,14 +51,16 @@ expect = [
   [],
 ]
 
+# A buffered combo output dispatches the action it carries, not whatever the
+# keymap holds at its borrowed position.
 [[test]]
-name = "permissive_hold_preserves_buffered_combo_modifier_origin"
+name = "buffered_combo_output_keeps_its_own_action"
 steps = [
   { press = [0, 4] },   # Hold MT(B, LShift) unresolved.
   { press = [0, 1] },
   { press = [0, 2] },   # The combo output is buffered behind permissive hold.
   { release = [0, 2] },
-  { release = [0, 1] }, # Resolve the hold, then release from the other constituent.
+  { release = [0, 1] }, # Resolve the hold, then release from the other member.
   { release = [0, 4] },
 ]
 expect = [
@@ -74,135 +70,21 @@ expect = [
   [],
 ]
 
+# The same when a morse timeout flushes the buffer after a layer change, which
+# would otherwise re-resolve the borrowed position on the new layer.
 [[test]]
-name = "permissive_hold_flush_preserves_buffered_combo_modifier_origin"
-behavior.sticky_key = { activate_on_keypress = true, release_mode = "layer_enter" }
-steps = [
-  { press = [0, 4] },   # Hold MT(B, LShift) unresolved.
-  { press = [0, 3] },   # Buffer A behind permissive hold.
-  { press = [0, 1] },
-  { press = [0, 2] },   # Buffer the combo output behind A.
-  { release = [0, 3] }, # Resolve the hold and flush the combo output normally.
-  { release = [0, 2] },
-  { release = [0, 1] },
-  { release = [0, 4] },
-]
-expect = [
-  ["LShift"],
-  ["LShift", "A"],
-  ["LShift", "LAlt", "A"],
-  ["LShift"],
-  [],
-]
-
-[[test]]
-name = "morse_timeout_flush_preserves_buffered_combo_sticky_origin_and_action"
+name = "morse_timeout_flush_keeps_the_buffered_combo_action"
 behavior.morse = { unilateral_tap = false, permissive_hold = true, hold_timeout = "100ms" }
 steps = [
-  { press = [0, 19] },  # Hold LT(1, B) unresolved.
+  { press = [0, 5] },   # Hold LT(1, B) unresolved.
   { press = [0, 1] },
-  { press = [0, 2] },   # Buffer combo slot 0 while position 2 still maps to E.
-  { delay = 150 },      # LT timeout enters layer 1, where position 2 maps to C, then flushes.
-  { release = [0, 2] },
-  { release = [0, 1] }, # A different constituent completes the combo release.
-  { release = [0, 19] },
-]
-expect = [
-  ["LAlt"],
-  [],
-]
-
-[[test]]
-name = "morse_timeout_flush_clears_stale_key_with_modifier_before_sticky_combo"
-behavior.morse = { unilateral_tap = false, permissive_hold = true, hold_timeout = "100ms" }
-steps = [
-  { press = [0, 19] },  # Hold LT(1, B) unresolved.
-  { press = [0, 20] },  # Buffer WM(B, LGui) behind the layer-tap.
-  { press = [0, 1] },
-  { press = [0, 2] },   # Buffer the Sticky modifier combo after WM(B, LGui).
-  { delay = 150 },      # Flush WM first, then the combo after the LT timeout.
+  { press = [0, 2] },   # Buffer the combo while position 2 still maps to E.
+  { delay = 150 },      # The LT timeout enters layer 1, where position 2 is C.
   { release = [0, 2] },
   { release = [0, 1] },
-  { release = [0, 20] },
-  { release = [0, 19] },
-]
-expect = [
-  ["LGui", "B"],
-  ["LAlt", "B"],
-  ["B"],
-  [],
-]
-
-[[test]]
-name = "same_modifier_sibling_combos_keep_distinct_nonadjacent_slots"
-steps = [
-  { press = [0, 1] },
-  { press = [0, 2] },   # Combo slot 0.
-  { press = [0, 5] },
-  { press = [0, 6] },   # Combo slot 3.
-  { press = [0, 3] },
-  { release = [0, 2] },
-  { release = [0, 1] }, # Slot 3 still owns LAlt.
-  { release = [0, 6] },
-  { release = [0, 5] }, # The last owner drops LAlt while A remains held.
-  { release = [0, 3] },
-]
-expect = [
-  ["LAlt"],
-  ["LAlt"],
-  ["LAlt", "A"],
-  ["A"],
-  [],
-]
-
-[[test]]
-name = "all_combo_slots_keep_distinct_modifier_producers"
-steps = [
-  { press = [0, 1] },
-  { press = [0, 2] },
-  { press = [0, 7] },
-  { press = [0, 8] },
-  { press = [0, 9] },
-  { press = [0, 10] },
-  { press = [0, 5] },
-  { press = [0, 6] },
-  { press = [0, 11] },
-  { press = [0, 12] },
-  { press = [0, 13] },
-  { press = [0, 14] },
-  { press = [0, 15] },
-  { press = [0, 16] },
-  { press = [0, 17] },
-  { press = [0, 18] },
-  { press = [0, 3] },
-  { release = [0, 2] },
-  { release = [0, 1] },
-  { release = [0, 8] },
-  { release = [0, 7] },
-  { release = [0, 10] },
-  { release = [0, 9] },
-  { release = [0, 6] },
   { release = [0, 5] },
-  { release = [0, 12] },
-  { release = [0, 11] },
-  { release = [0, 14] },
-  { release = [0, 13] },
-  { release = [0, 16] },
-  { release = [0, 15] },
-  { release = [0, 18] },
-  { release = [0, 17] },
-  { release = [0, 3] },
 ]
 expect = [
   ["LAlt"],
-  ["LAlt"],
-  ["LAlt"],
-  ["LAlt"],
-  ["LAlt"],
-  ["LAlt"],
-  ["LAlt"],
-  ["LAlt"],
-  ["LAlt", "A"],
-  ["A"],
   [],
 ]

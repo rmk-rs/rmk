@@ -186,16 +186,22 @@ impl StickyKeyHoldDuration {
 pub struct StickyKeyProfile {
     /// Maximum idle time after the physical Sticky key is released and latched.
     pub timeout: Duration,
-    /// Send a pure modifier report as soon as the Sticky key is pressed.
+    /// Report the effect as soon as the Sticky key is pressed. The action
+    /// applies either way; this only decides when the host first sees it.
     pub activate_on_keypress: bool,
-    /// Release a held modifier or layer on physical key-up after this duration,
-    /// instead of latching it. Sticky tap keys ignore this field.
+    /// Held at least this long, the Sticky key ends its effect on its own
+    /// key-up instead of latching it.
     pub release_after_hold: StickyKeyHoldDuration,
-    /// Maximum emissions in one Sticky tap-key sequence, including the first.
-    /// Zero is unlimited; modifier and layer actions ignore this field.
+    /// How many keys one latch may serve before it ends with the last of them.
+    /// Zero is unlimited.
     pub max_repeat: u16,
-    /// Release triggers. `None` selects the default for the action shape.
+    /// Release triggers. `None` selects the default, `other_key_release`.
     pub release_mode: Option<StickyKeyReleaseMode>,
+    /// Keys this profile treats specially. Empty means every key ends the latch.
+    pub keys: &'static [KeyCode],
+    /// Whether [`Self::keys`] is the set that keeps the latch. When false it is
+    /// the set that ends it, and every other key keeps it.
+    pub keys_keep: bool,
 }
 
 impl Default for StickyKeyProfile {
@@ -206,6 +212,8 @@ impl Default for StickyKeyProfile {
             release_after_hold: StickyKeyHoldDuration::DISABLED,
             max_repeat: 0,
             release_mode: None,
+            keys: &[],
+            keys_keep: false,
         }
     }
 }

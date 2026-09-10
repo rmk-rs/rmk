@@ -112,8 +112,9 @@ pub enum KeyState {
 pub struct HeldKey {
     pub event: KeyboardEvent,
     pub action: KeyAction,
-    /// Stable combo-table slot when this is a buffered Sticky combo output.
-    pub sticky_combo_index: Option<u16>,
+    /// A combo output does not live at `event.pos`, so a buffered one keeps the
+    /// action it was dispatched with instead of reloading it from the keymap.
+    pub from_combo: bool,
     /// Current state of the held key
     pub state: KeyState,
     /// The press time for the key
@@ -133,59 +134,30 @@ impl HeldKey {
         Self {
             event,
             action,
-            sticky_combo_index: None,
+            from_combo: false,
             state,
             press_time,
             timeout_time,
         }
     }
-
-    pub fn with_sticky_combo_index(mut self, combo_index: u16) -> Self {
-        if matches!(self.action, KeyAction::Sticky(_, _)) {
-            self.sticky_combo_index = Some(combo_index);
-        }
-        self
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use rmk_types::action::Action;
     use rmk_types::keycode::{HidKeyCode, KeyCode};
-    use rmk_types::modifier::ModifierCombination;
 
     use super::*;
 
-    fn buffered(action: KeyAction) -> HeldKey {
+    #[test]
+    fn a_buffered_key_defaults_to_its_own_position() {
         let now = Instant::now();
-        HeldKey::new(
+        let key = HeldKey::new(
             KeyboardEvent::key(0, 0, true),
-            action,
+            KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A))),
             KeyState::Pressed(MorsePattern::default()),
             now,
             now,
-        )
-        .with_sticky_combo_index(7)
-    }
-
-    #[test]
-    fn sticky_combo_outputs_retain_combo_identity() {
-        let sticky_actions = [
-            KeyAction::Sticky(Action::Modifier(ModifierCombination::LCTRL), 0),
-            KeyAction::Sticky(Action::LayerOn(1), 0),
-            KeyAction::Sticky(Action::KeyWithModifier(HidKeyCode::Tab, ModifierCombination::LALT), 0),
-        ];
-        for action in sticky_actions {
-            assert_eq!(buffered(action).sticky_combo_index, Some(7));
-        }
-    }
-
-    #[test]
-    fn non_sticky_combo_outputs_remain_layer_sensitive() {
-        let ordinary = KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A)));
-        // No stored identity means buffered dispatch still reloads this
-        // position from the active layer, as it did before Sticky combo
-        // provenance was generalized.
-        assert_eq!(buffered(ordinary).sticky_combo_index, None);
+        );
+        assert!(!key.from_combo);
     }
 }

@@ -293,7 +293,7 @@ The `layer.keys` string follows several rules:
 
 9. For keyboard macros, use `Macro(n)`.
 
-10. For a configurable Sticky Key, use `SK(modifier)`, `SK(MO(n))`, or `SK(key, [modifiers])`. The tap-key form accepts one HID keyboard key and a bracketed modifier list; it does not accept consumer, system-control, mouse, or nested actions. `SK(MO(n))` is the only layer form. An optional named profile is written as the final `@profile` argument: `SK(LShift, @quick)` or `SK(Tab, [LAlt], @alt_tab)`. `OSM(modifier)` and `OSL(n)` remain compatibility aliases for the first two forms; their named-profile forms are `OSM(modifier, @profile)` and `OSL(n, @profile)`. See [Sticky Keys](./behavior#sticky-keys).
+10. For a configurable Sticky Key, use `SK(action)`. The action is any single action a tap/hold slot accepts, such as `SK(LShift)`, `SK(LCtrl | LShift)`, `SK(MO(1))`, `SK(A)`, `SK(WM(Tab, LAlt))`, or `SK(MACRO(2))`; only Sticky and composite tap-hold forms cannot be nested. An optional named profile is written as the final `@profile` argument, for example `SK(LShift, @quick)`. `OSM(modifier)` and `OSL(n)` remain compatibility aliases for `SK(modifier)` and `SK(MO(n))`; their named-profile forms are `OSM(modifier, @profile)` and `OSL(n, @profile)`. See [Sticky Keys](./behavior#sticky-keys).
 
 11. For a [Plover HID steno](../features/steno) key, use `STN(key)`, where `key` is the steno key name (for example `STN(S1)`). Requires the `steno` Cargo feature.
 

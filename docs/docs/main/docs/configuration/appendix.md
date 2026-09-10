@@ -145,8 +145,11 @@ tri_layer = { upper = 1, lower = 2, adjust = 3 }
 timeout = "1s"
 activate_on_keypress = false
 # release_after_hold = "500ms"
-max_repeat = 0
+# max_repeat = 0
 # release_mode = "other_key_release"
+# Only these keys keep the latch; every other key ends it. `release_keys` is the
+# same list from the other side. The two cannot both be set.
+# keep_keys = ["Tab"]
 
 # Named Sticky Key profile, selected with SK(..., @quick), OSM(..., @quick),
 # or OSL(..., @quick)

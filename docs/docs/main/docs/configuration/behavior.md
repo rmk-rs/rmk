@@ -32,13 +32,9 @@ In this example, when both layers 1 (`upper`) and 2 (`lower`) are active, layer 
 
 ## Sticky Keys
 
-Sticky Keys retain modifiers and layers, and support repeated modified HID keyboard keys. The three supported forms are:
+A Sticky Key defers the release of an ordinary action. `SK(action)` presses the action when its key goes down and holds it after the key comes up, until a release trigger ends it.
 
-- `SK(LShift)` for one or more modifiers
-- `SK(MO(1))` for a layer
-- `SK(Tab, [LAlt])` for one HID keyboard key with a bracketed modifier list
-
-The tap-key form does not accept consumer, system-control, mouse, or nested actions. `SK(MO(n))` is the only Sticky layer form.
+The action is any single action a tap/hold slot accepts, so `SK(LShift)`, `SK(LCtrl | LShift)`, `SK(MO(1))`, `SK(A)`, `SK(WM(Tab, LAlt))` and `SK(MACRO(2))` all work. Only Sticky and composite tap-hold forms cannot be nested.
 
 ```toml
 [behavior.sticky_key]
@@ -54,10 +50,10 @@ release_mode = "other_key_press | double_tap"
 [behavior.sticky_key.profiles.alt_tab]
 timeout = "5s"
 max_repeat = 8
-release_mode = "other_key_press | layer_exit"
+release_mode = "double_tap"
 ```
 
-Each field may be omitted. Named profiles inherit omitted fields from `[behavior.sticky_key]` and are selected with `@name`, for example `SK(LShift, @quick)` or `SK(Tab, [LAlt], @alt_tab)`.
+Each field may be omitted. Named profiles inherit omitted fields from `[behavior.sticky_key]` and are selected with `@name`, for example `SK(LShift, @quick)`.
 
 Profile names are case-sensitive. An undefined profile name fails the build.
 
@@ -65,40 +61,57 @@ Profile names are case-sensitive. An undefined profile name fails the build.
 
 | Field | Behavior |
 | --- | --- |
-| `timeout` | Releases a latch that has not reached a configured release trigger. The default is `1s`. The timer starts when the physical Sticky key is released and the effect becomes latched. Holding the key does not consume this time. |
-| `activate_on_keypress` | Sends a pure modifier report as soon as its Sticky key is pressed. If false, another key pressed while the Sticky key remains down still receives the modifier. This field has no useful effect on Sticky layers or tap keys. |
-| `release_after_hold` | For a modifier or layer held at least this long, releases the effect on physical key-up instead of latching it. A foreign key pressed during the hold keeps the effect active until the Sticky key is released. A shorter tap receives the full `timeout` from key-up. Pure modifiers need `activate_on_keypress = true` to appear in a modifier-only report while held. The default is disabled, and Sticky tap keys ignore this field. |
-| `max_repeat` | Limits how many times `SK(key, [modifiers])` emits the same tap key in one retained sequence, including its first press. For example, `2` emits twice and the third press cancels without emitting. `0` means unlimited. Modifiers and layers ignore this field. |
-| `release_mode` | Selects one or more release triggers. Join triggers with `|`. A configured value must name at least one trigger and replaces the shape's default. |
+| `timeout` | Ends a latch that no other trigger has ended. The default is `1s`. The timer starts when the Sticky key comes up, and restarts after a consuming key that no trigger ended. Holding the Sticky key does not consume it. |
+| `activate_on_keypress` | Reports the effect as soon as the Sticky key goes down. The action applies either way; without this the host first sees it on the report of the key that consumes it. |
+| `release_after_hold` | Held at least this long, the Sticky key ends its effect on its own key-up instead of latching it. A shorter tap gets the full `timeout` from key-up. The default is disabled. |
+| `max_repeat` | How many keys one latch may serve before it ends with the last of them. `0`, the default, is unlimited. |
+| `release_mode` | Selects one or more release triggers, joined with `\|`. A configured value must name at least one trigger. The default is `other_key_release`. |
+| `keep_keys` / `release_keys` | Which keys end the latch. See below; the two are alternative spellings of one list and cannot both be set. |
 
-The default release mode depends on the action:
+Release triggers decide *when* a key that ends the latch does so:
 
-| Shape | Default | Effect |
-| --- | --- | --- |
-| `SK(LShift)` | `other_key_release` | The target key receives Shift through its release. Keys rolled before that release also receive Shift. |
-| `SK(MO(1))` | `other_key_release` | The selected layer stays active through the target key's release. |
-| `SK(Tab, [LAlt])` | `other_key_press` | Another non-modifier action releases the retained tap key before that action runs. |
+- `other_key_press` ends it right after the report that carries that key's press, so the press receives the effect.
+- `other_key_release` keeps the effect through that key's press and ends it in the same report as its release. Keys rolled before that release also receive it.
+- `before_other_key` ends it before that key runs, so the key does **not** receive the effect.
+- `layer_enter` and `layer_exit` end the latch when a layer changes state. Activating an active layer or deactivating an inactive one does not count.
+- `double_tap` ends the latch when its own key is pressed again, without starting a new one.
 
-Release triggers work as follows:
+### Which keys end the latch
 
-- `other_key_press` releases on another action's press. A triggering key is resolved while a latched modifier or layer is still active, then RMK balances the modifier report or layer state. A Sticky tap key releases its retained key and modifiers before the foreign action. Plain modifier actions do not release a Sticky tap key.
-- `other_key_release` keeps the effect through another key's press and releases it on that key's release.
-- `layer_enter` and `layer_exit` release only when a layer changes state. Activating an active layer or deactivating an inactive layer does not count.
-- `double_tap` cancels the latch when the same Sticky source is pressed again. Pressing a different Sticky key does not trigger it.
+By default every key does, except modifiers: a modifier action never ends a latch, which is what lets Sticky modifiers stack with each other and with physically held ones.
 
-Combo and Morse decisions can delay resolution of the consuming key. RMK claims a press-triggered Sticky latch when the physical press arrives, so its timeout cannot expire while that decision is pending.
+`keep_keys` and `release_keys` narrow that from either side. `keep_keys` lists the only keys that do **not** end the latch; `release_keys` lists the only keys that **do**. Setting both is a build error. A listed key still uses the effect, refreshes the idle timeout, and counts toward `max_repeat`.
+
+Matching is by the keycode an action produces, so one `Tab` entry covers `Tab`, `WM(Tab, LShift)` and `SHIFTED(Tab)` alike. An action with no keycode, such as `MO(2)`, matches nothing and therefore falls on the unlisted side.
+
+```toml
+# Alt+Tab: only Tab keeps Alt, and the key that ends it does not get Alt, so the
+# switcher closes instead of firing a menu mnemonic.
+[behavior.sticky_key.profiles.alt_tab]
+timeout = "5s"
+keep_keys = ["Tab"]
+release_mode = "before_other_key | double_tap"
+
+# Caps Word shape: everything keeps Shift except the keys that end the word.
+[behavior.sticky_key.profiles.caps]
+timeout = "5s"
+release_keys = ["Space", "Enter", "Escape", "Tab"]
+release_mode = "before_other_key"
+```
+
+A profile with a key trigger but no list ends on every key, which is the plain one-shot shape. A profile with no key trigger at all keeps its latch across every key until `max_repeat`, a second tap, or the idle timeout.
+
+Combo and Morse decisions can delay the consuming key. A Sticky timeout cannot expire while a key is waiting in the held buffer, so the key still receives the effect when it resolves.
 
 ### Composition
 
-Sticky modifiers combine. Different physical keys and combo outputs retain separate identities even when they produce overlapping modifier masks. A Sticky modifier and one Sticky layer may coexist.
+Up to four latches are active at once, and they are independent: they neither combine nor exclude one another. Pressing a Sticky key while another Sticky key is down starts a second latch rather than merging into the first.
 
-Pressing the same Sticky layer again refreshes it. Pressing a different Sticky layer releases and replaces the old layer. Sticky layers use RMK's normal boolean layer state, so the latest activation or deactivation command controls a layer shared with another action.
+Held down with another key, a Sticky key is an ordinary held key: it ends at its own key-up when a key pressed after it is still down, or when a key consumed its effect during the hold.
 
-A Sticky tap key releases an active Sticky modifier and layer. Pressing a Sticky modifier or layer releases an active Sticky tap key, and pressing a different Sticky tap key replaces the first.
+Sticky layers use RMK's ordinary boolean layer state, so releasing one deactivates the layer even if a plain layer key also holds it.
 
-Releasing a physically held Sticky modifier immediately removes only the bits owned by that producer. Other held Sticky modifiers, ordinary modifiers, Caps Word Shift, `WM` or `SHIFTED` modifiers, layers, and held keys remain active. If another physical key is still down when the final Sticky modifier producer is released, that modifier entry ends instead of becoming a new latch. For accumulated modifiers, `release_after_hold` starts at the first producer press, while the most recently accepted producer supplies the active profile.
-
-RMK tracks up to eight simultaneously held Sticky modifier producers. A directly pressed Sticky modifier and a combo that outputs one each use a slot, including producers with the same modifier mask. A press above this limit is ignored, as is its later release, so it cannot release any accepted producer. Releasing an accepted producer frees its slot.
+Two latches that carry the same modifier bit do not each own it. `held_modifiers` is a bitmask rather than a per-modifier count, so the first release clears the bit for both, the same way two physical Shift keys behave today.
 
 ### Compatibility settings
 

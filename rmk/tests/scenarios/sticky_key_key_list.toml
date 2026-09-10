@@ -1,0 +1,86 @@
+# `keep_keys` and `release_keys` are two spellings of one list: which keys use a
+# latch without ending it. Matching is by the keycode an action produces, so a
+# `Tab` entry also covers `WM(Tab, LShift)`.
+#
+# Layer 0:
+#   SK(LAlt,@alt_tab)  Tab  WM(Tab, LShift)  J  SK(LShift,@caps)  A  Space
+#   SK(LAlt,@capped)
+
+[layout]
+rows = 1
+cols = 8
+map = "(0,0) (0,1) (0,2) (0,3) (0,4) (0,5) (0,6) (0,7)"
+
+[[keymap.layer]]
+keys = "SK(LAlt, @alt_tab) Tab WM(Tab, LShift) J SK(LShift, @caps) A Space SK(LAlt, @capped)"
+
+# Alt+Tab: only Tab keeps the latch, and the key that ends it must not receive
+# Alt, so the switcher closes instead of firing a menu mnemonic.
+[behavior.sticky_key.profiles.alt_tab]
+timeout = "150ms"
+keep_keys = ["Tab"]
+release_mode = "before_other_key | double_tap"
+
+[behavior.sticky_key.profiles.capped]
+timeout = "1s"
+max_repeat = 2
+keep_keys = ["Tab"]
+release_mode = "before_other_key | double_tap"
+
+# Caps Word shape: everything keeps Shift except the few keys that end the word.
+[behavior.sticky_key.profiles.caps]
+timeout = "1s"
+release_keys = ["Space"]
+release_mode = "before_other_key"
+
+[[test]]
+name = "keep_list_holds_the_latch_across_its_keys"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+]
+expect = [
+  ["LAlt", "Tab"],
+  ["LAlt"],
+  ["LAlt", "LShift", "Tab"],
+  ["LAlt"],
+  ["J"],
+  [],
+]
+
+[[test]]
+name = "keep_list_does_not_stop_the_idle_timeout"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { delay = 200 },
+]
+expect = [["LAlt", "Tab"], ["LAlt"], []]
+
+[[test]]
+name = "repeat_cap_counts_kept_keys"
+steps = [
+  { tap = { pos = [0, 7], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+]
+expect = [["LAlt", "Tab"], ["LAlt"], ["LAlt", "Tab"], []]
+
+[[test]]
+name = "release_list_keeps_every_other_key"
+steps = [
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [0, 5], duration = 10 } },
+  { tap = { pos = [0, 5], duration = 10 } },
+  { tap = { pos = [0, 6], duration = 10 } },
+]
+expect = [
+  ["LShift", "A"],
+  ["LShift"],
+  ["LShift", "A"],
+  ["LShift"],
+  ["Space"],
+  [],
+]

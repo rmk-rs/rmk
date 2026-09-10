@@ -88,6 +88,12 @@ fn expand_sticky_key_profile(
         None => quote! { ::rmk::config::StickyKeyHoldDuration::DISABLED },
     };
     let max_repeat = profile.max_repeat.or(fallback.max_repeat).unwrap_or(0);
+    let list = profile.keys.as_ref().or(fallback.keys.as_ref());
+    let keys_keep = list.is_some_and(|list| list.keep);
+    let key_tokens = list.into_iter().flat_map(|list| &list.keys).map(|key| {
+        let ident = get_key_with_alias(key.clone());
+        quote! { ::rmk::types::keycode::KeyCode::Hid(::rmk::types::keycode::HidKeyCode::#ident) }
+    });
     let release_mode = match profile.release_mode.or(fallback.release_mode) {
         Some(mode) => {
             let bits = mode.into_bits();
@@ -102,6 +108,8 @@ fn expand_sticky_key_profile(
             release_after_hold: #release_after_hold,
             max_repeat: #max_repeat,
             release_mode: #release_mode,
+            keys: &[#(#key_tokens),*],
+            keys_keep: #keys_keep,
         }
     }
 }
@@ -119,6 +127,7 @@ fn expand_sticky_key(behavior: &Behavior) -> proc_macro2::TokenStream {
             release_after_hold_ms: sticky.release_after_hold_ms,
             max_repeat: sticky.max_repeat,
             release_mode: sticky.release_mode,
+            keys: sticky.keys.clone(),
         })
         .unwrap_or_else(|| StickyKeyProfile {
             timeout_ms: behavior.one_shot_timeout_ms,

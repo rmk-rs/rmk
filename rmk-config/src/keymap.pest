@@ -118,14 +118,11 @@ morse_action = { (^"TD" | ^"MORSE") ~ "(" ~ number ~ ")" }
 // Rule 9: Macro(n) - Trigger Macro
 trigger_macro_action = { ^"MACRO" ~ "(" ~ number ~ ")" }
 
-modifier_keep_list = { "[" ~ modifier_combination ~ "]" | "[" ~ "]" }
-
-// SK(key, [mods], @profile) | SK(modifier, @profile) | SK(MO(n), @profile)
+// SK(action, @profile) | SK(modifier, @profile) - Sticky Key over any action
 sk_action = {
     ^"SK" ~ "(" ~ (
-        mo_action ~ ("," ~ sticky_profile_ref)?
-      | (keycode_name ~ "," ~ modifier_keep_list ~ ("," ~ sticky_profile_ref)?)
-      | modifier_combination ~ ("," ~ sticky_profile_ref)?
+        modifier_combination ~ ("," ~ sticky_profile_ref)?
+      | nestable_action ~ ("," ~ sticky_profile_ref)?
     ) ~ ")"
 }
 

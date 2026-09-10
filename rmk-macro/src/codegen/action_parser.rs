@@ -11,33 +11,6 @@ use rmk_config::resolved::KEYCODE_ALIAS;
 use rmk_config::resolved::behavior::{MorseProfile, StickyKeyProfile};
 use strum::VariantNames;
 
-/// Sticky effect handlers needed by a generated, immutable keymap.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct StickyKeyShapes {
-    pub modifier: bool,
-    pub layer: bool,
-    pub tap_key: bool,
-}
-
-impl StickyKeyShapes {
-    pub(crate) const ALL: Self = Self {
-        modifier: true,
-        layer: true,
-        tap_key: true,
-    };
-
-    pub(crate) fn include(&mut self, other: Self) {
-        self.modifier |= other.modifier;
-        self.layer |= other.layer;
-        self.tap_key |= other.tap_key;
-    }
-}
-
-pub(crate) struct ParsedKeyAction {
-    pub tokens: TokenStream2,
-    pub sticky_shapes: StickyKeyShapes,
-}
-
 #[derive(Default)]
 struct ModifierCombinationMacro {
     right: bool,
@@ -47,10 +20,6 @@ struct ModifierCombinationMacro {
     ctrl: bool,
 }
 impl ModifierCombinationMacro {
-    fn new() -> Self {
-        Self::default()
-    }
-
     fn is_empty(&self) -> bool {
         !(self.gui || self.alt || self.shift || self.ctrl)
     }
@@ -70,31 +39,44 @@ impl quote::ToTokens for ModifierCombinationMacro {
     }
 }
 
+const MODIFIERS: &SetterTable<ModifierCombinationMacro> = &[
+    ("LShift", |c| c.shift = true),
+    ("LCtrl", |c| c.ctrl = true),
+    ("LAlt", |c| c.alt = true),
+    ("LGui", |c| c.gui = true),
+    ("RShift", |c| {
+        c.right = true;
+        c.shift = true;
+    }),
+    ("RCtrl", |c| {
+        c.right = true;
+        c.ctrl = true;
+    }),
+    ("RAlt", |c| {
+        c.right = true;
+        c.alt = true;
+    }),
+    ("RGui", |c| {
+        c.right = true;
+        c.gui = true;
+    }),
+];
+
+/// A bare `SK(...)` argument is a modifier combination when every token names a
+/// modifier; anything else is an ordinary action, as in `SK(A)`.
+fn is_modifier_combination(text: &str) -> bool {
+    text.split('|').all(|token| {
+        let token = token.trim();
+        let token = KEYCODE_ALIAS
+            .get(token.to_lowercase().as_str())
+            .copied()
+            .unwrap_or(token);
+        MODIFIERS.iter().any(|(name, _)| *name == token)
+    })
+}
+
 /// Get modifier combination, in types of mod1 | mod2 | ...
 fn parse_modifiers(modifiers_str: &str) -> ModifierCombinationMacro {
-    const MODIFIERS: &SetterTable<ModifierCombinationMacro> = &[
-        ("LShift", |c| c.shift = true),
-        ("LCtrl", |c| c.ctrl = true),
-        ("LAlt", |c| c.alt = true),
-        ("LGui", |c| c.gui = true),
-        ("RShift", |c| {
-            c.right = true;
-            c.shift = true;
-        }),
-        ("RCtrl", |c| {
-            c.right = true;
-            c.ctrl = true;
-        }),
-        ("RAlt", |c| {
-            c.right = true;
-            c.alt = true;
-        }),
-        ("RGui", |c| {
-            c.right = true;
-            c.gui = true;
-        }),
-    ];
-
     parse_name_list(
         modifiers_str,
         "modifier",
@@ -329,7 +311,7 @@ fn strip_call(s: &str) -> &str {
 fn parse_sticky_action(
     key: &str,
     sticky_profiles: &Option<HashMap<String, StickyKeyProfile>>,
-) -> Option<ParsedKeyAction> {
+) -> Option<TokenStream2> {
     let lower = key.to_lowercase();
     let (inner, alias) = if lower.starts_with("osm(") {
         (strip_call(key).trim(), Some("modifier"))
@@ -354,97 +336,28 @@ fn parse_sticky_action(
     };
     let action = action_args.join(", ");
 
-    let (action, sticky_shapes) = match alias {
+    let action = match alias {
         Some("modifier") => {
             let modifiers = parse_modifiers(&action);
             if modifiers.is_empty() {
                 panic!("\n❌ keyboard.toml: OSM(modifier) is not valid");
             }
-            (
-                quote! { ::rmk::types::action::Action::Modifier(#modifiers) },
-                StickyKeyShapes {
-                    modifier: true,
-                    ..Default::default()
-                },
-            )
+            quote! { ::rmk::types::action::Action::Modifier(#modifiers) }
         }
         Some("layer") => {
             let layer = action.parse::<u8>().unwrap();
-            (
-                quote! { ::rmk::types::action::Action::LayerOn(#layer) },
-                StickyKeyShapes {
-                    layer: true,
-                    ..Default::default()
-                },
-            )
+            quote! { ::rmk::types::action::Action::LayerOn(#layer) }
         }
-        None if action.to_lowercase().starts_with("mo(") => {
-            let layer = parse_layer(&action);
-            (
-                quote! { ::rmk::types::action::Action::LayerOn(#layer) },
-                StickyKeyShapes {
-                    layer: true,
-                    ..Default::default()
-                },
-            )
-        }
-        None if action.contains('[') => {
-            let start = action.find('[').unwrap();
-            let end = action
-                .find(']')
-                .unwrap_or_else(|| panic!("\n❌ keyboard.toml: SK has unclosed '['"));
-            let key_ident = get_key_with_alias(
-                action[..start]
-                    .trim()
-                    .trim_end_matches(',')
-                    .trim()
-                    .to_string(),
-            );
-            let after = action[end + 1..].trim_start_matches(',').trim();
-            if !after.is_empty() {
-                panic!(
-                    "\n❌ keyboard.toml: the 5-positional SK(...) form is removed; use SK(key, [mods])."
-                );
-            }
-            let modifiers = if action[start + 1..end].trim().is_empty() {
-                ModifierCombinationMacro::new()
-            } else {
-                parse_modifiers(&action[start + 1..end])
-            };
-            (
-                quote! { ::rmk::types::action::Action::KeyWithModifier(::rmk::types::keycode::HidKeyCode::#key_ident, #modifiers) },
-                StickyKeyShapes {
-                    tap_key: true,
-                    ..Default::default()
-                },
-            )
-        }
-        None => {
-            if action.contains('(') {
-                panic!(
-                    "\n❌ keyboard.toml: SK only supports MO(n) as its layer shape (got `{action}`)."
-                );
-            }
+        // `SK(...)` takes any action a tap/hold slot takes. A bare modifier list
+        // is spelled by no other form, so it keeps `OSM`'s encoding.
+        None if !action.contains('(') && is_modifier_combination(&action) => {
             let modifiers = parse_modifiers(&action);
-            if modifiers.is_empty() {
-                panic!("\n❌ keyboard.toml: SK(modifier) is not valid");
-            }
-            (
-                quote! { ::rmk::types::action::Action::Modifier(#modifiers) },
-                StickyKeyShapes {
-                    modifier: true,
-                    ..Default::default()
-                },
-            )
+            quote! { ::rmk::types::action::Action::Modifier(#modifiers) }
         }
+        None => parse_action_with_profiles(&action, sticky_profiles),
         _ => unreachable!(),
     };
-    Some(ParsedKeyAction {
-        tokens: quote! {
-            ::rmk::types::action::KeyAction::Sticky(#action, #profile)
-        },
-        sticky_shapes,
-    })
+    Some(quote! { ::rmk::types::action::KeyAction::Sticky(#action, #profile) })
 }
 
 /// Parse a single "action expression" into an [`rmk_types::action::Action`] token stream.
@@ -599,27 +512,10 @@ pub(crate) fn parse_key(
     profiles: &Option<HashMap<String, MorseProfile>>,
     sticky_profiles: &Option<HashMap<String, StickyKeyProfile>>,
 ) -> TokenStream2 {
-    parse_key_with_shapes(key, profiles, sticky_profiles).tokens
-}
-
-/// Parse one key and return both its generated tokens and the Sticky handler it
-/// can reach. Keeping both results here prevents capability inference from
-/// acquiring a second action grammar.
-pub(crate) fn parse_key_with_shapes(
-    key: String,
-    profiles: &Option<HashMap<String, MorseProfile>>,
-    sticky_profiles: &Option<HashMap<String, StickyKeyProfile>>,
-) -> ParsedKeyAction {
     if !key.is_empty() && (key.trim_start_matches("_").is_empty() || key.to_lowercase() == "trns") {
-        return ParsedKeyAction {
-            tokens: quote! { ::rmk::a!(Transparent) },
-            sticky_shapes: StickyKeyShapes::default(),
-        };
+        return quote! { ::rmk::a!(Transparent) };
     } else if !key.is_empty() && key == "No" {
-        return ParsedKeyAction {
-            tokens: quote! { ::rmk::a!(No) },
-            sticky_shapes: StickyKeyShapes::default(),
-        };
+        return quote! { ::rmk::a!(No) };
     }
 
     let lower = key.to_lowercase();
@@ -628,7 +524,7 @@ pub(crate) fn parse_key_with_shapes(
         return action;
     }
 
-    let tokens = if lower.starts_with("mt(") {
+    if lower.starts_with("mt(") {
         let keys = split_top_level(strip_call(&key));
         if keys.len() < 2 || keys.len() > 3 {
             panic!("\n\u{274c} keyboard.toml: MT(key, modifier) invalid");
@@ -668,10 +564,6 @@ pub(crate) fn parse_key_with_shapes(
     } else {
         let action = parse_action_with_profiles(&key, sticky_profiles);
         quote! { ::rmk::types::action::KeyAction::Single(#action) }
-    };
-    ParsedKeyAction {
-        tokens,
-        sticky_shapes: StickyKeyShapes::default(),
     }
 }
 
@@ -802,68 +694,55 @@ mod tests {
         parse_key(key.to_string(), &None, &None).to_string()
     }
 
-    fn sticky_shapes(key: &str) -> StickyKeyShapes {
-        parse_key_with_shapes(key.to_string(), &None, &None).sticky_shapes
-    }
-
     #[test]
-    fn sticky_shape_metadata_comes_from_canonical_parser() {
-        let modifier = StickyKeyShapes {
-            modifier: true,
-            ..Default::default()
-        };
-        let layer = StickyKeyShapes {
-            layer: true,
-            ..Default::default()
-        };
-        let tap_key = StickyKeyShapes {
-            tap_key: true,
-            ..Default::default()
-        };
-
-        for action in ["OSM(LShift)", "SK(LAlt)", "SK(LCtrl | LShift)"] {
-            assert_eq!(sticky_shapes(action), modifier, "{action}");
-        }
-        for action in ["OSL(1)", "SK(MO(2))"] {
-            assert_eq!(sticky_shapes(action), layer, "{action}");
-        }
-        for action in ["SK(Tab, [])", "SK(Tab, [LAlt | LShift])"] {
-            assert_eq!(sticky_shapes(action), tap_key, "{action}");
-        }
-        for action in [
-            "A",
-            "No",
-            "_",
-            "MOD(LShift)",
-            "MO(1)",
-            "WM(A, LShift)",
-            "MT(A, LShift)",
-            "TH(A, B)",
-            "LT(1, A)",
-            "TT(1)",
-            "TD(0)",
+    fn sticky_takes_any_single_action() {
+        for (action, inner) in [
+            ("SK(LShift)", "Action :: Modifier"),
+            ("SK(LCtrl | LShift)", "Action :: Modifier"),
+            ("OSM(LShift)", "Action :: Modifier"),
+            ("SK(MO(2))", "Action :: LayerOn"),
+            ("OSL(1)", "Action :: LayerOn"),
+            ("SK(A)", "Action :: Key"),
+            ("SK(WM(Tab, LAlt))", "Action :: KeyWithModifier"),
+            ("SK(MACRO(3))", "Action :: TriggerMacro"),
+            ("SK(TG(2))", "Action :: LayerToggle"),
+            ("SK(SHIFTED(B))", "Action :: KeyWithModifier"),
         ] {
-            assert_eq!(
-                sticky_shapes(action),
-                StickyKeyShapes::default(),
-                "{action}"
+            let expanded = expand(action);
+            assert!(
+                expanded.contains("KeyAction :: Sticky"),
+                "{action}: {expanded}"
             );
+            assert!(expanded.contains(inner), "{action}: {expanded}");
         }
     }
 
     #[test]
-    fn sticky_profiles_do_not_change_shape_metadata() {
+    #[should_panic(expected = "cannot be nested")]
+    fn sticky_cannot_wrap_another_sticky() {
+        expand("SK(SK(LShift))");
+    }
+
+    #[test]
+    fn sticky_profiles_select_a_table_index() {
         let profiles = Some(HashMap::from([(
             "custom".to_string(),
             StickyKeyProfile::default(),
         )]));
-        let shapes = |action: &str| {
-            parse_key_with_shapes(action.to_string(), &None, &profiles).sticky_shapes
-        };
+        let expand = |action: &str| parse_key(action.to_string(), &None, &profiles).to_string();
 
-        assert!(shapes("OSM(LShift, @custom)").modifier);
-        assert!(shapes("OSL(1, @custom)").layer);
-        assert!(shapes("SK(Tab, [LAlt], @custom)").tap_key);
+        for action in [
+            "OSM(LShift, @custom)",
+            "OSL(1, @custom)",
+            "SK(WM(Tab, LAlt), @custom)",
+        ] {
+            let expanded = expand(action);
+            assert!(
+                expanded.contains("KeyAction :: Sticky"),
+                "{action}: {expanded}"
+            );
+            assert!(expanded.ends_with(", 0u8)"), "{action}: {expanded}");
+        }
     }
 
     fn profile(enable_flow_tap: Option<bool>) -> MorseProfile {
