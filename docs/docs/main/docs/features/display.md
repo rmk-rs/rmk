@@ -204,6 +204,7 @@ Feature-gated fields (require the corresponding RMK feature to be enabled):
 | `central_connected`     | `split`          | Whether the central is connected (peripheral side) |
 | `peripherals_connected` | `split`          | Per-peripheral connection state array              |
 | `peripheral_batteries`  | `split` + `_ble` | Per-peripheral battery state array                 |
+| `dongle_state`          | `dongle`         | The dongle's link to its keyboard (`DongleState`)  |
 
 ::: tip `key_press_latch` vs `key_pressed`
 Use `key_press_latch` when you want to react to a new key press — it stays `true` even if the key was released before the render ran. Use `key_pressed` to reflect the real-time held state (e.g. to display a held-key animation).

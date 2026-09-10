@@ -549,6 +549,8 @@ define_event_config!(
     central_connected,
     peripheral_battery,
     clear_peer,
+    // Dongle events
+    dongle_state,
     // DFU events
     dfu_status,
     // Action events

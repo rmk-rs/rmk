@@ -92,3 +92,9 @@ subs = 0
 channel_size = 2
 pubs = 1
 subs = 1
+
+# Dongle events
+[event.dongle_state]
+channel_size = 1
+pubs = 1
+subs = 0

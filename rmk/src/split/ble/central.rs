@@ -367,6 +367,11 @@ pub(crate) mod subrating {
                         embassy_time::Timer::after_millis(100).await;
                         continue;
                     }
+                    if error == HciError::UNKNOWN_CONN_IDENTIFIER {
+                        error!("[update_subrate_factor] stale split link, rebooting");
+                        embassy_time::Timer::after_millis(100).await;
+                        crate::boot::reboot_keyboard();
+                    }
                     error!("[update_subrate_factor] HCI error: {:?}", error);
                     return false;
                 }

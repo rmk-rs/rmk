@@ -66,7 +66,8 @@ splits by resolution mode. Those all start with `morse_`, so
 | `sticky_key`, `sticky_key_*` | Canonical Sticky Key actions, profiles, composition, release ordering, and combo output identity |
 | `one_shot` | `OSM`/`OSL` compatibility syntax and legacy behavior settings |
 | `rynk_*` | The Rynk host protocol, one file per endpoint group |
-| everything else | One feature each — `combo`, `layer`, `encoder`, `macros`, `hid_reports`, `passkey`, `steno` |
+| `deadline_race` | Deadlines that must keep firing while a key is buffered |
+| everything else | One feature each — `combo`, `layer`, `encoder`, `macros`, `hid_reports`, `passkey`, `steno`, `user_hold` |
 
 Cases that only differ by mode share a name across files, so
 `nextest run two_key_misses_window` runs that case under every mode at once —

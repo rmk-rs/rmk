@@ -239,21 +239,16 @@ async fn run_ble_keyboard<
             },
         )
         .unwrap();
-    // The serial number characteristic is length limited, so truncate at a char
-    // boundary instead of panicking when the configured serial is too long.
-    let mut serial_number_trimmed = heapless::String::new();
-    for c in serial_number.chars() {
-        if serial_number_trimmed.push(c).is_err() {
-            break;
-        }
-    }
     server
-        .set(&server.device_config_service.serial_number, &serial_number_trimmed)
+        .set(
+            &server.device_config_service.serial_number,
+            &heapless::String::try_from(serial_number).expect("serial_number is too long for BLE"),
+        )
         .unwrap();
     server
         .set(
             &server.device_config_service.manufacturer_name,
-            &heapless::String::try_from(device_config.manufacturer).unwrap(),
+            &heapless::String::try_from(device_config.manufacturer).expect("manufacturer is too long for BLE"),
         )
         .unwrap();
     let server = &server;
@@ -413,11 +408,10 @@ pub(crate) async fn wait_for_stack_started() {
 /// This is a background task that is required to run forever alongside any other BLE tasks.
 pub(crate) async fn ble_task<C: Controller, P: PacketPool, E: EventHandler>(mut runner: Runner<'_, C, P>, handler: &E) {
     STACK_STARTED.signal(());
-    loop {
-        if let Err(e) = runner.run_with_handler(handler).await {
-            error!("[ble_task] runner error: {:?}", e);
-            Timer::after_millis(100).await;
-        }
+    if let Err(e) = runner.run_with_handler(handler).await {
+        error!("[ble_task] runner stopped, rebooting: {:?}", e);
+        Timer::after_millis(100).await;
+        crate::boot::reboot_keyboard();
     }
 }
 

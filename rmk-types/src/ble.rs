@@ -1,7 +1,14 @@
-//! BLE status types.
+//! BLE status types and the limits an identity string has to clear.
 
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
+
+/// Longest name a legacy advertisement can carry: flags (3), the battery + HID service
+/// UUIDs (6) and the appearance (4) claim the rest of its 31 bytes.
+pub const BLE_ADV_NAME_MAX_LEN: usize = 16;
+
+/// Capacity of a Device Information Service string, in static RAM whatever it holds.
+pub const BLE_DIS_STRING_MAX_LEN: usize = 24;
 
 /// BLE state (what the BLE subsystem is currently doing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]

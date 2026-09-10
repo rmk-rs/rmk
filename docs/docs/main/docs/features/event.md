@@ -59,6 +59,10 @@ RMK provides built-in event types organized by category. All of them are exporte
 - `PeripheralBatteryEvent` - Peripheral battery status changed
 - `ClearPeerEvent` - BLE peer clearing event (BLE split builds only)
 
+**Dongle Events** (when the `dongle` feature is enabled):
+
+- `DongleStateEvent` - The dongle's link to its keyboard changed state (`DongleState`: searching, pairing, connected)
+
 **DFU Events** (when the `dfu` feature is enabled):
 
 - `DfuStatusEvent` - DFU status changed (`DfuStatus`: idle, started, downloading, finished, error, lock waiting, unlocked)

@@ -128,6 +128,8 @@ pub(crate) async fn advertise<'a, 'b, C: Controller, const ATT: usize, const CON
 
 #[cfg(test)]
 mod tests {
+    use rmk_types::ble::BLE_ADV_NAME_MAX_LEN;
+
     use super::Adv;
 
     /// Overrunning the 31-byte legacy advertisement only fails at runtime.
@@ -139,10 +141,10 @@ mod tests {
     fn every_advertisement_fits_the_legacy_budget() {
         assert!(fits(Adv::SplitPeripheral { id: 0xFF }));
         assert!(fits(Adv::DongleSeeking));
-        // Flags, UUIDs and appearance leave 16 bytes for the name.
-        assert!(fits(Adv::Host {
-            name: "0123456789abcdef"
-        }));
+        // Where BLE_ADV_NAME_MAX_LEN comes from: this name fills the budget exactly.
+        const LONGEST_NAME: &str = "0123456789abcdef";
+        assert_eq!(LONGEST_NAME.len(), BLE_ADV_NAME_MAX_LEN);
+        assert!(fits(Adv::Host { name: LONGEST_NAME }));
         assert!(!fits(Adv::Host {
             name: "0123456789abcdefg"
         }));

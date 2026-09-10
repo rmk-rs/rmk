@@ -441,7 +441,7 @@ dongle_pairing_window_secs = 30
 # <name> is one of: connection_status_change, modifier, keyboard, layer_change,
 # wpm_update, led_indicator, sleep_state, battery_status, battery_adc,
 # charging_state, pointing, peripheral_connected, central_connected,
-# peripheral_battery, clear_peer, dfu_status, action.
+# peripheral_battery, clear_peer, dongle_state, dfu_status, action.
 # All defaults are in rmk-config/src/default_config/event_default.toml
 [event.keyboard]
 # Channel buffer size

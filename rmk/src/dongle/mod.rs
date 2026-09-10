@@ -17,6 +17,7 @@ mod router;
 #[cfg(feature = "vial")]
 mod vial_router;
 use core::cell::Cell;
+use core::ops::ControlFlow;
 
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
@@ -43,8 +44,10 @@ use crate::ble::wait_for_stack_started;
 use crate::channel::send_hid_report;
 use crate::core_traits::Runnable;
 use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_SERVICE_UUID, DongleEvent};
-use crate::event::{EventSubscriber, LedIndicatorEvent, SubscribableEvent, publish_event};
-use crate::hid::{KeyboardReport, Report};
+use crate::event::{
+    DongleState, DongleStateEvent, EventSubscriber, LedIndicatorEvent, SubscribableEvent, publish_event,
+};
+use crate::hid::{CompositeReportType, KeyboardReport, Report};
 use crate::{DONGLE_PAIRING_WINDOW_SECS, RawMutex};
 
 /// The dongle relays exactly one keyboard.
@@ -170,6 +173,7 @@ where
             scan: &scan,
             router: self.router,
             profiles: ProfileManager::new(stack),
+            state: Cell::new(DongleState::default()),
         };
 
         join(crate::ble::ble_task(stack.runner(), &scan), central.run()).await;
@@ -184,6 +188,8 @@ struct DongleCentral<'b, 's: 'b, C: Controller + ControllerCmdAsync<LeSetPhy>> {
     scan: &'b ScanHandler,
     router: &'b DongleRouter,
     profiles: ProfileManager<'b, 's, C, DefaultPacketPool, 1>,
+    /// The last state published, so a path that ends where it began says nothing.
+    state: Cell<DongleState>,
 }
 
 impl<'b, 's: 'b, C> DongleCentral<'b, 's, C>
@@ -193,6 +199,13 @@ where
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<LeSetScanParams>,
 {
+    /// Publish current `DongleState` if it is a change.
+    fn set_state(&self, state: DongleState) {
+        if self.state.replace(state) != state {
+            publish_event(DongleStateEvent(state));
+        }
+    }
+
     async fn run(&mut self) -> ! {
         wait_for_stack_started().await;
         self.profiles.load_bonded_devices().await;
@@ -214,6 +227,7 @@ where
             self.scan.bonded_addr.lock(|a| a.set(bonded.map(|addr| addr.addr)));
 
             if let Some(addr) = bonded {
+                self.set_state(DongleState::Searching);
                 // Connect only once the keyboard asks for the dongle; its bare address
                 // would match its host advertising too. The accept list drops other traffic.
                 self.scan.bonded_asked.reset();
@@ -267,6 +281,7 @@ where
     /// user before the (re)plug — that beats the automatic reconnect.
     async fn run_pairing_window(&self) -> Option<(AddrKind, BdAddr)> {
         info!("[dongle] pairing window open for {}s", DONGLE_PAIRING_WINDOW_SECS);
+        self.set_state(DongleState::Pairing);
         self.scan.seeking_keyboard.reset();
         self.scan.bonded_seen.reset();
         let deadline = Instant::now() + Duration::from_secs(DONGLE_PAIRING_WINDOW_SECS as u64);
@@ -417,6 +432,7 @@ where
         let mut listener = client.listen_all().ok()?;
 
         self.router.link_up();
+        self.set_state(DongleState::Connected);
         info!("[dongle] relaying");
         self.relay(
             #[cfg(not(feature = "vial"))]
@@ -541,28 +557,20 @@ struct KeyboardCharacteristics {
 
 impl KeyboardCharacteristics {
     /// Discover the HID and host-protocol services. Report characteristics all
-    /// share UUID 0x2A4D, but both ends are RMK, so the declaration order below
-    /// is fixed and identifies them.
+    /// share UUID 0x2A4D; like any HID-over-GATT host, the dongle tells them
+    /// apart by their Report Reference descriptor.
     async fn discover<C: Controller>(client: &Client<'_, C>) -> Option<Self> {
         let mut hid_services = client
             .services_by_uuid(&Uuid::new_short(0x1812))
             .await
             .ok()?
             .into_iter();
-        let hid = hid_services.next()?;
-        let report_uuid = Uuid::new_short(0x2A4D);
-        // The 9 must fit every characteristic `HidService` declares, or discovery fails.
-        let mut reports = client
-            .characteristics::<9>(&hid)
-            .await
-            .ok()?
-            .into_iter()
-            .filter(|c| c.uuid == report_uuid);
-        let keyboard_input = reports.next()?;
-        let keyboard_output = reports.next()?;
-        let mouse = reports.next()?;
-        let media = reports.next()?;
-        let system = reports.next()?;
+        let mut hid = ReportCharacteristics::discover(client, &hid_services.next()?).await?;
+        let keyboard_input = hid.take(CompositeReportType::Keyboard as u8, 1)?;
+        let keyboard_output = hid.take(CompositeReportType::Keyboard as u8, 2)?;
+        let mouse = hid.take(CompositeReportType::Mouse as u8, 1)?;
+        let media = hid.take(CompositeReportType::Media as u8, 1)?;
+        let system = hid.take(CompositeReportType::System as u8, 1)?;
 
         #[cfg(not(feature = "vial"))]
         let (config_input, config_output) = {
@@ -583,17 +591,11 @@ impl KeyboardCharacteristics {
                     .ok()?,
             )
         };
-        // Vial uses the second HID service: input (notify) first, then output (write).
+        // Vial's own HID service carries one report with no id: input and output.
         #[cfg(feature = "vial")]
         let (config_input, config_output) = {
-            let vial = hid_services.next()?;
-            let mut reports = client
-                .characteristics::<9>(&vial)
-                .await
-                .ok()?
-                .into_iter()
-                .filter(|c| c.uuid == report_uuid);
-            (reports.next()?, reports.next()?)
+            let mut vial = ReportCharacteristics::discover(client, &hid_services.next()?).await?;
+            (vial.take(0, 1)?, vial.take(0, 2)?)
         };
 
         let mut event = None;
@@ -664,6 +666,43 @@ impl KeyboardCharacteristics {
         } else {
             None
         }
+    }
+}
+
+/// The report characteristics of one HID service, keyed by their Report
+/// Reference `(report_id, report_type)`: report_type 1 is input, 2 is output.
+struct ReportCharacteristics(heapless::LinearMap<(u8, u8), Characteristic<[u8]>, 8>);
+
+impl ReportCharacteristics {
+    /// Two ATT exchanges: characteristic discovery, then one Read By Type that
+    /// returns every Report Reference descriptor in the service.
+    async fn discover<C: Controller>(client: &Client<'_, C>, service: &ServiceHandle) -> Option<Self> {
+        // 16 leaves room beyond the 9 characteristics `HidService` declares today.
+        let mut characteristics = client.characteristics::<16>(service).await.ok()?;
+        let mut reports = heapless::LinearMap::new();
+        let report_reference = Uuid::new_short(0x2908);
+        let (start, end) = service.handle_range().into_inner();
+        client
+            .read_by_type(start, end, &report_reference, |descriptor_handle, reference| {
+                // A descriptor sits inside the handle range of the characteristic it describes.
+                let owner = characteristics
+                    .iter()
+                    .position(|c| (c.handle..=c.end_handle).contains(&descriptor_handle));
+                if let Some(i) = owner
+                    && let &[report_id, report_type] = reference
+                {
+                    let _ = reports.insert((report_id, report_type), characteristics.swap_remove(i));
+                }
+                ControlFlow::<()>::Continue(())
+            })
+            .await
+            .ok()?;
+        Some(Self(reports))
+    }
+
+    /// The characteristic carrying this report, moved out of the set.
+    fn take(&mut self, report_id: u8, report_type: u8) -> Option<Characteristic<[u8]>> {
+        self.0.remove(&(report_id, report_type))
     }
 }
 

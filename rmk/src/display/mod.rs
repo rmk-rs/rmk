@@ -84,6 +84,8 @@ use crate::event::{
 };
 #[cfg(feature = "split")]
 use crate::event::{CentralConnectedEvent, PeripheralConnectedEvent};
+#[cfg(feature = "dongle")]
+use crate::event::{DongleState, DongleStateEvent};
 use crate::processor::Processor;
 
 /// Snapshot of keyboard state passed to renderers on every redraw.
@@ -95,6 +97,7 @@ use crate::processor::Processor;
 /// - `ble_status` — requires the `_ble` feature
 /// - `central_connected`, `peripherals_connected` — require the `split` feature
 /// - `peripheral_batteries` — requires both `split` and `_ble` features
+/// - `dongle_state` — requires the `dongle` feature
 ///
 /// Third-party renderers that access these fields must enable the
 /// corresponding features in their `Cargo.toml` dependency on `rmk`,
@@ -124,6 +127,9 @@ pub struct RenderContext {
     /// Per-peripheral battery status, indexed by peripheral id.
     #[cfg(all(feature = "split", feature = "_ble"))]
     pub peripheral_batteries: [BatteryStatusEvent; crate::SPLIT_PERIPHERALS_NUM],
+    /// The dongle's link to its keyboard (only meaningful on a dongle).
+    #[cfg(feature = "dongle")]
+    pub dongle_state: DongleState,
     /// Currently active modifier keys (Shift, Ctrl, Alt, GUI).
     pub modifiers: ModifierCombination,
     /// Whether a key is currently held down.
@@ -153,6 +159,8 @@ impl Default for RenderContext {
             #[cfg(all(feature = "split", feature = "_ble"))]
             peripheral_batteries: [BatteryStatusEvent(rmk_types::battery::BatteryStatus::Unavailable);
                 crate::SPLIT_PERIPHERALS_NUM],
+            #[cfg(feature = "dongle")]
+            dongle_state: DongleState::default(),
             modifiers: ModifierCombination::new(),
             key_pressed: false,
             key_press_latch: false,
@@ -227,6 +235,7 @@ pub trait DisplayRenderer<C: PixelColor> {
 #[cfg_attr(feature = "_ble", processor(subscribe = [ConnectionStatusChangeEvent]))]
 #[cfg_attr(feature = "split", processor(subscribe = [PeripheralConnectedEvent, CentralConnectedEvent]))]
 #[cfg_attr(all(feature = "split", feature = "_ble"), processor(subscribe = [PeripheralBatteryEvent]))]
+#[cfg_attr(feature = "dongle", processor(subscribe = [DongleStateEvent]))]
 #[::rmk::macros::runnable_generated]
 pub struct DisplayProcessor<D, R = LogoRenderer>
 where
@@ -405,6 +414,12 @@ where
         if let Some(slot) = self.ctx.peripheral_batteries.get_mut(event.id) {
             *slot = event.state;
         }
+        self.render().await;
+    }
+
+    #[cfg(feature = "dongle")]
+    async fn on_dongle_state_event(&mut self, event: DongleStateEvent) {
+        self.ctx.dongle_state = event.0;
         self.render().await;
     }
 }

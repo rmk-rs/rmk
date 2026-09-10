@@ -99,6 +99,13 @@ events = [
     { name = "battery_status" },
 ]
 
+[[subscriber]]
+features = ["dongle", "display"]
+events = [
+    # display/mod.rs: DisplayProcessor subscribes on a dongle with a screen.
+    { name = "dongle_state" },
+]
+
 # --- Split-gated internal subscribers ---
 
 [[subscriber]]

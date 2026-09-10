@@ -107,6 +107,22 @@ pub async fn drain_flash_channel_for_test() {
 #[cfg(feature = "_ble")]
 pub(crate) static BLE_PROFILE_CHANNEL: Channel<RawMutex, BleProfileAction, 1> = Channel::new();
 
+/// Test-only stand-in for the BLE profile task: records the `Debug` form of every
+/// received action in `sink`, so a test can check what a profile-key gesture sent.
+#[cfg(feature = "std")]
+#[doc(hidden)]
+pub async fn drain_ble_profile_channel_for_test(sink: &mut std::vec::Vec<std::string::String>) {
+    #[cfg(feature = "_ble")]
+    loop {
+        sink.push(std::format!("{:?}", BLE_PROFILE_CHANNEL.receive().await));
+    }
+    #[cfg(not(feature = "_ble"))]
+    {
+        let _ = sink;
+        core::future::pending::<()>().await
+    }
+}
+
 /// Vial RX from BLE GATT `output_data` writes — one 32-byte chunk per write.
 /// Pushed by `gatt_events_task`, drained by [`crate::ble::host::HostGattHandler::run`].
 #[cfg(all(feature = "vial", feature = "_ble"))]

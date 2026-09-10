@@ -1103,6 +1103,11 @@ impl<const STICKY_MODIFIER: bool, const STICKY_LAYER: bool, const STICKY_TAP_KEY
                         _ => unreachable!("tap-key and unsupported entries are not foreign-key candidates"),
                     }
                 }
+                // The press binds the latch to that key's lifetime: its release consumes
+                // the entry, so the latch timeout must not expire under a held key.
+                StickyPhase::Latched if event.pressed && entry.trigger_for_key(false) => {
+                    entry.timing_marker = None;
+                }
                 StickyPhase::Latched | StickyPhase::Held => {}
             }
         }

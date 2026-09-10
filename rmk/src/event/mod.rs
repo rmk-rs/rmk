@@ -14,6 +14,7 @@
 //! - `battery`: Battery events (ADC, charging, battery status)
 //! - `connection`: Connection events (USB/BLE, BLE status)
 //! - `split`: Split keyboard events (peripheral/central connection)
+//! - `dongle`: Dongle events (the dongle's link to its keyboard)
 
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_sync::pubsub::{Error as PubSubError, ImmediatePublisher, Publisher, Subscriber};
@@ -49,6 +50,8 @@ mod battery;
 mod connection;
 #[cfg(feature = "dfu")]
 mod dfu;
+#[cfg(feature = "dongle")]
+mod dongle;
 mod input;
 #[cfg(feature = "split")]
 mod split;
@@ -59,6 +62,8 @@ pub use battery::{BatteryAdcEvent, BatteryStatusEvent, ChargingStateEvent};
 pub use connection::{ConnectionStatus, ConnectionStatusChangeEvent, ConnectionType};
 #[cfg(feature = "dfu")]
 pub use dfu::DfuStatusEvent;
+#[cfg(feature = "dongle")]
+pub use dongle::{DongleState, DongleStateEvent};
 pub use input::{
     Axis, AxisEvent, AxisValType, KeyPos, KeyboardEvent, KeyboardEventPos, ModifierEvent, PointingEvent,
     PointingProcessorEvent, PointingSetCpiEvent, RotaryEncoderPos,

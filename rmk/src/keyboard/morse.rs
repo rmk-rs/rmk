@@ -46,11 +46,11 @@ where
                 // The time since the key release is longer than the timeout, trigger the action
                 let action = Self::action_from_pattern(self.keymap, &key.action, pattern);
                 self.process_key_action_tap(action, key.event).await;
-                let _ = self.held_buffer.remove(key.event.pos);
+                let _ = self.held_buffer.remove_if(|k| k.event.pos == key.event.pos);
             }
             KeyState::EarlyFired(_) => {
                 // Tap was already fired early, just clean up
-                let _ = self.held_buffer.remove(key.event.pos);
+                let _ = self.held_buffer.remove_if(|k| k.event.pos == key.event.pos);
             }
             _ => unreachable!(),
         };
@@ -176,14 +176,13 @@ where
                                 k.press_time = released_time;
                                 k.timeout_time = released_time + keep_alive;
                             }
-                            self.held_buffer.keys.sort_unstable_by_key(|k| k.timeout_time);
                             if !self.has_unresolved_morse_key() {
                                 self.fire_held_non_morse_keys().await;
                             }
                         } else if let Some(action) = final_action {
                             debug!("released prediction {:?} -> {:?}", pattern, action);
                             // Reached the longest configured morse pattern, trigger the corresponding action immediately
-                            self.held_buffer.remove(event.pos); // Remove the key from the held buffer, is like setting to an idle state
+                            self.held_buffer.remove_if(|k| k.event.pos == event.pos); // Remove the key from the held buffer, is like setting to an idle state
 
                             debug!(
                                 "Reached the longest configured morse pattern, trigger corresponding action {:?} immediately",
@@ -194,7 +193,7 @@ where
                             let mut press_event = event;
                             press_event.pressed = true;
                             self.process_key_action_tap(action, press_event).await;
-                            self.held_buffer.remove(event.pos); // Remove the key from the held buffer, is like setting to an idle state
+                            self.held_buffer.remove_if(|k| k.event.pos == event.pos); // Remove the key from the held buffer, is like setting to an idle state
                         } else {
                             // Expect a possible longer morse pattern (or idle timeout), update the state
                             let early_action = Self::check_early_fire(self.keymap, &k.action, pattern);
@@ -234,7 +233,7 @@ where
                     KeyState::ProcessedButReleaseNotReportedYet(action) => {
                         // Releasing a tap-hold action whose pressed HID report is already sent
                         info!("Releasing a morse action whose pressed action is already triggered");
-                        let _ = self.held_buffer.remove(event.pos);
+                        let _ = self.held_buffer.remove_if(|k| k.event.pos == event.pos);
                         // Process the release action
                         debug!("[morse] Releasing morse key: {:?}", event);
                         self.process_key_action_normal(action, event).await;
@@ -256,7 +255,7 @@ where
                                 k.timeout_time = now + timeout;
                             }
                         } else {
-                            let _ = self.held_buffer.remove(event.pos);
+                            let _ = self.held_buffer.remove_if(|k| k.event.pos == event.pos);
                         }
                     }
                     _ => {}
@@ -289,8 +288,6 @@ where
                 _ => (),
             }
         }
-
-        self.held_buffer.keys.sort_unstable_by_key(|k| k.timeout_time);
     }
 
     fn has_unresolved_morse_key(&self) -> bool {

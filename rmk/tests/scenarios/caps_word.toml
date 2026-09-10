@@ -1,0 +1,39 @@
+# Caps Word shifts letters until a non-continuation key or 5 s of idle time,
+# on a two-key board of its own: CapsWordToggle@(0,0), A@(0,1).
+
+[layout]
+rows = 1
+cols = 2
+map = "(0,0)  (0,1)"
+
+[[keymap.layer]]
+keys = "CapsWordToggle  A"
+
+[[test]]
+name = "caps_word_shifts_letters"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+]
+expect = [
+  ["LShift", "A"],
+  [],
+]
+
+# The 5 s timeout leaves the state machine activated-but-inactive, so the next
+# press of the Caps Word key has to switch it back on rather than off.
+[[test]]
+name = "caps_word_reactivates_after_the_timeout"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { delay = 6000 },
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+]
+expect = [
+  ["LShift", "A"],
+  [],
+  ["LShift", "A"],
+  [],
+]

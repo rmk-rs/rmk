@@ -16,7 +16,7 @@ use core::pin::Pin;
 
 #[cfg(feature = "storage")]
 use embassy_embedded_hal::adapter::BlockingAsync;
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either, select, select4};
 use embassy_futures::yield_now;
 use embassy_time::{Duration, Timer};
 #[cfg(feature = "storage")]
@@ -134,6 +134,7 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             rmk_config: self.rmk_config,
             steps: Vec::new(),
             storage: None,
+            ble_profile_actions: Vec::new(),
         }
     }
 
@@ -159,6 +160,7 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             rmk_config: self.rmk_config,
             steps: Vec::new(),
             storage: Some(Box::pin(async move { storage.run().await })),
+            ble_profile_actions: Vec::new(),
         }
     }
 }
@@ -196,6 +198,7 @@ pub struct SimKeyboard {
     rmk_config: RmkConfig<'static>,
     steps: Vec<SimStep>,
     storage: Option<Pin<Box<dyn Future<Output = ()>>>>,
+    ble_profile_actions: Vec<String>,
 }
 
 impl SimKeyboard {
@@ -364,6 +367,9 @@ impl SimKeyboard {
                 None => rmk::channel::drain_flash_channel_for_test().await,
             }
         };
+        // Same for the BLE profile task, but keep what it received so tests can check it.
+        let mut profile_actions = Vec::new();
+        let profiles = rmk::channel::drain_ble_profile_channel_for_test(&mut profile_actions);
 
         // A host connection is just a byte stream: drive the production
         // `run_session` over an in-memory duplex, exactly as a USB/BLE transport
@@ -385,22 +391,23 @@ impl SimKeyboard {
         // None of these ever return; the timeline does, and dropping them is how
         // a run ends. One resolving first means a task died or, for the session,
         // that a framing guard rejected the stream.
-        let background = select(keyboard.run(), select(flash, session));
+        let background = select4(keyboard.run(), flash, profiles, session);
         match select(background, run_steps(steps, &to_device, &from_device)).await {
             Either::First(_) => panic!("a background task ended before the scripted steps finished"),
             Either::Second(()) => {}
         }
+        self.ble_profile_actions = profile_actions;
 
         assert!(
             self.keyboard.held_buffer.is_empty(),
             "leak after buffer cleanup, buffer contains {:?}",
             self.keyboard.held_buffer
         );
-        assert!(
-            self.keyboard.unprocessed_events.is_empty(),
-            "simulator ended with unprocessed keyboard events: {:?}",
-            self.keyboard.unprocessed_events
-        );
+    }
+
+    /// What the keyboard sent the BLE profile task during `run`, in `Debug` form.
+    pub fn ble_profile_actions(&self) -> &[String] {
+        &self.ble_profile_actions
     }
 }
 
@@ -458,8 +465,6 @@ async fn run_steps(steps: Vec<SimStep>, to_device: &Link, from_device: &Link) {
                 }
             }
             SimStep::HostSend(request) => {
-                #[cfg(feature = "storage")]
-                rmk::test_support::reset_flash_operation();
                 let blocked = format!(
                     "host request of {} bytes blocked for {TIMEOUT_SECS}s: {}",
                     request.len(),
@@ -509,7 +514,7 @@ async fn run_steps(steps: Vec<SimStep>, to_device: &Link, from_device: &Link) {
             #[cfg(feature = "storage")]
             SimStep::WaitStorage => {
                 let waiting = format!("no storage write within {TIMEOUT_SECS}s");
-                let written = with_timeout(rmk::test_support::flash_operation_finished(), &waiting).await;
+                let written = with_timeout(rmk::test_support::flush_storage(), &waiting).await;
                 assert!(written, "storage write failed");
             }
             #[cfg(feature = "passkey_entry")]

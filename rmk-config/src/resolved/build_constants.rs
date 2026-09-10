@@ -157,6 +157,7 @@ impl crate::KeyboardTomlConfig {
             central_connected,
             peripheral_battery,
             clear_peer,
+            dongle_state,
             dfu_status,
             action,
         );
@@ -353,6 +354,25 @@ mod tests {
 
         // Three indicator processors, the display, two split peripherals, and USB/BLE Rynk sessions.
         assert_eq!(led_indicator.subs, 8);
+    }
+
+    #[test]
+    fn dongle_display_reserves_the_dongle_state_subscriber() {
+        let config: KeyboardTomlConfig = toml::from_str("").unwrap();
+        let subs = |features: &[&str]| {
+            config
+                .build_constants(features)
+                .unwrap()
+                .events
+                .into_iter()
+                .find(|event| event.name == "dongle_state")
+                .unwrap()
+                .subs
+        };
+
+        // Nobody listens on a screenless dongle, so publishing there is a no-op.
+        assert_eq!(subs(&["dongle", "_ble", "storage"]), 0);
+        assert_eq!(subs(&["dongle", "display", "_ble", "storage"]), 1);
     }
 
     #[test]
