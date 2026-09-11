@@ -293,9 +293,6 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
                 #modifiers,
             )
         };
-    } else if lower.starts_with("osm(") {
-        let modifiers = parse_modifiers(strip_call(key));
-        return quote! { ::rmk::types::action::Action::OneShotModifier(#modifiers) };
     } else if lower.starts_with("lm(") {
         let keys = split_top_level(strip_call(key));
         if keys.len() != 2 {
@@ -307,9 +304,6 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
     } else if lower.starts_with("mo(") {
         let layer = parse_layer(key);
         return quote! { ::rmk::types::action::Action::LayerOn(#layer) };
-    } else if lower.starts_with("osl(") {
-        let layer = parse_layer(key);
-        return quote! { ::rmk::types::action::Action::OneShotLayer(#layer) };
     } else if lower.starts_with("tg(") {
         let layer = parse_layer(key);
         return quote! { ::rmk::types::action::Action::LayerToggle(#layer) };
@@ -410,6 +404,7 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
 pub(crate) fn parse_key(
     key: String,
     profiles: &Option<HashMap<String, MorseProfile>>,
+    sticky: &[String],
 ) -> TokenStream2 {
     if !key.is_empty() && (key.trim_start_matches("_").is_empty() || key.to_lowercase() == "trns") {
         return quote! { ::rmk::a!(Transparent) };
@@ -453,12 +448,61 @@ pub(crate) fn parse_key(
     } else if lower.starts_with("tt(") {
         let layer = parse_layer(&key);
         quote! { ::rmk::tt!(#layer) }
+    } else if lower.starts_with("sk(") {
+        let keys = split_top_level(strip_call(&key));
+        if keys.is_empty() || keys.len() > 2 {
+            panic!("\n\u{274c} keyboard.toml: SK(action) or SK(action, profile) invalid");
+        }
+        let action = parse_action(&keys[0]);
+        let profile = sticky_profile(keys.get(1), sticky);
+        quote! { ::rmk::types::action::KeyAction::Sticky(#action, #profile) }
+    } else if lower.starts_with("osm(") {
+        let modifiers = parse_modifiers(strip_call(&key));
+        quote! {
+            ::rmk::types::action::KeyAction::Sticky(
+                ::rmk::types::action::Action::Modifier(#modifiers),
+                ::core::primitive::u8::MAX,
+            )
+        }
+    } else if lower.starts_with("osl(") {
+        let layer = parse_layer(&key);
+        quote! {
+            ::rmk::types::action::KeyAction::Sticky(
+                ::rmk::types::action::Action::LayerOn(#layer),
+                ::rmk::types::sticky::STICKY_PROFILE_LAYER,
+            )
+        }
     } else if lower.starts_with("td(") || lower.starts_with("morse(") {
         let index = parse_numeric_arg(strip_call(&key), "morse");
         quote! { ::rmk::types::action::KeyAction::Morse(#index) }
     } else {
         let action = parse_action(&key);
         quote! { ::rmk::types::action::KeyAction::Single(#action) }
+    }
+}
+
+/// Expand `SK`'s optional trailing profile name into its sticky profile table
+/// index. Omitted means `u8::MAX`, an index the table never covers, which
+/// resolves to the default profile at runtime.
+fn sticky_profile(profile_name: Option<&String>, sticky: &[String]) -> TokenStream2 {
+    let Some(name) = profile_name else {
+        return quote! { ::core::primitive::u8::MAX };
+    };
+    match sticky.iter().position(|n| n == name) {
+        Some(pos) => {
+            let idx = pos as u8;
+            quote! { #idx }
+        }
+        None => {
+            let hint = match closest_name(name, sticky.iter().map(String::as_str)) {
+                Some(s) => format!(" (did you mean {s}?)"),
+                None => String::new(),
+            };
+            panic!(
+                "\n\u{274c} keyboard.toml: `{:?}` profile name is not found in behavior.sticky_key.profiles{hint}",
+                name
+            )
+        }
     }
 }
 
@@ -586,7 +630,7 @@ mod tests {
     use rmk_config::resolved::behavior::MorseProfile;
 
     fn expand(key: &str) -> String {
-        parse_key(key.to_string(), &None).to_string()
+        parse_key(key.to_string(), &None, &[]).to_string()
     }
 
     fn profile(enable_flow_tap: Option<bool>) -> MorseProfile {
@@ -692,7 +736,7 @@ mod tests {
         );
         assert!(squash(&expand("WM(C,LCtrl)")).contains("Action::KeyWithModifier"));
         assert!(squash(&expand("MOD(LCtrl | LAlt | LGui)")).contains("Action::Modifier"));
-        assert!(squash(&expand("OSM(LShift)")).contains("Action::OneShotModifier"));
+        assert!(squash(&expand("OSM(LShift)")).contains("KeyAction::Sticky"));
     }
 
     #[test]
@@ -747,7 +791,7 @@ mod tests {
     )]
     fn morse_profile_suggests_closest_defined_profile() {
         let profiles = Some(HashMap::from([("home_row".to_string(), profile(None))]));
-        let _ = parse_key("TH(Space, Enter, home_roww)".to_string(), &profiles);
+        let _ = parse_key("TH(Space, Enter, home_roww)".to_string(), &profiles, &[]);
     }
 
     #[test]

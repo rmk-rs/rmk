@@ -1,4 +1,5 @@
-# One-shot modifiers (OSM) and one-shot layers (OSL).
+# Sticky keys: `OSM` is `SK(Modifier)` and `OSL` is `SK(MO(n))`, both running
+# on the same state machine.
 #
 # The fixture is row 0, cols 0-5 of the shared split board:
 #   Layer 0: OSM(LShift)          OSL(1)  A  TH(B, C)  OSM(LCtrl)  WM(B, LGui)
@@ -7,15 +8,15 @@
 # Two more shared-board positions are used below: MouseWheelUp@(0,8) and
 # the plain layer key MO(1)@(3,0).
 #
-# Tests inherit the one-shot defaults (timeout 1000ms, activate_on_keypress and
-# quick_release both false) unless they carry a `behavior.one_shot*` delta.
+# Tests inherit the sticky defaults (timeout 1000ms, activate_on_press and
+# release_on_next_press both false) unless they carry a `behavior.sticky_key` delta.
 
 keyboard = "boards/split.toml"
 
 # A pressed after the one-shot timeout expires gets no modifier.
 [[test]]
 name = "osm_timeout"
-behavior.one_shot = { timeout = "100ms" }
+behavior.sticky_key = { timeout = "100ms" }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },
   { delay = 150 },
@@ -111,7 +112,7 @@ expect = [["LShift", "B"], []]
 # the tap came out unshifted.
 [[test]]
 name = "osm_outlives_deadline_while_tap_hold_unresolved"
-behavior.one_shot = { timeout = "100ms" }
+behavior.sticky_key = { timeout = "100ms" }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift), deadline at 110ms
   { delay = 40 },
@@ -124,7 +125,7 @@ expect = [["LShift", "B"], []]
 # Same, resolved as a hold by its own timeout instead of a release.
 [[test]]
 name = "osm_outlives_deadline_while_tap_hold_unresolved_hold"
-behavior.one_shot = { timeout = "100ms" }
+behavior.sticky_key = { timeout = "100ms" }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift), deadline at 110ms
   { delay = 40 },
@@ -157,7 +158,7 @@ expect = [["LShift", "LCtrl", "LGui", "B"], []]
 # activate_on_keypress: the modifier is reported as soon as the OSM is pressed.
 [[test]]
 name = "osm_activate_on_keypress"
-behavior.one_shot_modifiers = { activate_on_keypress = true }
+behavior.sticky_key = { activate_on_press = true }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
@@ -171,7 +172,7 @@ expect = [
 # activate_on_keypress with two OSMs: each one is reported as it is pressed.
 [[test]]
 name = "osm_combined_modifiers_with_activate_on_keypress"
-behavior.one_shot_modifiers = { activate_on_keypress = true }
+behavior.sticky_key = { activate_on_press = true }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },
   { tap = { pos = [0, 4], duration = 10 } },
@@ -200,7 +201,7 @@ expect = [
 # After the one-shot timeout the key resolves on layer 0 again.
 [[test]]
 name = "osl_timeout"
-behavior.one_shot = { timeout = "100ms" }
+behavior.sticky_key = { timeout = "100ms" }
 steps = [
   { tap = { pos = [0, 1], duration = 10 } },
   { delay = 150 },
@@ -221,7 +222,10 @@ steps = [
 ]
 expect = [["C"], [], ["B"], []]
 
-# OSM consumed by the OSL keypress, so the layer-1 key arrives unshifted.
+# OSM and OSL stack: pressing the OSL sends no keycode, so it is not the input
+# the OSM was waiting for. The layer-1 key gets both.
+# Behavior change: the old implementation had the OSL press consume the OSM,
+# via an `update_osm` call whose comment called it a way to avoid a stuck state.
 [[test]]
 name = "osm_then_osl"
 steps = [
@@ -229,11 +233,9 @@ steps = [
   { tap = { pos = [0, 1], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
 ]
-expect = [["C"], []]
+expect = [["LShift", "C"], []]
 
-# A held (not tapped) OSL consumes a pending OSM at the OSL's own press, same
-# as the tapped case above. The key typed under the held layer must not see
-# the modifier either.
+# Same stacking when the OSL is held rather than tapped.
 [[test]]
 name = "osm_then_held_osl"
 steps = [
@@ -243,12 +245,15 @@ steps = [
   { release = [0, 1] },  # Release OSL(1)
 ]
 expect = [
-  ["C"],  # OSM already consumed by the OSL press
+  ["LShift", "C"],  # the OSL press sent no keycode, so the OSM survived it
   [],
 ]
 
-# OSL first, so (0,0) resolves to layer 1's OSM(LShift | LCtrl); the layer is
-# spent by then, so the next key comes from layer 0.
+# OSL first, so (0,0) resolves to layer 1's OSM(LShift | LCtrl). That OSM sends
+# no keycode either, so the layer is still armed and the third key also comes
+# from layer 1.
+# Behavior change: the old implementation let the OSM press spend the layer,
+# so the third key used to resolve on layer 0 as `A`.
 [[test]]
 name = "osl_then_osm"
 steps = [
@@ -256,12 +261,12 @@ steps = [
   { tap = { pos = [0, 0], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
 ]
-expect = [["LShift", "LCtrl", "A"], []]
+expect = [["LShift", "LCtrl", "C"], []]
 
 # Both the OSM and the OSL expire before the next key.
 [[test]]
 name = "osm_and_osl_timeout"
-behavior.one_shot = { timeout = "100ms" }
+behavior.sticky_key = { timeout = "100ms" }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },
   { tap = { pos = [0, 1], duration = 10 } },
@@ -279,7 +284,7 @@ expect = [
 # after the OSM itself.
 [[test]]
 name = "osm_timeout_survives_intervening_keys"
-behavior.one_shot = { timeout = "150ms" }
+behavior.sticky_key = { timeout = "150ms" }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift)
   { tap = { pos = [3, 0], duration = 10 } },  # MO(1) down and up
@@ -297,7 +302,7 @@ expect = [
 # timeout.
 [[test]]
 name = "osm_armed_does_not_stall_mouse_repeats"
-behavior.one_shot = { timeout = "600ms" }
+behavior.sticky_key = { timeout = "600ms" }
 steps = [
   { press = [0, 8] },   # Hold MouseWheelUp: initial delta, first repeat due at +100ms
   { press = [0, 0] },   # OSM(LShift) down
@@ -324,7 +329,7 @@ expect = [
 # the tap resolves.
 [[test]]
 name = "osm_quick_release_rolling"
-behavior.one_shot_modifiers = { quick_release = true }
+behavior.sticky_key = { release_on_next_press = true }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },
   { tap = { pos = [0, 3], duration = 10 } },  # TH(B, C) tapped
@@ -333,7 +338,7 @@ expect = [["LShift", "B"], ["B"], []]
 
 [[test]]
 name = "osm_quick_release_multiple_keys"
-behavior.one_shot_modifiers = { quick_release = true }
+behavior.sticky_key = { release_on_next_press = true }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
@@ -343,7 +348,7 @@ expect = [["LShift", "A"], ["A"], [], ["B"], []]
 
 [[test]]
 name = "osm_quick_release_combined_modifiers"
-behavior.one_shot_modifiers = { quick_release = true }
+behavior.sticky_key = { release_on_next_press = true }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },
   { tap = { pos = [0, 4], duration = 10 } },
@@ -354,7 +359,7 @@ expect = [["LShift", "LCtrl", "A"], ["A"], []]
 # WM keeps its own LGui after the one-shot modifiers are released.
 [[test]]
 name = "osm_quick_release_with_wm"
-behavior.one_shot_modifiers = { quick_release = true }
+behavior.sticky_key = { release_on_next_press = true }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },
   { tap = { pos = [0, 4], duration = 10 } },
@@ -364,7 +369,7 @@ expect = [["LShift", "LCtrl", "LGui", "B"], ["LGui", "B"], []]
 
 [[test]]
 name = "osm_quick_release_activate_on_keypress"
-behavior.one_shot_modifiers = { activate_on_keypress = true, quick_release = true }
+behavior.sticky_key = { activate_on_press = true, release_on_next_press = true }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
@@ -373,10 +378,38 @@ expect = [["LShift"], ["LShift", "A"], ["A"], []]
 
 [[test]]
 name = "osm_quick_release_combined_activate_on_keypress"
-behavior.one_shot_modifiers = { activate_on_keypress = true, quick_release = true }
+behavior.sticky_key = { activate_on_press = true, release_on_next_press = true }
 steps = [
   { tap = { pos = [0, 0], duration = 10 } },
   { tap = { pos = [0, 4], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
 ]
 expect = [["LShift"], ["LShift", "LCtrl"], ["LShift", "LCtrl", "A"], ["A"], []]
+
+# An expiring sticky modifier must leave a physically held copy of the same
+# modifier alone. `LM(1, LShift)` at (0,12) holds LShift in the real register,
+# which the sticky record's own LShift never enters.
+[[test]]
+name = "expiring_osm_keeps_a_held_copy_of_its_modifier"
+behavior.sticky_key = { timeout = "100ms" }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },   # OSM(LShift), now armed
+  { press = [0, 12] },                         # LM(1, LShift): LShift held for real
+  { delay = 150 },                             # the sticky expires
+  { tap = { pos = [0, 2], duration = 10 } },   # layer 1 C, still shifted
+  { release = [0, 12] },
+]
+expect = [["LShift"], ["LShift", "C"], ["LShift"], []]
+
+# Two sticky modifiers ending on the same layer transition leave together in
+# one report, rather than letting the host watch them disappear in turn.
+[[test]]
+name = "two_sticky_modifiers_ending_together_report_once"
+behavior.sticky_key = { activate_on_press = true, release_on_layer = "enter" }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift), armed
+  { tap = { pos = [0, 4], duration = 10 } },  # OSM(LCtrl), armed
+  { press = [3, 0] },                         # MO(1): entering ends both at once
+  { release = [3, 0] },
+]
+expect = [["LShift"], ["LShift", "LCtrl"], []]

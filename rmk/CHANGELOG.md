@@ -16,8 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: Keyboard macros are reworked around `MacroOp` lists.
 - **BREAKING**: Bump Rynk protocol version to 0.2: now `GetMacro`/`SetMacro` read and write a whole macro by index.
 
+- **Breaking**: `[behavior.one_shot]` and `[behavior.one_shot_modifiers]` are replaced by `[behavior.sticky_key]`; `activate_on_keypress` is now `activate_on_press` and `quick_release` is now `release_on_next_press`.
+- **Breaking**: `Action::OneShotLayer`, `Action::OneShotModifier` and `Action::OneShotKey` are gone, replaced by `KeyAction::Sticky(Action, u8)`. This shifts the wire tags of the `Action` variants that followed them.
+- A modifier, layer key or other sticky key no longer ends a pending one-shot, since none of them sends anything to the host. `OSM` and `OSL` therefore stack in both orders.
+
 ### Added
 
+- Sticky keys: `SK(action)` postpones an action's release until the next input, with per-key profiles under `[behavior.sticky_key.profiles]`. `OSM`/`OSL` are now sticky keys, and the `ignore` list makes Alt+Tab style cycling possible.
 - Macro operations accept any single action (`WM`, `MO`, `OSM`, ...) without the `vial` feature, and a new `pause_for_release` operation (`MacroOp::PauseForRelease`) runs the rest of the macro when the macro key is released
 - PMW3610 `force_awake` now follows the keyboard's sleep state, ZMK style: the sensor is held in RUN while the keyboard is awake and released to its REST modes when the idle sleep starts. `PointingDriver` gained a default-implemented `set_low_power` hint and `PointingDevice` subscribes to `SleepStateEvent`; each sensor in `keyboard.toml` reserves its subscriber slot automatically.
 - Make Trouble BLE roles explicit, document environment-variable memory tuning, update the nRF52832 examples to peripheral-only SDC, and derive split notification capacity from Trouble's configured packet-pool MTU.
