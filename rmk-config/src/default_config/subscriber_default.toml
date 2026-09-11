@@ -145,3 +145,12 @@ events = [
     # Covers up to 2 peripherals; for 3+ peripherals override subs in keyboard.toml
     { name = "sleep_state", count = 2 },
 ]
+
+# --- DFU Lock-gated internal subscribers ---
+
+[[subscriber]]
+features = ["dfu_lock"]
+events = [
+    # dfu/mod.rs: DfuLock subscribes to DfuCmdEvent for UnlockRequest
+    { name = "dfu_cmd" },
+]

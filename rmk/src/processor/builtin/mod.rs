@@ -4,7 +4,7 @@
 
 #[cfg(feature = "_ble")]
 pub mod battery_led;
-#[cfg(feature = "dfu")]
+#[cfg(feature = "_dfu")]
 pub mod dfu_led;
 pub mod led_indicator;
 pub mod wpm;

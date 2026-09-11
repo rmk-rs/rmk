@@ -23,6 +23,8 @@ use crate::hid::{
 use crate::light::UsbLedReader;
 use crate::state::{current_usb_state, set_usb_state};
 
+#[cfg(feature = "_dfu")]
+pub(crate) mod dfu;
 // The Rynk vendor interface serves the keyboard's Rynk session and the dongle's router.
 #[cfg(any(feature = "rynk", all(feature = "dongle", not(feature = "vial"))))]
 pub(crate) mod rynk;
@@ -164,7 +166,7 @@ impl<'d, D: Driver<'d>> HidWriterTrait for UsbKeyboardWriter<'_, 'd, D> {
 const DEFAULT_CONFIG_DESC_SIZE: usize = if cfg!(any(
     feature = "usb_log",
     feature = "steno",
-    feature = "dfu",
+    feature = "_dfu",
     feature = "rynk",
     all(feature = "dongle", not(feature = "vial"))
 )) {
@@ -210,9 +212,9 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(
     usb_config.composite_with_iads = true;
 
     // Control buffer must be large enough for the largest DFU transfer block.
-    #[cfg(feature = "dfu")]
+    #[cfg(feature = "_dfu")]
     const CONTROL_BUF_SIZE: usize = crate::dfu::BLOCK_SIZE_DFU;
-    #[cfg(not(feature = "dfu"))]
+    #[cfg(not(feature = "_dfu"))]
     const CONTROL_BUF_SIZE: usize = DEFAULT_CONFIG_DESC_SIZE;
 
     // The rynk MS OS 2.0 descriptor set (WinUSB binding) takes ~178 bytes, and
@@ -265,8 +267,19 @@ pub struct UsbTransport<'a, D: Driver<'static>, S = ()> {
 }
 
 impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
-    pub fn new(driver: D, device_config: DeviceConfig<'static>) -> Self {
-        UsbTransportBuilder::new(driver, device_config, default_config_descriptor()).build()
+    pub fn new(
+        driver: D,
+        device_config: DeviceConfig<'static>,
+        #[cfg(feature = "dfu_split")] num_peripherals: usize,
+    ) -> Self {
+        UsbTransportBuilder::new(
+            driver,
+            device_config,
+            default_config_descriptor(),
+            #[cfg(feature = "dfu_split")]
+            num_peripherals,
+        )
+        .build()
     }
 
     /// Start a USB stack the caller finishes, for binaries serving USB classes of
@@ -281,7 +294,13 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
         // A CDC ACM function costs ~66 descriptor bytes, an extra HID interface ~40.
         const SIZE: usize = DEFAULT_CONFIG_DESC_SIZE + 256;
         static CONFIG_DESC: StaticCell<[u8; SIZE]> = StaticCell::new();
-        UsbTransportBuilder::new(driver, device_config, &mut CONFIG_DESC.init([0; SIZE])[..])
+        UsbTransportBuilder::new(
+            driver,
+            device_config,
+            &mut CONFIG_DESC.init([0; SIZE])[..],
+            #[cfg(feature = "dfu_split")]
+            crate::SPLIT_PERIPHERALS_NUM,
+        )
     }
 }
 
@@ -303,7 +322,12 @@ pub struct UsbTransportBuilder<D: Driver<'static>> {
 impl<D: Driver<'static>> UsbTransportBuilder<D> {
     // Without `always`, opt-level="z" moves the whole struct between the two: +300 bytes.
     #[inline(always)]
-    fn new(driver: D, device_config: DeviceConfig<'static>, config_descriptor: &'static mut [u8]) -> Self {
+    fn new(
+        driver: D,
+        device_config: DeviceConfig<'static>,
+        config_descriptor: &'static mut [u8],
+        #[cfg(feature = "dfu_split")] num_peripherals: usize,
+    ) -> Self {
         // nRF chips don't have a stable USB serial number unless one is derived
         // from the FICR. Override here so user code doesn't have to know.
         #[cfg(feature = "_nrf_ble")]
@@ -331,16 +355,13 @@ impl<D: Driver<'static>> UsbTransportBuilder<D> {
         #[cfg(feature = "usb_log")]
         let logger = add_usb_logger!(&mut builder);
 
-        #[cfg(any(feature = "dfu_rp", feature = "dfu_nrf"))]
-        if let Some(mgr) = crate::dfu::get_manager() {
-            crate::dfu::register_dfu_interface(
-                &mut builder,
-                mgr,
-                device_config.product_name,
-                #[cfg(feature = "dfu_split")]
-                crate::SPLIT_PERIPHERALS_NUM,
-            );
-        }
+        #[cfg(feature = "_dfu")]
+        dfu::register_dfu_iface(
+            &mut builder,
+            device_config.product_name,
+            #[cfg(feature = "dfu_split")]
+            num_peripherals,
+        );
 
         #[cfg(any(feature = "host", feature = "dongle"))]
         let (host_reader, host_writer) = host_usb::build_host_usb(&mut builder);
@@ -503,7 +524,7 @@ async fn run_usb_logger<D: Driver<'static>>(logger_class: CdcAcmClass<'static, D
     logger_fut.await;
 }
 
-#[cfg(any(feature = "usb_log", feature = "dfu_nrf", feature = "dfu_rp"))]
+#[cfg(any(feature = "usb_log", feature = "_dfu"))]
 pub async fn run_peripheral_usb<D: Driver<'static>>(driver: D, config: DeviceConfig<'static>) {
     let mut builder = new_usb_builder(driver, config, default_config_descriptor());
 
@@ -512,16 +533,13 @@ pub async fn run_peripheral_usb<D: Driver<'static>>(driver: D, config: DeviceCon
     #[cfg(not(feature = "usb_log"))]
     let logger_fut = ::core::future::pending::<()>();
 
-    #[cfg(any(feature = "dfu_rp", feature = "dfu_nrf"))]
-    if let Some(mgr) = crate::dfu::get_manager() {
-        crate::dfu::register_dfu_interface(
-            &mut builder,
-            mgr,
-            config.product_name,
-            #[cfg(feature = "dfu_split")]
-            0,
-        );
-    }
+    #[cfg(feature = "_dfu")]
+    dfu::register_dfu_iface(
+        &mut builder,
+        config.product_name,
+        #[cfg(feature = "dfu_split")]
+        0,
+    );
 
     let mut usb_device = builder.build();
 

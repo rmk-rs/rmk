@@ -93,6 +93,11 @@ channel_size = 2
 pubs = 1
 subs = 1
 
+[event.dfu_cmd]
+channel_size = 4
+pubs = 1
+subs = 1
+
 # Dongle events
 [event.dongle_state]
 channel_size = 1
