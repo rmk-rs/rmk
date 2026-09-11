@@ -5,8 +5,7 @@ The `[behavior]` section contains configuration for how different keyboard actio
 ```toml
 [behavior]
 tri_layer = { upper = 1, lower = 2, adjust = 3 }
-one_shot = { timeout = "1s" }
-one_shot_modifiers = { activate_on_keypress = false }
+sticky_key = { timeout = "1s" }
 ```
 
 ::: note Rust API only
@@ -28,46 +27,71 @@ adjust = 3
 
 In this example, when both layers 1 (`upper`) and 2 (`lower`) are active, layer 3 (`adjust`) will also be enabled.
 
-## One-Shot
+## Sticky Key
 
-The `one_shot` sub-table contains common one-shot configuration (for both OSM and OSL)
+A sticky key postpones the release of the action it wraps until the next input,
+so tapping `SK(LShift)` shifts the key that follows. `OSM(mod)` and `OSL(n)` are
+sticky keys too: they are `SK(mod)` and `SK(MO(n))` with the modifier and layer
+actions filled in, running on the same state machine.
 
-Currently, there are only `timeout` field that specifies how long the one-shot modifier/layer remains active. When no key is pressed within this time, the one-shot modifier/layer will be canceled. `timeout` value is a string suffixed with `s` or `ms` (default: `1s`).
+A sticky key ends for one of five reasons:
 
-## One-Shot Modifiers
+| Trigger | Setting | Default |
+| --- | --- | --- |
+| The next input | `ignore` lists the keycodes that don't count | always on |
+| Timeout | `timeout` | `1s` |
+| Pressing the same sticky key again | fixed behavior | on |
+| A layer transition | `release_on_layer` | off |
+| Holding it past the morse hold threshold, then letting go | fixed behavior | on |
 
-The `one_shot_modifiers` sub-table configures one-shot modifiers (OSM).
-
-By default, one-shot modifiers do not activate on keypress and will be sent only when other key is pressed. You can change this behavior by setting `activate_on_keypress` to `true`. This behavior is also known as One-Shot Sticky Modifiers (OSSM).
-
-If you press One-Shot Modifier again, it will be sent as a normal modifier key press and, therefore, released.
-
-The `quick_release` option controls when the one-shot modifier is released:
-
-- `false` (default): the modifier is included in the next key's press report and stays part of that report for as long as the key is held, including key repeat (chain mode, equivalent to ZMK `&skn`). No separate report is sent when the key is released.
-- `true`: an extra report is sent right after the next key's press with the modifier removed (equivalent to ZMK `&skq`). Only the initial press of the next key is modified; key repeat will not include the modifier.
-
-Default values:
-
-```toml
-[behavior.one_shot_modifiers]
-activate_on_keypress = false
-quick_release = false
-```
-
-OSSM example:
+"The next input" means a key that actually sends something to the host: a
+keycode, a media or system usage, a mouse button. Modifiers, `MO`, and other
+sticky keys send nothing, so they never end a sticky key, which is what lets
+`OSM` and `OSL` stack.
 
 ```toml
-[behavior.one_shot_modifiers]
-activate_on_keypress = true
+[behavior.sticky_key]
+timeout = "1s"                # no next input for this long, and it ends
+ignore = []                   # these keycodes don't count as the next input
+activate_on_press = false     # send the effect to the host on press
+release_on_next_press = false # end it on the next key's press, not its release
+release_on_layer = "none"     # none / enter / exit / both
 ```
 
-Quick-release example:
+`activate_on_press` off means the host sees nothing until the next key, so a
+sticky key that is never used stays invisible. Turn it on for chords with a
+mouse, where the host has to see the modifier before the click.
+
+`release_on_next_press` off means the effect disappears with the next key's own
+release report. Turn it on to have the host see it end the moment that key goes
+down, which is what `OSL` does so the key after it resolves on the right layer.
+
+### Profiles
+
+`[behavior.sticky_key.profiles]` defines named profiles that a key can pick with
+`SK(action, name)`. A field left out of a profile falls back to the default
+profile above.
 
 ```toml
-[behavior.one_shot_modifiers]
-quick_release = true
+[behavior.sticky_key.profiles.alttab]
+timeout = "5s"
+activate_on_press = true
+ignore = ["Tab"]
 ```
+
+With `SK(LAlt, alttab)` on one key and `Tab` on another, tapping the first key
+and then hitting Tab repeatedly cycles windows: Tab is on the ignore list, so it
+neither ends the sticky Alt nor lets the timeout run out. Any other key ends it.
+
+Add the arrow keys to `ignore` if you also pick windows with them:
+
+```toml
+ignore = ["Tab", "Left", "Right"]
+```
+
+The number of named profiles is capped by `[rmk].sticky_profile_max_num`
+(default 4), the ignore list by `[rmk].sticky_ignore_max` (default 4), and the
+number of sticky keys active at once by `[rmk].sticky_max_active` (default 4).
 
 ## Combo
 

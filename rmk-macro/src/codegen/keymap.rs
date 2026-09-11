@@ -17,13 +17,15 @@ pub(crate) fn expand_default_keymap(keymap: &Keymap, behavior: &Behavior) -> Tok
         .map(|m| m.profiles.clone())
         .filter(|p| !p.is_empty());
 
+    let sticky = super::behavior::sticky_profile_names(&behavior.sticky_key);
+
     let num_encoder = keymap.num_encoder;
 
     let mut layers = vec![];
     let mut encoder_map = vec![];
 
     for layer in &keymap.keymap {
-        layers.push(expand_layer(layer.clone(), &profiles));
+        layers.push(expand_layer(layer.clone(), &profiles, &sticky));
     }
 
     for encoder_layer in &keymap.encoder_map {
@@ -31,6 +33,7 @@ pub(crate) fn expand_default_keymap(keymap: &Keymap, behavior: &Behavior) -> Tok
             encoder_layer.clone(),
             num_encoder,
             &profiles,
+            &sticky,
         ));
     }
     encoder_map.resize(
@@ -53,9 +56,10 @@ pub(crate) fn expand_default_keymap(keymap: &Keymap, behavior: &Behavior) -> Tok
 pub(crate) fn expand_layer(
     layer: Vec<Vec<String>>,
     profiles: &Option<HashMap<String, MorseProfile>>,
+    sticky: &[String],
 ) -> TokenStream2 {
     let rows = layer.into_iter().map(|row| {
-        let keys = row.into_iter().map(|key| parse_key(key, profiles));
+        let keys = row.into_iter().map(|key| parse_key(key, profiles, sticky));
         quote! { [#(#keys), *] }
     });
     quote! { [#(#rows), *] }
@@ -66,12 +70,13 @@ pub(crate) fn expand_encoder_layer(
     encoder_layer: Vec<[String; 2]>,
     num_encoder: usize,
     profiles: &Option<HashMap<String, MorseProfile>>,
+    sticky: &[String],
 ) -> TokenStream2 {
     let mut encoders = vec![];
 
     for encoder in encoder_layer {
-        let cw_action = parse_key(encoder[0].clone(), profiles);
-        let ccw_action = parse_key(encoder[1].clone(), profiles);
+        let cw_action = parse_key(encoder[0].clone(), profiles, sticky);
+        let ccw_action = parse_key(encoder[1].clone(), profiles, sticky);
         encoders.push(quote! { ::rmk::encoder!(#cw_action, #ccw_action) });
     }
 
