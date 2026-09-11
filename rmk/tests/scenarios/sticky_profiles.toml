@@ -1,0 +1,285 @@
+# Sticky behaviors that `OSM`/`OSL` don't reach: the `ignore` list, layer
+# release, holding a sticky key, and wrapping a plain keycode.
+#
+# Board of its own, two rows:
+#   (0,0) SK(LAlt, alttab)   (0,1) Tab           (0,2) A         (0,3) MO(1)
+#   (0,4) SK(A)              (0,5) SK(LShift, layerexit)
+#   (1,0) SK(MO(1))          (1,1) SK(WM(Tab, LAlt), alttab)
+#   (1,2) MouseBtn1          (1,3) OSM(LCtrl)    (1,4) OSM(LCtrl | LShift)
+#   (1,5) MACRO(0), which taps A   (1,6) SK(LCtrl, alttab), an eager sticky Ctrl
+#   (0,6) a plain LCtrl
+# Layer 1 maps (0,2) to C.
+
+[layout]
+rows = 2
+cols = 7
+map = """
+(0,0)  (0,1)  (0,2)  (0,3)  (0,4)  (0,5)  (0,6)
+(1,0)  (1,1)  (1,2)  (1,3)  (1,4)  (1,5)  (1,6)
+"""
+
+[behavior.macro]
+macros = [{ operations = [{ operation = "tap", keycode = "A" }] }]
+
+[behavior.sticky_key]
+timeout = "1s"
+
+[behavior.sticky_key.profiles.alttab]
+timeout = "5s"
+activate_on_press = true
+ignore = ["Tab"]
+
+[behavior.sticky_key.profiles.layerexit]
+release_on_layer = "exit"
+
+[[keymap.layer]]
+keys = """
+SK(LAlt, alttab)  Tab                            A           MO(1)       SK(A)                  SK(LShift, layerexit)  LCtrl
+SK(MO(1))         SK(WM(Tab, LAlt), alttab)      MouseBtn1   OSM(LCtrl)  OSM(LCtrl | LShift)    MACRO(0)               SK(LCtrl, alttab)
+"""
+
+[[keymap.layer]]
+keys = """
+No  No  C   _   No  No  No
+No  No  No  No  No  No  No
+"""
+
+# Alt+Tab: the sticky Alt is pressed once, then every Tab hits the ignore list
+# so it neither claims the Alt nor lets the timeout run out. A key outside the
+# list ends it. This is KMK's `KC.SK(KC.LALT)` usage.
+[[test]]
+name = "sticky_alt_tab_cycles"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  ["LAlt"],           # activate_on_press: the host sees Alt right away
+  ["LAlt", "Tab"],
+  ["LAlt"],
+  ["LAlt", "Tab"],    # second Tab, Alt still held
+  ["LAlt"],
+  ["LAlt", "A"],      # A is not in the ignore list, so it claims the Alt
+  [],
+]
+
+# Each ignore hit refills the timeout, so cycling slowly never drops the Alt.
+[[test]]
+name = "sticky_ignore_refills_the_timeout"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { delay = 3000 },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { delay = 3000 },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  ["LAlt"],
+  ["LAlt", "Tab"],
+  ["LAlt"],
+  ["LAlt", "Tab"],
+  ["LAlt"],
+  ["LAlt", "A"],
+  [],
+]
+
+# Wrapping a plain keycode is the same rule with nothing special about it. This
+# one is on the default profile, so it is also lazy: the A is registered but
+# held back until the next key, then both land in one report and the A is
+# claimed by it. The default profile has no ignore list, so Tab claims.
+[[test]]
+name = "sticky_plain_keycode_stays_down"
+steps = [
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+]
+expect = [
+  ["A", "Tab"],
+  [],
+]
+
+# Pressing the same sticky key again cancels it, which is its only explicit undo.
+[[test]]
+name = "sticky_double_tap_cancels"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  ["LAlt"],
+  [],
+  ["A"],  # no Alt: the second tap cancelled it
+  [],
+]
+
+# Holding a sticky key past the "this is a hold" threshold makes it act like a
+# normal key: the effect ends with the finger, not with the next input.
+[[test]]
+name = "sticky_held_past_threshold_releases_on_keyup"
+steps = [
+  { press = [0, 0] },
+  { delay = 400 },
+  { release = [0, 0] },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  ["LAlt"],
+  [],
+  ["A"],  # no Alt: it was held, so it ended on key-up
+  [],
+]
+
+# `release_on_layer = "exit"`: leaving a layer ends the sticky key, which is
+# what #859 asked for and what ZMK cannot do at all.
+[[test]]
+name = "sticky_released_on_layer_exit"
+steps = [
+  { tap = { pos = [0, 5], duration = 10 } },
+  { press = [0, 3] },
+  { release = [0, 3] },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  ["A"],  # no Shift: leaving layer 1 released it
+  [],
+]
+
+# Without a layer transition the same key behaves normally.
+[[test]]
+name = "sticky_survives_without_layer_change"
+steps = [
+  { tap = { pos = [0, 5], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  ["LShift", "A"],
+  [],
+]
+
+# A layer has to be lit before the next key is looked up, so a sticky layer is
+# dispatched on press whatever the profile says. Regression: `SK(MO(1))` on the
+# default (lazy) profile used to resolve the next key on the base layer.
+[[test]]
+name = "sticky_layer_activates_in_time"
+steps = [
+  { tap = { pos = [1, 0], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["C"], []]
+
+# A mouse button is input, so it claims the sticky Ctrl. Its own report is a
+# mouse report, so the keyboard report that drops the Ctrl has to be sent
+# explicitly: nothing else is coming. Regression: the host kept holding Ctrl.
+# The sticky Ctrl has to be eager here, because a click carries no keyboard
+# report of its own for a held-back modifier to ride out on.
+[[test]]
+name = "mouse_button_claims_sticky_and_reports_it"
+steps = [
+  { tap = { pos = [1, 6], duration = 10 } },
+  { tap = { pos = [1, 2], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  ["LCtrl"],                    # eager, so the host has the Ctrl before the click
+  { mouse = { buttons = 1 } },
+  [],                           # dropped explicitly: no keyboard report follows a click
+  { mouse = {} },
+  ["A"],                        # so the next letter is clean
+  [],
+]
+
+# `SK(WM(Tab, LAlt))` behaves like holding the WM key: both the Tab and the Alt
+# stay until the next input. Regression: the Alt was cleared by the next press,
+# because a WM's modifiers are dropped when a new key goes down.
+[[test]]
+name = "sticky_wm_keeps_its_modifier"
+steps = [
+  { tap = { pos = [1, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  ["LAlt", "Tab"],          # pressed; the key-up keeps both, same as holding WM
+  ["LAlt", "Tab", "A"],     # the Alt is still there when the next key claims it
+  [],
+]
+
+# Two records holding overlapping modifiers: releasing one must not take the
+# other's bits with it, even though the release dispatches the whole action.
+[[test]]
+name = "overlapping_sticky_modifiers_keep_their_own_bits"
+steps = [
+  { press = [1, 3] },   # OSM(LCtrl) held
+  { press = [1, 4] },   # OSM(LCtrl | LShift) held
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [1, 4] }, # let go of the Ctrl+Shift one
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [1, 3] },
+]
+expect = [
+  ["LCtrl", "LShift", "A"],
+  ["LCtrl", "LShift"],
+  ["LCtrl"],               # Shift goes, Ctrl stays: the other record still holds it
+  ["LCtrl", "A"],
+  ["LCtrl"],
+  [],
+]
+
+# A macro writes into the report without going through the action dispatcher,
+# so it needs its own claim. Regression: the macro's key came out unmodified and
+# the sticky Ctrl stayed armed until it timed out.
+[[test]]
+name = "macro_gets_and_claims_the_sticky_modifier"
+steps = [
+  { tap = { pos = [1, 3], duration = 10 } },
+  { tap = { pos = [1, 5], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [
+  ["LCtrl", "A"],  # the macro's A carries the sticky Ctrl
+  ["LCtrl"],
+  ["A"],           # claimed rather than left armed, so the next letter is clean
+  [],
+]
+
+# A plain Ctrl held at the same time as a sticky Ctrl keeps its own claim: the
+# sticky's release dispatches `Modifier(LCtrl)`, which clears the register the
+# plain key is also using. Regression: the plain Ctrl went away with it.
+[[test]]
+name = "sticky_release_keeps_a_plain_modifier"
+steps = [
+  { press = [0, 6] },                         # plain LCtrl down
+  { tap = { pos = [1, 3], duration = 10 } },  # OSM(LCtrl)
+  { tap = { pos = [0, 2], duration = 10 } },  # A claims the sticky one
+  { tap = { pos = [0, 2], duration = 10 } },  # still Ctrl+A: the plain key is down
+  { release = [0, 6] },
+]
+expect = [
+  ["LCtrl"],
+  ["LCtrl", "A"],
+  ["LCtrl"],
+  ["LCtrl", "A"],
+  ["LCtrl"],
+  [],
+]
+
+# Two sticky records whose modifier sets overlap. Releasing the one that holds
+# only Ctrl must leave the other's Ctrl alone. Regression: the second record
+# recorded only the newly added Shift, so it lost its claim on Ctrl.
+[[test]]
+name = "overlapping_sticky_sets_keep_the_shared_bit"
+steps = [
+  { press = [1, 3] },                         # OSM(LCtrl)
+  { press = [1, 4] },                         # OSM(LCtrl | LShift)
+  { release = [1, 3] },                       # let the Ctrl-only one go
+  { tap = { pos = [0, 2], duration = 10 } },  # still Ctrl+Shift+A
+  { release = [1, 4] },
+]
+expect = [
+  ["LCtrl", "LShift", "A"],
+  ["LCtrl", "LShift"],
+  [],
+]

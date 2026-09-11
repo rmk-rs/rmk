@@ -273,11 +273,12 @@ fn expand_builder(
     rmk_config: Option<TokenStream2>,
 ) -> TokenStream2 {
     let profiles = behavior.morse.as_ref().map(|m| m.profiles.clone());
+    let sticky = super::behavior::sticky_profile_names(&behavior.sticky_key);
     let rows = keymap.rows as usize;
     let cols = keymap.cols as usize;
     let layers = keymap.layers as usize;
     let layer_tokens = keymap.keymap.iter();
-    let layer_tokens = layer_tokens.map(|l| expand_layer(l.clone(), &profiles));
+    let layer_tokens = layer_tokens.map(|l| expand_layer(l.clone(), &profiles, &sticky));
 
     let num_encoder = keymap.num_encoder;
     let encoder_call = (num_encoder > 0).then(|| {
@@ -286,7 +287,7 @@ fn expand_builder(
         encoder_map.resize(layers, Vec::new());
         let encoder_layers = encoder_map
             .into_iter()
-            .map(|e| expand_encoder_layer(e, num_encoder, &profiles));
+            .map(|e| expand_encoder_layer(e, num_encoder, &profiles, &sticky));
         quote! { .encoders([#(#encoder_layers),*]) }
     });
 

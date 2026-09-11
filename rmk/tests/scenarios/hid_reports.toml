@@ -19,7 +19,7 @@ map = """
 [[keymap.layer]]
 keys = """
 AudioVolUp  SystemSleep  MouseRight  MO(1)
-No          No           No          No
+LShift      LShift       No          No
 No          No           No          No
 """
 
@@ -107,5 +107,23 @@ expect = [
   ["Kc8"],
   ["Kc8", "Kc9"],
   ["Kc9"],
+  [],
+]
+
+# Two keys holding the same modifier are two holders, not one. Releasing the
+# first leaves it down for the second, the same way a shared keycode above
+# stays down until its last holder lets go.
+[[test]]
+name = "two_keys_holding_one_modifier_keep_it_until_the_last_release"
+steps = [
+  { press = [1, 0] },
+  { press = [1, 1] },
+  { release = [1, 0] },
+  { release = [1, 1] },
+]
+expect = [
+  ["LShift"],
+  ["LShift"],
+  ["LShift"],
   [],
 ]

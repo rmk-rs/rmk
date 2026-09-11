@@ -3,8 +3,7 @@ use std::collections::HashMap;
 /// Resolved behavioral configuration.
 pub struct Behavior {
     pub tri_layer: Option<[u8; 3]>,
-    pub one_shot_timeout_ms: Option<u64>,
-    pub one_shot_modifiers: Option<OneShot>,
+    pub sticky_key: Option<StickyKey>,
     pub combos: Option<Combos>,
     pub macros: Option<Macros>,
     pub forks: Option<Forks>,
@@ -31,9 +30,52 @@ pub const DEFAULT_AUTO_MOUSE_LAYER_THRESHOLD: u16 = 1;
 /// Fallback for `auto_mouse_layer_max_num` when no `keyboard.toml` is loaded.
 pub const DEFAULT_AUTO_MOUSE_LAYER_MAX_NUM: usize = 2;
 
-pub struct OneShot {
-    pub activate_on_keypress: Option<bool>,
-    pub quick_release: Option<bool>,
+/// Resolved sticky key configuration: the default profile plus the named ones.
+pub struct StickyKey {
+    pub default: StickyProfile,
+    /// Named profiles sorted by name, so a profile's index is stable across builds.
+    pub profiles: Vec<(String, StickyProfile)>,
+}
+
+/// One sticky profile. `None` means "inherit the default profile".
+#[derive(Clone, Debug, Default)]
+pub struct StickyProfile {
+    pub timeout_ms: Option<u64>,
+    pub ignore: Option<Vec<String>>,
+    pub activate_on_press: Option<bool>,
+    pub release_on_next_press: Option<bool>,
+    pub release_on_layer: Option<LayerRelease>,
+}
+
+/// Which layer transitions release a sticky key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerRelease {
+    None,
+    Enter,
+    Exit,
+    Both,
+}
+
+impl LayerRelease {
+    fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "none" => Ok(Self::None),
+            "enter" => Ok(Self::Enter),
+            "exit" => Ok(Self::Exit),
+            "both" => Ok(Self::Both),
+            other => Err(format!(
+                "behavior.sticky_key: release_on_layer must be none, enter, exit or both, got `{other}`"
+            )),
+        }
+    }
+
+    pub fn on_enter(self) -> bool {
+        matches!(self, Self::Enter | Self::Both)
+    }
+
+    pub fn on_exit(self) -> bool {
+        matches!(self, Self::Exit | Self::Both)
+    }
 }
 
 pub struct Combos {
@@ -123,12 +165,46 @@ impl crate::KeyboardTomlConfig {
 
         let tri_layer = toml_behavior.tri_layer.map(|t| [t.upper, t.lower, t.adjust]);
 
-        let one_shot_timeout_ms = toml_behavior.one_shot.and_then(|o| o.timeout.map(|t| t.0));
+        let sticky_key = match toml_behavior.sticky_key {
+            Some(s) => {
+                let mut profiles: Vec<(String, StickyProfile)> = Vec::new();
+                for (name, p) in s.profiles.iter().flatten() {
+                    profiles.push((
+                        name.clone(),
+                        StickyProfile {
+                            timeout_ms: p.timeout.as_ref().map(|t| t.0),
+                            ignore: p.ignore.clone(),
+                            activate_on_press: p.activate_on_press,
+                            release_on_next_press: p.release_on_next_press,
+                            release_on_layer: p.release_on_layer.as_deref().map(LayerRelease::parse).transpose()?,
+                        },
+                    ));
+                }
+                // Sorted so that a profile keeps the same index no matter how the
+                // TOML map was iterated.
+                profiles.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let one_shot_modifiers = toml_behavior.one_shot_modifiers.map(|o| OneShot {
-            activate_on_keypress: o.activate_on_keypress,
-            quick_release: o.quick_release,
-        });
+                if profiles.len() > self.rmk.sticky_profile_max_num {
+                    return Err(format!(
+                        "behavior.sticky_key.profiles defines {} profiles, but `[rmk] sticky_profile_max_num` is {}. Raise it in keyboard.toml",
+                        profiles.len(),
+                        self.rmk.sticky_profile_max_num
+                    ));
+                }
+
+                Some(StickyKey {
+                    default: StickyProfile {
+                        timeout_ms: s.timeout.as_ref().map(|t| t.0),
+                        ignore: s.ignore.clone(),
+                        activate_on_press: s.activate_on_press,
+                        release_on_next_press: s.release_on_next_press,
+                        release_on_layer: s.release_on_layer.as_deref().map(LayerRelease::parse).transpose()?,
+                    },
+                    profiles,
+                })
+            }
+            None => None,
+        };
 
         let combos = toml_behavior.combo.map(|c| Combos {
             combos: c
@@ -256,8 +332,7 @@ impl crate::KeyboardTomlConfig {
 
         Ok(Behavior {
             tri_layer,
-            one_shot_timeout_ms,
-            one_shot_modifiers,
+            sticky_key,
             combos,
             macros,
             forks,

@@ -11,7 +11,7 @@ use {
 };
 
 use crate::MACRO_SPACE_SIZE;
-use crate::config::{BehaviorConfig, Hand, MouseKeyConfig, OneShotModifiersConfig, PositionalConfig};
+use crate::config::{BehaviorConfig, Hand, MouseKeyConfig, PositionalConfig};
 use crate::event::{KeyboardEvent, KeyboardEventPos, LayerChangeEvent, publish_event};
 use crate::input_device::rotary_encoder::Direction;
 use crate::keyboard::combo::Combo;
@@ -242,6 +242,16 @@ impl KeyMapInner<'_> {
         // Keep release on the same transparent default-layer action as press.
         self.save_layer_cache(event.pos, self.behavior.default_layer);
         KeyAction::No
+    }
+
+    /// Active layers as a bitmask, for spotting a layer transition by comparing
+    /// it across an action's dispatch.
+    pub(crate) fn layer_bits(&self) -> u32 {
+        self.layer_state
+            .iter()
+            .enumerate()
+            .filter(|(_, on)| **on)
+            .fold(0u32, |acc, (i, _)| acc | (1 << i.min(31)))
     }
 
     fn get_activated_layer(&self) -> u8 {
@@ -543,6 +553,10 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow().get_activated_layer()
     }
 
+    pub(crate) fn layer_bits(&self) -> u32 {
+        self.inner.borrow().layer_bits()
+    }
+
     pub(crate) fn get_default_layer(&self) -> u8 {
         self.inner.borrow().get_default_layer()
     }
@@ -585,12 +599,10 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow().behavior.combo.prior_idle_time
     }
 
+    /// The default sticky profile's timeout. Vial and Rynk still call this the
+    /// one-shot timeout, which is what `OSM`/`OSL` map onto.
     pub(crate) fn one_shot_timeout(&self) -> Duration {
-        self.inner.borrow().behavior.one_shot.timeout
-    }
-
-    pub(crate) fn one_shot_modifiers_config(&self) -> OneShotModifiersConfig {
-        self.inner.borrow().behavior.one_shot_modifiers
+        Duration::from_millis(self.inner.borrow().behavior.sticky_key.default_profile.timeout_ms as u64)
     }
 
     pub(crate) fn tap_interval(&self) -> u16 {
@@ -607,6 +619,30 @@ impl<'a> KeyMap<'a> {
 
     pub(crate) fn morse_prior_idle_time(&self) -> Duration {
         self.inner.borrow().behavior.morse.prior_idle_time
+    }
+
+    /// Resolve a sticky profile by its table index: the entry if present,
+    /// otherwise the configured default profile.
+    pub(crate) fn sticky_profile(&self, idx: u8) -> rmk_types::sticky::StickyProfile {
+        let inner = self.inner.borrow();
+        let config = &inner.behavior.sticky_key;
+        if idx == rmk_types::sticky::STICKY_PROFILE_LAYER {
+            // A layer decides how the *next* key resolves, and that lookup
+            // happens before any dispatch, so it can't be held back the way a
+            // modifier can. Holding it back would also buy nothing: a layer is
+            // never sent to the host.
+            let mut profile = config.default_profile.clone();
+            profile.flags = profile
+                .flags
+                .with_activate_on_press(true)
+                .with_release_on_next_press(true);
+            return profile;
+        }
+        config
+            .profiles
+            .get(idx as usize)
+            .cloned()
+            .unwrap_or_else(|| config.default_profile.clone())
     }
 
     pub(crate) fn morse_default_profile(&self) -> MorseProfile {
@@ -644,7 +680,7 @@ impl<'a> KeyMap<'a> {
     }
 
     pub(crate) fn set_one_shot_timeout(&self, timeout: Duration) {
-        self.inner.borrow_mut().behavior.one_shot.timeout = timeout;
+        self.inner.borrow_mut().behavior.sticky_key.default_profile.timeout_ms = timeout.as_millis() as u16;
     }
 
     pub(crate) fn set_tap_interval(&self, interval: u16) {

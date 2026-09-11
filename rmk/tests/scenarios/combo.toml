@@ -104,7 +104,7 @@ expect = [
 
 [[test]]
 name = "combo_with_one_shot_modifier"
-behavior.one_shot = { timeout = "300ms" }
+behavior.sticky_key = { timeout = "300ms" }
 steps = [
   { press = [1, 4] },
   { press = [1, 6] },
@@ -293,8 +293,7 @@ expect = [["Equal"], ["Equal", "RightBracket"], ["Equal"], []]
 
 [[test]]
 name = "combo_with_one_shot_modifier_quick_release"
-behavior.one_shot = { timeout = "300ms" }
-behavior.one_shot_modifiers = { quick_release = true }
+behavior.sticky_key = { timeout = "300ms", release_on_next_press = true }
 steps = [
   { press = [1, 4] },
   { press = [1, 6] },
@@ -309,7 +308,7 @@ expect = [["LShift", "E"], ["E"], []]
 
 [[test]]
 name = "overlapped_combo_quick_release"
-behavior.one_shot_modifiers = { quick_release = true }
+behavior.sticky_key = { release_on_next_press = true }
 steps = [
   { press = [1, 4] },
   { press = [1, 6] },

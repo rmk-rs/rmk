@@ -53,15 +53,6 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
                 // 0x0
                 // }
             }
-            Action::OneShotLayer(l) => {
-                // One-shot layer
-                if l < 16 { 0x5280 | l as u16 } else { 0x0000 }
-            }
-            Action::OneShotModifier(m) => {
-                // One-shot modifier
-                let modifier_bits = m.into_packed_bits();
-                0x52A0 | modifier_bits as u16
-            }
             Action::LayerOnWithModifier(l, m) => {
                 if l < 16 {
                     0x5000 | ((l as u16) << 5) | ((m.into_packed_bits() & 0b11111) as u16)
@@ -93,6 +84,17 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
             Action::User(id) => (id as u16 & 0x1F) | 0x7E00,
             _ => {
                 warn!("Action: {:?} in vial is not supported yet", a);
+                0
+            }
+        },
+        // Via only has keycodes for the modifier and layer shapes of a sticky
+        // key; anything else is a sticky key Via cannot name, so it reads back
+        // as unknown rather than being silently rewritten to something else.
+        KeyAction::Sticky(action, _) => match action {
+            Action::Modifier(m) => 0x52A0 | m.into_packed_bits() as u16,
+            Action::LayerOn(l) if l < 16 => 0x5280 | l as u16,
+            _ => {
+                warn!("Sticky action {:?} has no via keycode", action);
                 0
             }
         },
@@ -190,14 +192,15 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
             KeyAction::Single(Action::LayerToggle(layer))
         }
         0x5280..=0x529F => {
-            // One-shot layer
+            // One-shot layer: the layer profile, same as the `osl!` macro, so a
+            // layer written back from Via still activates on press.
             let layer = via_keycode as u8 & 0xF;
-            KeyAction::Single(Action::OneShotLayer(layer))
+            KeyAction::Sticky(Action::LayerOn(layer), rmk_types::sticky::STICKY_PROFILE_LAYER)
         }
         0x52A0..=0x52BF => {
             // One-shot modifier
             let m = ModifierCombination::from_packed_bits((via_keycode & 0x1F) as u8);
-            KeyAction::Single(Action::OneShotModifier(m))
+            KeyAction::Sticky(Action::Modifier(m), u8::MAX)
         }
         0x52C0..=0x52DF => {
             // TODO: Layer tap toggle
@@ -343,16 +346,17 @@ mod test {
         // OSL(3)
         let via_keycode = 0x5283;
         assert_eq!(
-            KeyAction::Single(Action::OneShotLayer(3)),
+            KeyAction::Sticky(Action::LayerOn(3), u8::MAX),
             from_via_keycode(via_keycode)
         );
 
         // OSM RCtrl
         let via_keycode = 0x52B1;
         assert_eq!(
-            KeyAction::Single(Action::OneShotModifier(ModifierCombination::new_from(
-                true, false, false, false, true
-            ))),
+            KeyAction::Sticky(
+                Action::Modifier(ModifierCombination::new_from(true, false, false, false, true)),
+                u8::MAX
+            ),
             from_via_keycode(via_keycode)
         );
 
@@ -643,13 +647,14 @@ mod test {
         assert_eq!(0x7C03, to_via_keycode(a));
 
         // OSL(3)
-        let a = KeyAction::Single(Action::OneShotLayer(3));
+        let a = KeyAction::Sticky(Action::LayerOn(3), u8::MAX);
         assert_eq!(0x5283, to_via_keycode(a));
 
         // OSM RCtrl
-        let a = KeyAction::Single(Action::OneShotModifier(ModifierCombination::new_from(
-            true, false, false, false, true,
-        )));
+        let a = KeyAction::Sticky(
+            Action::Modifier(ModifierCombination::new_from(true, false, false, false, true)),
+            u8::MAX,
+        );
         assert_eq!(0x52B1, to_via_keycode(a));
 
         // DF(3)

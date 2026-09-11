@@ -107,6 +107,18 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         bc.morse_profile_max_num
     ));
     lines.push(format!(
+        "pub const STICKY_PROFILE_MAX_NUM: usize = {};",
+        bc.sticky_profile_max_num
+    ));
+    lines.push(format!(
+        "pub const STICKY_IGNORE_MAX: usize = {};",
+        bc.sticky_ignore_max
+    ));
+    lines.push(format!(
+        "pub const STICKY_MAX_ACTIVE: usize = {};",
+        bc.sticky_max_active
+    ));
+    lines.push(format!(
         "pub const AUTO_MOUSE_LAYER_MAX_NUM: usize = {};",
         bc.auto_mouse_layer_max_num
     ));

@@ -9,8 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Sticky keys: `SK(action)` postpones an action's release until the next input, with per-key profiles under `[behavior.sticky_key.profiles]`. `OSM`/`OSL` are now sticky keys, and the `ignore` list makes Alt+Tab style cycling possible.
 - Make Trouble BLE roles explicit, document environment-variable memory tuning, update the nRF52832 examples to peripheral-only SDC, and derive split notification capacity from Trouble's configured packet-pool MTU.
 - Publish the dongle's state.
+
+### Changed
+
+- **Breaking**: `[behavior.one_shot]` and `[behavior.one_shot_modifiers]` are replaced by `[behavior.sticky_key]`; `activate_on_keypress` is now `activate_on_press` and `quick_release` is now `release_on_next_press`.
+- **Breaking**: `Action::OneShotLayer`, `Action::OneShotModifier` and `Action::OneShotKey` are gone, replaced by `KeyAction::Sticky(Action, u8)`. This shifts the wire tags of the `Action` variants that followed them.
+- A modifier, layer key or other sticky key no longer ends a pending one-shot, since none of them sends anything to the host. `OSM` and `OSL` therefore stack in both orders.
 
 ### Fixed
 

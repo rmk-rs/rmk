@@ -10,7 +10,7 @@ mod vial;
 
 pub use behavior::{
     AutoMouseLayerConfig, BehaviorConfig, CombosConfig, ForksConfig, KeyboardMacrosConfig, MorsesConfig,
-    MouseKeyConfig, OneShotConfig, OneShotModifiersConfig, TapConfig,
+    MouseKeyConfig, StickyKeyConfig, TapConfig,
 };
 #[cfg(feature = "_ble")]
 pub use ble_battery::BleBatteryConfig;

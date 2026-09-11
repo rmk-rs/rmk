@@ -9,23 +9,20 @@
 Action::DefaultLayer(5)                   08 05
 Action::Key(Hid(A))                       01 00 04
 Action::KeyWithModifier(A,LShift)         03 04 02
-Action::KeyboardControl(Bootloader)       11 00
+Action::KeyboardControl(Bootloader)       0e 00
 Action::LayerOff(3)                       06 03
 Action::LayerOn(1)                        04 01
 Action::LayerOnWithModifier(2,LCtrl)      05 02 01
 Action::LayerToggle(4)                    07 04
 Action::LayerToggleOnly(6)                09 06
-Action::Light(RgbTog)                     10 07
+Action::Light(RgbTog)                     0d 07
 Action::Modifier(LCtrl)                   02 01
 Action::No                                00
-Action::OneShotKey(Hid(B))                0f 05
-Action::OneShotLayer(8)                   0d 08
-Action::OneShotModifier(LAlt)             0e 04
-Action::Special(GraveEscape)              12 00
+Action::Special(GraveEscape)              0f 00
 Action::TriLayerLower                     0a
 Action::TriLayerUpper                     0b
 Action::TriggerMacro(7)                   0c 07
-Action::User(9)                           13 09
+Action::User(9)                           10 09
 BatteryStatus::Available{Discharging,85}  01 01 01 55
 BatteryStatus::Unavailable                00
 BehaviorConfig{50..120}                   32 3c 46 50 da 80 a6 86 e8 8d 08 78
@@ -49,6 +46,7 @@ GetMacroRequest{256}                      80 02
 KeyAction::Morse(3)                       05 03
 KeyAction::No                             00
 KeyAction::Single(Action::Key(Hid(A)))    02 01 00 04
+KeyAction::Sticky(Modifier(LShift))       06 02 02 ff
 KeyAction::Tap(Action::No)                03 00
 KeyAction::TapHold(Key(A),LayerOn(3))     04 01 00 04 04 03 ff
 KeyAction::Transparent                    01

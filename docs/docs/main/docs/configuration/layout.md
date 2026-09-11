@@ -274,8 +274,9 @@ The `layer.keys` string follows several rules:
    3. `MO(n)` — momentarily activate layer `n`.
    4. `LM(n, modifier)` — activate layer `n` with a modifier held. The modifier chains like `WM`.
    5. `LT(n, key, <profile_name>)` — activate layer `n` on hold, or tap `key` (tap/hold). `key` is an RMK [`KeyCode`](./keymap_configuration/keycodes); the optional `profile_name` sets the key's [profile](./behavior#per-key-profiles-for-morse-tapdance-tap-hold-fine-tuning).
-   6. `OSL(n)` — one-shot layer `n`.
-   7. `OSM(modifier)` — one-shot modifier. The modifier chains like `WM`.
+   6. `OSL(n)` — one-shot layer `n`, i.e. `SK(MO(n))`.
+   7. `OSM(modifier)` — one-shot modifier, i.e. `SK(modifier)`. The modifier chains like `WM`.
+   8. `SK(action)` / `SK(action, profile)` — sticky key: `action`'s release is postponed until the next input. See [Sticky Key](behavior#sticky-key).
    8. `TT(n)` — activate layer `n`, or tap-toggle it.
    9. `TG(n)` — toggle layer `n`.
    10. `TO(n)` — activate layer `n` and deactivate all other layers.

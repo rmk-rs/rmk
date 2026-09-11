@@ -303,6 +303,16 @@ pub(crate) struct RmkConstantsConfig {
     #[serde_inline_default(16)]
     #[serde(deserialize_with = "check_morse_profile_max_num")]
     pub morse_profile_max_num: usize,
+    /// Capacity of the sticky profile table (named profiles in `[behavior.sticky_key.profiles]`)
+    #[serde_inline_default(4)]
+    #[serde(deserialize_with = "check_sticky_profile_max_num")]
+    pub sticky_profile_max_num: usize,
+    /// Maximum number of keycodes in one sticky profile's `ignore` list
+    #[serde_inline_default(4)]
+    pub sticky_ignore_max: usize,
+    /// Maximum number of sticky keys that can be active at the same time
+    #[serde_inline_default(4)]
+    pub sticky_max_active: usize,
     /// Maximum number of patterns a morse key can handle
     #[serde_inline_default(8)]
     #[serde(deserialize_with = "check_max_patterns_per_key")]
@@ -388,6 +398,19 @@ where
     Ok(value)
 }
 
+/// Same reasoning as `check_morse_profile_max_num`: `KeyAction::Sticky` holds a
+/// `u8` profile index and an index with no table entry means "use the default".
+fn check_sticky_profile_max_num<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let value = Deserialize::deserialize(deserializer)?;
+    if value > 255 {
+        panic!("❌ Parse `keyboard.toml` error: sticky_profile_max_num must be between 0 and 255, got {value}");
+    }
+    Ok(value)
+}
+
 fn check_max_patterns_per_key<'de, D>(deserializer: D) -> Result<usize, D::Error>
 where
     D: de::Deserializer<'de>,
@@ -425,6 +448,9 @@ impl Default for RmkConstantsConfig {
             fork_max_num: 8,
             morse_max_num: 8,
             morse_profile_max_num: 16,
+            sticky_profile_max_num: 4,
+            sticky_ignore_max: 4,
+            sticky_max_active: 4,
             max_patterns_per_key: 8,
             macro_space_size: 256,
             debounce_time: 20,
@@ -783,8 +809,7 @@ pub struct KeyInfo {
 #[serde(deny_unknown_fields)]
 pub(crate) struct BehaviorConfig {
     pub tri_layer: Option<TriLayerConfig>,
-    pub one_shot: Option<OneShotConfig>,
-    pub one_shot_modifiers: Option<OneShotModifiersConfig>,
+    pub sticky_key: Option<StickyKeyConfig>,
     pub combo: Option<CombosConfig>,
     #[serde(alias = "macro")]
     pub macros: Option<MacrosConfig>,
@@ -857,19 +882,32 @@ pub(crate) struct TriLayerConfig {
     pub adjust: u8,
 }
 
-/// Configurations for oneshot modifiers/layers
-#[derive(Clone, Debug, Deserialize)]
+/// Configurations for sticky keys, the default profile plus the named ones.
+///
+/// A sticky key postpones the release of the action it wraps until the next
+/// input. This table configures what counts as "the next input" and when the
+/// host gets to see the effect; `OSM`/`OSL` are sticky keys too.
+#[derive(Clone, Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OneShotConfig {
+pub(crate) struct StickyKeyConfig {
     pub timeout: Option<DurationMillis>,
+    pub ignore: Option<Vec<String>>,
+    pub activate_on_press: Option<bool>,
+    pub release_on_next_press: Option<bool>,
+    pub release_on_layer: Option<String>,
+    /// Named profiles, referenced from the keymap as `SK(action, name)`
+    pub profiles: Option<HashMap<String, StickyProfileConfig>>,
 }
 
-/// Configurations for oneshot modifiers
-#[derive(Clone, Debug, Deserialize)]
+/// A named sticky profile; every field falls back to the default profile.
+#[derive(Clone, Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct OneShotModifiersConfig {
-    pub activate_on_keypress: Option<bool>,
-    pub quick_release: Option<bool>,
+pub(crate) struct StickyProfileConfig {
+    pub timeout: Option<DurationMillis>,
+    pub ignore: Option<Vec<String>>,
+    pub activate_on_press: Option<bool>,
+    pub release_on_next_press: Option<bool>,
+    pub release_on_layer: Option<String>,
 }
 
 /// Configurations for combos
