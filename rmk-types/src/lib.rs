@@ -55,6 +55,7 @@ pub mod mouse_button;
 pub mod protocol;
 #[cfg(feature = "steno")]
 pub mod steno;
+pub mod sticky;
 
 /// Maximum device information string length in bytes, including serial number markers.
 pub const DEVICE_INFO_STRING_MAX_LEN: usize = 32;

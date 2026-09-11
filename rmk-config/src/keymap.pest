@@ -72,8 +72,11 @@ lm_action = { ^"LM" ~ "(" ~ layer_reference ~ "," ~ modifier_combination ~ ")" }
 // Rule 4.4: LT(n, key) - Layer Activate or Tap Key (Tap/Hold)
 lt_action = { ^"LT" ~ "(" ~ layer_reference ~ "," ~ nestable_action ~ ("," ~ profile_name)? ~ ")" }
 
-// Rule 4.5: OSL(n) - One-Shot Layer
+// Rule 4.5: OSL(n) - One-Shot Layer, i.e. SK(MO(n))
 osl_action = { ^"OSL" ~ "(" ~ layer_reference ~ ")" }
+
+// Rule 4.10: SK(action) / SK(action, profile) - Sticky key
+sk_action = { ^"SK" ~ "(" ~ nestable_action ~ ("," ~ profile_name)? ~ ")" }
 
 // Rule 4.7: TT(n) - Layer Activate or Tap Toggle
 tt_action = { ^"TT" ~ "(" ~ layer_reference ~ ")" }
@@ -96,8 +99,8 @@ layer_action = _{
 // `keycode_name` fallback (not `simple_keycode`) keeps a lone `,` from being
 // accepted as a slot argument.
 nestable_action = _{
-    wm_action | mod_action | osm_action | shifted_action | trigger_macro_action |
-    df_action | pdf_action | mo_action | lm_action | osl_action | tg_action | to_action |
+    wm_action | mod_action | shifted_action | trigger_macro_action |
+    df_action | pdf_action | mo_action | lm_action | tg_action | to_action |
     stn_action | keycode_name
 }
 
@@ -124,7 +127,7 @@ stn_action = { ^"STN" ~ "(" ~ keycode_name ~ ")" }
 // A single key action entry in the map
 // Order is important: more specific function-like rules first, then aliases/specials, then simple keycodes.
 key_action = _{ // Consume surrounding whitespace/comments implicitly
-    wm_action | mod_action | osm_action | layer_action | mt_action | th_action | shifted_action | morse_action | trigger_macro_action | stn_action | no_action | transparent_action | simple_keycode
+    sk_action | wm_action | mod_action | osm_action | layer_action | mt_action | th_action | shifted_action | morse_action | trigger_macro_action | stn_action | no_action | transparent_action | simple_keycode
 }
 
 // The entire key map string: Start, zero or more key actions, End.

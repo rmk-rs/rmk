@@ -297,4 +297,4 @@ steps = [
   { tap = { pos = [0, 6], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
 ]
-expect = [["A"], [], [], ["LShift", "A"], []]
+expect = [["A"], [], ["LShift"], ["LShift", "A"], []]
