@@ -141,10 +141,9 @@ MouseWheelLeft   MouseDown  MouseWheelRight  MouseWheelDown
 tri_layer = { upper = 1, lower = 2, adjust = 3 }
 
 # OneShot configuration
-one_shot = { timeout = "1s" }
+sticky_key = { timeout = "1s", ignore = [], activate_on_press = false, release_on_next_press = false, release_on_layer = "none" }
 
 # One Shot Modifiers configuration
-one_shot_modifiers = { activate_on_keypress = false, quick_release = false }
 
 [behavior.morse]
 # default profile for morse, tap dance and tap-hold keys:

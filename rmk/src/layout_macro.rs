@@ -323,7 +323,10 @@ macro_rules! thp {
 #[macro_export]
 macro_rules! osl {
     ($x: literal) => {
-        $crate::types::action::KeyAction::Single($crate::types::action::Action::OneShotLayer($x))
+        $crate::types::action::KeyAction::Sticky(
+            $crate::types::action::Action::LayerOn($x),
+            $crate::types::sticky::STICKY_PROFILE_LAYER,
+        )
     };
 }
 
@@ -347,7 +350,36 @@ macro_rules! osl {
 #[macro_export]
 macro_rules! osm {
     ($m: expr) => {
-        $crate::types::action::KeyAction::Single($crate::types::action::Action::OneShotModifier($m))
+        $crate::types::action::KeyAction::Sticky($crate::types::action::Action::Modifier($m), u8::MAX)
+    };
+}
+
+/// Create a sticky key: the wrapped action's release is postponed until the
+/// next input instead of following the finger.
+///
+/// `osm!` and `osl!` are this macro with the modifier and layer actions filled
+/// in. Use [`skp!`] to point at a named profile.
+///
+/// # Example
+/// ```ignore
+/// sk!(Action::Modifier(ModifierCombination::LSHIFT))  // same as osm!
+/// sk!(Action::Key(KeyCode::Hid(HidKeyCode::A)))       // A stays down until the next key
+/// ```
+#[macro_export]
+macro_rules! sk {
+    ($a: expr) => {
+        $crate::types::action::KeyAction::Sticky($a, u8::MAX)
+    };
+}
+
+/// Create a sticky key using the sticky profile at `$p`.
+///
+/// Profiles are interned from `[behavior.sticky_key.profiles]` in name order;
+/// `keyboard.toml` users write `SK(action, name)` and never see the index.
+#[macro_export]
+macro_rules! skp {
+    ($a: expr, $p: expr) => {
+        $crate::types::action::KeyAction::Sticky($a, $p)
     };
 }
 

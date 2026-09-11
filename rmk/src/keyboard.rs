@@ -29,7 +29,6 @@ use crate::keyboard::combo::Combo;
 use crate::keyboard::fork::ActiveFork;
 use crate::keyboard::held_buffer::{HeldBuffer, HeldKey, KeyState};
 use crate::keyboard::mouse::{MouseAction, MouseState};
-use crate::keyboard::oneshot::OneShotState;
 use crate::keymap::KeyMap;
 use crate::{COMBO_MAX_NUM, FORK_MAX_NUM, boot};
 
@@ -40,9 +39,9 @@ pub(crate) mod held_buffer;
 pub(crate) mod macros;
 pub(crate) mod morse;
 pub(crate) mod mouse;
-pub(crate) mod oneshot;
 #[cfg(feature = "steno")]
 pub(crate) mod steno;
+pub(crate) mod sticky;
 
 use crate::keymap::HOLD_BUFFER_SIZE;
 
@@ -183,17 +182,16 @@ pub struct Keyboard<'a> {
     /// Used in repeat-key
     last_key_code: HidKeyCode,
 
-    /// Oneshot Layer state
-    osl_state: OneShotState<u8>,
+    /// Sticky keys waiting for the next input. `OSM`/`OSL` live here too.
+    sticky: heapless::Vec<crate::keyboard::sticky::Sticky, { crate::STICKY_MAX_ACTIVE }>,
 
-    /// Expiry deadline while the oneshot layer is armed (`Single`)
-    osl_deadline: Option<Instant>,
-
-    /// Oneshot Modifier state
-    osm_state: OneShotState<ModifierCombination>,
-
-    /// Expiry deadline while the oneshot modifiers are armed (`Single`)
-    osm_deadline: Option<Instant>,
+    /// Modifier byte and keycodes of the last keyboard report actually sent.
+    /// A sticky release has to tell the host "this is the state now" without
+    /// knowing whether the host already agrees; this lets it skip the report
+    /// when it does. Reports elsewhere are deliberately not deduplicated:
+    /// rolling two keys with the same usage and typing a repeated character in
+    /// a macro both rely on sending the same report twice.
+    last_keyboard_report: (u8, [u8; 6]),
 
     /// The pending User-key hold gesture: when it fires, and the id of the held key.
     /// Any key event cancels it.
@@ -240,10 +238,9 @@ impl<'a> Keyboard<'a> {
             keymap,
             keyboard_event_subscriber: KeyboardEvent::subscriber(),
             last_press_time: Instant::now(),
-            osl_state: OneShotState::default(),
-            osl_deadline: None,
-            osm_state: OneShotState::default(),
-            osm_deadline: None,
+            sticky: heapless::Vec::new(),
+            // The host starts out seeing an empty report.
+            last_keyboard_report: (0, [0; 6]),
             #[cfg(feature = "_ble")]
             user_hold: None,
             caps_word: CapsWordState::default(),
@@ -265,11 +262,15 @@ impl<'a> Keyboard<'a> {
     }
 
     /// Send a keyboard report to the host.
-    async fn send_report(&self, report: Report) {
+    async fn send_report(&mut self, report: Report) {
         // Do not report keypresses to Host in passkey mode
         #[cfg(feature = "passkey_entry")]
         if self.passkey_entry_state.is_active() {
             return;
+        }
+
+        if let Report::KeyboardReport(r) = &report {
+            self.last_keyboard_report = (r.modifier, r.keycodes);
         }
 
         send_hid_report(report).await;
@@ -292,15 +293,15 @@ impl<'a> Keyboard<'a> {
     /// cleared or moved forward by `fire_expired`, otherwise `run()` busy-loops on it.
     fn next_deadline(&self) -> Option<Instant> {
         let buffered = self.next_buffered_key().map(|k| k.timeout_time);
-        // A buffered key may still use the one-shot it was pressed under, so the
-        // one-shot can only expire when the buffer is empty.
-        let one_shot = if buffered.is_some() {
+        // A buffered key may still use the sticky it was pressed under, so the
+        // sticky can only expire once the buffer is empty.
+        let sticky = if buffered.is_some() {
             None
         } else {
-            [self.osm_deadline, self.osl_deadline].into_iter().flatten().min()
+            self.sticky_next_deadline()
         };
         [
-            one_shot,
+            sticky,
             #[cfg(feature = "_ble")]
             self.user_hold.map(|(at, _)| at),
             buffered,
@@ -316,10 +317,10 @@ impl<'a> Keyboard<'a> {
     /// calling this too early does nothing.
     async fn fire_expired(&mut self) {
         match self.next_buffered_key() {
-            // `next_deadline` hides the one-shot while a key is buffered, so at most
-            // one of these two can be due.
+            // `next_deadline` hides the sticky deadline while a key is buffered,
+            // so at most one of these two can be due.
             Some(key) => self.fire_buffered_key_timeout(key).await,
-            None => self.fire_oneshot_timeout().await,
+            None => self.fire_sticky_timeout().await,
         }
         #[cfg(feature = "_ble")]
         self.fire_user_hold().await;
@@ -844,6 +845,10 @@ impl<'a> Keyboard<'a> {
                     self.process_key_action_normal(action, event).await;
                 }
                 KeyAction::Tap(action) => self.process_key_action_tap(action, event).await,
+                KeyAction::Sticky(action, profile) => {
+                    debug!("Process Sticky key action: {:?}, {:?}", action, event);
+                    self.process_key_action_sticky(action, profile, event, event_time).await;
+                }
                 _ => unreachable!(),
             }
         } else {
@@ -1200,27 +1205,58 @@ impl<'a> Keyboard<'a> {
         });
     }
 
+    /// Apply an action, report it, and then let any pending sticky key claim it.
+    /// Sticky's own postponed release calls [`Self::apply_action`] instead, which
+    /// is what keeps the report back and keeps this from recursing.
     async fn process_key_action_normal(&mut self, action: Action, event: KeyboardEvent) {
+        // Whatever puts content on the wire is "the next input" a pending sticky
+        // key is waiting for.
+        let watch_sticky = !self.sticky.is_empty();
+        let before = (event.pressed && watch_sticky).then(|| self.output_snapshot());
+        let layers_before = watch_sticky.then(|| self.keymap.layer_bits());
+
+        if self.apply_action(action, event).await {
+            self.send_keyboard_report_with_resolved_modifiers(event.pressed).await;
+        }
+
+        // A layer transition is spotted by comparing the layer state, not by
+        // asking whether this was a layer key: `TO`, `TG`, `DF` and tri-layer
+        // all end up here too.
+        if let Some(layers_before) = layers_before {
+            let layers_after = self.keymap.layer_bits();
+            let entered = layers_after & !layers_before != 0;
+            let exited = layers_before & !layers_after != 0;
+            if entered || exited {
+                self.sticky_on_layer_change(entered, exited).await;
+            }
+        }
+
+        if let Some(before) = before {
+            self.claim_sticky(before, action).await;
+        }
+    }
+
+    /// Apply an action to the keyboard state without reporting it. Returns
+    /// whether it changed the keyboard report, so the caller can decide when the
+    /// host hears about it: a sticky key's postponed release rides out on the
+    /// report of whatever comes next. Media, system and mouse reports are sent
+    /// from here regardless, since nothing later would carry them.
+    pub(crate) async fn apply_action(&mut self, action: Action, event: KeyboardEvent) -> bool {
         publish_event_async(ActionEvent {
             action,
             keyboard_event: event,
         })
         .await;
 
+        let mut changed = false;
         match action {
             Action::No => {}
             Action::Key(key) => match key {
-                KeyCode::Hid(hid) => self.process_action_key(hid, ModifierCombination::new(), event).await,
+                KeyCode::Hid(hid) => changed = self.process_action_key(hid, ModifierCombination::new(), event).await,
                 // Consumer/system keys with no HID alias are dispatched directly here.
-                KeyCode::Consumer(consumer) => {
-                    self.process_action_consumer_control(consumer, event).await;
-                    self.update_osm(event);
-                    self.update_osl(event);
-                }
+                KeyCode::Consumer(consumer) => self.process_action_consumer_control(consumer, event).await,
                 KeyCode::SystemControl(system_control) => {
-                    self.process_action_system_control(system_control, event).await;
-                    self.update_osm(event);
-                    self.update_osl(event);
+                    self.process_action_system_control(system_control, event).await
                 }
                 _ => warn!("KeyCode variant not supported: {:?}", key),
             },
@@ -1273,15 +1309,16 @@ impl<'a> Keyboard<'a> {
                     self.unregister_key(HidKeyCode::No, modifiers, event);
                 }
                 //report the modifier press/release in its own hid report
-                self.send_keyboard_report_with_resolved_modifiers(event.pressed).await;
-                self.update_osl(event);
+                changed = true;
             }
             Action::TriggerMacro(idx) => {
                 if !self.keymap.macros(|m| m.queue(idx, event.pressed)) {
                     warn!("Macro queue full, dropped macro {}", idx);
                 }
             }
-            Action::KeyWithModifier(key_code, modifiers) => self.process_action_key(key_code, modifiers, event).await,
+            Action::KeyWithModifier(key_code, modifiers) => {
+                changed = self.process_action_key(key_code, modifiers, event).await;
+            }
             Action::LayerOnWithModifier(layer_num, modifiers) => {
                 if event.pressed {
                     self.register_key(HidKeyCode::No, modifiers, event);
@@ -1289,22 +1326,11 @@ impl<'a> Keyboard<'a> {
                     self.unregister_key(HidKeyCode::No, modifiers, event);
                 }
                 self.process_action_layer_switch(layer_num, event);
-                self.send_keyboard_report_with_resolved_modifiers(event.pressed).await
+                changed = true;
             }
-            Action::OneShotLayer(l) => {
-                self.process_action_osl(l, event).await;
-                // Process OSM to avoid the OSL state stuck when an OSL is followed by an OSM
-                self.update_osm(event);
-            }
-            Action::OneShotModifier(m) => {
-                self.process_action_osm(m, event).await;
-                // Process OSL to avoid the OSM state stuck when an OSM is followed by an OSL
-                self.update_osl(event);
-            }
-            Action::OneShotKey(_k) => warn!("One-shot key is not supported: {:?}", action),
             Action::Light(_light_action) => warn!("Light control is not supported"),
             Action::KeyboardControl(c) => self.process_action_keyboard_control(c, event).await,
-            Action::Special(special_key) => self.process_action_special(special_key, event).await,
+            Action::Special(special_key) => changed = self.process_action_special(special_key, event).await,
             Action::User(id) => self.process_user(id, event).await,
             Action::TriLayerLower => {
                 // Tri-layer lower, turn layer 1 on and update layer state
@@ -1324,6 +1350,7 @@ impl<'a> Keyboard<'a> {
             }
             _ => warn!("Action variant not supported: {:?}", action),
         }
+        changed
     }
 
     /// Tap action, send a key when the key is pressed, then release the key.
@@ -1349,27 +1376,10 @@ impl<'a> Keyboard<'a> {
             .for_each(|(i, k)| info!("\n✅Held buffer {}: {:?}, state: {:?}", i, k.event, k.state));
     }
 
-    /// Calculates the combined effect of "explicit modifiers":
-    /// - registered modifiers
-    /// - one-shot modifiers
-    pub fn resolve_explicit_modifiers(&self, pressed: bool) -> ModifierCombination {
-        // if a one-shot modifier is active, decorate the hid report of keypress with those modifiers
-        let mut result = self.held_modifiers();
-
-        // OneShotState::Held keeps the temporary modifiers active until the key is released
-        if pressed {
-            if let Some(osm) = self.osm_state.value() {
-                result |= *osm;
-            }
-        } else if let OneShotState::Held(osm) = self.osm_state {
-            // One shot modifiers usually "released" together with the key release,
-            // except when oneshot is in "held mode" (to allow Alt+Tab like use cases)
-            // In this later case Held -> None state change will report
-            // the "modifier released" change in a separate hid report
-            result |= osm;
-        };
-
-        result
+    /// Calculates the combined effect of "explicit modifiers": the registered
+    /// (held) modifiers.
+    pub fn resolve_explicit_modifiers(&self, _pressed: bool) -> ModifierCombination {
+        self.held_modifiers()
     }
 
     /// Calculates the combined effect of all modifiers:
@@ -1409,8 +1419,8 @@ impl<'a> Keyboard<'a> {
         result
     }
 
-    // Process a basic keypress/release and also take care of applying one shot modifiers
-    async fn process_hid_keycode(&mut self, key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) {
+    /// Process a basic keypress/release. Returns whether the keyboard report changed.
+    async fn process_hid_keycode(&mut self, key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) -> bool {
         #[cfg(feature = "passkey_entry")]
         if self.passkey_entry_state.is_active() {
             use crate::ble::passkey::{PASSKEY_RESPONSE, PasskeyAction};
@@ -1432,7 +1442,8 @@ impl<'a> Keyboard<'a> {
                     }
                 }
             }
-            return;
+            // Don't call register_key/unregister_key or report
+            return false;
         }
 
         if event.pressed {
@@ -1441,11 +1452,11 @@ impl<'a> Keyboard<'a> {
             self.unregister_key(key, mods, event);
         }
 
-        self.send_keyboard_report_with_resolved_modifiers(event.pressed).await;
+        true
     }
 
     // Process action special keys
-    async fn process_action_special(&mut self, key: SpecialKey, event: KeyboardEvent) {
+    async fn process_action_special(&mut self, key: SpecialKey, event: KeyboardEvent) -> bool {
         match key {
             SpecialKey::GraveEscape => {
                 let hid_keycode = if self.held_modifiers().into_bits() == 0 {
@@ -1454,15 +1465,18 @@ impl<'a> Keyboard<'a> {
                     HidKeyCode::Grave
                 };
                 self.process_hid_keycode(hid_keycode, ModifierCombination::new(), event)
-                    .await;
+                    .await
             }
             SpecialKey::Repeat => {
                 debug!("Repeat last key code: {:?} , {:?}", self.last_key_code, event);
                 let key = self.last_key_code;
-                self.process_action_key(key, ModifierCombination::new(), event).await;
+                self.process_action_key(key, ModifierCombination::new(), event).await
             }
-            _ => warn!("SpecialKey variant not supported: {:?}", key),
-        };
+            _ => {
+                warn!("SpecialKey variant not supported: {:?}", key);
+                false
+            }
+        }
     }
 
     async fn process_action_keyboard_control(&mut self, keyboard_control: KeyboardAction, event: KeyboardEvent) {
@@ -1507,8 +1521,13 @@ impl<'a> Keyboard<'a> {
 
     // Process action key
     /// Universal HID keyboard-key pipeline: `Again` resolution, last-key/caps-word
-    /// bookkeeping, dispatch (a `HidKeyCode` may alias to consumer/system/mouse), and one-shot post.
-    async fn process_action_key(&mut self, mut key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) {
+    /// bookkeeping and dispatch (a `HidKeyCode` may alias to consumer/system/mouse).
+    async fn process_action_key(
+        &mut self,
+        mut key: HidKeyCode,
+        mods: ModifierCombination,
+        event: KeyboardEvent,
+    ) -> bool {
         // Process `Again` key first.
         // Not all platform support `Again` key, so we manually repeat it for users.
         if key == HidKeyCode::Again {
@@ -1551,20 +1570,14 @@ impl<'a> Keyboard<'a> {
         } else if key.is_mouse_key() {
             self.process_action_mouse(key, event).await;
         } else {
-            self.process_hid_keycode(key, mods, event).await;
+            return self.process_hid_keycode(key, mods, event).await;
         }
         if hold_mods && !event.pressed {
             self.unregister_key(HidKeyCode::No, mods, event);
             self.send_keyboard_report_with_resolved_modifiers(false).await;
         }
 
-        // Consume any pending one-shot; on quick-release of a basic key, re-send the report.
-        let quick_release = self.keymap.one_shot_modifiers_config().quick_release;
-        let osm_consumed = self.update_osm(event);
-        if quick_release && osm_consumed && is_basic_keyboard_key && event.pressed {
-            self.send_keyboard_report_with_resolved_modifiers(true).await;
-        }
-        self.update_osl(event);
+        false
     }
 
     /// Process layer switch action.
@@ -1754,7 +1767,17 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    /// Send the keyboard report with resolved modifiers to the host.
+    /// Send a keyboard report only if it would differ from the last one sent.
+    pub(crate) async fn send_keyboard_report_if_changed(&mut self) {
+        let modifiers = self.resolve_modifiers(false);
+        let report = self.build_keyboard_report(modifiers);
+        if self.last_keyboard_report == (report.modifier, report.keycodes) {
+            return;
+        }
+        self.send_report(Report::KeyboardReport(report)).await;
+        yield_now().await;
+    }
+
     pub(crate) async fn send_keyboard_report_with_resolved_modifiers(&mut self, pressed: bool) {
         let modifiers = self.resolve_modifiers(pressed);
         self.send_keyboard_report(modifiers).await;
@@ -1766,7 +1789,7 @@ impl<'a> Keyboard<'a> {
     /// each usage as up or down, so duplicates are collapsed to the first slot
     /// that holds them. This keeps the shared usage down until the last holder
     /// releases it.
-    async fn send_keyboard_report(&mut self, modifiers: ModifierCombination) {
+    fn build_keyboard_report(&self, modifiers: ModifierCombination) -> KeyboardReport {
         let mut keycodes = [0u8; 6];
         let mut n = 0;
         for k in self.registered.iter().filter(|k| k.keycode != HidKeyCode::No) {
@@ -1780,12 +1803,16 @@ impl<'a> Keyboard<'a> {
             "Sending keyboard report, modifiers: {:?}, keycodes: {:?}",
             modifiers, keycodes
         );
-        let report = KeyboardReport {
+        KeyboardReport {
             modifier: modifiers.into_bits(),
             reserved: 0,
             leds: LOCK_LED_STATES.load(core::sync::atomic::Ordering::Relaxed),
             keycodes,
-        };
+        }
+    }
+
+    async fn send_keyboard_report(&mut self, modifiers: ModifierCombination) {
+        let report = self.build_keyboard_report(modifiers);
         self.send_report(Report::KeyboardReport(report)).await;
 
         // Yield once after sending the report to channel
@@ -1860,10 +1887,13 @@ impl<'a> Keyboard<'a> {
             .iter()
             .filter(|k| k.keycode == HidKeyCode::No)
             .fold(ModifierCombination::new(), |acc, k| acc | k.mods)
+            | self
+                .sticky
+                .iter()
+                .fold(ModifierCombination::new(), |acc, s| acc | s.owned_mods)
     }
 
     /// The keycode slots of the keyboard report, in press order.
-    #[cfg(test)]
     fn held_keycodes(&self) -> [HidKeyCode; 6] {
         let mut keys = [HidKeyCode::No; 6];
         let held = self.registered.iter().filter(|k| k.keycode != HidKeyCode::No);
