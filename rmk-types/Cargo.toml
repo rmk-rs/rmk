@@ -41,6 +41,8 @@ defmt = [
 _codegen = []
 # Enable RMK's Rynk protocol
 rynk = ["dep:cobs"]
+# Enable custom message and emit CUSTOM_MESSAGE_MAX_SIZE.
+custom_message = []
 # Host tool
 host = ["rynk", "_ble", "split", "steno", "serde/alloc"]
 # TypeScript type + wasm ABI export for the web client. Enabled by a codegen/wasm

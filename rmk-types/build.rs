@@ -62,6 +62,12 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     lines.push(format!("pub const COMBO_MAX_NUM: usize = {};", bc.combo_max_num));
     lines.push(format!("pub const COMBO_MAX_LENGTH: usize = {};", bc.combo_max_length));
     lines.push(format!("pub const MACRO_SPACE_SIZE: usize = {};", bc.macro_space_size));
+    if env::var("CARGO_FEATURE_CUSTOM_MESSAGE").is_ok() {
+        lines.push(format!(
+            "pub const CUSTOM_MESSAGE_MAX_SIZE: usize = {};",
+            bc.custom_message_max_size
+        ));
+    }
     lines.push(format!("pub const FORK_MAX_NUM: usize = {};", bc.fork_max_num));
     lines.push(format!("pub const DEBOUNCE_THRESHOLD: u16 = {};", bc.debounce_time));
     lines.push(format!(

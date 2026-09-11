@@ -18,6 +18,18 @@ channel_size = 16
 pubs = 4
 subs = 3
 
+# Application-defined messages
+[event.custom_message]
+channel_size = 4
+pubs = 3
+subs = 2
+
+# Outgoing custom messages.
+[event.custom_message_out]
+channel_size = 4
+pubs = 2
+subs = 1
+
 # Keyboard state events
 [event.layer_change]
 channel_size = 1

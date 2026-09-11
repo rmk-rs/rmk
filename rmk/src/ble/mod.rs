@@ -507,6 +507,10 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                         }
                     }
                     GattEvent::Write(event) => {
+                        #[cfg(all(feature = "dongle", feature = "custom_message"))]
+                        let is_custom_message = event.handle() == server.dongle_event_service.custom_to_keyboard.handle;
+                        #[cfg(not(all(feature = "dongle", feature = "custom_message")))]
+                        let is_custom_message = false;
                         let encrypted = conn.raw().security_level()?.encrypted();
 
                         // trouble-host 0.7 exposes written bytes via a closure; copy them out
@@ -554,6 +558,21 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                             cccd_updated = true;
                         } else if event.handle() == hid_control_point.handle {
                             control_point_write = true;
+                        } else if is_custom_message {
+                            #[cfg(all(feature = "dongle", feature = "custom_message"))]
+                            match postcard::from_bytes::<crate::custom_message::CustomMessage>(data) {
+                                Ok(message) => match message.target {
+                                    #[cfg(feature = "split")]
+                                    crate::custom_message::CustomMessageTarget::Peripherals => {
+                                        crate::custom_message::send(message)
+                                    }
+                                    crate::custom_message::CustomMessageTarget::Central => {
+                                        crate::event::publish_event(message)
+                                    }
+                                    _ => (),
+                                },
+                                Err(_) => warn!("[ble] undecodable custom message dropped"),
+                            }
                         } else {
                             #[cfg(feature = "host")]
                             match host_gatt_handler.handle_write(event.handle(), data, encrypted).await {
@@ -857,14 +876,14 @@ async fn serve_keyboard_connection<
     let host_task = core::future::pending::<()>();
 
     // When dongle feature is enabled, send `DongleEvent` to the dongle.
-    #[cfg(all(feature = "dongle", feature = "host"))]
+    #[cfg(feature = "dongle")]
     let dongle_event_task = async {
         if !dongle_link {
             core::future::pending::<()>().await;
         }
         crate::dongle::event::run(server, conn).await;
     };
-    #[cfg(not(all(feature = "dongle", feature = "host")))]
+    #[cfg(not(feature = "dongle"))]
     let dongle_event_task = core::future::pending::<()>();
 
     let inner = join4(writer_task, led_task, host_task, dongle_event_task);

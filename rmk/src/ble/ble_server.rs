@@ -1,3 +1,5 @@
+#[cfg(all(feature = "dongle", feature = "custom_message"))]
+use postcard::experimental::max_size::MaxSize;
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
@@ -5,7 +7,9 @@ use super::battery_service::BatteryService;
 #[cfg(feature = "split")]
 use super::battery_service::PeripheralBatteryServices;
 use super::device_info::DeviceConfigurationService;
-#[cfg(all(feature = "dongle", feature = "host"))]
+#[cfg(all(feature = "dongle", feature = "custom_message"))]
+use crate::dongle::event::{CUSTOM_TO_DONGLE_UUID, CUSTOM_TO_KEYBOARD_UUID};
+#[cfg(feature = "dongle")]
 use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_MAX, DONGLE_EVENT_SERVICE_UUID};
 #[cfg(feature = "rynk")]
 use crate::hid::RynkHidReport;
@@ -37,16 +41,22 @@ pub(crate) struct Server {
     #[cfg(feature = "rynk")]
     pub(crate) rynk_hid_service: RynkHidService,
     pub(crate) device_config_service: DeviceConfigurationService,
-    #[cfg(all(feature = "dongle", feature = "host"))]
+    #[cfg(feature = "dongle")]
     pub(crate) dongle_event_service: DongleEventService,
 }
 
 /// One postcard-encoded [`crate::dongle::event::DongleEvent`] per notification.
-#[cfg(all(feature = "dongle", feature = "host"))]
+#[cfg(feature = "dongle")]
 #[gatt_service(uuid = DONGLE_EVENT_SERVICE_UUID)]
 pub(crate) struct DongleEventService {
     #[characteristic(uuid = DONGLE_EVENT_CHAR_UUID, notify, permissions(encrypted))]
     pub(crate) event: heapless::Vec<u8, DONGLE_EVENT_MAX>,
+    #[cfg(feature = "custom_message")]
+    #[characteristic(uuid = CUSTOM_TO_DONGLE_UUID, notify, permissions(encrypted))]
+    pub(crate) custom_to_dongle: heapless::Vec<u8, { crate::custom_message::CustomMessage::POSTCARD_MAX_SIZE }>,
+    #[cfg(feature = "custom_message")]
+    #[characteristic(uuid = CUSTOM_TO_KEYBOARD_UUID, write_without_response, permissions(encrypted))]
+    pub(crate) custom_to_keyboard: heapless::Vec<u8, { crate::custom_message::CustomMessage::POSTCARD_MAX_SIZE }>,
 }
 
 /// Rynk-over-GATT transport. The host writes request chunks to `output_data`;

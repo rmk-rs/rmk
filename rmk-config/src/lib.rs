@@ -284,6 +284,9 @@ pub(crate) struct RmkConstantsConfig {
     /// Mouse wheel interval (ms) - controls scrolling speed
     #[serde_inline_default(80)]
     pub mouse_wheel_interval: u16,
+    /// The size of the largest custom message.
+    #[serde_inline_default(241)]
+    pub custom_message_max_size: usize,
     /// Maximum number of combos keyboard can store
     #[serde_inline_default(8)]
     #[serde(deserialize_with = "check_combo_max_num")]
@@ -420,6 +423,7 @@ impl Default for RmkConstantsConfig {
         Self {
             mouse_key_interval: 20,
             mouse_wheel_interval: 80,
+            custom_message_max_size: 241,
             combo_max_num: 8,
             combo_max_length: 4,
             fork_max_num: 8,
@@ -521,6 +525,9 @@ define_event_config!(
     dfu_status,
     // Action events
     action,
+    // Application-defined messages
+    custom_message,
+    custom_message_out,
 );
 
 /// The `[layout]` section: the physical key arrangement plus the rendered layout.
