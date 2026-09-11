@@ -1,0 +1,8 @@
+# Compile-time constants only: `rmk-types`' build script reads the `[rmk]` and
+# `[event]` sections of this file, and `.cargo/config.toml` points it here. The
+# keymap, pins and everything else live in `src/`, as in any use_rust example.
+[rmk]
+split_peripherals_num = 1
+# Without this the constant is 0, which disables sleep management outright — the
+# central would never drop the split link into its subrated state.
+split_central_sleep_timeout_seconds = 60

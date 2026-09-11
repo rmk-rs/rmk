@@ -2,6 +2,7 @@
 //!
 use core::cell::Cell;
 
+#[cfg(not(feature = "_ble"))]
 use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::Mutex as BlockingMutex;
 use futures::FutureExt;
@@ -133,6 +134,9 @@ mod tests {
 ///
 /// When the central scans the matrix, the scanning thread sends sync signal and gets key state cache back.
 ///
+/// Serial split only: BLE split runs the concurrent loops below instead, and
+/// `split::serial` — the one place this is built — is itself `not(_ble)`.
+#[cfg(not(feature = "_ble"))]
 pub(crate) struct PeripheralManager<T: SplitReader + SplitWriter> {
     /// Receiver
     transceiver: T,
@@ -157,6 +161,7 @@ pub enum UpdatePolicy {
     Force,
 }
 
+#[cfg(not(feature = "_ble"))]
 impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
     pub(crate) fn new(
         transceiver: T,
@@ -264,7 +269,8 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
                     Ok(SplitMessage::FirmwareHashResponse(hash)) => {
                         self.handle_proactive_hash(hash).await;
                     }
-                    Ok(split_message) => self.process_peripheral_message(split_message).await,
+                    Ok(split_message) => process_peripheral_message(self.id, self.matrix_config, split_message).await,
+                    Err(SplitDriverError::Disconnected) => return,
                     Err(e) => error!("Peripheral message read error: {:?}", e),
                 },
                 #[cfg(feature = "dfu_split")]
@@ -283,46 +289,6 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
                     }
                 }
             }
-        }
-    }
-
-    /// Process a single message from the peripheral.
-    async fn process_peripheral_message(&self, split_message: SplitMessage) {
-        trace!("Got message from peripheral: {:?}", split_message);
-        match split_message {
-            SplitMessage::Key(e) => match e.pos {
-                KeyboardEventPos::Key(key_pos) => {
-                    // Verify the row/col
-                    if key_pos.row >= self.matrix_config.rows || key_pos.col >= self.matrix_config.cols {
-                        error!("Invalid peripheral row/col: {} {}", key_pos.row, key_pos.col);
-                        return;
-                    }
-                    publish_event_async(KeyboardEvent::key(
-                        key_pos.row + self.matrix_config.row_offset,
-                        key_pos.col + self.matrix_config.col_offset,
-                        e.pressed,
-                    ))
-                    .await;
-                }
-                _ => publish_event_async(e).await,
-            },
-            // Non-key events are drop-on-full to keep the split read loop responsive.
-            SplitMessage::Pointing(e) => publish_event(e),
-            #[cfg(feature = "_ble")]
-            SplitMessage::BatteryStatus(state) => set_peripheral_battery(self.id, state.0),
-            #[cfg(feature = "dfu_split")]
-            SplitMessage::FirmwareHashResponse(hash) => {
-                info!("dfu_split: stale hash response ({:#x}) in event loop", hash);
-            }
-            #[cfg(feature = "dfu_split")]
-            SplitMessage::FirmwareChunkAck { offset, crc: _ } => {
-                info!("dfu_split: stale chunk ack (offset {}) in event loop, ignoring", offset);
-            }
-            #[cfg(feature = "dfu_split")]
-            SplitMessage::FirmwareUpdateConfirm => {
-                info!("dfu_split: stale update confirm in event loop, ignoring");
-            }
-            _ => warn!("{:?} should not come from peripheral", split_message),
         }
     }
 
@@ -711,5 +677,118 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
         }
 
         error!("dfu_split: all {} update attempts failed", MAX_ATTEMPTS);
+    }
+}
+
+/// Process a single message from the peripheral.
+async fn process_peripheral_message(id: usize, matrix_config: PeripheralMatrixConfig, split_message: SplitMessage) {
+    trace!("Got message from peripheral {}: {:?}", id, split_message);
+    // Input from the peripheral counts as activity for sleep management.
+    #[cfg(feature = "_ble")]
+    if matches!(split_message, SplitMessage::Key(_) | SplitMessage::Pointing(_)) {
+        crate::ble::sleep::report_activity();
+    }
+    match split_message {
+        SplitMessage::Key(e) => match e.pos {
+            KeyboardEventPos::Key(key_pos) => {
+                // Verify the row/col
+                if key_pos.row >= matrix_config.rows || key_pos.col >= matrix_config.cols {
+                    error!("Invalid peripheral row/col: {} {}", key_pos.row, key_pos.col);
+                    return;
+                }
+                publish_event_async(KeyboardEvent::key(
+                    key_pos.row + matrix_config.row_offset,
+                    key_pos.col + matrix_config.col_offset,
+                    e.pressed,
+                ))
+                .await;
+            }
+            _ => publish_event_async(e).await,
+        },
+        // Non-key events are drop-on-full to keep the split read loop responsive.
+        SplitMessage::Pointing(e) => publish_event(e),
+        #[cfg(feature = "_ble")]
+        SplitMessage::BatteryStatus(state) => set_peripheral_battery(id, state.0),
+        #[cfg(feature = "dfu_split")]
+        SplitMessage::FirmwareHashResponse(hash) => {
+            info!("dfu_split: stale hash response ({:#x}) in event loop", hash);
+        }
+        #[cfg(feature = "dfu_split")]
+        SplitMessage::FirmwareChunkAck { offset, crc: _ } => {
+            info!("dfu_split: stale chunk ack (offset {}) in event loop, ignoring", offset);
+        }
+        #[cfg(feature = "dfu_split")]
+        SplitMessage::FirmwareUpdateConfirm => {
+            info!("dfu_split: stale update confirm in event loop, ignoring");
+        }
+        _ => warn!("{:?} should not come from peripheral", split_message),
+    }
+}
+
+/// The only caller of the transport's `read`, and never raced against anything:
+/// `L2capChannel::receive` is not cancellation safe. Run concurrently with
+/// [`write_loop`] — credits are granted from inside `receive`, so a send waiting
+/// on the peer must never be able to stop the reader, or neither half can make
+/// progress again.
+#[cfg(feature = "_ble")]
+pub(crate) async fn read_loop<R: SplitReader>(id: usize, matrix_config: PeripheralMatrixConfig, reader: &mut R) {
+    loop {
+        match reader.read().await {
+            Ok(split_message) => process_peripheral_message(id, matrix_config, split_message).await,
+            Err(SplitDriverError::Disconnected) => return,
+            Err(e) => error!("Peripheral message read error: {:?}", e),
+        }
+    }
+}
+
+#[cfg(feature = "_ble")]
+pub(crate) async fn write_loop<W: SplitWriter>(id: usize, writer: &mut W) {
+    use crate::event::EventSubscriber;
+
+    let mut indicator_sub = crate::event::LedIndicatorEvent::subscriber();
+    let mut layer_sub = crate::event::LayerChangeEvent::subscriber();
+    // Subscribe before the initial send so any change racing past the
+    // snapshot is still delivered to us.
+    let mut connection_sub = crate::event::ConnectionStatusChangeEvent::subscriber();
+    #[cfg(feature = "_ble")]
+    let mut clear_peer_sub = crate::event::ClearPeerEvent::subscriber();
+    #[cfg(feature = "display")]
+    let mut wpm_sub = crate::event::WpmUpdateEvent::subscriber();
+    #[cfg(feature = "display")]
+    let mut modifier_sub = crate::event::ModifierEvent::subscriber();
+    let mut sleep_sub = crate::event::SleepStateEvent::subscriber();
+
+    // The first message is the current state, so the peripheral matches us even
+    // when no transition has happened since the central booted.
+    let mut msg = SplitMessage::ConnectionStatus(crate::state::current_connection_status());
+    loop {
+        debug!("Sending message to peripheral {}: {:?}", id, msg);
+        match writer.write(&msg).await {
+            Ok(_) => {}
+            Err(SplitDriverError::Disconnected) => return,
+            Err(e) => error!("SplitDriver write error: {:?}", e),
+        }
+
+        let next = async {
+            crate::select_biased_with_feature! {
+                e = indicator_sub.next_event().fuse() => SplitMessage::KeyboardIndicator(e.0.into_bits()),
+                e = layer_sub.next_event().fuse() => SplitMessage::Layer(e.0),
+                e = connection_sub.next_event().fuse() => SplitMessage::ConnectionStatus(e.0),
+                with_feature("_ble"): _ = clear_peer_sub.next_event().fuse() => {
+                    #[cfg(feature = "storage")]
+                    {
+                        use {crate::channel::FLASH_CHANNEL, crate::split::ble::PeerAddress, crate::storage::FlashOperationMessage};
+                        FLASH_CHANNEL
+                            .send(FlashOperationMessage::PeerAddress(PeerAddress::new(id as u8, false, [0; 6])))
+                            .await;
+                    }
+                    SplitMessage::ClearPeer
+                },
+                e = sleep_sub.next_event().fuse() => SplitMessage::SleepState(e.0),
+                with_feature("display"): e = wpm_sub.next_event().fuse() => SplitMessage::Wpm(e.0),
+                with_feature("display"): e = modifier_sub.next_event().fuse() => SplitMessage::Modifier(e.modifier.into_bits()),
+            }
+        };
+        msg = next.await;
     }
 }

@@ -1,6 +1,7 @@
 #[cfg(feature = "_ble")]
 #[cfg(all(feature = "_ble", feature = "subrating"))]
 use bt_hci::{cmd::le::LeSetHostFeature, controller::ControllerCmdSync};
+#[cfg(not(feature = "_ble"))]
 use embassy_futures::select::{Either, select};
 #[cfg(not(feature = "_ble"))]
 use embedded_io_async::{Read, Write};
@@ -56,22 +57,27 @@ pub async fn run_rmk_split_peripheral<
 
     #[cfg(feature = "_ble")]
     {
-        // Exactly one link — the central.
-        let mut resources: HostResources<DefaultPacketPool, 1, 4> = HostResources::new();
+        // Exactly one link — the central — carrying exactly one dynamic L2CAP
+        // channel, the split link itself. The SPSM must be registered before
+        // the central can open it.
+        let mut resources: HostResources<DefaultPacketPool, 1, 1> = HostResources::new();
         let stack = trouble_host::new(controller, &mut resources)
             .set_random_address(Address::random(address))
+            .register_l2cap_spsm(crate::split::ble::SPLIT_L2CAP_PSM)
             .build();
         crate::split::ble::peripheral::initialize_nrf_ble_split_peripheral_and_run(id, &stack).await;
     }
 }
 
-/// The split peripheral instance.
+/// Serial split only: BLE split runs the concurrent loops below instead.
+#[cfg(not(feature = "_ble"))]
 pub(crate) struct SplitPeripheral<S: SplitWriter + SplitReader> {
     split_driver: S,
     #[cfg(feature = "dfu_split")]
     dfu_handler: Option<crate::dfu::SplitDfuHandler>,
 }
 
+#[cfg(not(feature = "_ble"))]
 impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
     pub(crate) fn new(split_driver: S) -> Self {
         Self {
@@ -123,48 +129,6 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                 Either::First(m) => match m {
                     // Process split messages from the central
                     Ok(split_message) => match split_message {
-                        SplitMessage::ConnectionStatus(status) => {
-                            trace!("Received central connection status: {:?}", status);
-                            update_status(|c| *c = status);
-                            // The central sends this only after subscribing to split notifications.
-                            #[cfg(feature = "_ble")]
-                            self.split_driver
-                                .write(&SplitMessage::BatteryStatus(
-                                    crate::input_device::battery::current_battery_status().into(),
-                                ))
-                                .await
-                                .ok();
-                        }
-                        #[cfg(all(feature = "_ble", feature = "storage"))]
-                        SplitMessage::ClearPeer => {
-                            // Clear the peer address
-                            FLASH_CHANNEL
-                                .send(crate::storage::FlashOperationMessage::PeerAddress(PeerAddress::new(
-                                    0, false, [0; 6],
-                                )))
-                                .await;
-                        }
-                        SplitMessage::KeyboardIndicator(indicator) => {
-                            // Publish KeyboardIndicator event
-                            publish_event(LedIndicatorEvent::new(
-                                rmk_types::led_indicator::LedIndicator::from_bits(indicator),
-                            ));
-                        }
-                        SplitMessage::Layer(layer) => {
-                            // Publish Layer event
-                            publish_event(LayerChangeEvent::new(layer));
-                        }
-                        #[cfg(feature = "display")]
-                        SplitMessage::Wpm(wpm) => publish_event(WpmUpdateEvent::new(wpm)),
-                        #[cfg(feature = "display")]
-                        SplitMessage::Modifier(bits) => {
-                            publish_event(ModifierEvent {
-                                modifier: rmk_types::modifier::ModifierCombination::from_bits(bits),
-                            });
-                        }
-                        SplitMessage::SleepState(sleeping) => {
-                            publish_event(SleepStateEvent::new(sleeping));
-                        }
                         // --- dfu_split: firmware update handlers ---
                         #[cfg(feature = "dfu_split")]
                         SplitMessage::FirmwareHashQuery => {
@@ -242,7 +206,7 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                                 error!("dfu_split: no active DFU session");
                             }
                         }
-                        _ => (),
+                        other => process_central_message(other).await,
                     },
                     Err(e) => {
                         error!("Split message read error: {:?}", e);
@@ -256,6 +220,106 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                     self.split_driver.write(&e).await.ok();
                 }
             }
+        }
+    }
+}
+
+/// Handle one message from the central.
+///
+/// Write-free on purpose: the read loop runs concurrently with the outbound
+/// loop and must not contend for the writer, so anything the central needs back
+/// is published as an event instead and forwarded from there.
+async fn process_central_message(split_message: SplitMessage) {
+    match split_message {
+        SplitMessage::ConnectionStatus(status) => {
+            trace!("Received central connection status: {:?}", status);
+            update_status(|c| *c = status);
+            // The central sends this once the split link is up, which is
+            // our cue to report the battery. Published rather than written
+            // so the read path never needs the writer: the outbound loop
+            // picks it up from the same subscription the periodic updates use.
+            #[cfg(feature = "_ble")]
+            {
+                let e: BatteryStatusEvent = crate::input_device::battery::current_battery_status().into();
+                publish_event(e);
+            }
+        }
+        #[cfg(all(feature = "_ble", feature = "storage"))]
+        SplitMessage::ClearPeer => {
+            // Clear the peer address
+            FLASH_CHANNEL
+                .send(crate::storage::FlashOperationMessage::PeerAddress(PeerAddress::new(
+                    0, false, [0; 6],
+                )))
+                .await;
+        }
+        SplitMessage::KeyboardIndicator(indicator) => {
+            // Publish KeyboardIndicator event
+            publish_event(LedIndicatorEvent::new(
+                rmk_types::led_indicator::LedIndicator::from_bits(indicator),
+            ));
+        }
+        SplitMessage::Layer(layer) => {
+            // Publish Layer event
+            publish_event(LayerChangeEvent::new(layer));
+        }
+        #[cfg(feature = "display")]
+        SplitMessage::Wpm(wpm) => publish_event(WpmUpdateEvent::new(wpm)),
+        #[cfg(feature = "display")]
+        SplitMessage::Modifier(bits) => {
+            publish_event(ModifierEvent {
+                modifier: rmk_types::modifier::ModifierCombination::from_bits(bits),
+            });
+        }
+        SplitMessage::SleepState(sleeping) => {
+            publish_event(SleepStateEvent::new(sleeping));
+        }
+        _ => (),
+    }
+}
+
+/// The only caller of the transport's `read`, and never raced against anything:
+/// `L2capChannel::receive` is not cancellation safe. Run concurrently with
+/// [`peripheral_write_loop`] — credits are granted from inside `receive`, so a
+/// send waiting on the central must never be able to stop the reader.
+#[cfg(feature = "_ble")]
+pub(crate) async fn peripheral_read_loop<R: SplitReader>(reader: &mut R) {
+    loop {
+        match reader.read().await {
+            Ok(split_message) => process_central_message(split_message).await,
+            Err(crate::split::driver::SplitDriverError::Disconnected) => return,
+            Err(e) => error!("Split message read error: {:?}", e),
+        }
+    }
+}
+
+#[cfg(feature = "_ble")]
+pub(crate) async fn peripheral_write_loop<W: SplitWriter>(writer: &mut W) {
+    let mut key_sub = KeyboardEvent::subscriber();
+    #[cfg(feature = "_ble")]
+    let mut charging_state_sub = ChargingStateEvent::subscriber();
+    let mut pointing_sub = PointingEvent::subscriber();
+    #[cfg(feature = "_ble")]
+    let mut battery_sub = BatteryStatusEvent::subscriber();
+
+    loop {
+        let msg = async {
+            crate::select_biased_with_feature! {
+                e = key_sub.next_message_pure().fuse() => SplitMessage::Key(e),
+                with_feature("_ble"): e = charging_state_sub.next_message_pure().fuse() => {
+                    SplitMessage::BatteryStatus(BatteryStatus::Available {
+                        charge_state: e.charging.into(),
+                        level: None,
+                    }.into())
+                },
+                e = pointing_sub.next_message_pure().fuse() => SplitMessage::Pointing(e),
+                with_feature("_ble"): e = battery_sub.next_event().fuse() => SplitMessage::BatteryStatus(e),
+            }
+        };
+        let msg = msg.await;
+        debug!("Writing split message {:?} to central", msg);
+        if let Err(crate::split::driver::SplitDriverError::Disconnected) = writer.write(&msg).await {
+            return;
         }
     }
 }

@@ -9,7 +9,7 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer, with_timeout};
 use trouble_host::prelude::*;
 
-use super::GattSplitMessage;
+use super::{SPLIT_L2CAP_PSM, split_channel_config, split_coc};
 use crate::ble::adv::Adv;
 use crate::ble::scan::{SPLIT_CENTRAL_SCAN_WINDOW, scan_config, start_scan};
 use crate::ble::sleep::report_activity;
@@ -17,8 +17,8 @@ use crate::ble::{update_ble_phy, update_conn_params, wait_for_stack_started};
 use crate::channel::FLASH_CHANNEL;
 use crate::event::{EventSubscriber, SleepStateEvent, SubscribableEvent};
 use crate::split::ble::PeerAddress;
-use crate::split::driver::{PeripheralManager, SplitDriverError, SplitReader, SplitWriter, set_peripheral_connected};
-use crate::split::{PeripheralMatrixConfig, SPLIT_MESSAGE_MAX_SIZE, SplitMessage};
+use crate::split::driver::{read_loop, set_peripheral_connected, write_loop};
+use crate::split::{PeripheralMatrixConfig, SPLIT_MESSAGE_MAX_SIZE};
 use crate::storage::FlashOperationMessage;
 
 static PERIPHERAL_FOUND: Signal<crate::RawMutex, (u8, BdAddr)> = Signal::new();
@@ -33,11 +33,9 @@ enum SlotState {
     Connected([u8; 6]),
 }
 
-// The split service and its two characteristics, declared by `#[gatt_service]`
-// in `split::ble::peripheral` and discovered by UUID here.
-const SPLIT_SERVICE_UUID: u128 = 0x4dd5fbaa_18e5_4b07_bf0a_353698659946;
-const MESSAGE_TO_CENTRAL_UUID: u128 = 0x0e6313e3_bd0b_45c2_8d2e_37a2e8128bc3;
-const MESSAGE_TO_PERIPHERAL_UUID: u128 = 0x4b3514fb_cae4_4d38_a097_3a2a3d1c3b9c;
+/// How long to wait for the peripheral to answer the channel request. One
+/// signalling round trip, so this only has to cover a retry or two.
+const CHANNEL_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Scan for peripheral addresses, connect them, and hand each connection to
 /// that slot's session; sessions report back on `ended`.
@@ -403,122 +401,62 @@ async fn run_central_manager_task<
     conn: &Connection<'b, P>,
     matrix_config: PeripheralMatrixConfig,
 ) -> Result<(), BleHostError<C::Error>> {
-    let client = GattClient::<C, P, 10>::new(stack, conn).await?;
+    // Setup emits a PHY and a parameter update, which is already the whole
+    // depth of the connection event queue, so it has to be drained alongside or
+    // a disconnect arriving here is dropped.
+    let setup = async {
+        // Split link uses 2M PHY always.
+        update_ble_phy(stack, conn, PhyKind::Le2M).await;
 
-    // Split link uses 2M PHY always.
-    update_ble_phy(stack, conn, PhyKind::Le2M).await;
+        info!("Updating connection parameters for peripheral");
+        update_conn_params(stack, conn, &default_split_conn_params()).await;
 
-    info!("Updating connection parameters for peripheral");
-    update_conn_params(stack, conn, &default_split_conn_params()).await;
+        // One signalling round trip, so a lost request is cheap to retry: bound
+        // it and let the session restart rather than waiting the channel out.
+        with_timeout(
+            CHANNEL_OPEN_TIMEOUT,
+            L2capChannel::create(stack, conn, SPLIT_L2CAP_PSM, &split_channel_config()),
+        )
+        .await
+    };
+    let channel = match select(setup, drain_until_disconnect(conn)).await {
+        Either::First(Ok(channel)) => channel?,
+        Either::First(Err(_)) => {
+            error!("Opening the split channel timed out");
+            return Ok(());
+        }
+        Either::Second(()) => return Ok(()),
+    };
+    info!("Split channel open, mtu {}", channel.mtu());
+
+    let session = async {
+        let (mut reader, mut writer) = split_coc(stack, channel);
+        select(read_loop(id, matrix_config, &mut reader), write_loop(id, &mut writer)).await;
+        info!("Peripheral manager stopped");
+        Ok(())
+    };
 
     let (Either3::First(e) | Either3::Second(e) | Either3::Third(e)) = select3(
-        ble_central_task(&client, conn),
-        discover_and_run_manager(id, &client, matrix_config),
+        async {
+            drain_until_disconnect(conn).await;
+            Ok(())
+        },
+        session,
         update_conn_params_on_sleep_change(stack, conn),
     )
     .await;
     e
 }
 
-async fn ble_central_task<'a, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool>(
-    client: &GattClient<'a, C, P, 10>,
-    conn: &Connection<'a, P>,
-) -> Result<(), BleHostError<C::Error>> {
-    // Watch for the disconnect; draining the other events keeps the small
-    // per-connection queue from sitting full and dropping it.
-    let conn_events = async {
-        loop {
-            if let ConnectionEvent::Disconnected { reason } = conn.next().await {
-                info!("Connection lost: {:?}", reason);
-                break;
-            }
+/// Consume this link's connection events until it drops. Nothing else reads
+/// them and the queue holds only a couple, so leaving it unread loses the
+/// disconnect and the session can only end by timing out.
+async fn drain_until_disconnect<P: PacketPool>(conn: &Connection<'_, P>) {
+    loop {
+        if let ConnectionEvent::Disconnected { reason } = conn.next().await {
+            info!("Connection lost: {:?}", reason);
+            return;
         }
-    };
-
-    match select(client.task(), conn_events).await {
-        Either::First(e) => e,
-        Either::Second(()) => Ok(()),
-    }
-}
-
-/// Discover the split service on the connected peripheral, then run its
-/// [`PeripheralManager`] over the GATT link.
-async fn discover_and_run_manager<C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool>(
-    id: usize,
-    client: &GattClient<'_, C, P, 10>,
-    matrix_config: PeripheralMatrixConfig,
-) -> Result<(), BleHostError<C::Error>> {
-    let services = client
-        .services_by_uuid(&Uuid::new_long(SPLIT_SERVICE_UUID.to_le_bytes()))
-        .await?;
-    info!("Services found");
-    let Some(service) = services.first() else {
-        return Ok(());
-    };
-    let message_to_central = client
-        .characteristic_by_uuid::<GattSplitMessage>(service, &Uuid::new_long(MESSAGE_TO_CENTRAL_UUID.to_le_bytes()))
-        .await?;
-    info!("Message to central found");
-    let message_to_peripheral = client
-        .characteristic_by_uuid::<GattSplitMessage>(service, &Uuid::new_long(MESSAGE_TO_PERIPHERAL_UUID.to_le_bytes()))
-        .await?;
-    info!("Subscribing notifications");
-    let listener = client.subscribe(&message_to_central, false).await?;
-    let split_ble_driver = BleSplitCentralDriver {
-        listener,
-        message_to_peripheral,
-        client,
-    };
-    PeripheralManager::new(split_ble_driver, id, matrix_config).run().await;
-    info!("Peripheral manager stopped");
-    Ok(())
-}
-
-/// [`SplitReader`]/[`SplitWriter`] over the peripheral's GATT link: reads are
-/// notifications on `message_to_central`, writes go to `message_to_peripheral`.
-struct BleSplitCentralDriver<'a, 'b, 'c, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool> {
-    listener: NotificationListener<'b, { trouble_host::config::GATT_CLIENT_NOTIFICATION_MTU }>,
-    message_to_peripheral: Characteristic<GattSplitMessage>,
-    client: &'c GattClient<'a, C, P, 10>,
-}
-
-impl<'a, 'b, 'c, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool> SplitReader
-    for BleSplitCentralDriver<'a, 'b, 'c, C, P>
-{
-    async fn read(&mut self) -> Result<SplitMessage, SplitDriverError> {
-        let data = self.listener.next().await;
-        let message = postcard::from_bytes(data.as_ref()).map_err(|_| SplitDriverError::DeserializeError)?;
-        debug!("Received split message: {:?}", message);
-
-        // Key events from the peripheral count as activity for sleep management
-        if matches!(message, SplitMessage::Key(_) | SplitMessage::Pointing(_)) {
-            report_activity();
-        }
-
-        Ok(message)
-    }
-}
-
-impl<'a, 'b, 'c, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool> SplitWriter
-    for BleSplitCentralDriver<'a, 'b, 'c, C, P>
-{
-    async fn write(&mut self, message: &SplitMessage) -> Result<usize, SplitDriverError> {
-        let gatt_msg = GattSplitMessage::try_from(message)?;
-        if let Err(e) = self
-            .client
-            .write_characteristic_without_response(&self.message_to_peripheral, gatt_msg.as_gatt())
-            .await
-        {
-            if let BleHostError::BleHost(Error::NotFound) = e {
-                error!("Peripheral disconnected");
-                return Err(SplitDriverError::Disconnected);
-            }
-            #[cfg(feature = "defmt")]
-            let e = defmt::Debug2Format(&e);
-            error!("BLE message_to_peripheral_write error: {:?}", e);
-        }
-
-        Ok(gatt_msg.len)
     }
 }
 
@@ -538,8 +476,8 @@ async fn update_conn_params_on_sleep_change<
 
     let mut sleeping = crate::state::current_sleep_state();
     if !sleeping {
-        // Restart the idle timeout so service discovery isn't cut short. Asleep
-        // this isn't user activity, so discovery runs on the sleep parameters.
+        // Restart the idle timeout so opening the channel isn't cut short.
+        // Asleep this isn't user activity, so it runs on the sleep parameters.
         report_activity();
     }
 

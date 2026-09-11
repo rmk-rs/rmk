@@ -112,17 +112,26 @@ impl Adv<'_> {
 
 /// Broadcast `adv` and hand back the connection a central makes on it, or
 /// [`Error::Timeout`] if none does within `timeout`.
+pub(crate) async fn advertise_conn<'a, C: Controller>(
+    peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
+    adv: Adv<'_>,
+    timeout: Duration,
+) -> Result<Connection<'a, DefaultPacketPool>, BleHostError<C::Error>> {
+    let mut buf = [0; 31];
+    let advertiser = peripheral.advertise(&adv.params(), adv.build(&mut buf)?).await?;
+    Ok(with_timeout(timeout, advertiser.accept())
+        .await
+        .map_err(|_| Error::Timeout)??)
+}
+
+/// [`advertise_conn`] for a link that serves GATT, attaching `server` to it.
 pub(crate) async fn advertise<'a, 'b, C: Controller, const ATT: usize, const CONN: usize>(
     peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
     server: &'b AttributeServer<'_, NoopRawMutex, DefaultPacketPool, ATT, CONN>,
     adv: Adv<'_>,
     timeout: Duration,
 ) -> Result<GattConnection<'a, 'b, DefaultPacketPool>, BleHostError<C::Error>> {
-    let mut buf = [0; 31];
-    let advertiser = peripheral.advertise(&adv.params(), adv.build(&mut buf)?).await?;
-    let conn = with_timeout(timeout, advertiser.accept())
-        .await
-        .map_err(|_| Error::Timeout)??;
+    let conn = advertise_conn(peripheral, adv, timeout).await?;
     Ok(conn.with_attribute_server(server)?)
 }
 

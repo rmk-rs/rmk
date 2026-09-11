@@ -62,8 +62,13 @@ compile_error!("You may not enable feature `subrating` on unsupported platforms!
 /// own — see [`crate::dongle::Dongle`].
 const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + 1;
 
-/// Max number of L2CAP channels
-const L2CAP_CHANNELS_MAX: usize = CONNECTIONS_MAX * 4; // Signal + att + smp + hid
+/// Max number of dynamic L2CAP channels. Signalling, ATT and SMP ride fixed
+/// CIDs and cost nothing here; the only dynamic channel a keyboard opens is one
+/// split link per peripheral.
+#[cfg(feature = "split")]
+const L2CAP_CHANNELS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM;
+#[cfg(not(feature = "split"))]
+const L2CAP_CHANNELS_MAX: usize = 0;
 
 /// BLE transport. Owns the whole BLE stack.
 ///

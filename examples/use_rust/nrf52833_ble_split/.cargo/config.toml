@@ -1,0 +1,26 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+runner = "probe-rs run --chip nRF52833_xxAA"
+
+# Use flip-link overflow check: https://github.com/knurling-rs/flip-link
+linker = "flip-link"
+
+[build]
+target = "thumbv7em-none-eabihf"     # Cortex-M4F and Cortex-M7F (with FPU)
+
+# A vial + USB + BLE split central is about 426K, or 96% of the app region this
+# chip's flash leaves. Uncommenting this line and the `[unstable]` block at the
+# end of the file cuts it to about 364K, almost all of it panic formatting that
+# `immediate-abort` drops from .rodata. Both need a nightly toolchain, which is
+# why neither is on by default: this repo builds on stable, where
+# `-Zunstable-options` is a hard error.
+# rustflags = ["-Zunstable-options", "-Cpanic=immediate-abort"]
+
+[env]
+# The split path logs one `debug!` per key event on each half, which backs up
+# RTT during fast bursts. Keep this at `info` while measuring the split link.
+DEFMT_LOG = "info"
+KEYBOARD_TOML_PATH = { value = "keyboard.toml", relative = true }
+
+# [unstable]
+# build-std = ["core"]
+# build-std-features = ["optimize_for_size"]
