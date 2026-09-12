@@ -107,6 +107,10 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         bc.morse_profile_max_num
     ));
     lines.push(format!(
+        "pub const HOLD_TRIGGER_KEY_POSITION_MAX_NUM: usize = {};",
+        bc.hold_trigger_key_position_max_num
+    ));
+    lines.push(format!(
         "pub const AUTO_MOUSE_LAYER_MAX_NUM: usize = {};",
         bc.auto_mouse_layer_max_num
     ));

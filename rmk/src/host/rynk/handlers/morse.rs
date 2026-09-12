@@ -1,8 +1,14 @@
 //! Morse handlers.
 
+use rmk_types::constants::MORSE_PROFILE_MAX_NUM;
 use rmk_types::morse::Morse;
-use rmk_types::protocol::rynk::command::{GetMorse, GetMorseBulk, SetMorse, SetMorseBulk};
-use rmk_types::protocol::rynk::{GetMorseBulkRequest, RynkError, RynkMessage, SetMorseRequest, bulk_item_capacity};
+use rmk_types::protocol::rynk::command::{
+    GetMorse, GetMorseBulk, GetMorseHoldTriggerPositions, SetMorse, SetMorseBulk, SetMorseHoldTriggerPositions,
+};
+use rmk_types::protocol::rynk::{
+    GetMorseBulkRequest, MorseHoldTriggerPositionState, RynkError, RynkMessage, SetMorseHoldTriggerPositionsRequest,
+    SetMorseRequest, bulk_item_capacity,
+};
 
 use super::super::RynkService;
 use super::bulk::{bulk_page, take_bulk, take_element};
@@ -45,5 +51,26 @@ impl HandleBulk<SetMorseBulk> for RynkService<'_> {
             self.ctx.update_morse(idx as u8, |m| *m = config).await;
         }
         msg.encode_response(&())
+    }
+}
+
+impl Handle<GetMorseHoldTriggerPositions> for RynkService<'_> {
+    async fn handle(&self, _: ()) -> Result<MorseHoldTriggerPositionState, RynkError> {
+        Ok(self.ctx.morse_hold_trigger_positions())
+    }
+}
+
+impl Handle<SetMorseHoldTriggerPositions> for RynkService<'_> {
+    async fn handle(&self, request: SetMorseHoldTriggerPositionsRequest) -> Result<(), RynkError> {
+        let (rows, cols, _) = self.ctx.keymap_dimensions();
+        if request.positions.iter().any(|position| {
+            (position.profile != u8::MAX && position.profile as usize >= MORSE_PROFILE_MAX_NUM)
+                || position.row as usize >= rows
+                || position.col as usize >= cols
+        }) {
+            return Err(RynkError::Invalid);
+        }
+        self.ctx.set_morse_hold_trigger_positions(request).await;
+        Ok(())
     }
 }

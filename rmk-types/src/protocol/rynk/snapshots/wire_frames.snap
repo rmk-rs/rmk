@@ -51,6 +51,8 @@ GetMatrixState reply Ok(MatrixState{[0x05,0x00,0x20]})                          
 GetMatrixState request ()                                                       04 02 08 01 00
 GetMorse reply Ok(Morse{TAP->Key(A)})                                           04 01 04 01 01 04 01 02 01 02 04 00
 GetMorse request 0                                                              04 01 04 01 01 00
+GetMorseHoldTriggerPositions reply Ok({16,[(default,1,2),(3,4,5)]})             04 0a 04 01 09 10 02 ff 01 02 03 04 05 00
+GetMorseHoldTriggerPositions request ()                                         04 0a 04 01 00
 GetPeripheralStatus reply Ok(PeripheralStatus{true,Available{Discharging,85}})  04 04 08 01 06 01 01 01 01 55 00
 GetPeripheralStatus request 1                                                   05 04 08 01 01 00
 GetSleepState reply Ok(true)                                                    04 06 08 01 02 01 00
@@ -82,6 +84,9 @@ SetMacro reply Ok(())                                                           
 SetMacro request SetMacroRequest{2,[0x01,0x02,0x03]}                            09 02 02 01 02 03 01 02 03 00
 SetMorse reply Ok(())                                                           04 02 04 01 01 00
 SetMorse request SetMorseRequest{0,morse}                                       04 02 04 01 01 04 01 02 01 02 04 00
+SetMorseHoldTriggerPositions reply Err(Invalid)                                 06 0b 04 01 01 05 00
+SetMorseHoldTriggerPositions reply Ok(())                                       04 0b 04 01 01 00
+SetMorseHoldTriggerPositions request {[(default,1,2),(3,4,5)]}                  0b 0b 04 01 02 ff 01 02 03 04 05 00
 SleepState topic true                                                           03 04 80 02 01 00
 StorageReset reply Ok(())                                                       02 05 02 01 01 00
 StorageReset request StorageResetMode::Full                                     02 05 02 01 01 00

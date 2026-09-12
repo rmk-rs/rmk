@@ -10,8 +10,13 @@ use rmk_types::fork::Fork;
 use rmk_types::led_indicator::LedIndicator;
 use rmk_types::morse::{Morse, MorseProfile};
 #[cfg(feature = "rynk")]
-use rmk_types::protocol::rynk::BehaviorConfig;
+use rmk_types::protocol::rynk::{
+    BehaviorConfig, MorseHoldTriggerPosition, MorseHoldTriggerPositionState, MorseHoldTriggerPositions,
+    SetMorseHoldTriggerPositionsRequest,
+};
 
+#[cfg(feature = "rynk")]
+use crate::config::HoldTriggerPositions;
 use crate::event::KeyboardEventPos;
 use crate::keyboard::combo::Combo;
 use crate::keymap::KeyMap;
@@ -241,6 +246,36 @@ impl<'a> KeyboardContext<'a> {
 
     pub fn morse_prior_idle_time(&self) -> Duration {
         self.keymap.morse_prior_idle_time()
+    }
+
+    #[cfg(feature = "rynk")]
+    pub fn morse_hold_trigger_positions(&self) -> MorseHoldTriggerPositionState {
+        let stored = self.keymap.morse_hold_trigger_positions();
+        let mut positions = MorseHoldTriggerPositions::new();
+        for (profile, row, col) in stored {
+            positions
+                .push(MorseHoldTriggerPosition { profile, row, col })
+                .expect("runtime hold-trigger table fits its compiled capacity");
+        }
+        MorseHoldTriggerPositionState {
+            capacity: crate::HOLD_TRIGGER_KEY_POSITION_MAX_NUM as u8,
+            positions,
+        }
+    }
+
+    #[cfg(feature = "rynk")]
+    pub async fn set_morse_hold_trigger_positions(&self, request: SetMorseHoldTriggerPositionsRequest) {
+        let mut stored = HoldTriggerPositions::new();
+        for position in request.positions {
+            stored
+                .push((position.profile, position.row, position.col))
+                .expect("Rynk decoder enforces the compiled hold-trigger capacity");
+        }
+        self.keymap.set_morse_hold_trigger_positions(stored.clone());
+        #[cfg(feature = "storage")]
+        FLASH_CHANNEL
+            .send(FlashOperationMessage::MorseHoldTriggerPositions(stored))
+            .await;
     }
 
     pub async fn set_combo_timeout(&self, ms: u16) {

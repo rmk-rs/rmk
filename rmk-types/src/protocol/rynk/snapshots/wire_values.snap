@@ -46,6 +46,7 @@ EncoderAction{Morse(3),No}                05 03 00
 Fork{Single(A),No,Morse(2)}               02 01 00 04 00 05 02 01 02 01 00 00 00 02 01
 GetEncoderRequest{1,2}                    01 02
 GetMacroRequest{256}                      80 02
+HoldTriggerState{16,[d:1,2;3:4,5]}        10 02 ff 01 02 03 04 05
 KeyAction::Morse(3)                       05 03
 KeyAction::No                             00
 KeyAction::Single(Action::Key(Hid(A)))    02 01 00 04
@@ -81,6 +82,7 @@ RynkError::UnknownCmd                     06
 SetComboRequest{3,combo}                  03 01 02 01 00 04 05 01 01 02
 SetEncoderRequest{1,2,{Morse(3),No}}      01 02 05 03 00
 SetForkRequest{2,fork}                    02 02 01 00 04 00 05 02 01 02 01 00 00 00 02 01
+SetHoldTriggers{[d:1,2;3:4,5]}            02 ff 01 02 03 04 05
 SetKeyRequest{{0,5,13},Morse(7)}          00 05 0d 05 07
 SetMacroRequest{2,[0x01,0x02,0x03]}       02 03 01 02 03
 SetMorseRequest{0,morse}                  00 00 01 02 01 00 04

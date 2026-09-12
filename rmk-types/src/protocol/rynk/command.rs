@@ -16,9 +16,10 @@ use super::message::{RynkHeader, encode_frame};
 use super::{
     BehaviorConfig, DeviceCapabilities, DeviceInfo, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest,
     GetKeymapBulkRequest, GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse,
-    KeyPosition, LayoutChunk, LockStatus, MacroData, MatrixState, ProtocolVersion, RynkError, SetComboBulkRequest,
-    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest,
-    SetMorseBulkRequest, SetMorseRequest, StorageResetMode,
+    KeyPosition, LayoutChunk, LockStatus, MacroData, MatrixState, MorseHoldTriggerPositionState, ProtocolVersion,
+    RynkError, SetComboBulkRequest, SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest,
+    SetKeymapBulkRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseHoldTriggerPositionsRequest, SetMorseRequest,
+    StorageResetMode,
 };
 use crate::action::{EncoderAction, KeyAction};
 #[cfg(feature = "_ble")]
@@ -304,6 +305,10 @@ endpoints! {
     SetMorse = 0x0402: SetMorseRequest => ();
     GetMorseBulk = 0x0403: GetMorseBulkRequest => GetMorseBulkResponse;
     SetMorseBulk = 0x0404: SetMorseBulkRequest => ();
+    /// Read the complete profile-keyed positional hold-trigger table.
+    GetMorseHoldTriggerPositions = 0x040A: () => MorseHoldTriggerPositionState;
+    /// Atomically replace the complete positional hold-trigger table.
+    SetMorseHoldTriggerPositions = 0x040B: SetMorseHoldTriggerPositionsRequest => ();
 
     // Fork (0x05xx).
     GetFork = 0x0501: u8 => Fork;

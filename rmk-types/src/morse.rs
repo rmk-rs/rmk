@@ -38,11 +38,12 @@ pub enum MorseMode {
 ///
 /// Bit layout of the inner `u64`:
 /// ```text
-/// 63        46 | 45      | 44           32 | 31  30 | 29       17 | 16  15 | 14  13   | 12       0
-/// reserved     | qt_set  | quick_tap_tm    | mode   | gap_timeout | uni_tap| flow_tap | hold_timeout
-///   (18b)      |  (1b)   |   (13b ms)      |  (2b)  |   (13b ms)  |  (2b)  |   (2b)   |  (13b ms)
+/// 63       62 | 61     46 | 45      | 44           32 | 31  30 | 29       17 | 16  15 | 14  13   | 12       0
+/// ht_on_release | reserved  | qt_set  | quick_tap_tm    | mode   | gap_timeout | uni_tap| flow_tap | hold_timeout
+///     (2b)      |   (16b)   |  (1b)   |   (13b ms)      |  (2b)  |   (13b ms)  |  (2b)  |   (2b)   |  (13b ms)
 /// ```
 ///
+/// - `ht_on_release` (bits 63, 62): `00`/`01` = None, `10` = Some(false), `11` = Some(true)
 /// - `qt_set` (bit 45): when set, `quick_tap_timeout` is explicitly configured
 ///   (even if 0, which means "disabled"). When clear, the field is unset and
 ///   callers should fall back to the global default.
@@ -70,6 +71,9 @@ const FLOW_TAP_MASK: u64 = FLOW_TAP_LOW_BIT | FLOW_TAP_HIGH_BIT;
 const MODE_MASK: u64 = 0xC000_0000;
 const QT_VALUE_MASK: u64 = TIMEOUT_MASK << 32;
 const QT_SET_BIT: u64 = 1 << 45;
+const HT_ON_RELEASE_LOW_BIT: u64 = 1 << 62;
+const HT_ON_RELEASE_HIGH_BIT: u64 = 1 << 63;
+const HT_ON_RELEASE_MASK: u64 = HT_ON_RELEASE_LOW_BIT | HT_ON_RELEASE_HIGH_BIT;
 
 const fn encode_timeout_ms(t: u16) -> u64 {
     if t > TIMEOUT_MAX_MS {
@@ -120,6 +124,30 @@ impl MorseProfile {
                 | match b {
                     Some(true) => FLOW_TAP_MASK,
                     Some(false) => FLOW_TAP_HIGH_BIT,
+                    None => 0,
+                },
+        )
+    }
+
+    /// A key outside `hold_trigger_key_positions` settles the tap-hold as a tap when it is
+    /// released rather than when it is pressed. Same as ZMK's `hold-trigger-on-release`: a
+    /// next key that is merely tapped still resolves this key as a tap, while a next key that
+    /// is held leaves the hold reachable, which is what lets same-hand modifiers combine.
+    /// `None` inherits the global default.
+    pub fn hold_trigger_on_release(self) -> Option<bool> {
+        match (self.0 & HT_ON_RELEASE_MASK) >> 62 {
+            3 => Some(true),
+            2 => Some(false),
+            _ => None,
+        }
+    }
+
+    pub const fn with_hold_trigger_on_release(self, b: Option<bool>) -> Self {
+        Self(
+            (self.0 & !HT_ON_RELEASE_MASK)
+                | match b {
+                    Some(true) => HT_ON_RELEASE_MASK,
+                    Some(false) => HT_ON_RELEASE_HIGH_BIT,
                     None => 0,
                 },
         )
@@ -260,6 +288,7 @@ impl Serialize for MorseProfile {
                 hold_timeout_ms: Option<u16>,
                 gap_timeout_ms: Option<u16>,
                 quick_tap_timeout_ms: Option<u16>,
+                hold_trigger_on_release: Option<bool>,
             }
             Repr {
                 unilateral_tap: self.unilateral_tap(),
@@ -268,6 +297,7 @@ impl Serialize for MorseProfile {
                 hold_timeout_ms: self.hold_timeout_ms(),
                 gap_timeout_ms: self.gap_timeout_ms(),
                 quick_tap_timeout_ms: self.quick_tap_timeout_ms(),
+                hold_trigger_on_release: self.hold_trigger_on_release(),
             }
             .serialize(serializer)
         } else {
@@ -287,12 +317,16 @@ impl<'de> Deserialize<'de> for MorseProfile {
                 hold_timeout_ms: Option<u16>,
                 gap_timeout_ms: Option<u16>,
                 quick_tap_timeout_ms: Option<u16>,
+                // Added after the shape shipped; absent in older payloads.
+                #[serde(default)]
+                hold_trigger_on_release: Option<bool>,
             }
             let r = Repr::deserialize(deserializer)?;
             Ok(
                 MorseProfile::new(r.unilateral_tap, r.mode, r.hold_timeout_ms, r.gap_timeout_ms)
                     .with_enable_flow_tap(r.enable_flow_tap)
-                    .with_quick_tap_timeout_ms(r.quick_tap_timeout_ms),
+                    .with_quick_tap_timeout_ms(r.quick_tap_timeout_ms)
+                    .with_hold_trigger_on_release(r.hold_trigger_on_release),
             )
         } else {
             Ok(MorseProfile(u64::deserialize(deserializer)?))
@@ -304,7 +338,7 @@ impl<'de> Deserialize<'de> for MorseProfile {
 #[cfg(feature = "wasm")]
 const _: () = {
     #[::wasm_bindgen::prelude::wasm_bindgen(typescript_custom_section)]
-    const TS_APPEND_CONTENT: &'static str = "export type MorseProfile = { unilateral_tap: boolean | undefined; enable_flow_tap: boolean | undefined; mode: MorseMode | undefined; hold_timeout_ms: number | undefined; gap_timeout_ms: number | undefined; quick_tap_timeout_ms: number | undefined; };";
+    const TS_APPEND_CONTENT: &'static str = "export type MorseProfile = { unilateral_tap: boolean | undefined; enable_flow_tap: boolean | undefined; mode: MorseMode | undefined; hold_timeout_ms: number | undefined; gap_timeout_ms: number | undefined; quick_tap_timeout_ms: number | undefined; hold_trigger_on_release: boolean | undefined; };";
 };
 crate::wasm_object_abi!(MorseProfile, "MorseProfile");
 
@@ -849,6 +883,28 @@ mod tests {
         assert_eq!(profile.mode(), Some(MorseMode::PermissiveHold));
     }
 
+    #[test]
+    fn hold_trigger_on_release_accessors_preserve_packed_fields() {
+        assert_eq!(MorseProfile::const_default().hold_trigger_on_release(), None);
+
+        let base = MorseProfile::new(Some(true), Some(MorseMode::PermissiveHold), Some(1000), Some(2000))
+            .with_enable_flow_tap(Some(true))
+            .with_quick_tap_timeout_ms(Some(150));
+
+        for value in [Some(true), Some(false), None] {
+            let p = base.with_hold_trigger_on_release(value);
+            assert_eq!(p.hold_trigger_on_release(), value);
+            assert_eq!(p.hold_timeout_ms(), Some(1000));
+            assert_eq!(p.gap_timeout_ms(), Some(2000));
+            assert_eq!(p.unilateral_tap(), Some(true));
+            assert_eq!(p.enable_flow_tap(), Some(true));
+            assert_eq!(p.quick_tap_timeout_ms(), Some(150));
+            assert_eq!(p.mode(), Some(MorseMode::PermissiveHold));
+        }
+
+        assert_eq!(core::mem::size_of::<MorseProfile>(), 8);
+    }
+
     /// The human-readable serde goes `MorseProfile` -> decoded parts -> `new()`.
     /// All 32 bits are covered by the five fields, so that path must be lossless.
     #[test]
@@ -862,11 +918,14 @@ mod tests {
             )
             .with_enable_flow_tap(Some(false)),
             MorseProfile::new(Some(true), Some(MorseMode::Normal), Some(200), Some(150))
-                .with_enable_flow_tap(Some(true)),
+                .with_enable_flow_tap(Some(true))
+                .with_hold_trigger_on_release(Some(true)),
             MorseProfile::const_default(),
         ] {
             let parts = MorseProfile::new(p.unilateral_tap(), p.mode(), p.hold_timeout_ms(), p.gap_timeout_ms())
-                .with_enable_flow_tap(p.enable_flow_tap());
+                .with_enable_flow_tap(p.enable_flow_tap())
+                .with_quick_tap_timeout_ms(p.quick_tap_timeout_ms())
+                .with_hold_trigger_on_release(p.hold_trigger_on_release());
             assert_eq!(p, parts);
         }
     }

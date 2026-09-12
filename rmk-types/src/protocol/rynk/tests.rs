@@ -213,10 +213,48 @@ struct Exemplars {
     combo: Combo,
     fork: Fork,
     morse: Morse,
+    hold_trigger_positions: MorseHoldTriggerPositions,
     macro_data: MacroData,
     encoder: EncoderAction,
     battery: BatteryStatus,
     layout: LayoutChunk,
+}
+
+fn exemplar_hold_trigger_positions() -> MorseHoldTriggerPositions {
+    #[cfg(feature = "host")]
+    {
+        alloc::vec![
+            MorseHoldTriggerPosition {
+                profile: u8::MAX,
+                row: 1,
+                col: 2,
+            },
+            MorseHoldTriggerPosition {
+                profile: 3,
+                row: 4,
+                col: 5,
+            },
+        ]
+    }
+    #[cfg(not(feature = "host"))]
+    {
+        let mut positions = MorseHoldTriggerPositions::new();
+        positions
+            .push(MorseHoldTriggerPosition {
+                profile: u8::MAX,
+                row: 1,
+                col: 2,
+            })
+            .unwrap();
+        positions
+            .push(MorseHoldTriggerPosition {
+                profile: 3,
+                row: 4,
+                col: 5,
+            })
+            .unwrap();
+        positions
+    }
 }
 
 fn exemplars() -> Exemplars {
@@ -309,6 +347,7 @@ fn exemplars() -> Exemplars {
         profile: MorseProfile::const_default(),
         actions: morse_actions,
     };
+    let hold_trigger_positions = exemplar_hold_trigger_positions();
     let mut macro_bytes = heapless::Vec::new();
     macro_bytes.extend_from_slice(&[0x01, 0x02, 0x03]).unwrap();
     let macro_data = MacroData { data: macro_bytes };
@@ -332,6 +371,7 @@ fn exemplars() -> Exemplars {
         combo,
         fork,
         morse,
+        hold_trigger_positions,
         macro_data,
         encoder,
         battery: BatteryStatus::Available {
@@ -483,6 +523,13 @@ fn wire_values_locked() {
         ("Fork{Single(A),No,Morse(2)}", encode(&ex.fork)),
         ("StateBits{LCtrl,Caps,B1}", encode(&ex.state_bits)),
         ("Morse{TAP->Key(A)}", encode(&ex.morse)),
+        (
+            "HoldTriggerState{16,[d:1,2;3:4,5]}",
+            encode(&MorseHoldTriggerPositionState {
+                capacity: 16,
+                positions: ex.hold_trigger_positions.clone(),
+            }),
+        ),
         ("MacroData{[0x01,0x02,0x03]}", encode(&ex.macro_data)),
         // --- Status / system responses ---
         ("MatrixState{[0x05,0x00,0x20]}", encode(&ex.matrix)),
@@ -563,6 +610,12 @@ fn wire_values_locked() {
                 index: 0,
                 config: ex.morse.clone()
             })
+        ),
+        (
+            "SetHoldTriggers{[d:1,2;3:4,5]}",
+            encode(&SetMorseHoldTriggerPositionsRequest {
+                positions: ex.hold_trigger_positions.clone(),
+            }),
         ),
         (
             "SetForkRequest{2,fork}",
@@ -836,6 +889,43 @@ fn wire_frames_locked() {
         (
             "SetMorse reply Ok(())",
             encode_frame(Cmd::SetMorse, SEQ, &Ok::<(), RynkError>(()))
+        ),
+        (
+            "GetMorseHoldTriggerPositions request ()",
+            encode_frame(Cmd::GetMorseHoldTriggerPositions, SEQ, &()),
+        ),
+        (
+            "GetMorseHoldTriggerPositions reply Ok({16,[(default,1,2),(3,4,5)]})",
+            encode_frame(
+                Cmd::GetMorseHoldTriggerPositions,
+                SEQ,
+                &Ok::<MorseHoldTriggerPositionState, RynkError>(MorseHoldTriggerPositionState {
+                    capacity: 16,
+                    positions: ex.hold_trigger_positions.clone(),
+                }),
+            ),
+        ),
+        (
+            "SetMorseHoldTriggerPositions request {[(default,1,2),(3,4,5)]}",
+            encode_frame(
+                Cmd::SetMorseHoldTriggerPositions,
+                SEQ,
+                &SetMorseHoldTriggerPositionsRequest {
+                    positions: ex.hold_trigger_positions.clone(),
+                },
+            ),
+        ),
+        (
+            "SetMorseHoldTriggerPositions reply Ok(())",
+            encode_frame(Cmd::SetMorseHoldTriggerPositions, SEQ, &Ok::<(), RynkError>(()),),
+        ),
+        (
+            "SetMorseHoldTriggerPositions reply Err(Invalid)",
+            encode_frame(
+                Cmd::SetMorseHoldTriggerPositions,
+                SEQ,
+                &Err::<(), RynkError>(RynkError::Invalid),
+            ),
         ),
         // Fork (0x05xx).
         ("GetFork request 2", encode_frame(Cmd::GetFork, SEQ, &2u8)),

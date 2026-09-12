@@ -265,6 +265,33 @@ impl KeyboardTomlConfig {
                 self.rmk.morse_max_num = self.rmk.morse_max_num.max(morses.len());
             }
 
+            // Update hold_trigger_key_position_max_num to fit every configured position
+            if let Some(morse) = &behavior.morse {
+                let regions = self.layout.as_ref().and_then(|layout| layout.regions.as_ref());
+                let configured_len = |positions: Option<&Vec<[u8; 2]>>, names: Option<&Vec<String>>| {
+                    positions.map(Vec::len).unwrap_or(0)
+                        + names
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|name| regions.and_then(|r| r.get(name)))
+                            .map(Vec::len)
+                            .sum::<usize>()
+                };
+                let mut total = configured_len(
+                    morse.hold_trigger_key_positions.as_ref(),
+                    morse.hold_trigger_regions.as_ref(),
+                );
+                if let Some(profiles) = &morse.profiles {
+                    for profile in profiles.values() {
+                        total += configured_len(
+                            profile.hold_trigger_key_positions.as_ref(),
+                            profile.hold_trigger_regions.as_ref(),
+                        );
+                    }
+                }
+                self.rmk.hold_trigger_key_position_max_num = self.rmk.hold_trigger_key_position_max_num.max(total);
+            }
+
             let auto_mouse_layers = behavior.auto_mouse_layer.as_deref().unwrap_or_default();
             self.rmk.auto_mouse_layer_max_num.get_or_insert(auto_mouse_layers.len());
         } else {
@@ -303,6 +330,12 @@ pub(crate) struct RmkConstantsConfig {
     #[serde_inline_default(16)]
     #[serde(deserialize_with = "check_morse_profile_max_num")]
     pub morse_profile_max_num: usize,
+    /// Capacity of the hold trigger position table, counting every `hold_trigger_key_positions`
+    /// entry across all profiles. Raised automatically to fit `keyboard.toml`; the default
+    /// covers a typical home row mod setup at 3 bytes per entry.
+    #[serde_inline_default(16)]
+    #[serde(deserialize_with = "check_hold_trigger_key_position_max_num")]
+    pub hold_trigger_key_position_max_num: usize,
     /// Maximum number of patterns a morse key can handle
     #[serde_inline_default(8)]
     #[serde(deserialize_with = "check_max_patterns_per_key")]
@@ -377,6 +410,19 @@ where
 /// The profile index is a `u8` in `KeyAction::TapHold` and an index with no
 /// table entry means "use the default profile", so the table may never cover
 /// the full `u8` range: capacity ≤ 255 keeps at least one index always vacant.
+fn check_hold_trigger_key_position_max_num<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = usize::deserialize(deserializer)?;
+    if value > 255 {
+        panic!(
+            "❌ Parse `keyboard.toml` error: hold_trigger_key_position_max_num must be between 0 and 255, got {value}"
+        );
+    }
+    Ok(value)
+}
+
 fn check_morse_profile_max_num<'de, D>(deserializer: D) -> Result<usize, D::Error>
 where
     D: de::Deserializer<'de>,
@@ -425,6 +471,7 @@ impl Default for RmkConstantsConfig {
             fork_max_num: 8,
             morse_max_num: 8,
             morse_profile_max_num: 16,
+            hold_trigger_key_position_max_num: 16,
             max_patterns_per_key: 8,
             macro_space_size: 256,
             debounce_time: 20,
@@ -534,6 +581,8 @@ pub(crate) struct LayoutTomlConfig {
     /// optional hand, shape (`@2u`), gaps (`[1.5]`), row-steps (`[y=]`), and
     /// encoders (`(e,0)`). Its order also defines the order of `[[keymap.layer]]`.
     pub map: Option<String>,
+    /// Reusable named sets of matrix coordinates for positional behaviors.
+    pub regions: Option<HashMap<String, Vec<[u8; 2]>>>,
     // Rendered-layout fields.
     pub default_variant: Option<String>,
     pub shapes: Option<HashMap<String, ShapeToml>>,
@@ -846,6 +895,16 @@ pub(crate) struct MorseProfile {
     pub gap_timeout: Option<DurationMillis>,
 
     pub quick_tap_timeout: Option<DurationMillis>,
+
+    /// Key positions allowed to trigger the hold, as `[row, col]` pairs. When set, any other
+    /// key resolves this tap-hold as a tap. Same as ZMK's `hold-trigger-key-positions`.
+    pub hold_trigger_key_positions: Option<Vec<[u8; 2]>>,
+    /// Named `[layout.regions]` whose positions are added to `hold_trigger_key_positions`.
+    pub hold_trigger_regions: Option<Vec<String>>,
+
+    /// A key outside `hold_trigger_key_positions` settles this tap-hold as a tap when it is
+    /// released rather than when it is pressed
+    pub hold_trigger_on_release: Option<bool>,
 }
 
 /// Configurations for tri layer
@@ -960,6 +1019,17 @@ pub(crate) struct MorsesConfig {
     pub gap_timeout: Option<DurationMillis>,
 
     pub quick_tap_timeout: Option<DurationMillis>,
+
+    /// Key positions allowed to trigger the hold, as `[row, col]` pairs. When set, any other
+    /// key resolves the tap-hold as a tap. Same as ZMK's `hold-trigger-key-positions`.
+    pub hold_trigger_key_positions: Option<Vec<[u8; 2]>>,
+
+    /// Named `[layout.regions]` whose positions are added to `hold_trigger_key_positions`.
+    pub hold_trigger_regions: Option<Vec<String>>,
+
+    /// A key outside `hold_trigger_key_positions` settles the tap-hold as a tap when it is
+    /// released rather than when it is pressed
+    pub hold_trigger_on_release: Option<bool>,
 
     /// these can be used to overrides the defaults given above
     pub profiles: Option<HashMap<String, MorseProfile>>,

@@ -1,4 +1,73 @@
-use crate::{BehaviorConfig, MacroOperation};
+use std::collections::HashSet;
+
+use crate::{BehaviorConfig, LayoutTomlConfig, MacroOperation, MorseProfile, MorsesConfig};
+
+fn expand_hold_trigger_regions(
+    layout: Option<&LayoutTomlConfig>,
+    positions: &mut Option<Vec<[u8; 2]>>,
+    region_names: Option<&[String]>,
+    context: &str,
+) -> Result<(), String> {
+    let Some(layout) = layout else {
+        if region_names.is_some_and(|names| !names.is_empty()) {
+            return Err(format!(
+                "keyboard.toml: {context}.hold_trigger_regions requires [layout]"
+            ));
+        }
+        return Ok(());
+    };
+    let valid_positions = crate::layout::logical_key_positions(layout)?;
+    let mut expanded = positions.take().unwrap_or_default();
+
+    if let Some(names) = region_names {
+        let regions = layout.regions.as_ref();
+        for name in names {
+            let region = regions.and_then(|regions| regions.get(name)).ok_or_else(|| {
+                format!("keyboard.toml: {context}.hold_trigger_regions references unknown layout region '{name}'")
+            })?;
+            expanded.extend(region);
+        }
+    }
+
+    let mut seen = HashSet::new();
+    expanded.retain(|position| seen.insert(*position));
+    if let Some(position) = expanded.iter().find(|position| !valid_positions.contains(*position)) {
+        return Err(format!(
+            "keyboard.toml: {context} references hold trigger position [{}, {}], which is not a key in layout.map",
+            position[0], position[1]
+        ));
+    }
+    *positions = (!expanded.is_empty()).then_some(expanded);
+    Ok(())
+}
+
+fn expand_morse_regions(layout: Option<&LayoutTomlConfig>, morse: &mut MorsesConfig) -> Result<(), String> {
+    expand_hold_trigger_regions(
+        layout,
+        &mut morse.hold_trigger_key_positions,
+        morse.hold_trigger_regions.as_deref(),
+        "behavior.morse",
+    )?;
+    if let Some(profiles) = &mut morse.profiles {
+        for (name, profile) in profiles {
+            expand_profile_regions(layout, name, profile)?;
+        }
+    }
+    Ok(())
+}
+
+fn expand_profile_regions(
+    layout: Option<&LayoutTomlConfig>,
+    name: &str,
+    profile: &mut MorseProfile,
+) -> Result<(), String> {
+    expand_hold_trigger_regions(
+        layout,
+        &mut profile.hold_trigger_key_positions,
+        profile.hold_trigger_regions.as_deref(),
+        &format!("behavior.morse.profiles.{name}"),
+    )
+}
 
 impl crate::KeyboardTomlConfig {
     pub(crate) fn get_behavior_config(&self) -> Result<BehaviorConfig, String> {
@@ -139,6 +208,9 @@ impl crate::KeyboardTomlConfig {
                     }
                 }
                 behavior.morse = behavior.morse.or(default.morse);
+                if let Some(morse) = &mut behavior.morse {
+                    expand_morse_regions(self.layout.as_ref(), morse)?;
+                }
                 if let Some(morse) = &behavior.morse
                     && let Some(morses) = &morse.morses
                     && morses.len() > self.rmk.morse_max_num
