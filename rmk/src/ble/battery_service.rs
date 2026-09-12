@@ -1,25 +1,28 @@
 use core::sync::atomic::Ordering;
 
-use embassy_futures::join::join;
 use embassy_futures::select::{Either, select};
 use embassy_sync::pubsub::Subscriber;
-use embassy_time::{Duration, Instant, Timer, with_timeout};
+use embassy_sync::watch::Receiver as WatchReceiver;
+use embassy_time::{Duration, Instant, Timer};
 use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
 
 use super::ble_server::Server;
-use crate::ble::sleep::SLEEPING_STATE;
+use crate::ble::sleep::{LAST_ACTIVITY_TIMESTAMP, SLEEPING_STATE};
 use crate::core_traits::Runnable;
 #[cfg(feature = "split")]
 use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
-use crate::keyboard::LAST_KEY_TIMESTAMP;
 
 const CHARACTERISTIC_PRESENTATION_FORMAT_UINT8: u8 = 0x04;
 const CHARACTERISTIC_PRESENTATION_FORMAT_EXPONENT_ZERO: u8 = 0x00;
 const CHARACTERISTIC_PRESENTATION_FORMAT_UNIT_PERCENTAGE: u16 = 0x27AD;
 const CHARACTERISTIC_PRESENTATION_FORMAT_NAMESPACE_BLUETOOTH_SIG: u8 = 0x01;
 const CHARACTERISTIC_PRESENTATION_FORMAT_DESCRIPTION_MAIN: u16 = 0x0106;
+const GATT_SERVER_START_DELAY_SECS: u64 = 2;
+const FIRST_BATTERY_REPORT_TIMEOUT_SECS: u64 = 30;
+const BATTERY_REPORT_INTERVAL_SECS: u64 = 30 * 60;
+const RECENT_ACTIVITY_THRESHOLD_SECS: u32 = 60;
 
 const fn battery_presentation_format(description: u16) -> [u8; 7] {
     let [unit_low, unit_high] = CHARACTERISTIC_PRESENTATION_FORMAT_UNIT_PERCENTAGE.to_le_bytes();
@@ -119,9 +122,11 @@ fn peripheral_battery_presentation_format(peripheral_id: usize) -> [u8; 7] {
     battery_presentation_format(description)
 }
 
-pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
+pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, 'values, P: PacketPool> {
     battery_level: Characteristic<u8>,
+    server: &'conn Server<'values>,
     conn: &'conn GattConnection<'stack, 'server, P>,
+    last_activity_timestamp: WatchReceiver<'static, crate::RawMutex, u32, 2>,
     sub: Subscriber<
         'static,
         crate::RawMutex,
@@ -132,102 +137,175 @@ pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
     >,
 }
 
-impl<'stack, 'server, 'conn, P: PacketPool> BleBatteryServer<'stack, 'server, 'conn, P> {
-    pub(crate) fn new(server: &Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
+impl<'stack, 'server, 'conn, 'values, P: PacketPool> BleBatteryServer<'stack, 'server, 'conn, 'values, P> {
+    pub(crate) fn new(server: &'conn Server<'values>, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
         Self {
             battery_level: server.battery_service.level,
+            server,
             conn,
+            last_activity_timestamp: LAST_ACTIVITY_TIMESTAMP
+                .receiver()
+                .expect("battery activity timestamp receiver limit reached"),
             sub: BatteryStatusEvent::subscriber(),
         }
     }
 }
 
-impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
+fn update_battery_value(server: &Server, battery_level: &Characteristic<u8>, status: &BatteryStatus) {
+    if let BatteryStatus::Available { level: Some(level), .. } = status
+        && let Err(e) = server.set(battery_level, level)
+    {
+        error!("Failed to update battery level: {:?}", e);
+    }
+}
+
+impl<P: PacketPool> BleBatteryServer<'_, '_, '_, '_, P> {
+    async fn notify_latest_battery_status(&mut self, pending_status: &mut Option<BatteryStatusEvent>) {
+        while let Some(status) = self.sub.try_next_message_pure() {
+            update_battery_value(self.server, &self.battery_level, &status.0);
+            *pending_status = Some(status);
+        }
+
+        let status = pending_status.take().expect("battery status pending before notify");
+        if let BatteryStatus::Available { level: Some(level), .. } = status.0
+            && let Err(e) = self.battery_level.notify(self.conn, &level, false).await
+        {
+            error!("Failed to notify battery level: {:?}", e);
+        }
+    }
+}
+
+impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, '_, P> {
     async fn run(&mut self) -> ! {
         // Wait 2 seconds, ensure that gatt server has been started
-        Timer::after_secs(2).await;
+        Timer::after_secs(GATT_SERVER_START_DELAY_SECS).await;
 
-        // First report after connected.
-        //
-        // Prefer the cached status from the processor — that way a host that
-        // connects after the level has already stabilized (battery clamped at
-        // 100%, no recent key activity, etc.) doesn't have to wait for a state
-        // change to learn the level. If the cache is empty, fall through to
-        // waiting on the event stream.
-        let first_report = async {
-            if let BatteryStatus::Available { level: Some(level), .. } =
-                crate::input_device::battery::current_battery_status()
-                && self.battery_level.notify(self.conn, &level, true).await.is_ok()
-            {
-                return;
-            }
-            loop {
-                if let BatteryStatus::Available { level: Some(level), .. } = self.sub.next_message_pure().await.0 {
-                    if let Err(e) = self.battery_level.notify(self.conn, &level, true).await {
-                        error!("Failed to notify battery level: {:?}", e);
-                    } else {
-                        // The first report is sent, return to continue
-                        return;
+        let mut pending_status = None;
+        let cached_status = crate::input_device::battery::current_battery_status();
+        if let BatteryStatus::Available { level: Some(_), .. } = cached_status {
+            update_battery_value(self.server, &self.battery_level, &cached_status);
+            pending_status = Some(BatteryStatusEvent::from(cached_status));
+        }
+
+        // The first report may wait for a battery event until its deadline.
+        // Once a value is available, keep updating GATT storage while asleep
+        // and defer only the notification until the keyboard wakes.
+        let mut first_report_deadline = Some(Instant::now() + Duration::from_secs(FIRST_BATTERY_REPORT_TIMEOUT_SECS));
+        let mut next_timeout = Instant::now() + Duration::from_secs(BATTERY_REPORT_INTERVAL_SECS);
+        loop {
+            if first_report_deadline.is_some() {
+                if pending_status.is_none() {
+                    let deadline = first_report_deadline.expect("first report deadline is set");
+                    match select(Timer::at(deadline), self.sub.next_message_pure()).await {
+                        Either::First(_) => {
+                            first_report_deadline = None;
+                            continue;
+                        }
+                        Either::Second(status) => {
+                            update_battery_value(self.server, &self.battery_level, &status.0);
+                            if matches!(status.0, BatteryStatus::Available { level: Some(_), .. }) {
+                                pending_status = Some(status);
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                match select(
+                    wait_until_awake(&mut self.last_activity_timestamp),
+                    self.sub.next_message_pure(),
+                )
+                .await
+                {
+                    Either::First(_) => {
+                        self.notify_latest_battery_status(&mut pending_status).await;
+                        first_report_deadline = None;
+                        next_timeout = Instant::now() + Duration::from_secs(BATTERY_REPORT_INTERVAL_SECS);
+                    }
+                    Either::Second(status) => {
+                        update_battery_value(self.server, &self.battery_level, &status.0);
+                        pending_status = Some(status);
                     }
                 }
-                embassy_time::Timer::after_secs(2).await;
+                continue;
             }
-        };
 
-        // Try to do the first battery report in 30 seconds
-        with_timeout(Duration::from_secs(30), first_report).await.ok();
+            // Report the battery level.
+            if pending_status.is_none() {
+                let status = self.sub.next_message_pure().await;
+                update_battery_value(self.server, &self.battery_level, &status.0);
+                pending_status = Some(status);
+                continue;
+            }
 
-        // Report the battery level.
-        loop {
-            let battery_status = self.wait_until_battery_status_available().await;
-
-            // Check if there's a newer event, if not, use original battery status event
-            let state = self.sub.try_next_message_pure().unwrap_or(battery_status);
-            if let BatteryStatus::Available { level: Some(level), .. } = state.0
-                && let Err(e) = self.battery_level.notify(self.conn, &level, true).await
+            match select(
+                wait_for_central_battery_report_decision(&mut self.last_activity_timestamp, next_timeout),
+                self.sub.next_message_pure(),
+            )
+            .await
             {
-                error!("Failed to notify battery level: {:?}", e);
+                Either::First(decision) => match decision {
+                    BatteryReportDecision::Notify => {
+                        self.notify_latest_battery_status(&mut pending_status).await;
+                        next_timeout = Instant::now() + Duration::from_secs(BATTERY_REPORT_INTERVAL_SECS);
+                    }
+                    BatteryReportDecision::Drop => pending_status = None,
+                },
+                Either::Second(status) => {
+                    update_battery_value(self.server, &self.battery_level, &status.0);
+                    pending_status = Some(status);
+                }
             }
         }
     }
 }
 
-impl<P: PacketPool> BleBatteryServer<'_, '_, '_, P> {
-    /// Wait until the battery status is available.
-    /// To avoid unexpected wakeup, before reporting battery level, all conditions should be satistied:
-    ///
-    /// 1. There's a battery status update
-    /// 2. There's a key press in last 1 minute, or timeout(30 minutes)
-    /// 3. The keyboard is not in the sleep mode
-    async fn wait_until_battery_status_available(&mut self) -> BatteryStatusEvent {
-        loop {
-            // Calculate timeout when reporting battery level
-            let timeout = async {
-                loop {
-                    embassy_time::Timer::after_secs(1800).await;
-                    // 30 minutes passed and the keyboard isn't in sleep mode: timeout
-                    if !SLEEPING_STATE.load(Ordering::Acquire) {
-                        break;
-                    }
-                }
-            };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BatteryReportDecision {
+    Notify,
+    Drop,
+}
 
-            // Wait until there are both battery status update and key pressing or timeout
-            let (battery_status, last_press) =
-                join(self.sub.next_message_pure(), select(timeout, LAST_KEY_TIMESTAMP.wait())).await;
-
-            // Then check the value last press time
-            let last_press = match last_press {
-                Either::First(_) => Instant::now().as_secs() as u32,
-                Either::Second(last_press) => last_press,
-            };
-
-            // Only report battery status if the last key action is less than 60 seconds ago
-            let current_time = Instant::now().as_secs() as u32;
-            if current_time.saturating_sub(last_press) < 60 {
-                return battery_status;
-            }
+/// Wait until a central battery notification is allowed or the current event must be dropped.
+async fn wait_for_central_battery_report_decision<M: embassy_sync::blocking_mutex::raw::RawMutex>(
+    last_activity_timestamp: &mut WatchReceiver<'_, M, u32, 2>,
+    timeout_at: Instant,
+) -> BatteryReportDecision {
+    loop {
+        let deadline_passed = Instant::now() >= timeout_at;
+        if !SLEEPING_STATE.load(Ordering::Acquire) && deadline_passed {
+            return BatteryReportDecision::Notify;
         }
+
+        let activity = if let Some(activity) = last_activity_timestamp.try_changed() {
+            activity
+        } else if deadline_passed {
+            last_activity_timestamp.changed().await
+        } else {
+            match select(Timer::at(timeout_at), last_activity_timestamp.changed()).await {
+                Either::First(_) => continue,
+                Either::Second(activity) => activity,
+            }
+        };
+
+        if SLEEPING_STATE.load(Ordering::Acquire) {
+            continue;
+        }
+
+        let current_time = Instant::now().as_secs() as u32;
+        return if current_time.saturating_sub(activity) < RECENT_ACTIVITY_THRESHOLD_SECS {
+            BatteryReportDecision::Notify
+        } else {
+            BatteryReportDecision::Drop
+        };
+    }
+}
+
+async fn wait_until_awake<M: embassy_sync::blocking_mutex::raw::RawMutex>(
+    last_activity_timestamp: &mut WatchReceiver<'_, M, u32, 2>,
+) {
+    while SLEEPING_STATE.load(Ordering::Acquire) {
+        last_activity_timestamp.changed().await;
     }
 }
 
@@ -238,9 +316,11 @@ impl<P: PacketPool> BleBatteryServer<'_, '_, '_, P> {
 /// notifies the matching peripheral battery characteristic so the host can
 /// read it the same way it reads the central's level.
 #[cfg(feature = "split")]
-pub(crate) struct BlePeripheralBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
+pub(crate) struct BlePeripheralBatteryServer<'stack, 'server, 'conn, 'values, P: PacketPool> {
     battery_levels: [Characteristic<u8>; crate::SPLIT_BATTERY_PERIPHERALS_NUM],
+    server: &'conn Server<'values>,
     conn: &'conn GattConnection<'stack, 'server, P>,
+    last_activity_timestamp: WatchReceiver<'static, crate::RawMutex, u32, 2>,
     sub: Subscriber<
         'static,
         crate::RawMutex,
@@ -259,6 +339,34 @@ fn find_peripheral_battery_slot(configured_ids: &[usize], peripheral_id: usize) 
 }
 
 #[cfg(feature = "split")]
+fn handle_peripheral_battery_event(
+    server: &Server,
+    battery_levels: &[Characteristic<u8>],
+    configured_ids: &[usize],
+    pending_slots: &mut [bool],
+    result: embassy_sync::pubsub::WaitResult<PeripheralBatteryEvent>,
+) {
+    match result {
+        embassy_sync::pubsub::WaitResult::Message(event) => {
+            let Some(slot) = find_peripheral_battery_slot(configured_ids, event.id) else {
+                return;
+            };
+
+            if let BatteryStatus::Available { level: Some(level), .. } = event.state.0
+                && let Err(e) = server.set(&battery_levels[slot], &level)
+            {
+                error!("Failed to update peripheral {} battery level: {:?}", event.id, e);
+            }
+            pending_slots[slot] = true;
+        }
+        embassy_sync::pubsub::WaitResult::Lagged(_) => {
+            initialize_peripheral_battery_levels(server);
+            pending_slots.fill(true);
+        }
+    }
+}
+
+#[cfg(feature = "split")]
 fn initialize_peripheral_battery_levels(server: &Server) {
     for (slot, peripheral_id) in crate::SPLIT_BATTERY_PERIPHERAL_IDS.iter().copied().enumerate() {
         if let Some(BatteryStatus::Available { level: Some(level), .. }) =
@@ -274,47 +382,104 @@ fn initialize_peripheral_battery_levels(server: &Server) {
 }
 
 #[cfg(feature = "split")]
-impl<'stack, 'server, 'conn, P: PacketPool> BlePeripheralBatteryServer<'stack, 'server, 'conn, P> {
-    pub(crate) fn new(server: &Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
+impl<'stack, 'server, 'conn, 'values, P: PacketPool> BlePeripheralBatteryServer<'stack, 'server, 'conn, 'values, P> {
+    pub(crate) fn new(server: &'conn Server<'values>, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
         let sub = PeripheralBatteryEvent::subscriber();
         initialize_peripheral_battery_levels(server);
 
         Self {
             battery_levels: server.peripheral_battery_services.levels,
+            server,
             conn,
+            last_activity_timestamp: LAST_ACTIVITY_TIMESTAMP
+                .receiver()
+                .expect("battery activity timestamp receiver limit reached"),
             sub,
         }
     }
 }
 
 #[cfg(feature = "split")]
-impl<P: PacketPool> Runnable for BlePeripheralBatteryServer<'_, '_, '_, P> {
+impl<P: PacketPool> Runnable for BlePeripheralBatteryServer<'_, '_, '_, '_, P> {
     async fn run(&mut self) -> ! {
         // Wait for the GATT server to be ready before pushing notifications.
-        Timer::after_secs(2).await;
+        Timer::after_secs(GATT_SERVER_START_DELAY_SECS).await;
 
-        // The subscriber is created before this snapshot, so discarding queued
-        // events and then reading the cache cannot miss a newer value.
+        // The subscriber is created before this snapshot, so the cache contains
+        // the latest value after queued startup events have been consumed.
         while self.sub.try_next_message_pure().is_some() {}
+        initialize_peripheral_battery_levels(self.server);
+
+        let mut pending_slots = [false; crate::SPLIT_BATTERY_PERIPHERALS_NUM];
         for (slot, peripheral_id) in crate::SPLIT_BATTERY_PERIPHERAL_IDS.iter().copied().enumerate() {
-            if let Some(BatteryStatus::Available { level: Some(level), .. }) =
-                crate::split::driver::current_peripheral_battery_status(peripheral_id)
-                && let Err(e) = self.battery_levels[slot].notify(self.conn, &level, true).await
-            {
-                error!(
-                    "Failed to set initial peripheral {} battery level: {:?}",
-                    peripheral_id, e
-                );
+            if matches!(
+                crate::split::driver::current_peripheral_battery_status(peripheral_id),
+                Some(BatteryStatus::Available { level: Some(_), .. })
+            ) {
+                pending_slots[slot] = true;
             }
         }
 
         loop {
-            let event = self.sub.next_message_pure().await;
-            if let Some(slot) = find_peripheral_battery_slot(&crate::SPLIT_BATTERY_PERIPHERAL_IDS, event.id)
-                && let BatteryStatus::Available { level: Some(level), .. } = event.state.0
-                && let Err(e) = self.battery_levels[slot].notify(self.conn, &level, true).await
+            if !pending_slots.contains(&true) {
+                let result = self.sub.next_message().await;
+                handle_peripheral_battery_event(
+                    self.server,
+                    &self.battery_levels,
+                    &crate::SPLIT_BATTERY_PERIPHERAL_IDS,
+                    &mut pending_slots,
+                    result,
+                );
+                if !pending_slots.contains(&true) {
+                    continue;
+                }
+            }
+
+            match select(
+                wait_until_awake(&mut self.last_activity_timestamp),
+                self.sub.next_message(),
+            )
+            .await
             {
-                error!("Failed to notify peripheral {} battery level: {:?}", event.id, e);
+                Either::First(_) => {
+                    while let Some(result) = self.sub.try_next_message() {
+                        handle_peripheral_battery_event(
+                            self.server,
+                            &self.battery_levels,
+                            &crate::SPLIT_BATTERY_PERIPHERAL_IDS,
+                            &mut pending_slots,
+                            result,
+                        );
+                    }
+
+                    for (slot, peripheral_id) in crate::SPLIT_BATTERY_PERIPHERAL_IDS.iter().copied().enumerate() {
+                        if !pending_slots[slot] {
+                            continue;
+                        }
+                        if SLEEPING_STATE.load(Ordering::Acquire) {
+                            break;
+                        }
+                        if let Some(BatteryStatus::Available { level: Some(level), .. }) =
+                            crate::split::driver::current_peripheral_battery_status(peripheral_id)
+                            && let Err(e) = self.battery_levels[slot].notify(self.conn, &level, false).await
+                        {
+                            error!("Failed to notify peripheral {} battery level: {:?}", peripheral_id, e);
+                        }
+                        pending_slots[slot] = false;
+                    }
+                    if pending_slots.contains(&true) {
+                        continue;
+                    }
+                }
+                Either::Second(result) => {
+                    handle_peripheral_battery_event(
+                        self.server,
+                        &self.battery_levels,
+                        &crate::SPLIT_BATTERY_PERIPHERAL_IDS,
+                        &mut pending_slots,
+                        result,
+                    );
+                }
             }
         }
     }
@@ -352,11 +517,12 @@ mod cpf_tests {
 #[cfg(all(test, feature = "split"))]
 mod tests {
     use embassy_sync::blocking_mutex::raw::{NoopRawMutex, RawMutex};
+    use rmk_types::battery::{BatteryStatus, ChargeState};
     use trouble_host::prelude::{AttributeTable, Characteristic, CharacteristicProp, characteristic};
 
     use super::{
-        BatteryService, MAIN_BATTERY_PRESENTATION_FORMAT, add_peripheral_battery_level, find_peripheral_battery_slot,
-        peripheral_battery_presentation_format,
+        BatteryService, MAIN_BATTERY_PRESENTATION_FORMAT, Server, add_peripheral_battery_level,
+        find_peripheral_battery_slot, peripheral_battery_presentation_format, update_battery_value, wait_until_awake,
     };
 
     fn descriptor_value<M: RawMutex, const N: usize>(
@@ -467,5 +633,183 @@ mod tests {
         assert_eq!(find_peripheral_battery_slot(&configured_ids, 0), Some(0));
         assert_eq!(find_peripheral_battery_slot(&configured_ids, 1), None);
         assert_eq!(find_peripheral_battery_slot(&configured_ids, 2), Some(1));
+
+        let mut pending_slots = [false; 2];
+        pending_slots[find_peripheral_battery_slot(&configured_ids, 2).unwrap()] = true;
+        assert_eq!(pending_slots, [false, true]);
+    }
+
+    #[test]
+    fn battery_value_updates_gatt_storage_without_notification() {
+        let server = Server::new_default("rmk").unwrap();
+        let battery_level = server.battery_service.level;
+
+        for level in [80, 79, 78] {
+            update_battery_value(
+                &server,
+                &battery_level,
+                &BatteryStatus::Available {
+                    charge_state: ChargeState::Discharging,
+                    level: Some(level),
+                },
+            );
+        }
+
+        assert_eq!(server.get(&battery_level), Ok(78));
+    }
+
+    #[test]
+    fn activity_timestamp_watch_supports_multiple_receivers() {
+        let watch = embassy_sync::watch::Watch::<NoopRawMutex, u32, 2>::new();
+        let mut first = watch.receiver().unwrap();
+        let mut second = watch.receiver().unwrap();
+        watch.sender().send(42);
+
+        crate::test_support::test_block_on(async {
+            assert_eq!(first.changed().await, 42);
+            assert_eq!(second.changed().await, 42);
+        });
+    }
+
+    #[test]
+    fn activity_timestamp_is_consumed_once_per_receiver() {
+        let watch = embassy_sync::watch::Watch::<NoopRawMutex, u32, 2>::new();
+        let mut receiver = watch.receiver().unwrap();
+        watch.sender().send(42);
+
+        assert_eq!(receiver.try_changed(), Some(42));
+        assert_eq!(receiver.try_changed(), None);
+
+        watch.sender().send(43);
+        assert_eq!(receiver.try_changed(), Some(43));
+    }
+
+    #[test]
+    fn central_battery_report_gate_drops_stale_activity() {
+        use embassy_time::{Duration, Instant, MockDriver};
+
+        let watch = embassy_sync::watch::Watch::<NoopRawMutex, u32, 2>::new();
+        let mut receiver = watch.receiver().unwrap();
+        crate::ble::sleep::SLEEPING_STATE.store(false, core::sync::atomic::Ordering::Release);
+
+        let decision = crate::test_support::test_block_on(async {
+            watch.sender().send(0);
+            let timeout = Instant::now() + Duration::from_secs(super::BATTERY_REPORT_INTERVAL_SECS);
+            MockDriver::get().advance(Duration::from_secs(u64::from(super::RECENT_ACTIVITY_THRESHOLD_SECS)));
+            super::wait_for_central_battery_report_decision(&mut receiver, timeout).await
+        });
+        assert_eq!(decision, super::BatteryReportDecision::Drop);
+    }
+
+    #[test]
+    fn peripheral_queue_overflow_refreshes_all_slots() {
+        use embassy_sync::pubsub::PubSubChannel;
+
+        use crate::event::{BatteryStatusEvent, PeripheralBatteryEvent};
+
+        let channel = PubSubChannel::<NoopRawMutex, PeripheralBatteryEvent, 2, 1, 1>::new();
+        let mut subscriber = channel.subscriber().unwrap();
+        let publisher = channel.immediate_publisher();
+        let mut pending_slots = [true, false];
+        for id in [2, 0, 0] {
+            publisher.publish_immediate(PeripheralBatteryEvent {
+                id,
+                state: BatteryStatusEvent(rmk_types::battery::BatteryStatus::Unavailable),
+            });
+        }
+        let server = Server::new_default("rmk").unwrap();
+        let battery_levels = server.peripheral_battery_services.levels;
+        while let Some(result) = subscriber.try_next_message() {
+            super::handle_peripheral_battery_event(&server, &battery_levels, &[0, 2], &mut pending_slots, result);
+        }
+        assert_eq!(pending_slots, [true, true]);
+    }
+
+    #[test]
+    fn peripheral_battery_report_gate_allows_awake_without_recent_activity() {
+        use embassy_futures::select::{Either, select};
+        use embassy_time::Timer;
+
+        let watch = embassy_sync::watch::Watch::<NoopRawMutex, u32, 2>::new();
+        let mut receiver = watch.receiver().unwrap();
+        crate::ble::sleep::SLEEPING_STATE.store(false, core::sync::atomic::Ordering::Release);
+
+        crate::test_support::test_block_on(async {
+            assert!(matches!(
+                select(wait_until_awake(&mut receiver), Timer::after_millis(1),).await,
+                Either::First(_)
+            ));
+        });
+    }
+
+    #[cfg(feature = "_ble")]
+    #[test]
+    fn initial_battery_report_gate_returns_while_awake() {
+        use embassy_futures::select::{Either, select};
+        use embassy_time::Timer;
+
+        let watch = embassy_sync::watch::Watch::<NoopRawMutex, u32, 2>::new();
+        let mut receiver = watch.receiver().unwrap();
+        crate::ble::sleep::SLEEPING_STATE.store(false, core::sync::atomic::Ordering::Release);
+
+        let completed = crate::test_support::test_block_on(async {
+            match select(wait_until_awake(&mut receiver), Timer::after_millis(10)).await {
+                Either::First(_) => true,
+                Either::Second(_) => false,
+            }
+        });
+
+        assert!(completed);
+    }
+
+    #[cfg(feature = "_ble")]
+    #[test]
+    fn battery_report_gate_waits_until_wake() {
+        use embassy_futures::select::{Either, select};
+        use embassy_time::{Instant, Timer};
+
+        let watch = embassy_sync::watch::Watch::<NoopRawMutex, u32, 2>::new();
+        let mut receiver = watch.receiver().unwrap();
+        watch.sender().send(Instant::now().as_secs() as u32);
+        crate::ble::sleep::SLEEPING_STATE.store(true, core::sync::atomic::Ordering::Release);
+
+        let completed = crate::test_support::test_block_on(async {
+            match select(wait_until_awake(&mut receiver), Timer::after_millis(10)).await {
+                Either::First(_) => true,
+                Either::Second(_) => false,
+            }
+        });
+
+        crate::ble::sleep::SLEEPING_STATE.store(false, core::sync::atomic::Ordering::Release);
+        assert!(!completed);
+    }
+
+    #[cfg(feature = "_ble")]
+    #[test]
+    fn battery_report_gate_returns_after_wake_activity() {
+        use embassy_futures::select::{Either, select};
+        use embassy_time::{Instant, Timer};
+
+        let watch = embassy_sync::watch::Watch::<NoopRawMutex, u32, 2>::new();
+        let mut receiver = watch.receiver().unwrap();
+        watch.sender().send(Instant::now().as_secs() as u32);
+        crate::ble::sleep::SLEEPING_STATE.store(true, core::sync::atomic::Ordering::Release);
+
+        let completed = crate::test_support::test_block_on(async {
+            match select(wait_until_awake(&mut receiver), async {
+                Timer::after_millis(5).await;
+                crate::ble::sleep::SLEEPING_STATE.store(false, core::sync::atomic::Ordering::Release);
+                watch.sender().send(Instant::now().as_secs() as u32);
+                Timer::after_millis(5).await;
+            })
+            .await
+            {
+                Either::First(_) => true,
+                Either::Second(_) => false,
+            }
+        });
+
+        crate::ble::sleep::SLEEPING_STATE.store(false, core::sync::atomic::Ordering::Release);
+        assert!(completed);
     }
 }
