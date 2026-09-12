@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix UTF-8 panics when non-ASCII names are used in `keyboard.toml` aliases, and accept Unicode whitespace between keymap actions
 - Honour `SET_PROTOCOL` on the boot-subclass keyboard interface. The keyboard interface now accepts both modes and reports the selected one
 - Reboot instead of re-running trouble's host runner after it stops, and when a split link the host still holds is unknown to the controller.
+- Advertise a paired profile to its bonded host only, through the controller's filter accept list, so another bonded host in range can't take the profile and fail encryption while switching. The nRF SoftDevice Controller is now built with LL privacy, which resolves hosts' private addresses; Rust API users should add `.support_le_privacy()` to their SDC builder.
 
 ## [0.9.0] - 2026-08-27
 

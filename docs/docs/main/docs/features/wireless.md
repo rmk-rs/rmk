@@ -63,7 +63,7 @@ Vial user keycodes can be configured to operate wireless profiles. Suppose that 
 
 Vial also provides a way to customize the displayed keycode, see `customKeycodes` in [this example](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/vial.json). If `customKeycodes` are configured, the `User0` ~ `User(N+3)` will be displayed as `BT0`, ..., `Switch Output`.
 
-If you've connected a host to a profile, other devices will not be able to connect to this profile: the keyboard immediately disconnects any device that doesn't match the profile's stored bond. To pair a different host to that profile, clear it first, for example by holding the profile's key for 5 seconds.
+If you've connected a host to a profile, other devices will not be able to connect to this profile: the keyboard advertises to the bonded host alone, so another host that also knows the keyboard can't take the profile while switching between them, and it immediately disconnects any device that doesn't match the profile's stored bond. To pair a different host to that profile, clear it first, for example by holding the profile's key for 5 seconds.
 
 ## BLE Passkey Entry
 

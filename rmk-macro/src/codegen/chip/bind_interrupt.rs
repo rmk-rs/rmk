@@ -203,6 +203,7 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
                         .support_central()
                         .support_adv()
                         .support_peripheral()
+                        .support_le_privacy()
                         .support_dle_peripheral()
                         .support_dle_central()
                         .support_phy_update_central()
@@ -220,6 +221,7 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
                     ::nrf_sdc::Builder::new()?
                     .support_adv()
                     .support_peripheral()
+                    .support_le_privacy()
                     .support_dle_peripheral()
                     .support_phy_update_peripheral()
                     #use_2m_phy

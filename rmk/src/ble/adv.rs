@@ -1,5 +1,6 @@
 //! Every advertisement RMK sends, in one place.
 
+use bt_hci::param::AdvFilterPolicy;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, with_timeout};
 use trouble_host::prelude::appearance::human_interface_device::KEYBOARD;
@@ -22,6 +23,10 @@ pub(crate) enum Adv<'a> {
     Directed(Address),
     /// Any BLE host, which finds us as a standard HID keyboard.
     Host { name: &'a str },
+    /// The host bonded to the active profile: the same HID advertisement as
+    /// [`Adv::Host`], but the controller answers connect and scan requests only
+    /// from its filter accept list, which the caller loads with that host first.
+    BondedHost { name: &'a str },
     /// The split central that owns peripheral `id`.
     SplitPeripheral { id: u8 },
     /// An RMK dongle whose pairing window is open.
@@ -33,7 +38,7 @@ impl Adv<'_> {
     fn build<'b>(&self, buf: &'b mut [u8; 31]) -> Result<Advertisement<'b>, Error> {
         let adv_data: &[AdStructure] = match *self {
             Self::Directed(peer) => return Ok(Advertisement::ConnectableNonscannableDirected { peer }),
-            Self::Host { name } => &[
+            Self::Host { name } | Self::BondedHost { name } => &[
                 AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
                 AdStructure::CompleteServiceUuids16(&[BATTERY.to_le_bytes(), HUMAN_INTERFACE_DEVICE.to_le_bytes()]),
                 AdStructure::CompleteLocalName(name.as_bytes()),
@@ -96,8 +101,12 @@ impl Adv<'_> {
     /// peer is RMK's own hardware, where reaching it fast matters more.
     fn params(&self) -> AdvertisementParameters {
         let (phy, interval) = match self {
-            Self::Host { .. } => (PhyKind::Le2M, Duration::from_millis(200)),
+            Self::Host { .. } | Self::BondedHost { .. } => (PhyKind::Le2M, Duration::from_millis(200)),
             _ => (PhyKind::Le1M, Duration::from_millis(50)),
+        };
+        let filter_policy = match self {
+            Self::BondedHost { .. } => AdvFilterPolicy::FilterConnAndScan,
+            _ => AdvFilterPolicy::Unfiltered,
         };
         AdvertisementParameters {
             primary_phy: phy,
@@ -105,7 +114,43 @@ impl Adv<'_> {
             tx_power: TxPower::Plus8dBm,
             interval_min: interval,
             interval_max: interval,
+            filter_policy,
             ..Default::default()
+        }
+    }
+}
+
+/// The advertisement for a host profile, with the controller's filter accept
+/// list loaded to match it.
+///
+/// A paired profile advertises to its bonded host first. Advertising openly
+/// lets every bonded host in range race for the profile, and the wrong one,
+/// holding the key of another profile, can't encrypt the link: the right host
+/// is locked out while that connection lingers, and some hosts stop
+/// reconnecting on their own after such a failure. The caller opens the
+/// profile up once the bonded host has let its window pass.
+///
+/// A profile stays open when the controller can't single its host out. A host
+/// that shares an IRK connects from rotating private addresses, which only a
+/// controller with LL privacy resolves against the accept list; and a split
+/// central with several peripherals needs the list for its own connects.
+pub(crate) async fn host_adv<'a, C: Controller>(
+    peripheral: &mut Peripheral<'_, C, DefaultPacketPool>,
+    name: &'a str,
+    bonded: Option<Identity>,
+    ll_privacy: bool,
+) -> Adv<'a> {
+    let accept_list_free = matches!(crate::SPLIT_PERIPHERALS_NUM, 0 | 1);
+    let Some(host) = bonded.filter(|host| accept_list_free && (host.irk.is_none() || ll_privacy)) else {
+        return Adv::Host { name };
+    };
+    match peripheral.set_filter_accept_list(&[host.addr]).await {
+        Ok(()) => Adv::BondedHost { name },
+        Err(e) => {
+            #[cfg(feature = "defmt")]
+            let e = defmt::Debug2Format(&e);
+            warn!("[adv] can't load the filter accept list, advertising openly: {:?}", e);
+            Adv::Host { name }
         }
     }
 }
@@ -130,7 +175,7 @@ pub(crate) async fn advertise<'a, 'b, C: Controller, const ATT: usize, const CON
 mod tests {
     use rmk_types::ble::BLE_ADV_NAME_MAX_LEN;
 
-    use super::Adv;
+    use super::{Adv, AdvFilterPolicy};
 
     /// Overrunning the 31-byte legacy advertisement only fails at runtime.
     fn fits(adv: Adv<'_>) -> bool {
@@ -148,6 +193,23 @@ mod tests {
         assert!(!fits(Adv::Host {
             name: "0123456789abcdefg"
         }));
+    }
+
+    #[test]
+    fn bonded_host_differs_from_host_only_in_the_filter_policy() {
+        let (mut open, mut bonded) = ([0; 31], [0; 31]);
+        Adv::Host { name: "rmk" }.build(&mut open).unwrap();
+        Adv::BondedHost { name: "rmk" }.build(&mut bonded).unwrap();
+        assert_eq!(open, bonded);
+
+        let open = Adv::Host { name: "rmk" }.params();
+        let bonded = Adv::BondedHost { name: "rmk" }.params();
+        assert_eq!(open.filter_policy, AdvFilterPolicy::Unfiltered);
+        assert_eq!(bonded.filter_policy, AdvFilterPolicy::FilterConnAndScan);
+        assert_eq!(
+            (open.primary_phy, open.interval_min),
+            (bonded.primary_phy, bonded.interval_min)
+        );
     }
 
     #[test]
