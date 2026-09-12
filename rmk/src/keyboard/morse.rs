@@ -257,6 +257,10 @@ impl<'a> Keyboard<'a> {
     }
 
     pub(crate) async fn fire_held_non_morse_keys(&mut self) {
+        // Firing buffered keys reports presses; flush queued tap releases first
+        // so they don't share a HID frame with a buffered key's press (the same
+        // invariant the press entry points maintain via `flush_pending_tap_releases`).
+        self.flush_pending_tap_releases().await;
         self.held_buffer.keys.sort_unstable_by_key(|k| k.press_time);
 
         // Trigger all non morse keys in the buffer
