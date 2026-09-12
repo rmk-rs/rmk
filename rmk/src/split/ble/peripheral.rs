@@ -1,7 +1,11 @@
 #[cfg(feature = "subrating")]
 use bt_hci::{cmd::le::LeSetHostFeature, controller::ControllerCmdSync};
 use embassy_futures::join::join;
+#[cfg(feature = "custom_message")]
+use embassy_futures::select::select;
 use embassy_time::{Duration, Timer};
+#[cfg(feature = "custom_message")]
+use postcard::experimental::max_size::MaxSize;
 use rmk_types::connection::ConnectionStatus;
 use trouble_host::prelude::*;
 
@@ -9,6 +13,8 @@ use trouble_host::prelude::*;
 use super::PeerAddress;
 use super::{GattSplitMessage, SplitMessage};
 use crate::ble::adv::{Adv, advertise};
+#[cfg(feature = "custom_message")]
+use crate::custom_message::{CustomMessage, CustomMessageTarget, forward};
 use crate::event::{CentralConnectedEvent, KeyboardEvent, SleepStateEvent, SubscribableEvent, publish_event};
 use crate::split::driver::{SplitDriverError, SplitReader, SplitWriter};
 use crate::split::peripheral::SplitPeripheral;
@@ -22,6 +28,13 @@ pub(crate) struct SplitBleService {
 
     #[characteristic(uuid = "4b3514fb-cae4-4d38-a097-3a2a3d1c3b9c", write_without_response, read, notify)]
     pub(crate) message_to_peripheral: GattSplitMessage,
+
+    #[cfg(feature = "custom_message")]
+    #[characteristic(uuid = "5f2a7c14-9b3e-4a51-8d76-2c1e4b8a6f03", read, notify)]
+    pub(crate) custom_to_central: heapless::Vec<u8, { crate::custom_message::CustomMessage::POSTCARD_MAX_SIZE }>,
+    #[cfg(feature = "custom_message")]
+    #[characteristic(uuid = "5f2a7c15-9b3e-4a51-8d76-2c1e4b8a6f03", write_without_response, read)]
+    pub(crate) custom_to_peripheral: heapless::Vec<u8, { crate::custom_message::CustomMessage::POSTCARD_MAX_SIZE }>,
 }
 
 /// Gatt server in split peripheral
@@ -34,6 +47,9 @@ pub(crate) struct BleSplitPeripheralServer {
 pub(crate) struct BleSplitPeripheralDriver<'stack, 'server, 'c, P: PacketPool> {
     message_to_peripheral: Characteristic<GattSplitMessage>,
     message_to_central: Characteristic<GattSplitMessage>,
+    #[cfg(feature = "custom_message")]
+    custom_to_peripheral:
+        Characteristic<heapless::Vec<u8, { crate::custom_message::CustomMessage::POSTCARD_MAX_SIZE }>>,
     conn: &'c GattConnection<'stack, 'server, P>,
 }
 
@@ -42,6 +58,8 @@ impl<'stack, 'server, 'c, P: PacketPool> BleSplitPeripheralDriver<'stack, 'serve
         Self {
             message_to_central: server.service.message_to_central.clone(),
             message_to_peripheral: server.service.message_to_peripheral.clone(),
+            #[cfg(feature = "custom_message")]
+            custom_to_peripheral: server.service.custom_to_peripheral.clone(),
             conn,
         }
     }
@@ -75,6 +93,28 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitReader for BleSplitPeripheralDrive
                                     }
                                     Err(e) => error!("Postcard deserialize split message error: {}", e),
                                 }
+                            } else if cfg!(feature = "custom_message") && {
+                                #[cfg(feature = "custom_message")]
+                                {
+                                    event.handle() == self.custom_to_peripheral.handle
+                                }
+                                #[cfg(not(feature = "custom_message"))]
+                                {
+                                    false
+                                }
+                            } {
+                                // Not a `SplitMessage`, so the read goes on.
+                                // A peripheral has nowhere to forward to.
+                                #[cfg(feature = "custom_message")]
+                                event.with_data(|_, data| match postcard::from_bytes::<CustomMessage>(data) {
+                                    // An end of the chain: it delivers what names it and
+                                    // has nowhere to relay the rest to.
+                                    Ok(message) => match message.target {
+                                        CustomMessageTarget::Peripherals => publish_event(message),
+                                        _ => (),
+                                    },
+                                    Err(_) => warn!("[split] undecodable custom message dropped"),
+                                });
                             } else {
                                 info!("Gatt write other event: {:?}", event.handle());
                             }
@@ -204,7 +244,17 @@ pub async fn initialize_nrf_ble_split_peripheral_and_run<
                             central_addr = Some(new_addr);
                         }
                     }
+                    #[cfg(not(feature = "custom_message"))]
                     peripheral.run().await;
+                    #[cfg(feature = "custom_message")]
+                    select(peripheral.run(), {
+                        // A peripheral has one link, so everything queued goes out on it.
+                        let custom_to_central = &server.service.custom_to_central;
+                        forward(None, async |encoded| {
+                            custom_to_central.notify_raw(&conn, encoded, false).await
+                        })
+                    })
+                    .await;
                     info!("Disconnected from the central");
                 }
                 Err(BleHostError::BleHost(Error::Timeout)) => {

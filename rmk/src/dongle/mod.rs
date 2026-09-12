@@ -43,6 +43,8 @@ use crate::ble::scan::{DONGLE_SCAN_WINDOW, scan_config, start_scan};
 use crate::ble::wait_for_stack_started;
 use crate::channel::send_hid_report;
 use crate::core_traits::Runnable;
+#[cfg(feature = "custom_message")]
+use crate::dongle::event::{CUSTOM_TO_DONGLE_UUID, CUSTOM_TO_KEYBOARD_UUID};
 use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_SERVICE_UUID, DongleEvent};
 use crate::event::{
     DongleState, DongleStateEvent, EventSubscriber, LedIndicatorEvent, SubscribableEvent, publish_event,
@@ -466,6 +468,10 @@ where
             loop {
                 let notification = listener.next().await;
                 let (handle, data) = (notification.handle(), notification.as_ref());
+                #[cfg(feature = "custom_message")]
+                let is_custom_message = chars.custom_to_dongle.as_ref().is_some_and(|ch| ch.handle == handle);
+                #[cfg(not(feature = "custom_message"))]
+                let is_custom_message = false;
                 // The config stream is the only one not parsed; it goes straight to the host.
                 if handle == chars.config_input.handle {
                     // A full pipe usually means the host is a moment behind, so wait 20ms at most.
@@ -487,6 +493,18 @@ where
                             }
                         }
                         Err(_) => warn!("[dongle] non-report-size vial notify dropped"),
+                    }
+                } else if is_custom_message {
+                    // The dongle is an end of the chain: nothing to forward to.
+                    #[cfg(feature = "custom_message")]
+                    match postcard::from_bytes::<crate::custom_message::CustomMessage>(data) {
+                        // An end of the chain: it delivers what names it and has nowhere
+                        // to relay the rest to.
+                        Ok(message) => match message.target {
+                            crate::custom_message::CustomMessageTarget::Dongle => publish_event(message),
+                            _ => (),
+                        },
+                        Err(_) => warn!("[dongle] undecodable custom message dropped"),
                     }
                 } else if chars.event.as_ref().is_some_and(|ch| ch.handle == handle) {
                     // One notification is one whole event, so there is nothing to reassemble.
@@ -535,7 +553,22 @@ where
 
         // Three independent loops, not one combined one: an LED update must not
         // wait behind a config write, or the other way around.
+        #[cfg(not(feature = "custom_message"))]
         select3(keyboard_to_host, led_to_keyboard, request_to_keyboard).await;
+        #[cfg(feature = "custom_message")]
+        embassy_futures::select::select4(keyboard_to_host, led_to_keyboard, request_to_keyboard, async {
+            let Some(characteristic) = chars.custom_to_keyboard.as_ref() else {
+                return core::future::pending().await;
+            };
+            // The dongle has one link, so everything queued goes out on it.
+            crate::custom_message::forward(None, async |encoded| {
+                client
+                    .write_characteristic_without_response(characteristic, encoded)
+                    .await
+            })
+            .await
+        })
+        .await;
     }
 }
 
@@ -553,6 +586,11 @@ struct KeyboardCharacteristics {
     /// `None` on a keyboard whose firmware has no event service; the relay
     /// works without it, there is just nothing to publish.
     event: Option<Characteristic<[u8]>>,
+    /// `None` on a keyboard built without `custom_message`.
+    #[cfg(feature = "custom_message")]
+    custom_to_dongle: Option<Characteristic<[u8]>>,
+    #[cfg(feature = "custom_message")]
+    custom_to_keyboard: Option<Characteristic<[u8]>>,
 }
 
 impl KeyboardCharacteristics {
@@ -599,6 +637,10 @@ impl KeyboardCharacteristics {
         };
 
         let mut event = None;
+        #[cfg(feature = "custom_message")]
+        let mut custom_to_dongle = None;
+        #[cfg(feature = "custom_message")]
+        let mut custom_to_keyboard = None;
         if let Ok(services) = client.services_by_uuid(&DONGLE_EVENT_SERVICE_UUID.into()).await
             && let Some(service) = services.into_iter().next()
         {
@@ -606,6 +648,17 @@ impl KeyboardCharacteristics {
                 .characteristic_by_uuid::<[u8]>(&service, &DONGLE_EVENT_CHAR_UUID.into())
                 .await
                 .ok();
+            #[cfg(feature = "custom_message")]
+            {
+                custom_to_dongle = client
+                    .characteristic_by_uuid::<[u8]>(&service, &CUSTOM_TO_DONGLE_UUID.into())
+                    .await
+                    .ok();
+                custom_to_keyboard = client
+                    .characteristic_by_uuid::<[u8]>(&service, &CUSTOM_TO_KEYBOARD_UUID.into())
+                    .await
+                    .ok();
+            }
         }
 
         Some(Self {
@@ -617,6 +670,10 @@ impl KeyboardCharacteristics {
             config_input,
             config_output,
             event,
+            #[cfg(feature = "custom_message")]
+            custom_to_dongle,
+            #[cfg(feature = "custom_message")]
+            custom_to_keyboard,
         })
     }
 
@@ -631,7 +688,16 @@ impl KeyboardCharacteristics {
         ]
         .into_iter()
         .chain(self.event.as_ref())
-        {
+        .chain({
+            #[cfg(feature = "custom_message")]
+            {
+                self.custom_to_dongle.as_ref()
+            }
+            #[cfg(not(feature = "custom_message"))]
+            {
+                None
+            }
+        }) {
             if let Some(cccd) = ch.cccd_handle {
                 client.write_handle(cccd, &[0x01, 0x00]).await.ok()?;
             }

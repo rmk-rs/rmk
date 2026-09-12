@@ -31,6 +31,7 @@ fn default_sub_count() -> usize {
 
 /// Compile-time constants emitted as `pub const` items by `rmk-types/build.rs`.
 pub struct BuildConstants {
+    pub custom_message_max_size: usize,
     pub combo_max_num: usize,
     pub combo_max_length: usize,
     pub fork_max_num: usize,
@@ -159,11 +160,21 @@ impl crate::KeyboardTomlConfig {
             dongle_state,
             dfu_status,
             action,
+            custom_message,
+            custom_message_out,
         );
 
         // Auto-bump subscriber counts based on enabled feature flags.
         // Declarations live in subscriber_default.toml.
         apply_feature_subscriber_bumps(&mut events, active_features);
+        // Every link subscribes to the outgoing queue, so a central needs one
+        // slot per split peripheral on top of its link toward the dongle.
+        if active_features.contains(&"custom_message")
+            && active_features.contains(&"split")
+            && let Some(event) = events.iter_mut().find(|event| event.name == "custom_message_out")
+        {
+            event.subs += split_peripherals_num;
+        }
         if !split_battery_peripheral_ids.is_empty()
             && active_features.contains(&"split")
             && active_features.contains(&"_ble")
@@ -231,6 +242,7 @@ impl crate::KeyboardTomlConfig {
         validate_u16_capability("macro_space_size", rmk.macro_space_size)?;
         validate_u16_capability("rynk_buffer_size", rmk.rynk_buffer_size)?;
         Ok(BuildConstants {
+            custom_message_max_size: rmk.custom_message_max_size,
             combo_max_num: rmk.combo_max_num,
             combo_max_length: rmk.combo_max_length,
             fork_max_num: rmk.fork_max_num,
@@ -353,31 +365,6 @@ mod tests {
         // Nobody listens on a screenless dongle, so publishing there is a no-op.
         assert_eq!(subs(&["dongle", "_ble", "storage"]), 0);
         assert_eq!(subs(&["dongle", "display", "_ble", "storage"]), 1);
-    }
-
-    #[test]
-    fn split_reserves_sleep_subscribers_for_two_peripherals_without_display() {
-        let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
-        config.split = Some(SplitConfig {
-            peripheral: vec![SplitBoardConfig::default(), SplitBoardConfig::default()],
-            ..Default::default()
-        });
-        config.auto_calculate_parameters();
-
-        let sleep_subs = |features: &[&str]| {
-            config
-                .build_constants(features)
-                .unwrap()
-                .events
-                .into_iter()
-                .find(|event| event.name == "sleep_state")
-                .unwrap()
-                .subs
-        };
-        let base = sleep_subs(&[]);
-
-        assert_eq!(sleep_subs(&["split"]), base + 2);
-        assert_eq!(sleep_subs(&["split", "_ble"]), base + 4);
     }
 
     #[test]

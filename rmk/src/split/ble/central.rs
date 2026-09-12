@@ -38,6 +38,10 @@ enum SlotState {
 const SPLIT_SERVICE_UUID: u128 = 0x4dd5fbaa_18e5_4b07_bf0a_353698659946;
 const MESSAGE_TO_CENTRAL_UUID: u128 = 0x0e6313e3_bd0b_45c2_8d2e_37a2e8128bc3;
 const MESSAGE_TO_PERIPHERAL_UUID: u128 = 0x4b3514fb_cae4_4d38_a097_3a2a3d1c3b9c;
+#[cfg(feature = "custom_message")]
+const CUSTOM_TO_CENTRAL_UUID: u128 = 0x5f2a7c14_9b3e_4a51_8d76_2c1e4b8a6f03;
+#[cfg(feature = "custom_message")]
+const CUSTOM_TO_PERIPHERAL_UUID: u128 = 0x5f2a7c15_9b3e_4a51_8d76_2c1e4b8a6f03;
 
 /// Scan for peripheral addresses, connect them, and hand each connection to
 /// that slot's session; sessions report back on `ended`.
@@ -469,7 +473,73 @@ async fn discover_and_run_manager<C: Controller + ControllerCmdAsync<LeSetPhy>, 
         message_to_peripheral,
         client,
     };
+    #[cfg(not(feature = "custom_message"))]
     PeripheralManager::new(split_ble_driver, id, matrix_config).run().await;
+    // A peripheral built without `custom_message` has no such characteristics;
+    #[cfg(feature = "custom_message")]
+    {
+        use postcard::experimental::max_size::MaxSize;
+
+        use crate::custom_message::{CustomMessage, CustomMessageTarget, forward, send};
+        use crate::event::publish_event;
+
+        let to_central = client
+            .characteristic_by_uuid::<heapless::Vec<u8, { CustomMessage::POSTCARD_MAX_SIZE }>>(
+                service,
+                &Uuid::new_long(CUSTOM_TO_CENTRAL_UUID.to_le_bytes()),
+            )
+            .await
+            .ok();
+        let to_peripheral = client
+            .characteristic_by_uuid::<heapless::Vec<u8, { CustomMessage::POSTCARD_MAX_SIZE }>>(
+                service,
+                &Uuid::new_long(CUSTOM_TO_PERIPHERAL_UUID.to_le_bytes()),
+            )
+            .await
+            .ok();
+        let mut incoming = match &to_central {
+            Some(characteristic) => Some(client.subscribe(characteristic, false).await?),
+            None => None,
+        };
+
+        let from_peripheral = async {
+            match incoming.as_mut() {
+                None => core::future::pending().await,
+                Some(listener) => loop {
+                    let notification = listener.next().await;
+                    match postcard::from_bytes::<CustomMessage>(notification.as_ref()) {
+                        // A central is the one board with links on both sides: it relays
+                        // what is headed past it and delivers what names it.
+                        Ok(message) => match message.target {
+                            CustomMessageTarget::Dongle => send(message),
+                            CustomMessageTarget::Central => publish_event(message),
+                            CustomMessageTarget::Peripherals => (),
+                        },
+                        Err(_) => warn!("[split] undecodable custom message dropped"),
+                    }
+                },
+            }
+        };
+
+        let to_this_peripheral = async {
+            let Some(characteristic) = to_peripheral.as_ref() else {
+                return core::future::pending().await;
+            };
+            forward(Some(CustomMessageTarget::Peripherals), async |encoded| {
+                client
+                    .write_characteristic_without_response(characteristic, encoded)
+                    .await
+            })
+            .await
+        };
+
+        select3(
+            PeripheralManager::new(split_ble_driver, id, matrix_config).run(),
+            from_peripheral,
+            to_this_peripheral,
+        )
+        .await;
+    }
     info!("Peripheral manager stopped");
     Ok(())
 }
