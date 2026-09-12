@@ -33,7 +33,7 @@ pub use router::DongleRouter;
 #[cfg(feature = "vial")]
 use router::VialReport;
 use trouble_host::prelude::*;
-use usbd_hid::descriptor::{MediaKeyboardReport, MouseReport, SystemControlReport};
+use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 #[cfg(feature = "vial")]
 use vial_router as router;
 
@@ -47,7 +47,7 @@ use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_SERVICE_UUID, Do
 use crate::event::{
     DongleState, DongleStateEvent, EventSubscriber, LedIndicatorEvent, SubscribableEvent, publish_event,
 };
-use crate::hid::{CompositeReportType, KeyboardReport, Report};
+use crate::hid::{CompositeReportType, KeyboardReport, MOUSE_REPORT_SIZE, MouseReport, Report};
 use crate::{DONGLE_PAIRING_WINDOW_SECS, RawMutex};
 
 /// The dongle relays exactly one keyboard.
@@ -649,13 +649,13 @@ impl KeyboardCharacteristics {
                 leds: 0,
                 keycodes: data[2..8].try_into().unwrap(),
             }))
-        } else if handle == self.mouse.handle && data.len() >= 5 {
+        } else if handle == self.mouse.handle && data.len() >= MOUSE_REPORT_SIZE {
             Some(Report::MouseReport(MouseReport {
                 buttons: data[0],
-                x: data[1] as i8,
-                y: data[2] as i8,
-                wheel: data[3] as i8,
-                pan: data[4] as i8,
+                x: i16::from_le_bytes([data[1], data[2]]),
+                y: i16::from_le_bytes([data[3], data[4]]),
+                wheel: i16::from_le_bytes([data[5], data[6]]),
+                pan: i16::from_le_bytes([data[7], data[8]]),
             }))
         } else if handle == self.media.handle && data.len() >= 2 {
             Some(Report::MediaKeyboardReport(MediaKeyboardReport {

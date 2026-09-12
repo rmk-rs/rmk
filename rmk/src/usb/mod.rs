@@ -18,7 +18,8 @@ use crate::core_traits::Runnable;
 #[cfg(feature = "steno")]
 use crate::hid::StenoReport;
 use crate::hid::{
-    CompositeReport, CompositeReportType, HidError, HidWriterTrait, KeyboardReport, Report, run_led_reader,
+    CompositeReport, CompositeReportType, HidError, HidWriterTrait, KeyboardReport, MOUSE_REPORT_SIZE, Report,
+    run_led_reader,
 };
 use crate::light::UsbLedReader;
 use crate::state::{current_usb_state, set_usb_state};
@@ -61,7 +62,7 @@ impl HostSession for () {
 /// concurrently without moving the whole transport into one task.
 pub(crate) struct UsbKeyboardWriter<'a, 'd, D: Driver<'d>> {
     pub(crate) keyboard_writer: &'a mut HidWriter<'d, D, 8>,
-    pub(crate) other_writer: &'a mut HidWriter<'d, D, 9>,
+    pub(crate) other_writer: &'a mut HidWriter<'d, D, COMPOSITE_WRITE_SIZE>,
     #[cfg(feature = "steno")]
     pub(crate) steno_writer: &'a mut HidWriter<'d, D, 9>,
 }
@@ -101,7 +102,7 @@ impl<'d, D: Driver<'d>> UsbKeyboardWriter<'_, 'd, D> {
         kind: CompositeReportType,
         report: &R,
     ) -> Result<usize, HidError> {
-        let mut buf = [0u8; 9];
+        let mut buf = [0u8; COMPOSITE_WRITE_SIZE];
         buf[0] = kind as u8;
         let n = report
             .serialize(&mut buf[1..])
@@ -159,6 +160,9 @@ impl<'d, D: Driver<'d>> HidWriterTrait for UsbKeyboardWriter<'_, 'd, D> {
         }
     }
 }
+
+/// Report id byte plus the largest composite payload, which is the mouse report.
+const COMPOSITE_WRITE_SIZE: usize = 1 + MOUSE_REPORT_SIZE;
 
 /// Extra interfaces (usb_log, steno, dfu, rynk) overflow the 128-byte buffer.
 const DEFAULT_CONFIG_DESC_SIZE: usize = if cfg!(any(
@@ -250,7 +254,7 @@ pub struct UsbTransport<'a, D: Driver<'static>, S = ()> {
     device: UsbDevice<'static, D>,
     keyboard_reader: HidReader<'static, D, 1>,
     keyboard_writer: HidWriter<'static, D, 8>,
-    other_writer: HidWriter<'static, D, 9>,
+    other_writer: HidWriter<'static, D, COMPOSITE_WRITE_SIZE>,
     #[cfg(feature = "steno")]
     steno_writer: HidWriter<'static, D, 9>,
     /// Taken by `run`: the logger future consumes the CDC class.
@@ -289,7 +293,7 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
 pub struct UsbTransportBuilder<D: Driver<'static>> {
     builder: Builder<'static, D>,
     keyboard_rw: HidReaderWriter<'static, D, 1, 8>,
-    other_writer: HidWriter<'static, D, 9>,
+    other_writer: HidWriter<'static, D, COMPOSITE_WRITE_SIZE>,
     #[cfg(feature = "steno")]
     steno_writer: HidWriter<'static, D, 9>,
     #[cfg(feature = "usb_log")]
@@ -325,7 +329,7 @@ impl<D: Driver<'static>> UsbTransportBuilder<D> {
             ::embassy_usb::class::hid::HidSubclass::Boot,
             ::embassy_usb::class::hid::HidBootProtocol::Keyboard
         );
-        let other_writer = add_usb_writer!(&mut builder, CompositeReport, 9, 16);
+        let other_writer = add_usb_writer!(&mut builder, CompositeReport, COMPOSITE_WRITE_SIZE, 16);
         #[cfg(feature = "steno")]
         let steno_writer = add_usb_writer!(&mut builder, StenoReport, 9, 16);
         #[cfg(feature = "usb_log")]
