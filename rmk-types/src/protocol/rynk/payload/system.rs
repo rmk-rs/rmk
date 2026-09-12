@@ -52,6 +52,7 @@ pub struct DeviceCapabilities {
     // -- Feature flags --
     pub storage_enabled: bool,
     pub lighting_enabled: bool,
+    pub dfu_enabled: bool,
 
     // -- Connectivity --
     pub is_split: bool,
@@ -193,6 +194,7 @@ mod tests {
             max_forks: 4,
             storage_enabled: true,
             lighting_enabled: false,
+            dfu_enabled: true,
             is_split: false,
             num_split_peripherals: 0,
             ble_enabled: true,
@@ -216,6 +218,7 @@ mod tests {
             max_forks: 0,
             storage_enabled: false,
             lighting_enabled: false,
+            dfu_enabled: false,
             is_split: false,
             num_split_peripherals: 0,
             ble_enabled: false,

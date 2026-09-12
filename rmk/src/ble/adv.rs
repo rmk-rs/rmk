@@ -26,6 +26,8 @@ pub(crate) enum Adv<'a> {
     SplitPeripheral { id: u8 },
     /// An RMK dongle whose pairing window is open.
     DongleSeeking,
+    /// A split peripheral in DFU mode, discoverable by rynk-wtf.
+    DfuPeripheral { name: &'a str },
 }
 
 impl Adv<'_> {
@@ -57,6 +59,18 @@ impl Adv<'_> {
                 AdStructure::ManufacturerSpecificData {
                     company_identifier: RMK_ADV_COMPANY_ID,
                     payload: &[DONGLE_SEEKING],
+                },
+            ],
+            // DFU peripherals advertise with the standard HID keyboard
+            // appearance so rynk-wtf can discover them by name. The DFU
+            // GATT service is discovered after connection.
+            Self::DfuPeripheral { name } => &[
+                AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
+                AdStructure::CompleteServiceUuids16(&[BATTERY.to_le_bytes(), HUMAN_INTERFACE_DEVICE.to_le_bytes()]),
+                AdStructure::CompleteLocalName(name.as_bytes()),
+                AdStructure::Unknown {
+                    ty: 0x19, // Appearance: keyboard
+                    data: &KEYBOARD.to_le_bytes(),
                 },
             ],
         };
@@ -96,7 +110,7 @@ impl Adv<'_> {
     /// peer is RMK's own hardware, where reaching it fast matters more.
     fn params(&self) -> AdvertisementParameters {
         let (phy, interval) = match self {
-            Self::Host { .. } => (PhyKind::Le2M, Duration::from_millis(200)),
+            Self::Host { .. } | Self::DfuPeripheral { .. } => (PhyKind::Le2M, Duration::from_millis(200)),
             _ => (PhyKind::Le1M, Duration::from_millis(50)),
         };
         AdvertisementParameters {
@@ -141,6 +155,7 @@ mod tests {
     fn every_advertisement_fits_the_legacy_budget() {
         assert!(fits(Adv::SplitPeripheral { id: 0xFF }));
         assert!(fits(Adv::DongleSeeking));
+        assert!(fits(Adv::DfuPeripheral { name: "Test per1" }));
         // Where BLE_ADV_NAME_MAX_LEN comes from: this name fills the budget exactly.
         const LONGEST_NAME: &str = "0123456789abcdef";
         assert_eq!(LONGEST_NAME.len(), BLE_ADV_NAME_MAX_LEN);

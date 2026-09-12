@@ -19,6 +19,11 @@ const RYNK_SERVICE_UUID: Uuid = Uuid::from_u128(rynk::rmk_types::protocol::rynk:
 const RYNK_INPUT_CHAR_UUID: Uuid = Uuid::from_u128(rynk::rmk_types::protocol::rynk::RYNK_INPUT_CHAR_UUID);
 const RYNK_OUTPUT_CHAR_UUID: Uuid = Uuid::from_u128(rynk::rmk_types::protocol::rynk::RYNK_OUTPUT_CHAR_UUID);
 
+/// Minimal DFU GATT service for split peripherals.
+const DFU_SERVICE_UUID: Uuid = Uuid::from_u128(0x4dd5fbaa_18e5_4b07_bf0a_353698659947);
+const DFU_INPUT_CHAR_UUID: Uuid = Uuid::from_u128(0x0e6313e3_bd0b_45c2_8d2e_37a2e8128bc4);
+const DFU_OUTPUT_CHAR_UUID: Uuid = Uuid::from_u128(0x4b3514fb_cae4_4d38_a097_3a2a3d1c3b9d);
+
 /// Bounds connection, discovery, and subscription; those operations carry no
 /// inherent timeout, so a radio-silent device would otherwise pend forever.
 const GATT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -139,16 +144,95 @@ impl BleDevice {
         Ok(devices)
     }
 
-    // Discover the Rynk service and its input/output characteristics.
-    async fn discover_characteristic(&self) -> Result<(Characteristic, Characteristic), RynkHostError> {
-        let service = self
-            .device
-            .discover_services_with_uuid(RYNK_SERVICE_UUID)
+    /// Scan for all advertising BLE devices (connected + new), not limited to
+    /// the Rynk service. Used by rynk-wtf to find peripherals in DFU mode
+    /// which advertise with a name like `"rmk per0"`.
+    pub async fn discover_all() -> Result<Vec<Self>, RynkHostError> {
+        let adapter = Adapter::default()
             .await
-            .map_err(|e| RynkHostError::Transport("discover_services", e.to_string()))?
-            .into_iter()
-            .next()
-            .ok_or_else(|| RynkHostError::DeviceNotFound("Rynk GATT service not found".into()))?;
+            .ok_or_else(|| RynkHostError::DeviceNotFound("no BLE adapter".into()))?;
+        adapter
+            .wait_available()
+            .await
+            .map_err(|e| RynkHostError::Transport("wait_available", e.to_string()))?;
+
+        // First include already-connected devices.
+        let connected = adapter
+            .connected_devices()
+            .await
+            .map_err(|e| RynkHostError::Transport("connected_devices", e.to_string()))?;
+        let mut seen = std::collections::HashSet::new();
+        let mut devices = Vec::new();
+        for device in connected {
+            let name = device.name_async().await.ok();
+            let id = device.id();
+            seen.insert(id.clone());
+            devices.push(BleDevice {
+                name,
+                adapter: adapter.clone(),
+                device,
+            });
+        }
+
+        // Then scan for new advertising devices for a short window.
+        use futures_util::StreamExt;
+        let scan = adapter
+            .scan(&[])
+            .await
+            .map_err(|e| RynkHostError::Transport("scan", e.to_string()))?;
+        futures_util::pin_mut!(scan);
+        let scan_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while let Some(adv) = tokio::time::timeout_at(tokio::time::Instant::from_std(scan_deadline), scan.next())
+            .await
+            .unwrap_or(None)
+        {
+            let device = adv.device;
+            let id = device.id();
+            if seen.insert(id) {
+                let name = device.name_async().await.ok();
+                devices.push(BleDevice {
+                    name,
+                    adapter: adapter.clone(),
+                    device,
+                });
+            }
+        }
+
+        Ok(devices)
+    }
+
+    // Discover the Rynk service and its input/output characteristics.
+    // Falls back to the DFU service for split peripherals in DFU mode.
+    async fn discover_characteristic(&self) -> Result<(Characteristic, Characteristic), RynkHostError> {
+        // Try Rynk service first (full keyboard).
+        if let Ok(Some((input, output))) = self
+            .try_discover_service(RYNK_SERVICE_UUID, RYNK_INPUT_CHAR_UUID, RYNK_OUTPUT_CHAR_UUID)
+            .await
+        {
+            return Ok((input, output));
+        }
+        // Fall back to DFU service (split peripheral in DFU mode).
+        self.try_discover_service(DFU_SERVICE_UUID, DFU_INPUT_CHAR_UUID, DFU_OUTPUT_CHAR_UUID)
+            .await
+            .map_err(|_| RynkHostError::DeviceNotFound("neither Rynk nor DFU GATT service found".into()))?
+            .ok_or_else(|| RynkHostError::DeviceNotFound("neither Rynk nor DFU GATT service found".into()))
+    }
+
+    async fn try_discover_service(
+        &self,
+        service_uuid: Uuid,
+        input_uuid: Uuid,
+        output_uuid: Uuid,
+    ) -> Result<Option<(Characteristic, Characteristic)>, RynkHostError> {
+        let services = self
+            .device
+            .discover_services_with_uuid(service_uuid)
+            .await
+            .map_err(|e| RynkHostError::Transport("discover_services", e.to_string()))?;
+        let service = match services.into_iter().next() {
+            Some(s) => s,
+            None => return Ok(None),
+        };
         let mut input_char = None;
         let mut output_char = None;
         for c in service
@@ -161,15 +245,15 @@ impl BleDevice {
                 .await
                 .map_err(|e| RynkHostError::Transport("characteristic uuid", e.to_string()))?
             {
-                u if u == RYNK_INPUT_CHAR_UUID => input_char = Some(c),
-                u if u == RYNK_OUTPUT_CHAR_UUID => output_char = Some(c),
+                u if u == input_uuid => input_char = Some(c),
+                u if u == output_uuid => output_char = Some(c),
                 _ => {}
             }
         }
         let input = input_char.ok_or_else(|| RynkHostError::DeviceNotFound("input characteristic missing".into()))?;
         let output =
             output_char.ok_or_else(|| RynkHostError::DeviceNotFound("output characteristic missing".into()))?;
-        Ok((input, output))
+        Ok(Some((input, output)))
     }
 
     /// Subscribe and build the transport. bluest's notify stream borrows the

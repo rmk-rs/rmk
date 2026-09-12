@@ -21,11 +21,12 @@ use rmk_types::fork::Fork;
 use rmk_types::led_indicator::LedIndicator;
 use rmk_types::morse::Morse;
 use rmk_types::protocol::rynk::{
-    BehaviorConfig, Cmd, DeviceCapabilities, DeviceInfo, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest,
-    GetKeymapBulkRequest, GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse,
-    KeyPosition, LockStatus, MacroData, MatrixState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest,
-    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest,
-    SetMorseBulkRequest, SetMorseRequest, StorageResetMode, command,
+    BehaviorConfig, Cmd, DeviceCapabilities, DeviceInfo, DfuCrcRewindRequest, DfuCrcSyncRequest, DfuVerifyRequest,
+    DfuWriteRequest, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest, GetKeymapBulkRequest,
+    GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse, KeyPosition, LockStatus,
+    MacroData, MatrixState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest, SetComboRequest, SetEncoderRequest,
+    SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest,
+    StorageResetMode, command,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -392,6 +393,68 @@ impl Client {
     pub async fn clear_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
         self.require_ble(Cmd::ClearBleProfile)?;
         self.request::<command::ClearBleProfile>(&slot).await
+    }
+
+    fn require_dfu(&self, cmd: Cmd) -> Result<(), RynkHostError> {
+        if self.capabilities.dfu_enabled {
+            Ok(())
+        } else {
+            Err(RynkHostError::Unsupported(cmd, "DFU not enabled"))
+        }
+    }
+
+    /// Start a DFU download session. The device must be unlocked first (see
+    /// [`get_lock_status`](Self::get_lock_status) and
+    /// [`unlock_poll`](Self::unlock_poll)).
+    pub async fn dfu_start(&self) -> Result<(), RynkHostError> {
+        self.require_dfu(Cmd::DfuStart)?;
+        self.request::<command::DfuStart>(&()).await
+    }
+
+    /// Write a chunk of firmware data at `offset`. The chunk size should not
+    /// exceed `max_payload_size` from the device capabilities.
+    pub async fn dfu_write(&self, offset: u32, data: Vec<u8>) -> Result<(), RynkHostError> {
+        self.require_dfu(Cmd::DfuWrite)?;
+        self.request::<command::DfuWrite>(&DfuWriteRequest { offset, data })
+            .await
+    }
+
+    /// Periodic CRC-32 synchronization. Sends the host's running CRC for
+    /// comparison with the firmware's accumulated value. Returns `Ok(())` on
+    /// match, [`RynkHostError::Rejected`] on mismatch.
+    pub async fn dfu_crc_sync(&self, expected_crc: u32) -> Result<(), RynkHostError> {
+        self.require_dfu(Cmd::DfuCrcSync)?;
+        self.request::<command::DfuCrcSync>(&DfuCrcSyncRequest { expected_crc })
+            .await
+    }
+
+    /// Rewind the firmware's DFU state to a previous CRC checkpoint after
+    /// a mismatch. The host should then retransmit data starting from `offset`.
+    pub async fn dfu_crc_rewind(&self, offset: u32, crc: u32) -> Result<(), RynkHostError> {
+        self.require_dfu(Cmd::DfuCrcRewind)?;
+        self.request::<command::DfuCrcRewind>(&DfuCrcRewindRequest { offset, crc })
+            .await
+    }
+
+    /// End-of-transfer verification. The firmware reads back its DFU
+    /// partition, recomputes CRC-32, and runs the vector-table sanity check.
+    /// Call this before [`dfu_finish`](Self::dfu_finish).
+    pub async fn dfu_verify(&self, crc32: u32) -> Result<(), RynkHostError> {
+        self.require_dfu(Cmd::DfuVerify)?;
+        self.request::<command::DfuVerify>(&DfuVerifyRequest { crc32 }).await
+    }
+
+    /// Finalize a DFU transfer: sanity-check the image and reset into the new
+    /// firmware. Call after a successful [`dfu_verify`](Self::dfu_verify).
+    pub async fn dfu_finish(&self) -> Result<(), RynkHostError> {
+        self.require_dfu(Cmd::DfuFinish)?;
+        self.request::<command::DfuFinish>(&()).await
+    }
+
+    /// Request a hard system reset without completing a DFU transfer.
+    pub async fn dfu_reset(&self) -> Result<(), RynkHostError> {
+        self.require_dfu(Cmd::DfuReset)?;
+        self.send_no_reply::<command::DfuReset>(&()).await
     }
 }
 

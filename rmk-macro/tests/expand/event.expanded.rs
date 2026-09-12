@@ -131,6 +131,12 @@ mod pubsub {
         { 8 },
         { 2 },
     > = ::embassy_sync::pubsub::PubSubChannel::new();
+    impl LedIndicatorEvent {
+        /// Returns `true` when every subscriber has consumed every published message.
+        pub(crate) fn empty() -> bool {
+            LED_INDICATOR_EVENT_EVENT_CHANNEL.is_empty()
+        }
+    }
     impl ::rmk::event::PublishableEvent for LedIndicatorEvent {
         type Publisher = ::embassy_sync::pubsub::ImmediatePublisher<
             'static,

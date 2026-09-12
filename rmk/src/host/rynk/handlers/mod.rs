@@ -7,6 +7,8 @@ mod behavior;
 mod bulk;
 mod combo;
 mod connection;
+#[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
+pub(crate) mod dfu;
 mod fork;
 mod keymap;
 mod layout;
@@ -17,7 +19,7 @@ mod system;
 
 /// Fixed-size endpoints: a request → response function. [`serve`] adds the
 /// decode → handle → encode wire glue.
-pub(super) trait Handle<E: Endpoint> {
+pub(crate) trait Handle<E: Endpoint> {
     async fn handle(&self, req: E::Request) -> Result<E::Response, RynkError>;
 }
 

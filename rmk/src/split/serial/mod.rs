@@ -16,7 +16,7 @@ pub(crate) async fn run_serial_peripheral_manager<S: Read + Write>(
     id: usize,
     receiver: S,
     matrix_config: crate::split::PeripheralMatrixConfig,
-    #[cfg(feature = "dfu_split")] policy: crate::split::driver::UpdatePolicy,
+    #[cfg(feature = "dfu_split")] policy: crate::split::dfu::UpdatePolicy,
 ) {
     let split_serial_driver: SerialSplitDriver<S> = SerialSplitDriver::new(receiver);
     let peripheral_manager = PeripheralManager::new(

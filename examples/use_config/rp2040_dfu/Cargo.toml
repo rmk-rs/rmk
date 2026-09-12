@@ -1,0 +1,58 @@
+[package]
+name = "rmk-rp2040-dfu"
+version = "0.2.0"
+authors = ["Haobo Gu <haobogu@outlook.com>"]
+description = "Keyboard firmware written in Rust"
+homepage = "https://github.com/rmk-rs/rmk"
+repository = "https://github.com/rmk-rs/rmk"
+readme = "../../README.md"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "dfu_rp", "dfu_lock", "storage", "vial", "watchdog"] }
+embassy-time = { version = "0.5", features = ["defmt"] }
+embassy-rp = { version = "0.10", features = [
+    "rp2040",
+    "defmt",
+    "time-driver",
+    "critical-section-impl",
+] }
+embassy-executor = { version = "0.10", features = [
+    "defmt",
+    "platform-cortex-m",
+    "executor-thread",
+] }
+embassy-sync = { version = "0.8" }
+embassy-embedded-hal = { version = "0.6" }
+cortex-m-rt = { version = "0.7.5", features = ["set-vtor"] } # <-- set-vtor necessary for embassy-boot
+portable-atomic = { version = "1", features = ["critical-section"] }
+static_cell = "2"
+defmt = "1"
+defmt-rtt = "1"
+panic-probe = { version = "1", features = ["print-defmt"] }
+
+[build-dependencies]
+xz2 = "0.1.7"
+json = "0.12"
+const-gen = "1.6"
+
+[[bin]]
+name = "rmk-rp2040-dfu"
+test = false
+bench = false
+
+[profile.dev]
+codegen-units = 1
+debug = true
+opt-level = 1
+overflow-checks = true
+lto = false
+panic = 'unwind'
+
+[profile.release]
+codegen-units = 1
+debug = true
+opt-level = "z"
+overflow-checks = false
+lto = "fat"

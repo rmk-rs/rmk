@@ -1,0 +1,89 @@
+[keyboard]
+name = "RMK RP2040 DFU split dfu_ext"
+product_name = "RMK RP2040 DFU split dfu_ext"
+vendor_id = 0x4c4b
+product_id = 0x4643
+manufacturer = "RMK"
+chip = "rp2040"
+
+[rmk]
+split_peripherals_num = 1
+
+[split]
+connection = "serial"
+
+[split.central]
+rows = 2
+cols = 2
+row_offset = 0
+col_offset = 0
+serial = [{ instance = "UART0", tx_pin = "PIN_0", rx_pin = "PIN_1" }]
+[split.central.matrix]
+matrix_type = "normal"
+row_pins = ["PIN_6", "PIN_7"]
+col_pins = ["PIN_10", "PIN_11"]
+
+[[split.peripheral]]
+rows = 2
+cols = 1
+row_offset = 2
+col_offset = 2
+serial = [{ instance = "UART0", tx_pin = "PIN_0", rx_pin = "PIN_1" }]
+# firmware = "rmk-rp2040-dfu-split-dfu-ext-peripheral.bin"
+update_policy = "MatchHash"
+# update_policy = "force" to force a peripheral update every start of central
+
+[split.peripheral.matrix]
+matrix_type = "normal"
+row_pins = ["PIN_8", "PIN_9"]
+col_pins = ["PIN_10"]
+
+# The peripheral's own [dfu] section completely replaces the global one for
+# this side: no external_flash here means the peripheral keeps an internal
+# DFU partition, updated over the split link. Give it its own
+# [dfu.external_flash] with different SPI pins to use external flash on the
+# peripheral too.
+[split.peripheral.dfu]
+
+[layout]
+rows = 4
+cols = 3
+map = """
+(0,0)  (0,1)  (0,2)
+(1,0)  (1,1)  (1,2)
+(2,0)  (2,1)  (2,2)
+(3,0)  (3,1)  (3,2)
+"""
+
+[keymap]
+layers = 3
+
+[[keymap.layer]]
+keys = """
+A       B           C
+Kc1     Kc2         Kc3
+LCtrl   MO(1)       LShift
+OSL(1)  LT(2, Kc9)  LM(1, LShift | LGui)
+"""
+
+[[keymap.layer]]
+keys = """
+_  TT(1)  TG(2)
+_  _      _
+_  _      _
+_  _      _
+"""
+
+[dfu]
+led = "PIN_25"
+
+# Central-side DFU: the download partition lives on the external SPI flash.
+# The peripheral's own [split.peripheral.dfu] above replaces this for that
+# side (internal DFU partition, no external flash).
+[dfu.external_flash]
+driver = "w25q"
+flash_size = 8388608
+dfu_partition_size = 8388608
+spi = { instance = "SPI0", sck = "PIN_18", mosi = "PIN_19", miso = "PIN_16", cs = "PIN_17", tx_dma = "DMA_CH3", rx_dma = "DMA_CH4" }
+
+[storage]

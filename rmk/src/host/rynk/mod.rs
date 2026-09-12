@@ -4,7 +4,7 @@
 //! [`run_session`](RynkService::run_session) creates its own authorization gate
 //! ([`HostLock`]) and topic subscriptions, so transports never share either.
 
-mod handlers;
+pub(crate) mod handlers;
 mod topics;
 
 use embassy_futures::select::{Either, select};
@@ -50,6 +50,8 @@ impl<'a> RynkService<'a> {
     fn requires_unlock(&self, cmd: Cmd) -> bool {
         match cmd {
             Cmd::BootloaderJump | Cmd::StorageReset | Cmd::GetMatrixState => true,
+            // DFU start requires unlock for physical-presence gate.
+            Cmd::DfuStart => true,
             // Deleting a bond opens a re-pair hijack window; BLE-only command.
             #[cfg(feature = "_ble")]
             Cmd::ClearBleProfile => true,
@@ -135,6 +137,31 @@ impl<'a> RynkService<'a> {
             Cmd::GetLedIndicator => serve::<command::GetLedIndicator, _>(self, msg).await,
 
             Cmd::GetLayout => serve::<command::GetLayout, _>(self, msg).await,
+
+            // DFU commands — routed to ProxyRynkDfuHandler via dispatch_dfu_cmd.
+            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
+            Cmd::DfuStart
+            | Cmd::DfuWrite
+            | Cmd::DfuCrcSync
+            | Cmd::DfuCrcRewind
+            | Cmd::DfuVerify
+            | Cmd::DfuFinish
+            | Cmd::DfuReset => {
+                let payload = msg.payload();
+                match handlers::dfu::dispatch_dfu_cmd(cmd, payload).await {
+                    Ok(()) => msg.encode_response(&()),
+                    Err(e) => Err(e),
+                }
+            }
+            // DFU commands when the feature is disabled — return UnknownCmd.
+            #[cfg(not(all(feature = "dfu_ble", feature = "_dfu")))]
+            Cmd::DfuStart
+            | Cmd::DfuWrite
+            | Cmd::DfuCrcSync
+            | Cmd::DfuCrcRewind
+            | Cmd::DfuVerify
+            | Cmd::DfuFinish
+            | Cmd::DfuReset => Err(RynkError::UnknownCmd),
 
             _ => Err(RynkError::UnknownCmd),
         }

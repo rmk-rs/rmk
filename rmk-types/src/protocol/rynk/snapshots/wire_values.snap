@@ -40,7 +40,7 @@ Combo{[Single(A)],Morse(1),L2}            01 02 01 00 04 05 01 01 02
 ConnectionStatus{Configured,{1,Adv},Ble}  02 01 00 01
 ConnectionType::Ble                       01
 ConnectionType::Usb                       00
-DeviceCapabilities{1..16}                 01 02 03 04 05 06 07 08 09 0a 01 00 01 0b 00 0c 0d 0e 0f 10 01
+DeviceCapabilities{1..16}                 01 02 03 04 05 06 07 08 09 0a 01 00 00 01 0b 00 0c 0d 0e 0f 10 01
 DeviceInfo{1.2.3,4,5,RMK,..}              01 02 03 04 05 03 52 4d 4b 0c 52 4d 4b 20 4b 65 79 62 6f 61 72 64 09 72 79 6e 6b 3a 30 30 30 31
 EncoderAction{Morse(3),No}                05 03 00
 Fork{Single(A),No,Morse(2)}               02 01 00 04 00 05 02 01 02 01 00 00 00 02 01

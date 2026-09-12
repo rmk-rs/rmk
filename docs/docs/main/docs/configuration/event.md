@@ -75,6 +75,7 @@ peripheral_battery.subs = 4
 | `dongle_state`             | `DongleStateEvent`            | subs=0                          |
 | **DFU Events**             |                               |                                 |
 | `dfu_status`               | `DfuStatusEvent`              | channel_size=2                  |
+| `dfu_cmd`                  | `DfuCmdEvent`                 | channel_size=4, subs=1 (+1 when `dfu_split` enabled) |
 | **Action Events**          |                               |                                 |
 | `action`                   | `ActionEvent`                 | channel_size=16, subs=0         |
 

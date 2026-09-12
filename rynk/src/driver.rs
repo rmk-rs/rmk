@@ -169,7 +169,7 @@ impl Drop for SlotGuard<'_> {
 /// any order. Moving the actual bytes is [`Driver::run`]'s job.
 pub struct Client {
     /// Client → Driver: request frames waiting to be written.
-    message: Channel<CS, FrameBytes, 1>,
+    message: Channel<CS, FrameBytes, MAX_IN_FLIGHT>,
     /// In-flight requests; the driver delivers each reply here by SEQ.
     slots: [Slot; MAX_IN_FLIGHT],
     /// Free slot indices. Receiving an index claims that slot, so callers
