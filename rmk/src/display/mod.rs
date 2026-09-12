@@ -168,6 +168,25 @@ impl Default for RenderContext {
     }
 }
 
+/// Controls whether RMK renders the sleeping context before asking the driver
+/// to enter its sleep state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DisplaySleepBehavior {
+    /// Render and flush once, then call [`DisplayDriver::set_sleeping`].
+    ///
+    /// This supports displays that need a final sleep frame, including
+    /// persistent e-paper and memory displays. It also preserves the existing
+    /// behavior of RMK's built-in renderers, which clear while sleeping.
+    #[default]
+    RenderThenSleep,
+    /// Skip rendering and call [`DisplayDriver::set_sleeping`] immediately.
+    ///
+    /// This supports drivers that retain the current frame or turn the display
+    /// off without first transferring another framebuffer.
+    SleepImmediately,
+}
+
 /// Async display driver trait.
 ///
 /// Extends [`DrawTarget`] with the async I/O operations (`init` and `flush`)
@@ -179,6 +198,18 @@ pub trait DisplayDriver: DrawTarget {
     fn init(&mut self) -> impl core::future::Future<Output = ()>;
     /// Flush the framebuffer to the display.
     fn flush(&mut self) -> impl core::future::Future<Output = ()>;
+    /// Choose how the processor enters the sleeping state.
+    fn sleep_behavior(&self) -> DisplaySleepBehavior {
+        DisplaySleepBehavior::RenderThenSleep
+    }
+    /// Apply or leave the driver's sleeping state.
+    ///
+    /// On sleep, this is called after the optional final render selected by
+    /// [`sleep_behavior`](Self::sleep_behavior). On wake, it is called before
+    /// the next render. The default is a no-op.
+    fn set_sleeping(&mut self, _sleeping: bool) -> impl core::future::Future<Output = ()> {
+        core::future::ready(())
+    }
 }
 
 /// Trait for custom display renderers.
@@ -303,7 +334,7 @@ where
     /// Set the minimum time between event-driven renders.
     ///
     /// When events arrive faster than this interval, redraws are coalesced
-    /// and the latest state is drawn once the interval elapses. Default: 10 ms.
+    /// and the latest state is drawn once the interval elapses. Default: 33 ms.
     pub fn with_min_render_interval(mut self, interval: Duration) -> Self {
         self.min_render_interval = interval;
         self
@@ -338,6 +369,11 @@ where
             return;
         }
 
+        self.render_now().await;
+    }
+
+    /// Redraw immediately, bypassing the event rate limiter.
+    async fn render_now(&mut self) {
         if !self.initialized {
             self.display.init().await;
             self.initialized = true;
@@ -358,6 +394,7 @@ where
 
     async fn on_wpm_update_event(&mut self, event: WpmUpdateEvent) {
         self.ctx.wpm = event.0;
+        self.render().await;
     }
 
     async fn on_led_indicator_event(&mut self, event: LedIndicatorEvent) {
@@ -386,7 +423,19 @@ where
 
     async fn on_sleep_state_event(&mut self, event: SleepStateEvent) {
         self.ctx.sleeping = event.0;
-        self.render().await;
+        if event.0 {
+            match self.display.sleep_behavior() {
+                DisplaySleepBehavior::RenderThenSleep => self.render_now().await,
+                DisplaySleepBehavior::SleepImmediately => {
+                    self.pending_render = false;
+                    self.ctx.key_press_latch = false;
+                }
+            }
+            self.display.set_sleeping(true).await;
+        } else {
+            self.display.set_sleeping(false).await;
+            self.render().await;
+        }
     }
 
     #[cfg(feature = "_ble")]
@@ -490,5 +539,142 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::convert::Infallible;
+
+    use embedded_graphics::pixelcolor::BinaryColor;
+    use embedded_graphics::prelude::{DrawTarget, OriginDimensions, Pixel, Size};
+
+    use super::*;
+    use crate::test_support::test_block_on;
+
+    #[derive(Default)]
+    struct TestDisplay {
+        init_count: u8,
+        flush_count: u8,
+        sleep_behavior: DisplaySleepBehavior,
+        sleeping: bool,
+        transition_flush_count: u8,
+    }
+
+    impl OriginDimensions for TestDisplay {
+        fn size(&self) -> Size {
+            Size::new(128, 32)
+        }
+    }
+
+    impl DrawTarget for TestDisplay {
+        type Color = BinaryColor;
+        type Error = Infallible;
+
+        fn draw_iter<I>(&mut self, _pixels: I) -> Result<(), Self::Error>
+        where
+            I: IntoIterator<Item = Pixel<Self::Color>>,
+        {
+            Ok(())
+        }
+    }
+
+    impl DisplayDriver for TestDisplay {
+        async fn init(&mut self) {
+            self.init_count += 1;
+        }
+
+        async fn flush(&mut self) {
+            self.flush_count += 1;
+        }
+
+        fn sleep_behavior(&self) -> DisplaySleepBehavior {
+            self.sleep_behavior
+        }
+
+        fn set_sleeping(&mut self, sleeping: bool) -> impl core::future::Future<Output = ()> {
+            self.sleeping = sleeping;
+            self.transition_flush_count = self.flush_count;
+            core::future::ready(())
+        }
+    }
+
+    #[derive(Default)]
+    struct TestRenderer {
+        render_count: u8,
+        last_wpm: u16,
+    }
+
+    impl DisplayRenderer<BinaryColor> for TestRenderer {
+        fn render<D: DrawTarget<Color = BinaryColor>>(&mut self, ctx: &RenderContext, _display: &mut D) {
+            self.render_count += 1;
+            self.last_wpm = ctx.wpm;
+        }
+    }
+
+    fn processor() -> DisplayProcessor<TestDisplay, TestRenderer> {
+        DisplayProcessor::with_renderer(TestDisplay::default(), TestRenderer::default())
+    }
+
+    #[test]
+    fn wpm_event_requests_a_render() {
+        test_block_on(async {
+            let mut processor = processor().with_min_render_interval(Duration::MIN);
+
+            processor.on_wpm_update_event(WpmUpdateEvent::new(73)).await;
+
+            assert_eq!(processor.ctx.wpm, 73);
+            assert_eq!(processor.renderer.render_count, 1);
+            assert_eq!(processor.renderer.last_wpm, 73);
+            assert_eq!(processor.display.flush_count, 1);
+        });
+    }
+
+    #[test]
+    fn default_sleep_behavior_flushes_before_the_driver_transition() {
+        test_block_on(async {
+            let mut processor = processor();
+            processor.last_render = Instant::now();
+
+            processor.on_sleep_state_event(SleepStateEvent::new(true)).await;
+
+            assert!(processor.display.sleeping);
+            assert_eq!(processor.renderer.render_count, 1);
+            assert_eq!(processor.display.flush_count, 1);
+            assert_eq!(processor.display.transition_flush_count, 1);
+        });
+    }
+
+    #[test]
+    fn immediate_sleep_behavior_skips_the_final_render() {
+        test_block_on(async {
+            let mut processor = processor();
+            processor.display.sleep_behavior = DisplaySleepBehavior::SleepImmediately;
+            processor.last_render = Instant::now();
+
+            processor.on_sleep_state_event(SleepStateEvent::new(true)).await;
+
+            assert!(processor.display.sleeping);
+            assert_eq!(processor.renderer.render_count, 0);
+            assert_eq!(processor.display.init_count, 0);
+            assert_eq!(processor.display.flush_count, 0);
+            assert_eq!(processor.display.transition_flush_count, 0);
+        });
+    }
+
+    #[test]
+    fn waking_the_driver_precedes_the_next_render() {
+        test_block_on(async {
+            let mut processor = processor().with_min_render_interval(Duration::MIN);
+            processor.display.sleeping = true;
+            processor.ctx.sleeping = true;
+
+            processor.on_sleep_state_event(SleepStateEvent::new(false)).await;
+
+            assert!(!processor.display.sleeping);
+            assert_eq!(processor.display.transition_flush_count, 0);
+            assert_eq!(processor.renderer.render_count, 1);
+            assert_eq!(processor.display.flush_count, 1);
+        });
     }
 }

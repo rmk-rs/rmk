@@ -1417,7 +1417,7 @@ pub struct DisplayConfig {
     /// When absent, polling is disabled — the display only redraws on events.
     pub render_interval: Option<u64>,
     /// Minimum time in milliseconds between event-driven renders.
-    /// Prevents the display from being hammered by rapid events. Default: 10 ms.
+    /// Prevents the display from being hammered by rapid events. Default: 33 ms.
     pub min_render_interval: Option<u64>,
 }
 
