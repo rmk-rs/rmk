@@ -147,8 +147,7 @@ impl<'a> VialService<'a> {
                 boot::jump_to_bootloader();
             }
             ViaCommand::DynamicKeymapMacroGetCount => {
-                report.input_data[1] = 32;
-                warn!("Macro get count -- to be implemented")
+                report.input_data[1] = self.vial_config.macro_count;
             }
             ViaCommand::DynamicKeymapMacroGetBufferSize => {
                 report.input_data[1] = (MACRO_SPACE_SIZE as u16 >> 8) as u8;
@@ -301,6 +300,26 @@ mod tests {
             input_data: output_data,
             output_data,
         }
+    }
+
+    #[test]
+    fn macro_count_uses_vial_config() {
+        let mut data = KeymapData::new([[[KeyAction::No]]]);
+        let mut behavior = BehaviorConfig::default();
+        let positional = PositionalConfig::<1, 1>::default();
+        let keymap = block_on(KeyMap::new(&mut data, &mut behavior, &positional));
+        let mut config = RmkConfig::default();
+        config.vial_config = VialConfig::new(&[], &[], &[]).with_macro_count(1);
+        let service = VialService::new(&keymap, &config);
+        let mut report = ViaReport {
+            input_data: [0; 32],
+            output_data: [0; 32],
+        };
+        report.output_data[0] = ViaCommand::DynamicKeymapMacroGetCount as u8;
+
+        block_on(service.process_via_packet(&mut report));
+
+        assert_eq!(report.input_data[1], 1);
     }
 
     // `output_data` is [u8; 32], so the handler slices `output_data[4..4 + size]`.

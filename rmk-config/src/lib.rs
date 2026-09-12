@@ -1111,6 +1111,9 @@ pub(crate) struct HostConfig {
     /// Whether Vial is enabled
     #[serde_inline_default(true)]
     pub vial_enabled: bool,
+    /// Number of dynamic macros reported to Vial.
+    #[serde_inline_default(32)]
+    pub vial_macro_count: u8,
     /// Whether the RMK-native Rynk protocol is enabled. Mutually exclusive
     /// with `vial_enabled` (the underlying Cargo features conflict).
     #[serde_inline_default(false)]
@@ -1133,6 +1136,7 @@ impl Default for HostConfig {
     fn default() -> Self {
         Self {
             vial_enabled: true,
+            vial_macro_count: 32,
             rynk_enabled: false,
             unlock_keys: None,
             insecure: false,
@@ -1532,6 +1536,30 @@ fork_max_num = 255
             let err = toml::from_str::<KeyboardTomlConfig>(&toml).unwrap_err();
             assert!(err.to_string().contains(message), "{err}");
         }
+    }
+
+    #[test]
+    fn vial_macro_count_defaults_and_accepts_override() {
+        let default: KeyboardTomlConfig = toml::from_str("").unwrap();
+        assert_eq!(default.host().vial_macro_count, 32);
+
+        let configured: KeyboardTomlConfig = toml::from_str(
+            r#"
+[host]
+vial_macro_count = 1
+"#,
+        )
+        .unwrap();
+        assert_eq!(configured.host().vial_macro_count, 1);
+
+        let err = toml::from_str::<KeyboardTomlConfig>(
+            r#"
+[host]
+vial_macro_count = 256
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("vial_macro_count"), "{err}");
     }
 
     #[test]

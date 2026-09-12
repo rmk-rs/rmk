@@ -61,6 +61,7 @@ pub(crate) fn expand_vial_config(host: &Host) -> proc_macro2::TokenStream {
     }
     let unlock_keys = unlock_keys_tokens(host);
     let insecure = host.insecure;
+    let macro_count = host.vial_macro_count;
     quote! {
         include!(concat!(env!("OUT_DIR"), "/config_generated.rs"));
         const VIAL_CONFIG: ::rmk::config::VialConfig = ::rmk::config::VialConfig {
@@ -68,6 +69,7 @@ pub(crate) fn expand_vial_config(host: &Host) -> proc_macro2::TokenStream {
             vial_keyboard_def: &VIAL_KEYBOARD_DEF,
             unlock_keys: #unlock_keys,
             insecure: #insecure,
+            macro_count: #macro_count,
         };
     }
 }

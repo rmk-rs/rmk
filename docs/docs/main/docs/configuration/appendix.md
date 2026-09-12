@@ -576,6 +576,8 @@ defmt_log = true
 [host]
 # Whether Vial is enabled (default: true in keyboard.toml config)
 vial_enabled = true
+# Number of dynamic macro slots reported to Vial (default: 32).
+vial_macro_count = 32
 # Whether Rynk is enabled (experimental, default: false in keyboard.toml config)
 # Rynk and Vial are mutually exclusive and must match Cargo features.
 rynk_enabled = false
