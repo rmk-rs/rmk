@@ -285,6 +285,12 @@ subrating = ["split"]
 ## Internal feature that indicates that subrating is not supported, this will be auto-activated for some chips
 _no_subrating = []
 
+## Enable Shorter Connection Intervals (Bluetooth 6.2) on the split and dongle links, which
+## run at 1.25ms instead of 7.5ms. The host link keeps its own parameters.
+shorter_conn_interval = ["trouble-host?/shorter-connection-intervals"]
+## Internal feature that indicates that shorter connection intervals are not supported, this will be auto-activated for some chips
+_no_shorter_conn_interval = []
+
 #! ### BLE feature flags
 #!
 #! ⚠️ Due to the limitation of docs.rs, functions gated by BLE features won't show in docs.rs. You have to head to [`examples`](https://github.com/rmk-rs/rmk/tree/main/examples) folder of RMK repo for their usages.
@@ -314,13 +320,13 @@ esp32c6_ble = ["_esp_ble", "_no_usb"]
 esp32h2_ble = ["_esp_ble", "_no_usb"]
 ## Enable feature if you want to use ESP32S3 with BLE.
 esp32s3_ble = ["_esp_ble"]
-_esp_ble = ["_ble", "dep:esp-hal"]
+_esp_ble = ["_ble", "_no_shorter_conn_interval", "dep:esp-hal"]
 
 ## Enable feature if you want to use RP2040W with BLE.
-pico_w_ble = ["_ble", "_no_subrating", "dep:embassy-rp"]
+pico_w_ble = ["_ble", "_no_subrating", "_no_shorter_conn_interval", "dep:embassy-rp"]
 
 ## Enable feature if you want to use SF32LB52x with BLE.
-sf32lb52x_ble = ["_ble"]
+sf32lb52x_ble = ["_ble", "_no_shorter_conn_interval"]
 
 ## Enable passkey entry support for BLE pairing
 passkey_entry = ["_ble", "rmk-types/passkey_entry"]

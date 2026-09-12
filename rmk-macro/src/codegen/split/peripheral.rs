@@ -161,7 +161,16 @@ fn expand_bind_interrupt_for_split_peripheral(
             };
 
             let ble_config = communication.get_ble_config().unwrap();
-            let support_subrating = if is_feature_enabled(&get_rmk_features(), "subrating") {
+            let features = get_rmk_features();
+            // Shorter connection intervals are built on the extended feature set and
+            // connection subrating, which sdc.h asks to be enabled first.
+            let support_rate = if is_feature_enabled(&features, "shorter_conn_interval") {
+                quote! {
+                    .support_extended_feature_set_peripheral()
+                    .support_connection_subrating_peripheral()
+                    .support_shorter_connection_intervals_peripheral()
+                }
+            } else if is_feature_enabled(&features, "subrating") {
                 quote! { .support_connection_subrating_peripheral() }
             } else {
                 quote! {}
@@ -268,7 +277,7 @@ fn expand_bind_interrupt_for_split_peripheral(
                         .support_dle_central()
                         .support_phy_update_central()
                         .support_phy_update_peripheral()
-                        #support_subrating
+                        #support_rate
                         #use_2m_phy
                         #tx_power
                         .peripheral_count(1)?

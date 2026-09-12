@@ -191,8 +191,21 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
             let nrf_sdc_config = match &board {
                 BoardConfig::Split(_) => {
                     let num_peri = board.get_num_peripheral() as u8;
-                    let support_subrating = if is_feature_enabled(&get_rmk_features(), "subrating")
-                    {
+                    let features = get_rmk_features();
+                    // Shorter connection intervals are built on the extended feature set and
+                    // connection subrating, which sdc.h asks to be enabled first. Both roles
+                    // have to be enabled here because a split central serves the host link
+                    // as a peripheral.
+                    let support_rate = if is_feature_enabled(&features, "shorter_conn_interval") {
+                        quote! {
+                            .support_extended_feature_set_central()
+                            .support_extended_feature_set_peripheral()
+                            .support_connection_subrating_central()
+                            .support_connection_subrating_peripheral()
+                            .support_shorter_connection_intervals_central()
+                            .support_shorter_connection_intervals_peripheral()
+                        }
+                    } else if is_feature_enabled(&features, "subrating") {
                         quote! { .support_connection_subrating_central() }
                     } else {
                         quote! {}
@@ -207,7 +220,7 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
                         .support_dle_central()
                         .support_phy_update_central()
                         .support_phy_update_peripheral()
-                        #support_subrating
+                        #support_rate
                         #use_2m_phy
                         #tx_power
                         .central_count(#num_peri)?
@@ -216,18 +229,33 @@ pub(crate) fn bind_interrupt_default(hardware: &Hardware, item_mod: &ItemMod) ->
                         .build(p, rng, mpsl, mem)
                     }
                 }
-                BoardConfig::UniBody(_) => quote! {
-                    ::nrf_sdc::Builder::new()?
-                    .support_adv()
-                    .support_peripheral()
-                    .support_dle_peripheral()
-                    .support_phy_update_peripheral()
-                    #use_2m_phy
-                    #tx_power
-                    .peripheral_count(1)?
-                    .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
-                    .build(p, rng, mpsl, mem)
-                },
+                BoardConfig::UniBody(_) => {
+                    // A unibody keyboard is a peripheral on every link it has, including the
+                    // one a dongle opens, so only the peripheral role is enabled.
+                    let support_rate =
+                        if is_feature_enabled(&get_rmk_features(), "shorter_conn_interval") {
+                            quote! {
+                                .support_extended_feature_set_peripheral()
+                                .support_connection_subrating_peripheral()
+                                .support_shorter_connection_intervals_peripheral()
+                            }
+                        } else {
+                            quote! {}
+                        };
+                    quote! {
+                        ::nrf_sdc::Builder::new()?
+                        .support_adv()
+                        .support_peripheral()
+                        .support_dle_peripheral()
+                        .support_phy_update_peripheral()
+                        #support_rate
+                        #use_2m_phy
+                        #tx_power
+                        .peripheral_count(1)?
+                        .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
+                        .build(p, rng, mpsl, mem)
+                    }
+                }
             };
 
             // Extract PMW33xx configuration

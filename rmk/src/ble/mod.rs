@@ -1,4 +1,6 @@
-#[cfg(feature = "subrating")]
+#[cfg(feature = "shorter_conn_interval")]
+use bt_hci::cmd::le::LeConnectionRateRequest;
+#[cfg(all(feature = "subrating", not(feature = "shorter_conn_interval")))]
 use bt_hci::cmd::le::LeSubrateRequest;
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
@@ -57,6 +59,27 @@ pub(crate) mod sleep;
 
 #[cfg(all(feature = "subrating", feature = "_no_subrating"))]
 compile_error!("You may not enable feature `subrating` on unsupported platforms!");
+
+#[cfg(all(feature = "shorter_conn_interval", feature = "_no_shorter_conn_interval"))]
+compile_error!("You may not enable feature `shorter_conn_interval` on unsupported platforms!");
+
+/// The controller command that carries a link's connection rate, which differs per
+/// enabled feature. Naming the bound once keeps every task that passes the stack down
+/// free of the feature permutations, the way trouble names its own optional commands.
+#[cfg(feature = "shorter_conn_interval")]
+pub(crate) trait RateCmds: ControllerCmdSync<LeConnectionRateRequest> {}
+#[cfg(feature = "shorter_conn_interval")]
+impl<C: ControllerCmdSync<LeConnectionRateRequest>> RateCmds for C {}
+
+#[cfg(all(feature = "subrating", not(feature = "shorter_conn_interval")))]
+pub(crate) trait RateCmds: ControllerCmdAsync<LeSubrateRequest> {}
+#[cfg(all(feature = "subrating", not(feature = "shorter_conn_interval")))]
+impl<C: ControllerCmdAsync<LeSubrateRequest>> RateCmds for C {}
+
+#[cfg(not(any(feature = "subrating", feature = "shorter_conn_interval")))]
+pub(crate) trait RateCmds {}
+#[cfg(not(any(feature = "subrating", feature = "shorter_conn_interval")))]
+impl<C> RateCmds for C {}
 
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
 /// own — see [`crate::dongle::Dongle`].
@@ -155,15 +178,11 @@ where
 #[cfg(feature = "split")]
 impl<
     'a,
-    #[cfg(not(feature = "subrating"))] C: Controller
-        + ControllerCmdAsync<LeSetPhy>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>,
-    #[cfg(feature = "subrating")] C: Controller
+    C: Controller
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>
-        + ControllerCmdAsync<LeSubrateRequest>,
+        + RateCmds,
 > Runnable for BleTransport<'a, C>
 {
     async fn run(&mut self) -> ! {
@@ -670,8 +689,8 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                 supervision_timeout,
             } => {
                 info!(
-                    "[gatt] ConnectionRateChanged: {:?}ms, {:?}, {:?}, {:?}, {:?}ms",
-                    conn_interval.as_millis(),
+                    "[gatt] ConnectionRateChanged: {:?}us, {:?}, {:?}, {:?}, {:?}ms",
+                    conn_interval.as_micros(),
                     subrate_factor,
                     peripheral_latency,
                     continuation_number,
@@ -818,14 +837,18 @@ async fn serve_keyboard_connection<
     #[cfg(feature = "split")]
     let battery_task = embassy_futures::join::join(ble_battery_server.run(), ble_peripheral_battery_server.run());
 
+    let conn_params_task = async {
+        if cfg!(feature = "shorter_conn_interval") && dongle_link {
+            // The dongle sets this link's rate itself, and asking for 15ms/7.5ms here
+            // would undo it.
+            core::future::pending().await
+        } else {
+            set_conn_params(stack, conn).await
+        }
+    };
+
     let communication_task = async {
-        if let Either3::First(e) = select3(
-            gatt_events_task(server, conn),
-            set_conn_params(stack, conn),
-            battery_task,
-        )
-        .await
-        {
+        if let Either3::First(e) = select3(gatt_events_task(server, conn), conn_params_task, battery_task).await {
             error!("[gatt_events_task] end: {:?}", e)
         }
     };
@@ -942,6 +965,48 @@ pub(crate) async fn update_conn_params<
         }
     }
     warn!("[update_conn_params] controller stayed busy, giving up");
+    false
+}
+
+/// Set the connection interval and the subrate factor in one Connection Rate Update
+/// procedure, which is the only way to ask for an interval below 7.5ms.
+///
+/// Returns whether the request reached the controller, like [`update_conn_params`].
+#[cfg(feature = "shorter_conn_interval")]
+pub(crate) async fn update_conn_rate<
+    'a,
+    'b,
+    C: Controller + ControllerCmdSync<LeConnectionRateRequest>,
+    P: PacketPool,
+>(
+    stack: &Stack<'a, C, P>,
+    conn: &Connection<'b, P>,
+    params: &ConnectRateParams,
+) -> bool {
+    // Retry 10 times
+    for _ in 0..10 {
+        match conn.request_connection_rate(stack, params).await {
+            Err(BleHostError::BleHost(Error::Hci(error))) => {
+                // A connection runs one link-layer control procedure at a time, and
+                // a fresh one is still running its own.
+                if error == HciError::CONTROLLER_BUSY || error == HciError::DIFFERENT_TRANSACTION_COLLISION {
+                    info!("[update_conn_rate] controller busy, retrying: {:?}", error);
+                    embassy_time::Timer::after_millis(100).await;
+                    continue;
+                }
+                error!("[update_conn_rate] HCI error: {:?}", error);
+                return false;
+            }
+            Err(e) => {
+                #[cfg(feature = "defmt")]
+                let e = defmt::Debug2Format(&e);
+                error!("[update_conn_rate] BLE host error: {:?}", e);
+                return false;
+            }
+            Ok(_) => return true,
+        }
+    }
+    warn!("[update_conn_rate] controller stayed busy, giving up");
     false
 }
 

@@ -40,7 +40,9 @@ use vial_router as router;
 use crate::ble::adv::Adv;
 use crate::ble::profile::{ProfileInfo, ProfileManager};
 use crate::ble::scan::{DONGLE_SCAN_WINDOW, scan_config, start_scan};
-use crate::ble::wait_for_stack_started;
+#[cfg(feature = "shorter_conn_interval")]
+use crate::ble::update_conn_rate;
+use crate::ble::{RateCmds, wait_for_stack_started};
 use crate::channel::send_hid_report;
 use crate::core_traits::Runnable;
 use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_SERVICE_UUID, DongleEvent};
@@ -158,7 +160,8 @@ where
     C: Controller
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetScanParams>,
+        + ControllerCmdSync<LeSetScanParams>
+        + RateCmds,
 {
     async fn run(&mut self) -> ! {
         let controller = self.controller.take().expect("Dongle::run called twice");
@@ -181,6 +184,26 @@ where
     }
 }
 
+/// The rate the dongle asks for once the link is up: 1.25ms carries a key press to the
+/// dongle six times sooner than the 7.5ms a connection can start at, and the keyboard
+/// may still skip 360 of those events — the same ~450ms idle window it asks for itself
+/// on a 7.5ms link. Only the dongle drives this link's rate; the keyboard skips its own
+/// request, see `serve_keyboard_connection`.
+#[cfg(feature = "shorter_conn_interval")]
+fn dongle_conn_rate() -> ConnectRateParams {
+    ConnectRateParams {
+        min_connection_interval: Duration::from_micros(1250),
+        max_connection_interval: Duration::from_micros(1250),
+        subrate_min: 1,
+        subrate_max: 1,
+        max_latency: 360,
+        continuation_number: 0,
+        supervision_timeout: Duration::from_secs(6),
+        min_ce_length: Duration::from_secs(0),
+        max_ce_length: Duration::from_secs(0),
+    }
+}
+
 /// The dongle's BLE central: the state that outlives one connection.
 /// Per-connection state — the link, its GATT client — is passed as arguments.
 struct DongleCentral<'b, 's: 'b, C: Controller + ControllerCmdAsync<LeSetPhy>> {
@@ -197,7 +220,8 @@ where
     C: Controller
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetScanParams>,
+        + ControllerCmdSync<LeSetScanParams>
+        + RateCmds,
 {
     /// Publish current `DongleState` if it is a change.
     fn set_state(&self, state: DongleState) {
@@ -327,6 +351,9 @@ where
         if !self.secure_connection(&conn, peer).await {
             info!("[dongle] securing failed");
         } else if let Ok(client) = Client::new(self.stack, &conn).await {
+            #[cfg(feature = "shorter_conn_interval")]
+            update_conn_rate(self.stack, &conn, &dongle_conn_rate()).await;
+
             // The client task receives notifications and the watcher drains connection
             // events; the relay runs beside them and ends when either one ends.
             select3(

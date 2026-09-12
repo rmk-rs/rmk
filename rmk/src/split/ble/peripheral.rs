@@ -108,6 +108,20 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitReader for BleSplitPeripheralDrive
                     continuation_number,
                     supervision_timeout.as_millis()
                 ),
+                GattConnectionEvent::ConnectionRateChanged {
+                    conn_interval,
+                    subrate_factor,
+                    peripheral_latency,
+                    continuation_number,
+                    supervision_timeout,
+                } => info!(
+                    "[split] rate changed: interval {:?}us, subrate {:?}, latency {:?}, continuation {:?}, timeout {:?}ms",
+                    conn_interval.as_micros(),
+                    subrate_factor,
+                    peripheral_latency,
+                    continuation_number,
+                    supervision_timeout.as_millis()
+                ),
                 GattConnectionEvent::PhyUpdated { tx_phy, rx_phy } => {
                     info!("[split] PHY updated: {:?}, {:?}", tx_phy, rx_phy)
                 }
