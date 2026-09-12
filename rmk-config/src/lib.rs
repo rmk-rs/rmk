@@ -1154,7 +1154,8 @@ pub struct InputDeviceConfig {
     pub iqs5xx: Option<Vec<Iqs5xxConfig>>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[serde_inline_default]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JoystickConfig {
     // Name of the joystick
@@ -1171,6 +1172,57 @@ pub struct JoystickConfig {
     pub transform: Vec<Vec<i16>>,
     pub bias: Vec<i16>,
     pub resolution: u16,
+    pub power_pin: Option<String>,
+    #[serde_inline_default(50)]
+    pub polling_rate_hz: u16,
+    #[serde_inline_default(10)]
+    pub idle_polling_rate_hz: u16,
+    #[serde_inline_default(20)]
+    pub sample_settle_us: u32,
+    #[serde_inline_default(2)]
+    pub boot_settle_ms: u32,
+    /// Axis counts after the existing bias, before transform/resolution scaling.
+    #[serde_inline_default(0)]
+    pub deadzone: u16,
+}
+
+impl Default for JoystickConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            id: None,
+            pin_x: String::new(),
+            pin_y: String::new(),
+            pin_z: String::new(),
+            transform: Vec::new(),
+            bias: Vec::new(),
+            resolution: 1,
+            power_pin: None,
+            polling_rate_hz: 50,
+            idle_polling_rate_hz: 10,
+            sample_settle_us: 20,
+            boot_settle_ms: 2,
+            deadzone: 0,
+        }
+    }
+}
+
+impl JoystickConfig {
+    pub fn validate_power_config(&self) -> Result<(), String> {
+        if self.polling_rate_hz == 0 || self.idle_polling_rate_hz == 0 {
+            return Err("joystick polling rates must be greater than zero".into());
+        }
+        if self.idle_polling_rate_hz > self.polling_rate_hz {
+            return Err("joystick idle_polling_rate_hz must not exceed polling_rate_hz".into());
+        }
+        if self.deadzone > i16::MAX as u16 {
+            return Err("joystick deadzone must be in 0..=32767".into());
+        }
+        if self.resolution == 0 || self.resolution > i16::MAX as u16 {
+            return Err("joystick resolution must be in 1..=32767".into());
+        }
+        Ok(())
+    }
 }
 
 /// PMW3610 optical mouse sensor configuration
