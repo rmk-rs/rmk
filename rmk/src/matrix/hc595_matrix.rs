@@ -124,6 +124,8 @@ impl<
     async fn read_keyboard_event(&mut self) -> KeyboardEvent {
         loop {
             let (col_start, row_start) = self.scan_pos;
+            #[cfg(not(feature = "async_matrix"))]
+            let mut any_active = false;
 
             for col_idx in col_start..COL {
                 self.clear_columns().await;
@@ -164,6 +166,13 @@ impl<
                     if self.key_states[col_idx][row_idx].pressed {
                         self.rescan_needed = true;
                     }
+
+                    // Keep scanning at full rate while a key is held or bouncing.
+                    #[cfg(not(feature = "async_matrix"))]
+                    if self.key_states[col_idx][row_idx].pressed || matches!(debounce_state, DebounceState::InProgress)
+                    {
+                        any_active = true;
+                    }
                 }
             }
 
@@ -175,9 +184,18 @@ impl<
                     self.wait_for_key().await;
                 }
                 self.rescan_needed = false;
+                Timer::after_millis(1).await;
             }
 
-            Timer::after_millis(1).await;
+            // Polling builds have no interrupt gate: keep the 1ms cadence while any
+            // key is active, but idle-scan otherwise so the CPU can sleep between
+            // passes.
+            #[cfg(not(feature = "async_matrix"))]
+            if any_active {
+                Timer::after_millis(1).await;
+            } else {
+                Timer::after_millis(crate::MATRIX_IDLE_SCAN_MS.into()).await;
+            }
 
             self.scan_pos = (0, 0);
         }
