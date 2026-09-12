@@ -15,7 +15,7 @@ pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
             [k!(Backspace), k!(P), k!(O), k!(I), k!(U), k!(Y), a!(No)],
             [k!(Enter), k!(Backslash), k!(L), k!(K), k!(J), k!(H), a!(No)],
             [k!(Slash), k!(Up), k!(Dot), k!(Comma), k!(M), k!(N), a!(No)],
-            [k!(Right), k!(Down), k!(Left), mo!(2), mo!(4), k!(Space), a!(No)]
+            [k!(Right), k!(Down), k!(Left), mo!(2), mo!(3), k!(Space), a!(No)]
         ],
         [
             [k!(Escape), k!(Kc1), k!(Kc2), k!(Kc3), k!(Kc4), k!(Kc5), a!(No)],

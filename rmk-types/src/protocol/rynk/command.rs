@@ -78,6 +78,7 @@ impl Cmd {
     pub const fn is_topic(self) -> bool {
         self.0 & RYNK_TOPIC_BIT != 0
     }
+
 }
 
 impl core::fmt::Debug for Cmd {

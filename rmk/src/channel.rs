@@ -24,6 +24,11 @@ type ReportChannel = Channel<RawMutex, Report, REPORT_CHANNEL_SIZE>;
 #[cfg(feature = "_ble")]
 pub(crate) static LED_SIGNAL: Signal<RawMutex, LedIndicator> = Signal::new();
 
+/// Signalled on the first DFU write so `set_conn_params` can switch to
+/// low-latency BLE connection parameters immediately.
+#[cfg(feature = "_ble")]
+pub(crate) static DFU_LOW_LATENCY_SIGNAL: Signal<RawMutex, ()> = Signal::new();
+
 /// Drained by the USB HID writer task. Routed through `send_hid_report`
 /// from the keyboard task and ad-hoc producers (e.g. steno chord output).
 #[cfg(not(feature = "_no_usb"))]
@@ -128,9 +133,10 @@ pub async fn drain_ble_profile_channel_for_test(sink: &mut std::vec::Vec<std::st
 #[cfg(all(feature = "vial", feature = "_ble"))]
 pub(crate) static VIAL_BLE_RX_CHANNEL: Channel<RawMutex, [u8; 32], VIAL_CHANNEL_SIZE> = Channel::new();
 
-/// Rynk RX from the BLE `output_data` writes. The 512 B ring is ~2× one MTU's maximal payload.
+/// Rynk RX from the BLE `output_data` writes. 4 KiB ring buffers at least
+/// two full DFU frames (~2050 B each) to avoid backpressure during bulk writes.
 #[cfg(all(feature = "rynk", feature = "_ble"))]
-pub(crate) static RYNK_BLE_RX_PIPE: embassy_sync::pipe::Pipe<RawMutex, 512> = embassy_sync::pipe::Pipe::new();
+pub(crate) static RYNK_BLE_RX_PIPE: embassy_sync::pipe::Pipe<RawMutex, 4096> = embassy_sync::pipe::Pipe::new();
 
 /// Macros are triggered on key press but run by the keyboard loop to avoid recursion
 /// (`execute_macro` dispatches a macro's ops back through the action path).

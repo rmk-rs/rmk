@@ -1,4 +1,4 @@
-//! DFU handler — bridges rynk DFU commands to the internal `DFU_CHANNEL`.
+//! DFU handler — bridges rynk DFU commands to the internal `DfuCmdEvent` pubsub.
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────────┐
@@ -121,11 +121,11 @@ use rmk_types::protocol::rynk::{DfuCrcRewindRequest, DfuCrcSyncRequest, DfuVerif
 
 use super::Handle;
 use crate::crc32::Crc32;
-use crate::dfu::{BLOCK_SIZE_DFU, DFU_CHANNEL, DFU_WRITE_FAILED, DfuCmd, DfuTarget};
-use crate::event::{DfuStatusEvent, publish_event};
+use crate::dfu::{BLOCK_SIZE_DFU, DFU_WRITE_FAILED, DfuCmd, DfuTarget};
+use crate::event::{DfuCmdEvent, DfuStatusEvent, publish_event};
 
 /// Firmware-side DFU state for CRC checkpoint/rewind.
-struct DfuRynkState {
+pub(crate) struct DfuRynkState {
     running_crc: Crc32,
     checkpoint_offset: u32,
     checkpoint_crc: u32,
@@ -156,7 +156,7 @@ impl DfuRynkState {
 /// update + channel send) so contention is negligible.
 pub(crate) static DFU_RYNK_STATE: Mutex<CriticalSectionRawMutex, DfuRynkState> = Mutex::new(DfuRynkState::new());
 
-/// ProxyRynkDfuHandler bridges rynk DFU commands to the internal `DFU_CHANNEL`,
+/// ProxyRynkDfuHandler bridges rynk DFU commands to the internal `DfuCmdEvent` pubsub,
 /// mirroring the role of `ProxyUsbDfuHandler` for the USB path.
 pub(crate) struct ProxyRynkDfuHandler;
 
@@ -166,12 +166,11 @@ impl Handle<DfuStart> for ProxyRynkDfuHandler {
             let mut state = DFU_RYNK_STATE.lock().await;
             state.reset();
         }
-        DFU_CHANNEL
-            .try_send(DfuCmd::Start(DfuTarget::Central))
-            .map_err(|_| RynkError::Internal)?;
+        publish_event(DfuCmdEvent(DfuCmd::Start(DfuTarget::Central)));
         #[cfg(feature = "dfu_lock")]
         crate::dfu::DFU_STARTED.store(true, Ordering::Release);
         publish_event(DfuStatusEvent::new(DfuStatus::Started));
+        crate::channel::DFU_LOW_LATENCY_SIGNAL.signal(());
         info!("dfu_rynk: DFU download started");
         Ok(())
     }
@@ -194,12 +193,12 @@ impl Handle<DfuWrite> for ProxyRynkDfuHandler {
         // This must happen outside the lock to avoid holding it across the
         // async channel send.
         for (i, chunk) in req.data.chunks(BLOCK_SIZE_DFU).enumerate() {
-            let mut buf = heapless::Vec::new();
-            buf.extend_from_slice(chunk).map_err(|_| RynkError::Internal)?;
             let chunk_offset = req.offset + (i * BLOCK_SIZE_DFU) as u32;
-            DFU_CHANNEL
-                .send(DfuCmd::Write(DfuTarget::Central, chunk_offset, buf))
-                .await;
+            publish_event(DfuCmdEvent(DfuCmd::Write(
+                DfuTarget::Central,
+                chunk_offset,
+                heapless::Vec::from_slice(chunk).map_err(|_| RynkError::Internal)?,
+            )));
         }
 
         publish_event(DfuStatusEvent::new(DfuStatus::Downloading));
@@ -260,9 +259,7 @@ impl Handle<DfuVerify> for ProxyRynkDfuHandler {
 
 impl Handle<DfuFinish> for ProxyRynkDfuHandler {
     async fn handle(&self, _: ()) -> Result<(), RynkError> {
-        DFU_CHANNEL
-            .try_send(DfuCmd::Finish(DfuTarget::Central))
-            .map_err(|_| RynkError::Internal)?;
+        publish_event(DfuCmdEvent(DfuCmd::Finish(DfuTarget::Central)));
         publish_event(DfuStatusEvent::new(DfuStatus::Finished));
         info!("dfu_rynk: DFU download complete");
         Ok(())
@@ -271,9 +268,7 @@ impl Handle<DfuFinish> for ProxyRynkDfuHandler {
 
 impl Handle<DfuReset> for ProxyRynkDfuHandler {
     async fn handle(&self, _: ()) -> Result<(), RynkError> {
-        DFU_CHANNEL
-            .try_send(DfuCmd::SystemReset(DfuTarget::Central))
-            .map_err(|_| RynkError::Internal)?;
+        publish_event(DfuCmdEvent(DfuCmd::SystemReset(DfuTarget::Central)));
         info!("dfu_rynk: system reset requested");
         Ok(())
     }
@@ -283,28 +278,28 @@ impl Handle<DfuReset> for ProxyRynkDfuHandler {
 ///
 /// Used by the split peripheral's DFU GATT event loop to route incoming
 /// rynk-framed DFU commands to the handler, which sends them through
-/// [`DFU_CHANNEL`] for processing by [`FlashDfuHandler`](crate::dfu::FlashDfuHandler).
+/// [`DfuCmdEvent`] for processing by [`FlashDfuHandler`](crate::dfu::FlashDfuHandler).
 pub(crate) async fn dispatch_dfu_cmd(cmd: Cmd, payload: &[u8]) -> Result<(), RynkError> {
     match cmd {
-        Cmd::DfuStart => ProxyRynkDfuHandler.handle(()).await,
+        Cmd::DfuStart => <ProxyRynkDfuHandler as Handle<DfuStart>>::handle(&ProxyRynkDfuHandler, ()).await,
         Cmd::DfuWrite => {
             let req = postcard::from_bytes::<DfuWriteRequest>(payload).map_err(|_| RynkError::Internal)?;
-            ProxyRynkDfuHandler.handle(req).await
+            <ProxyRynkDfuHandler as Handle<DfuWrite>>::handle(&ProxyRynkDfuHandler, req).await
         }
         Cmd::DfuCrcSync => {
             let req = postcard::from_bytes::<DfuCrcSyncRequest>(payload).map_err(|_| RynkError::Internal)?;
-            ProxyRynkDfuHandler.handle(req).await
+            <ProxyRynkDfuHandler as Handle<DfuCrcSync>>::handle(&ProxyRynkDfuHandler, req).await
         }
         Cmd::DfuCrcRewind => {
             let req = postcard::from_bytes::<DfuCrcRewindRequest>(payload).map_err(|_| RynkError::Internal)?;
-            ProxyRynkDfuHandler.handle(req).await
+            <ProxyRynkDfuHandler as Handle<DfuCrcRewind>>::handle(&ProxyRynkDfuHandler, req).await
         }
         Cmd::DfuVerify => {
             let req = postcard::from_bytes::<DfuVerifyRequest>(payload).map_err(|_| RynkError::Internal)?;
-            ProxyRynkDfuHandler.handle(req).await
+            <ProxyRynkDfuHandler as Handle<DfuVerify>>::handle(&ProxyRynkDfuHandler, req).await
         }
-        Cmd::DfuFinish => ProxyRynkDfuHandler.handle(()).await,
-        Cmd::DfuReset => ProxyRynkDfuHandler.handle(()).await,
+        Cmd::DfuFinish => <ProxyRynkDfuHandler as Handle<DfuFinish>>::handle(&ProxyRynkDfuHandler, ()).await,
+        Cmd::DfuReset => <ProxyRynkDfuHandler as Handle<DfuReset>>::handle(&ProxyRynkDfuHandler, ()).await,
         _ => Err(RynkError::UnknownCmd),
     }
 }

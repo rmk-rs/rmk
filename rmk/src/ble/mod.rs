@@ -743,9 +743,20 @@ pub(crate) async fn set_conn_params<
         (Duration::from_micros(7500), 60, Duration::from_secs(6)),
     ];
 
+    let mut dfu_mode = false;
     for (interval, max_latency, supervision_timeout) in requests {
-        // Wait 5 seconds before each request to avoid connection drop
-        embassy_time::Timer::after_secs(5).await;
+        // Race each 5-second wait against the DFU signal so we can
+        // switch to low-latency mode immediately when a DFU transfer
+        // starts instead of waiting for the normal sequence to finish.
+        let wait = embassy_time::Timer::after_secs(5);
+        let signal = crate::channel::DFU_LOW_LATENCY_SIGNAL.wait();
+        match select(signal, wait).await {
+            Either::First(_) => {
+                dfu_mode = true;
+                break;
+            }
+            Either::Second(_) => {}
+        }
 
         update_conn_params(
             stack,
@@ -761,9 +772,39 @@ pub(crate) async fn set_conn_params<
         .await;
     }
 
-    // Wait forever. This is because we want the conn params setting can be interrupted when the connection is lost.
-    // So this task shouldn't quit after setting the conn params.
-    core::future::pending::<()>().await;
+    if dfu_mode {
+        info!("ble dfu: switching to low-latency mode");
+        update_conn_params(
+            stack,
+            conn.raw(),
+            &RequestedConnParams {
+                min_connection_interval: Duration::from_micros(7500),
+                max_connection_interval: Duration::from_micros(7500),
+                max_latency: 0,
+                supervision_timeout: Duration::from_secs(20),
+                ..Default::default()
+            },
+        )
+        .await;
+    }
+
+    // If DFU started after the normal param sequence, wait for the signal here.
+    loop {
+        crate::channel::DFU_LOW_LATENCY_SIGNAL.wait().await;
+        info!("ble dfu: switching to low-latency mode");
+        update_conn_params(
+            stack,
+            conn.raw(),
+            &RequestedConnParams {
+                min_connection_interval: Duration::from_micros(7500),
+                max_connection_interval: Duration::from_micros(7500),
+                max_latency: 0,
+                supervision_timeout: Duration::from_secs(20),
+                ..Default::default()
+            },
+        )
+        .await;
+    }
 }
 
 /// Serve one host keyboard connection.

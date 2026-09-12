@@ -173,6 +173,13 @@ impl crate::KeyboardTomlConfig {
             event.subs += split_peripherals_num;
             event.pubs += 1; // Split-Loop as second publisher (USB-Proxy is first)
         }
+        // Larger dfu_cmd buffer for BLE DFU: fire-and-forget writes need
+        // headroom so the FlashDfuHandler can stay ahead of the host.
+        if active_features.contains(&"dfu_ble")
+            && let Some(event) = events.iter_mut().find(|e| e.name == "dfu_cmd")
+        {
+            event.channel_size = event.channel_size.max(16);
+        }
         if !split_battery_peripheral_ids.is_empty()
             && active_features.contains(&"split")
             && active_features.contains(&"_ble")

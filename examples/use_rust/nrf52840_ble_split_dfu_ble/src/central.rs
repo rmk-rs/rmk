@@ -172,18 +172,22 @@ async fn main(spawner: Spawner) {
         product_name: "RMK Keyboard",
         ..DeviceConfig::default()
     };
-    let vial_config = VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(0, 0), (1, 1)]);
+    let _vial_config = VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(0, 0), (1, 1)]);
     let ble_battery_config = BleBatteryConfig::new(Some(is_charging_pin), true, None, false);
     let storage_config = StorageConfig {
-        start_addr: 0xA0000,
-        num_sectors: 6,
+        start_addr: 0x00000, // start address inside the storage partition = 0 when using dfu partitioning
+        num_sectors: 8,
         ..Default::default()
     };
     let rmk_config = RmkConfig {
         device_config: keyboard_device_config,
-        vial_config,
+        lock_config: rmk::config::LockConfig {
+            insecure: true,
+            ..Default::default()
+        },
         ble_battery_config,
         storage_config,
+        ..Default::default()
     };
 
     // Initialze keyboard stuffs

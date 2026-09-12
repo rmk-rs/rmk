@@ -682,6 +682,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "embassy-boot"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73bfc955c9238df2ce9fecc6f18a64b13ecaa41a3cd42d940a09f304765d10db"
+dependencies = [
+ "digest",
+ "document-features",
+ "embassy-embedded-hal",
+ "embassy-sync",
+ "embedded-storage",
+ "embedded-storage-async",
+ "signature",
+]
+
+[[package]]
 name = "embassy-embedded-hal"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1919,6 +1934,7 @@ dependencies = [
  "crc32fast",
  "defmt 1.1.1",
  "document-features",
+ "embassy-boot",
  "embassy-embedded-hal",
  "embassy-futures",
  "embassy-nrf",
@@ -1975,7 +1991,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rmk-nrf52840"
+name = "rmk-nrf52840-split-dfu-ble-config"
 version = "0.2.0"
 dependencies = [
  "bt-hci",
@@ -1984,8 +2000,11 @@ dependencies = [
  "cortex-m-rt",
  "defmt 1.1.1",
  "defmt-rtt",
+ "embassy-boot",
+ "embassy-embedded-hal",
  "embassy-executor",
  "embassy-nrf",
+ "embassy-sync",
  "embassy-time",
  "json",
  "nrf-mpsl",
@@ -2001,6 +2020,7 @@ name = "rmk-types"
 version = "0.4.0"
 dependencies = [
  "bitfield-struct",
+ "cobs",
  "defmt 1.1.1",
  "heapless 0.9.3",
  "postcard",
@@ -2221,6 +2241,12 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "signature"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 
 [[package]]
 name = "siphasher"

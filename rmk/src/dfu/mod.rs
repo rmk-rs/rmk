@@ -3,7 +3,7 @@
 //! This module implements DFU firmware updates for RMK keyboards. DFU is
 //! available over USB (via `ProxyUsbDfuHandler`) and over BLE via the rynk
 //! protocol (via `ProxyRynkDfuHandler`). Both paths feed into the same
-//! `DFU_CHANNEL` and `FlashDfuHandler`.
+//! DFU_CMD_EVENT-Channel and `FlashDfuHandler`.
 //!
 //! ## Data flow
 //!
@@ -15,17 +15,24 @@
 //! └──────────────┬──────────────────────────────────┬────────────-───┘
 //!                │ USB                              │ BLE (rynk)
 //!                ▼                                  ▼
-//! ┌─-─────────────────────────┐        ┌──────────────────────────────┐
-//! │  UsbDfuIface              │        │  ProxyRynkDfuHandler          │
+//! ┌─-─────────────────────────┐        ┌────-─-─────────────────────────┐
+//! │  UsbDfuIface              │        │  ProxyRynkDfuHandler           │
 //! │  (USB control handler)    │        │  (DFU commands → publish_event)│
-//! │                           │        │  CRC checkpoint/rewind state  │
-//! │  alt 0 → Central          │        └──────────┬───────────────────┘
+//! │                           │        │  CRC checkpoint/rewind state   │
+//! │  alt 0 → Central          │        └──────────┬─────────────────────┘
 //! │  alt 1 → Peripheral(0)    │                   │
 //! │  alt 2 → Peripheral(1)    │                   │
 //! │  ...                      │                   │
-//! └──-────────────────────────┘                   │
-//!                                                 │
-//!                          DfuCmdEvent (PubSub)   ▼
+//! └──-────────────────────┬───┘                   │
+//!                         │                       │
+//!                         ▼                       │
+//!  ┌────-─-─────────────────────────┐             │                       
+//!  │  ProxyRynkDfuHandler           │             │                       
+//!  │  (DFU commands → publish_event)│             │                      
+//!  │                                │             │                       
+//!  └────────────────────────────────┘             │                       
+//!                         │                       │
+//!                         ▼ DfuCmdEvent (PubSub)  ▼
 //! ┌───────────────────────────────────────────────────────────────┐
 //! │                                                               │
 //! │  ┌─── PeripheralManager (central event loop) ──────────────┐  │
@@ -379,7 +386,6 @@ impl<DFU: NorFlash + Clone, STATE: NorFlash + Clone> FlashDfuHandler<DFU, STATE>
                 self.last_erased_page = Some(page);
             }
         }
-        // Write the actual firmware bytes.
         dfu.write(offset, data).await.map_err(|_| ())?;
         // Track the highest written offset (used by compute_dfu_crc).
         self.written_len = self.written_len.max(offset + data.len() as u32);
@@ -517,12 +523,12 @@ impl<DFU: NorFlash + Clone, STATE: NorFlash + Clone> FlashDfuHandler<DFU, STATE>
                 DFU_WRITE_FAILED.store(false, Ordering::Release);
             }
             DfuCmd::Write(DfuTarget::Central, offset, data) => match self.write_chunk(offset, &data).await {
+                Ok(()) => {}
                 Err(()) => {
                     error!("dfu: firmware write failed at offset {:#010x}", offset);
                     DFU_WRITE_FAILED.store(true, Ordering::Release);
                     publish_event(DfuStatusEvent::new(DfuStatus::Error));
                 }
-                _ => {}
             },
             DfuCmd::Finish(DfuTarget::Central) | DfuCmd::Finish(DfuTarget::Local) => {
                 if DFU_WRITE_FAILED.load(Ordering::Acquire) {

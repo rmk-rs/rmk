@@ -138,21 +138,21 @@ impl<'a> RynkService<'a> {
 
             Cmd::GetLayout => serve::<command::GetLayout, _>(self, msg).await,
 
-            // DFU commands — routed to ProxyRynkDfuHandler.
+            // DFU commands — routed to ProxyRynkDfuHandler via dispatch_dfu_cmd.
             #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
-            Cmd::DfuStart => serve::<command::DfuStart, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
-            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
-            Cmd::DfuWrite => serve::<command::DfuWrite, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
-            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
-            Cmd::DfuCrcSync => serve::<command::DfuCrcSync, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
-            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
-            Cmd::DfuCrcRewind => serve::<command::DfuCrcRewind, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
-            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
-            Cmd::DfuVerify => serve::<command::DfuVerify, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
-            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
-            Cmd::DfuFinish => serve::<command::DfuFinish, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
-            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
-            Cmd::DfuReset => serve::<command::DfuReset, _>(&handlers::dfu::ProxyRynkDfuHandler, msg).await,
+            Cmd::DfuStart
+            | Cmd::DfuWrite
+            | Cmd::DfuCrcSync
+            | Cmd::DfuCrcRewind
+            | Cmd::DfuVerify
+            | Cmd::DfuFinish
+            | Cmd::DfuReset => {
+                let payload = msg.payload();
+                match handlers::dfu::dispatch_dfu_cmd(cmd, payload).await {
+                    Ok(()) => msg.encode_response(&()),
+                    Err(e) => Err(e),
+                }
+            }
             // DFU commands when the feature is disabled — return UnknownCmd.
             #[cfg(not(all(feature = "dfu_ble", feature = "_dfu")))]
             Cmd::DfuStart

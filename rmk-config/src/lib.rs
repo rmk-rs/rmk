@@ -436,7 +436,7 @@ impl Default for RmkConstantsConfig {
             split_central_sleep_timeout_seconds: 0,
             protocol_macro_chunk_size: 64,
             auto_mouse_layer_max_num: None,
-            rynk_buffer_size: 488,
+            rynk_buffer_size: 2048,
             dongle_pairing_window_secs: 30,
         }
     }

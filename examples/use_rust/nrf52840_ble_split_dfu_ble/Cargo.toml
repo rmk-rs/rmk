@@ -10,7 +10,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "watchdog", "nrf52840_ble", "split", "async_matrix", "adafruit_bl", "subrating", "dfu_ble", "dfu_nrf"] }
+rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "watchdog", "nrf52840_ble", "split", "async_matrix", "adafruit_bl", "subrating", "rynk", "dfu_nrf", "dfu_ble"] }
 nrf-sdc = { version = "0.4.0", features = [
     "defmt",
     "peripheral",
@@ -19,13 +19,13 @@ nrf-sdc = { version = "0.4.0", features = [
 ] }
 nrf-mpsl = { version = "0.4.0", features = [
     "defmt",
-    "critical-section-impl",
     "nrf52840",
 ] }
 bt-hci = { version = "0.10", features = ["defmt"] }
 
-cortex-m = "0.7.7"
-cortex-m-rt = "0.7.5"
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = { version = "0.7.5", features = ["set-vtor"] }
+portable-atomic = { version = "1", features = ["critical-section"] }
 embassy-time = { version = "0.5", features = ["tick-hz-32_768", "defmt", "defmt-timestamp-uptime"] }
 embassy-nrf = { version = "0.11", features = [
     "defmt",
@@ -41,9 +41,7 @@ embassy-executor = { version = "0.10", features = [
     "platform-cortex-m",
     "executor-thread",
 ] }
-embassy-boot = { version = "0.7" }
-embassy-sync = { version = "0.8" }
-embassy-embedded-hal = { version = "0.6" }
+embassy-boot = { version = "0.7", default-features = false }
 defmt = "1"
 defmt-rtt = "1"
 panic-probe = { version = "1", features = ["print-defmt"] }

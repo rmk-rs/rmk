@@ -293,32 +293,29 @@ async fn split_peripheral_dfu_advertise<'a, 'b, C: Controller>(
     peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
     server: &'b BleSplitPeripheralServer<'_>,
 ) -> Result<GattConnection<'a, 'b, DefaultPacketPool>, BleHostError<C::Error>> {
-    let mut name_buf = [0u8; 16];
     let prefix = b"rmk per";
-    name_buf[..prefix.len()].copy_from_slice(prefix);
-    let id_str = {
-        let mut tmp = [0u8; 4];
-        let mut n = 0;
+    let (name_buf, total_len) = {
+        let mut buf = [0u8; 16];
+        buf[..prefix.len()].copy_from_slice(prefix);
+        let mut pos = prefix.len();
         let mut val = id;
+        let mut digits = [0u8; 4];
+        let mut n = 0;
         if val == 0 {
-            tmp[0] = b'0';
+            digits[0] = b'0';
             n = 1;
         } else {
-            let mut start = 0;
             while val > 0 {
-                tmp[start] = b'0' + (val % 10) as u8;
+                digits[n] = b'0' + (val % 10) as u8;
                 val /= 10;
-                start += 1;
+                n += 1;
             }
-            for i in 0..start / 2 {
-                tmp.swap(i, start - 1 - i);
-            }
-            n = start;
+            digits[..n].reverse();
         }
-        &tmp[..n]
+        buf[pos..pos + n].copy_from_slice(&digits[..n]);
+        pos += n;
+        (buf, pos)
     };
-    let total_len = prefix.len() + id_str.len();
-    name_buf[prefix.len()..total_len].copy_from_slice(id_str);
     let name = core::str::from_utf8(&name_buf[..total_len]).unwrap_or("rmk dfu");
 
     let adv = Adv::DfuPeripheral { name };
@@ -330,10 +327,10 @@ async fn split_peripheral_dfu_advertise<'a, 'b, C: Controller>(
 /// Decodes rynk-framed DFU commands from `dfu_output`, dispatches them to
 /// [`ProxyRynkDfuHandler`](crate::host::rynk::handlers::dfu::ProxyRynkDfuHandler)
 /// via [`dispatch_dfu_cmd`](crate::host::rynk::handlers::dfu::dispatch_dfu_cmd),
-/// which sends them through `DFU_CHANNEL` for processing by `FlashDfuHandler`
+/// which sends them through `DfuCmdEvent` for processing by `FlashDfuHandler`
 /// in `run_all!()`.
 #[cfg(feature = "dfu_ble")]
-async fn run_dfu_session<'b, 's: 'b, C: Controller>(
+async fn run_dfu_session<'b, 's: 'b>(
     server: &'b BleSplitPeripheralServer<'_>,
     conn: &GattConnection<'b, 's, DefaultPacketPool>,
 ) {
@@ -390,7 +387,9 @@ async fn run_dfu_session<'b, 's: 'b, C: Controller>(
                             let mut reply_buf = [0u8; 512];
                             match encode_frame(&mut reply_buf, header, &result) {
                                 Ok(len) => {
-                                    if dfu_input.notify(conn, &reply_buf[..len], true).await.is_err() {
+                                    let notify_data: heapless::Vec<u8, 244> =
+                                        heapless::Vec::from_slice(&reply_buf[..len]).unwrap_or_default();
+                                    if dfu_input.notify(conn, &notify_data, true).await.is_err() {
                                         warn!("dfu_peri: notify failed");
                                     }
                                 }

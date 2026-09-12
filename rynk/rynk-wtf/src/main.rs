@@ -19,6 +19,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -294,10 +295,14 @@ async fn main() -> Result<()> {
     };
 
     eprintln!("Connecting to {}...", device.label());
-    let (client, mut driver) = device.connect().await.context("connection failed")?;
+    let (client, mut driver) = tokio::time::timeout(Duration::from_secs(15), device.connect())
+        .await
+        .context("connection timed out after 15s — BLE link or GATT handshake did not complete")?
+        .context("connection failed")?;
+    let client = Arc::new(client);
 
     let result = tokio::select! {
-        err = driver.run(&client) => Err(anyhow::anyhow!("driver error: {}", err)),
+        err = driver.run(Arc::as_ref(&client)) => Err(anyhow::anyhow!("driver error: {}", err)),
         result = async {
             let caps = client.get_capabilities().await?;
             if !caps.dfu_enabled {
@@ -320,19 +325,23 @@ async fn main() -> Result<()> {
                 eprintln!("Unlock successful.");
             }
 
-            let chunk_size = caps.max_payload_size as usize;
+            let mut chunk_size = caps.max_payload_size as usize - 8;
+            chunk_size -= chunk_size % 4; // NOR flash writes must be word-aligned
             let total = firmware.len();
             let mut crc = Crc32::new();
-            let mut checkpoint_offset = 0u32;
-            let mut checkpoint_crc: u32 = Crc32::new().finalize();
+            let mut last_checkpoint_offset = 0u32;
+            let mut last_checkpoint_crc: u32 = Crc32::new().finalize();
             let mut packets_since_check: u32 = 0;
 
             eprintln!("Starting DFU transfer... {} bytes ({} byte chunks)", total, chunk_size);
             client.dfu_start().await?;
 
-            for (idx, chunk) in firmware.chunks(chunk_size).enumerate() {
-                let abs_offset = (idx * chunk_size) as u32;
-
+            // Fire-and-forget DFU writes: send each chunk without waiting for
+            // the firmware's reply.  The firmware processes writes asynchronously
+            // and sends a response that the host drops.  Periodic CRC syncs
+            // verify the transfer.
+            for (chunk_idx, chunk) in firmware.chunks(chunk_size).enumerate() {
+                let abs_offset = (chunk_idx * chunk_size) as u32;
                 client.dfu_write(abs_offset, chunk.to_vec()).await?;
                 crc.update(chunk);
                 packets_since_check += 1;
@@ -343,23 +352,24 @@ async fn main() -> Result<()> {
                 if cli.crc_interval > 0 && packets_since_check >= cli.crc_interval {
                     match client.dfu_crc_sync(crc.finalize()).await {
                         Ok(()) => {
-                            checkpoint_offset = abs_offset + chunk.len() as u32;
-                            checkpoint_crc = crc.finalize();
+                            last_checkpoint_offset = abs_offset + chunk.len() as u32;
+                            last_checkpoint_crc = crc.finalize();
                             packets_since_check = 0;
                         }
                         Err(_) => {
-                            eprintln!("\nCRC mismatch at offset {}, rolling back...", abs_offset);
-                            client
-                                .dfu_crc_rewind(checkpoint_offset, checkpoint_crc)
-                                .await?;
-                            crc = Crc32::from_state(checkpoint_crc);
+                            eprintln!("\nCRC mismatch at offset {}, rolling back...", last_checkpoint_offset);
+                            client.dfu_crc_rewind(last_checkpoint_offset, last_checkpoint_crc).await?;
+                            crc = Crc32::from_state(last_checkpoint_crc);
 
-                            let start_idx = (checkpoint_offset / chunk_size as u32) as usize;
-                            for (retry_idx, retry_chunk) in firmware[start_idx..].chunks(chunk_size).enumerate() {
-                                let retry_offset = ((start_idx + retry_idx) * chunk_size) as u32;
+                            let start_idx = (last_checkpoint_offset / chunk_size as u32) as usize;
+                            for retry_idx in start_idx..=chunk_idx {
+                                let start = retry_idx * chunk_size;
+                                let end = (start + chunk_size).min(firmware.len());
+                                let retry_chunk = &firmware[start..end];
+                                let retry_offset = (retry_idx * chunk_size) as u32;
                                 client.dfu_write(retry_offset, retry_chunk.to_vec()).await?;
                                 crc.update(retry_chunk);
-                                let progress = (retry_offset as usize + retry_chunk.len()).min(total);
+                                let progress = ((retry_idx + 1) * chunk_size).min(total);
                                 print_progress(progress, total);
                             }
                             packets_since_check = 0;
