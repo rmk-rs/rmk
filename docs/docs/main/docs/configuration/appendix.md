@@ -272,6 +272,8 @@ spi = { instance = "bitbang0", sck = "P0_05", mosi = "P0_04", miso = "P0_04", cs
 # Motion interrupt pin; omit to poll the sensor
 motion = "P0_02"
 cpi = 800
+# Report rate in Hz; defaults to 125 and must be greater than 0
+report_hz = 125
 
 # Lighting configuration, if you don't have any light, just ignore this section.
 [light]

@@ -15,6 +15,11 @@ use crate::keymap::KeyMap;
 
 pub const ALL_POINTING_DEVICES: u8 = 255;
 
+pub(crate) fn duration_from_report_hz(report_hz: u16) -> Duration {
+    assert!(report_hz > 0, "report_hz must be greater than 0");
+    Duration::from_hz(report_hz as u64)
+}
+
 /// Motion data from the sensor
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MotionData {
@@ -759,6 +764,12 @@ mod tests {
     use super::*;
     use crate::input_device::InputDevice;
     use crate::test_support::test_block_on as block_on;
+
+    #[test]
+    #[should_panic(expected = "report_hz must be greater than 0")]
+    fn report_interval_rejects_zero_hz() {
+        duration_from_report_hz(0);
+    }
 
     struct DummyDriver {
         pub motion_pending: bool,

@@ -10,7 +10,9 @@ use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::digital::Wait;
 use embedded_hal_async::spi::SpiBus;
 
-use crate::input_device::pointing::{InitState, MotionData, PointingDevice, PointingDriver, PointingDriverError};
+use crate::input_device::pointing::{
+    InitState, MotionData, PointingDevice, PointingDriver, PointingDriverError, duration_from_report_hz,
+};
 
 // Burst report offsets
 const BURST_MOTION_FLAGS: usize = 0;
@@ -686,7 +688,7 @@ where
         )
     }
 
-    /// Create a new PMW33xx device with custom report rate (Hz)
+    /// Create a new PMW33xx device with a custom non-zero report rate (Hz)
     pub fn with_report_hz(
         id: u8,
         spi: SPI,
@@ -726,7 +728,7 @@ where
         )
     }
 
-    /// Create a new PMW3360 device with custom poll interval and report rate
+    /// Create a new PMW3360 device with a custom poll interval and non-zero report rate
     pub fn with_poll_interval_and_report_hz(
         id: u8,
         spi: SPI,
@@ -736,7 +738,7 @@ where
         poll_interval_us: u64,
         report_hz: u16,
     ) -> Self {
-        let report_interval = Duration::from_hz(report_hz as u64);
+        let report_interval = duration_from_report_hz(report_hz);
 
         // Polling should be more frequent than reporting
         let poll_interval = Duration::from_micros(poll_interval_us).min(report_interval);
@@ -754,7 +756,7 @@ where
         }
     }
 
-    /// Create a new PMW33xx device with SROM firmware and custom poll intervall and report rate
+    /// Create a new PMW33xx device with SROM firmware, custom poll interval and non-zero report rate
     ///
     /// Firmware is downloaded to the sensor on every startup
     #[allow(clippy::too_many_arguments)]
@@ -768,7 +770,7 @@ where
         report_hz: u16,
         firmware: &'a [u8],
     ) -> Self {
-        let report_interval = Duration::from_hz(report_hz as u64);
+        let report_interval = duration_from_report_hz(report_hz);
 
         // Polling should be more frequent than reporting
         let poll_interval = Duration::from_micros(poll_interval_us).min(report_interval);

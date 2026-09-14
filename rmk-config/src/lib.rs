@@ -1084,6 +1084,14 @@ const fn default_pointing_report_hz() -> u16 {
     125
 }
 
+fn deserialize_pointing_report_hz<'de, D: de::Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
+    let report_hz = u16::deserialize(deserializer)?;
+    if report_hz == 0 {
+        return Err(de::Error::custom("report_hz must be greater than 0"));
+    }
+    Ok(report_hz)
+}
+
 fn parse_duration_millis<'de, D: de::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
     let input: String = de::Deserialize::deserialize(deserializer)?;
     let num = input.trim_end_matches(|c: char| !c.is_numeric());
@@ -1203,7 +1211,10 @@ pub struct Pmw3610Config {
     #[serde(default)]
     pub smart_mode: bool,
     /// Report rate (Hz). Motion will be accumulated and emitted at this rate.
-    #[serde(default = "default_pointing_report_hz")]
+    #[serde(
+        default = "default_pointing_report_hz",
+        deserialize_with = "deserialize_pointing_report_hz"
+    )]
     pub report_hz: u16,
     #[serde(default)]
     pub proc_invert_x: bool,
@@ -1252,7 +1263,10 @@ pub struct Pmw33xxConfig {
     #[serde(default)]
     pub proc_swap_xy: bool,
     /// Report rate (Hz). Motion will be accumulated and emitted at this rate.
-    #[serde(default = "default_pointing_report_hz")]
+    #[serde(
+        default = "default_pointing_report_hz",
+        deserialize_with = "deserialize_pointing_report_hz"
+    )]
     pub report_hz: u16,
 }
 
@@ -1531,6 +1545,28 @@ fork_max_num = 255
             let toml = format!("[rmk]\n{field} = 256\n");
             let err = toml::from_str::<KeyboardTomlConfig>(&toml).unwrap_err();
             assert!(err.to_string().contains(message), "{err}");
+        }
+    }
+
+    #[test]
+    fn pointing_report_hz_must_be_positive() {
+        for device in ["pmw3610", "pmw33xx"] {
+            let sensor_type = if device == "pmw33xx" {
+                "sensor_type = \"PMW3360\""
+            } else {
+                ""
+            };
+            let toml = format!(
+                r#"
+[[input_device.{device}]]
+name = "sensor"
+{sensor_type}
+spi = {{ instance = "SPI0", sck = "PIN_0", mosi = "PIN_1", miso = "PIN_2" }}
+report_hz = 0
+"#
+            );
+            let err = toml::from_str::<KeyboardTomlConfig>(&toml).unwrap_err();
+            assert!(err.to_string().contains("report_hz must be greater than 0"), "{err}");
         }
     }
 
