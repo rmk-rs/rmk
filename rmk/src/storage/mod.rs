@@ -882,6 +882,8 @@ const fn get_buffer_size() -> usize {
 
 #[cfg(test)]
 mod tests {
+    use rmk_types::action::Action;
+    use rmk_types::keycode::{HidKeyCode, KeyCode};
     use sequential_storage::cache::Cache;
     use sequential_storage::map::{MapConfig, MapStorage};
 
@@ -1188,6 +1190,156 @@ mod tests {
             // The freshly built keymap exposes the stored value to the via
             // GET handler.
             assert_eq!(keymap.layout_option(), 42);
+        });
+    }
+
+    // Storage that holds one item whose value no longer decodes as `StorageData`
+    // (a `MacroData` written under a different `macro_space_size`), followed by a
+    // Vial edit. Both tests below fail on the erase-on-read-failure behaviour.
+    #[cfg(feature = "host")]
+    async fn storage_with_an_undecodable_macro_item() -> Storage<TestFlash<16_384, 4_096, 1>, 1, 1, 1, 0> {
+        type Flash = TestFlash<16_384, 4_096, 1>;
+
+        let storage_range = (16_384 - 2 * 4_096) as u32..16_384u32;
+        let mut map =
+            MapStorage::<StorageKey, _, _>::new(Flash::new(), MapConfig::new(storage_range), Cache::new_uncached());
+        let mut buffer = [0u8; 512];
+
+        map.store_item(
+            &mut buffer,
+            &StorageKey::StorageConfig,
+            &StorageData::StorageConfig(LocalStorageConfig {
+                enable: true,
+                build_hash: BUILD_HASH,
+            }),
+        )
+        .await
+        .unwrap();
+        map.store_item(
+            &mut buffer,
+            &StorageKey::LayoutConfig,
+            &StorageData::LayoutConfig(LayoutConfig {
+                default_layer: 0,
+                layout_option: 42,
+            }),
+        )
+        .await
+        .unwrap();
+
+        // The current `MacroData` tag followed by a two-byte payload: exactly what
+        // a firmware built with a smaller `macro_space_size` left behind.
+        let mut tag_buf = [0u8; MACRO_SPACE_SIZE + 8];
+        let tag = postcard::to_slice(&StorageData::MacroData([0u8; MACRO_SPACE_SIZE]), &mut tag_buf).unwrap()[0];
+        let stale_macro: &[u8] = &[tag, 2, 0xAA, 0xBB];
+        map.store_item(&mut buffer, &StorageKey::MacroData, &stale_macro)
+            .await
+            .unwrap();
+
+        // A key edit saved after the stale item.
+        map.store_item(
+            &mut buffer,
+            &StorageKey::keymap(0, 0, 0),
+            &StorageData::KeyAction(KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A)))),
+        )
+        .await
+        .unwrap();
+
+        let (flash, _) = map.destroy();
+        let keymap_init = [[[KeyAction::No; 1]; 1]; 1];
+        let encoder_map_init: Option<&mut [[EncoderAction; 0]; 1]> = None;
+        Storage::<Flash, 1, 1, 1, 0>::new(
+            flash,
+            &keymap_init,
+            &encoder_map_init,
+            &RuntimeStorageConfig::default(),
+            &RuntimeBehaviorConfig::default(),
+        )
+        .await
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn startup_scan_skips_an_undecodable_item_and_keeps_later_ones() {
+        use crate::config::BehaviorConfig;
+        use crate::keymap::KeymapData;
+
+        block_on(async {
+            let mut storage = storage_with_an_undecodable_macro_item().await;
+
+            let mut data = KeymapData::new([[[KeyAction::No]]]);
+            let mut behavior = BehaviorConfig::default();
+            storage
+                .read_keymap(&mut data, &mut behavior)
+                .await
+                .expect("one undecodable item must not fail the whole scan");
+
+            assert_eq!(
+                data.keymap[0][0][0],
+                KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A)))
+            );
+        });
+    }
+
+    // The map iterator yields every version of a key in write order, so skipping an
+    // undecodable newest value leaves the previous decodable one in place. This
+    // pins that behaviour rather than hiding it.
+    #[cfg(feature = "host")]
+    #[test]
+    fn startup_scan_keeps_the_previous_value_when_the_newest_does_not_decode() {
+        use crate::config::BehaviorConfig;
+        use crate::keymap::KeymapData;
+
+        block_on(async {
+            type Flash = TestFlash<16_384, 4_096, 1>;
+
+            let storage_range = (16_384 - 2 * 4_096) as u32..16_384u32;
+            let mut map =
+                MapStorage::<StorageKey, _, _>::new(Flash::new(), MapConfig::new(storage_range), Cache::new_uncached());
+            let mut buffer = [0u8; 512];
+
+            map.store_item(
+                &mut buffer,
+                &StorageKey::StorageConfig,
+                &StorageData::StorageConfig(LocalStorageConfig {
+                    enable: true,
+                    build_hash: BUILD_HASH,
+                }),
+            )
+            .await
+            .unwrap();
+            map.store_item(
+                &mut buffer,
+                &StorageKey::keymap(0, 0, 0),
+                &StorageData::KeyAction(KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A)))),
+            )
+            .await
+            .unwrap();
+            // A newer value for the same key that is not a `StorageData`.
+            let undecodable: &[u8] = &[0xFF];
+            map.store_item(&mut buffer, &StorageKey::keymap(0, 0, 0), &undecodable)
+                .await
+                .unwrap();
+
+            let (flash, _) = map.destroy();
+            let keymap_init = [[[KeyAction::No; 1]; 1]; 1];
+            let encoder_map_init: Option<&mut [[EncoderAction; 0]; 1]> = None;
+            let mut storage = Storage::<Flash, 1, 1, 1, 0>::new(
+                flash,
+                &keymap_init,
+                &encoder_map_init,
+                &RuntimeStorageConfig::default(),
+                &RuntimeBehaviorConfig::default(),
+            )
+            .await;
+
+            let mut data = KeymapData::new([[[KeyAction::No]]]);
+            let mut behavior = BehaviorConfig::default();
+            storage.read_keymap(&mut data, &mut behavior).await.unwrap();
+
+            assert_eq!(
+                data.keymap[0][0][0],
+                KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A)))
+            );
         });
     }
 }

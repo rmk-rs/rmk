@@ -82,12 +82,22 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
             .await
             .map_err(|e| print_storage_error::<F>(e))?;
 
-        // Read all keymap keys and encoder configs
-        while let Some((key, item)) = key_iterator
-            .next::<StorageData>(&mut self.buffer)
-            .await
-            .map_err(|e| print_storage_error::<F>(e))?
-        {
+        // Read all keymap keys and encoder configs. Skip a value that does not
+        // decode instead of aborting, which dropped every item written after it.
+        // Flash I/O errors still abort.
+        loop {
+            let (key, item) = match key_iterator.next::<StorageData>(&mut self.buffer).await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(sequential_storage::Error::SerializationError(e)) => {
+                    warn!("Skipping storage item that does not decode as StorageData: {:?}", e);
+                    continue;
+                }
+                Err(e) => {
+                    print_storage_error::<F>(e);
+                    return Err(());
+                }
+            };
             match (key, item) {
                 (StorageKey::Keymap { layer, row, col }, StorageData::KeyAction(action)) => {
                     let layer = layer as usize;
