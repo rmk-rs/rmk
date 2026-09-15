@@ -5,10 +5,7 @@ use rmk_types::action::{EncoderAction, KeyAction};
 use rmk_types::fork::Fork;
 use rmk_types::morse::{Morse, MorseProfile};
 #[cfg(all(feature = "storage", feature = "host"))]
-use {
-    crate::{boot::reboot_keyboard, storage::Storage},
-    embedded_storage_async::nor_flash::NorFlash,
-};
+use {crate::storage::Storage, embedded_storage_async::nor_flash::NorFlash};
 
 use crate::MACRO_SPACE_SIZE;
 use crate::config::{BehaviorConfig, Hand, MouseKeyConfig, OneShotModifiersConfig, PositionalConfig};
@@ -439,9 +436,9 @@ impl<'a> KeyMap<'a> {
             }
             .is_err()
         {
-            error!("Failed to read from storage, clearing...");
-            storage.flash.erase_all().await.ok();
-            reboot_keyboard();
+            // Keep the storage region: one undecodable item is not a reason to erase
+            // every stored keymap and setting. What was not read stays at its default.
+            error!("Failed to read from storage; keeping flash contents");
         }
 
         Self::build(data, behavior, positional_config)

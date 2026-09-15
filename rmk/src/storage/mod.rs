@@ -1280,6 +1280,42 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "host")]
+    #[test]
+    fn startup_read_failure_keeps_flash_contents() {
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::keymap::{KeyMap, KeymapData};
+
+        block_on(async {
+            let mut storage = storage_with_an_undecodable_macro_item().await;
+
+            // The keyed macro read still fails on the stale item, so the boot path
+            // takes its error branch. It must fall back to defaults, not erase.
+            let mut data = KeymapData::new([[[KeyAction::No]]]);
+            let mut behavior = BehaviorConfig::default();
+            let positional = PositionalConfig::<1, 1>::default();
+            let keymap = KeyMap::new_from_storage(&mut data, Some(&mut storage), &mut behavior, &positional).await;
+            drop(keymap);
+
+            // What the readers could restore is kept; the macro buffer the failed
+            // reader could not decode stays at its compiled-in default.
+            assert_eq!(
+                data.keymap[0][0][0],
+                KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A)))
+            );
+            assert_eq!(behavior.keyboard_macros.macro_sequences, [0u8; MACRO_SPACE_SIZE]);
+
+            let layout = storage.fetch_data(StorageKey::LayoutConfig).await;
+            assert!(
+                matches!(
+                    layout,
+                    Some(StorageData::LayoutConfig(LayoutConfig { layout_option: 42, .. }))
+                ),
+                "stored settings were erased on a read failure: {layout:?}"
+            );
+        });
+    }
+
     // The map iterator yields every version of a key in write order, so skipping an
     // undecodable newest value leaves the previous decodable one in place. This
     // pins that behaviour rather than hiding it.
