@@ -354,6 +354,22 @@ pub(crate) fn parse_map(map: &str, rows: u8, cols: u8) -> Result<Vec<MapToken>, 
     Ok(tokens)
 }
 
+pub(crate) fn logical_key_positions(layout: &LayoutTomlConfig) -> Result<HashSet<[u8; 2]>, String> {
+    if let Some(map) = &layout.map {
+        return Ok(parse_map(map, layout.rows, layout.cols)?
+            .into_iter()
+            .filter_map(|token| match token {
+                MapToken::Key { row, col, .. } => Some([row, col]),
+                _ => None,
+            })
+            .collect());
+    }
+
+    Ok((0..layout.rows)
+        .flat_map(|row| (0..layout.cols).map(move |col| [row, col]))
+        .collect())
+}
+
 /// Cursor state. A row's baseline `y` is the TOP of the row; a key stores its
 /// center. The advance to the next row is *lazy*: a newline only arms a break
 /// (so a lone `[y=n]` line doesn't itself consume a row), and the next key /

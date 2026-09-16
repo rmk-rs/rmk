@@ -145,11 +145,41 @@ fn expand_morse(morse: &Option<Morse>) -> proc_macro2::TokenStream {
             }
         };
 
+        // Hold trigger positions, keyed by the same profile index the profile table above is
+        // interned under, with `HOLD_TRIGGER_DEFAULT_PROFILE` for the default profile. The
+        // pushes can't overflow: the capacity is raised to fit every configured entry in
+        // `auto_calculate_parameters`.
+        let mut position_entries: Vec<proc_macro2::TokenStream> = config
+            .default_profile
+            .hold_trigger_key_positions
+            .iter()
+            .map(|p| {
+                let (row, col) = (p[0], p[1]);
+                quote! { (::rmk::config::HOLD_TRIGGER_DEFAULT_PROFILE, #row, #col) }
+            })
+            .collect();
+        for (idx, name) in sorted_profile_names(&profiles_ref).into_iter().enumerate() {
+            let idx = idx as u8;
+            let profile = profiles_ref
+                .as_ref()
+                .and_then(|m| m.get(&name))
+                .expect("name from same map");
+            position_entries.extend(profile.hold_trigger_key_positions.iter().map(|p| {
+                let (row, col) = (p[0], p[1]);
+                quote! { (#idx, #row, #col) }
+            }));
+        }
+
         quote! {
             ::rmk::config::MorsesConfig {
                 #enable_flow_tap_token
                 #prior_idle_time_token
                 default_profile: #default_profile,
+                hold_trigger_positions: {
+                    let mut v = ::rmk::heapless::Vec::new();
+                    #( let _ = v.push(#position_entries); )*
+                    v
+                },
                 #profiles_token
                 #morses
                 ..Default::default()
