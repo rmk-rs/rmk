@@ -16,7 +16,7 @@ use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
 use trouble_host::prelude::*;
 
-use crate::ble::adv::{Adv, advertise};
+use crate::ble::adv::{Adv, advertise, host_adv};
 use crate::ble::battery_service::BleBatteryServer;
 #[cfg(feature = "split")]
 use crate::ble::battery_service::BlePeripheralBatteryServer;
@@ -64,6 +64,15 @@ const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + 1;
 
 /// Max number of L2CAP channels
 const L2CAP_CHANNELS_MAX: usize = CONNECTIONS_MAX * 4; // Signal + att + smp + hid
+
+/// How long to advertise to a host before sleeping until a key is pressed.
+const ADV_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How long a paired profile advertises to its bonded host alone before opening
+/// up. A present host reconnects within seconds; this bounds how long an absent
+/// one, or a controller whose resolving list hasn't caught up with the bond,
+/// keeps everyone else out.
+const BONDED_HOST_WINDOW: Duration = Duration::from_secs(30);
 
 /// BLE transport. Owns the whole BLE stack.
 ///
@@ -267,20 +276,36 @@ async fn run_ble_keyboard<
     let profile_manager = &mut profile_manager;
 
     let connection_loop = async {
+        // Hosts with an IRK connect from rotating private addresses, which only
+        // a controller with LL privacy can match against the filter accept list.
+        let ll_privacy = match stack.command(LeReadLocalSupportedFeatures::new()).await {
+            Ok(features) => features.supports_ll_privacy(),
+            Err(_) => false,
+        };
+        // Set once the bonded host has let its window pass, so the next round
+        // advertises openly.
+        let mut bonded_host_missed = false;
         loop {
+            let active_bond = profile_manager.active_bond_info().map(|info| info.info.identity);
+            let bonded_host = active_bond.filter(|_| !bonded_host_missed);
+            bonded_host_missed = false;
             // On the dongle slot, advertise directed to the bonded dongle or
             // as a seeking broadcast; on the normal profiles, plain HID.
             #[cfg(feature = "dongle")]
             let adv = if crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE {
-                match profile_manager.active_bond_info() {
-                    Some(info) => Adv::Directed(info.info.identity.addr),
+                match active_bond {
+                    Some(identity) => Adv::Directed(identity.addr),
                     None => Adv::DongleSeeking,
                 }
             } else {
-                Adv::Host { name: product_name }
+                host_adv(&mut peripheral, product_name, bonded_host, ll_privacy).await
             };
             #[cfg(not(feature = "dongle"))]
-            let adv = Adv::Host { name: product_name };
+            let adv = host_adv(&mut peripheral, product_name, bonded_host, ll_privacy).await;
+            let timeout = match adv {
+                Adv::BondedHost { .. } => BONDED_HOST_WINDOW,
+                _ => ADV_TIMEOUT,
+            };
 
             // Wait for 10ms to ensure the USB is checked
             Timer::after_millis(10).await;
@@ -288,11 +313,15 @@ async fn run_ble_keyboard<
             set_ble_state(BleState::Advertising);
 
             match select(
-                advertise(&mut peripheral, &server.server, adv, Duration::from_secs(300)),
+                advertise(&mut peripheral, &server.server, adv, timeout),
                 profile_manager.update_profile(),
             )
             .await
             {
+                Either::First(Err(BleHostError::BleHost(Error::Timeout))) if matches!(adv, Adv::BondedHost { .. }) => {
+                    info!("[adv] the bonded host didn't answer, advertising openly");
+                    bonded_host_missed = true;
+                }
                 Either::First(Ok(conn)) => {
                     info!("[adv] connection established");
                     if let Err(e) = conn.raw().set_bondable(true) {
