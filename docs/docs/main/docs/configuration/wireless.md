@@ -38,6 +38,32 @@ passkey_entry_timeout = 120
 Some legacy BLE adapters cannot connect to devices using 2M PHY at all. For those hosts, enable the `use_1m_phy` Cargo feature of the `rmk` crate, which makes the keyboard use 1M PHY for the host connection.
 This only affects host connections. The dongle link and the split link between the halves always run at 2M PHY, so a keyboard built with both `dongle` and `use_1m_phy` keeps those links fast and still connects to a legacy adapter on its other BLE profiles.
 
+### Shorter connection intervals
+
+The split link and the dongle link open at the 7.5ms minimum that Bluetooth 5 allows, so a key press on a peripheral half or on a dongle-connected keyboard waits 3.75ms on average for the next connection event. Enable the `shorter_conn_interval` Cargo feature of the `rmk` crate to run both links at 1.25ms instead, which cuts that wait to 0.6ms. It is off by default.
+
+The feature uses Shorter Connection Intervals from Bluetooth 6.2, which requires:
+
+- An nRF chip on both ends. Only the SoftDevice Controller implements it, and it lives in the multirole library, so both the `peripheral` and `central` features of `nrf-sdc` must be enabled. Every RMK example already enables both.
+- The feature enabled on every firmware sharing the link: both split halves, or both the keyboard and its dongle. An end built without it refuses the request and the link stays at 7.5ms.
+
+Only the central of a link asks for the new rate, so the keyboard's connection to a phone or a PC keeps its own parameters. Sleep is unchanged as well: the link returns to 7.5ms with the same subrate factors [connection subrating](../features/low_power.md) uses, because the specification caps how many connection events a link may skip, not how long it may sleep.
+
+The cost is on the central: it opens a connection event on every interval, so its radio wakes six times as often per link. Peripherals keep the idle window they had before and are barely affected. Measure the current draw before shipping this on a battery-powered central.
+
+When you build with the Rust API instead of `keyboard.toml`, add the matching calls to your own `nrf_sdc::Builder` and grow `sdc::Mem<N>` by about 120 bytes per link:
+
+```rust
+    // A peripheral half, or any keyboard a dongle connects to
+    .support_extended_feature_set_peripheral()
+    .support_connection_subrating_peripheral()
+    .support_shorter_connection_intervals_peripheral()
+    // A dongle, plus the `_peripheral` calls above on a split central
+    .support_extended_feature_set_central()
+    .support_connection_subrating_central()
+    .support_shorter_connection_intervals_central()
+```
+
 ### Passkey entry
 
 RMK supports typing a BLE passkey directly on the keyboard during pairing. This is disabled by default, and requires the `passkey_entry` Cargo feature of the `rmk` crate in addition to the configuration below.

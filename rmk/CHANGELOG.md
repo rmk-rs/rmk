@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Run the split and dongle links at a 1.25ms connection interval with the `shorter_conn_interval` feature (Shorter Connection Intervals, Bluetooth 6.2), see [wireless configuration](https://rmk.rs/docs/configuration/wireless). nRF only, and required on both ends of a link.
 - Make Trouble BLE roles explicit, document environment-variable memory tuning, update the nRF52832 examples to peripheral-only SDC, and derive split notification capacity from Trouble's configured packet-pool MTU.
 - Give dongles a USB DFU runtime interface: a DETACH in the 30 s after plug-in reboots into the bootloader (`jump_to_bootloader`), so a dongle can be updated with `dfu-util` or rmk-gui although its host protocol is relayed to the keyboard.
 - Publish the dongle's state.

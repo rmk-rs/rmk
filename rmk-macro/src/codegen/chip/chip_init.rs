@@ -94,28 +94,49 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
             const SDC_MEM_SUBRATING_PER_PERIPHERAL: usize = 56;
             const SDC_MEM_SUBRATING_PER_EXTRA_PERIPHERAL: usize = 8;
 
-            let subrating_enabled =
-                peri_num > 0 && is_feature_enabled(&get_rmk_features(), "subrating");
+            // Shorter connection intervals add the extended feature set and the rate
+            // machinery, both sized per link (sdc.h: 11 + links * 43 and 12 + links * 52).
+            const SDC_MEM_SCI_FIXED: usize = 23;
+            const SDC_MEM_SCI_PER_LINK: usize = 95;
 
-            let sdc_mem_size = if peripheral_id.is_none() && peri_num > 0 {
-                // Split central
-                let base =
-                    SDC_MEM_SPLIT_BASE + peri_num.saturating_sub(1) * SDC_MEM_PER_EXTRA_PERIPHERAL;
-                if subrating_enabled {
-                    base + SDC_MEM_SUBRATING_BASE
-                        + peri_num.saturating_sub(1) * SDC_MEM_SUBRATING_PER_PERIPHERAL
-                        + peri_num.saturating_sub(2) * SDC_MEM_SUBRATING_PER_EXTRA_PERIPHERAL
+            let features = get_rmk_features();
+            let sci_enabled = is_feature_enabled(&features, "shorter_conn_interval");
+            // Shorter connection intervals need subrating enabled in the controller too,
+            // whether or not RMK drives the split link with it.
+            let subrating_enabled =
+                sci_enabled || (peri_num > 0 && is_feature_enabled(&features, "subrating"));
+            let sci_mem = if sci_enabled {
+                // A split central holds one link per peripheral plus the host link.
+                let links = if peripheral_id.is_none() && peri_num > 0 {
+                    peri_num + 1
                 } else {
-                    base
-                }
+                    1
+                };
+                SDC_MEM_SCI_FIXED + links * SDC_MEM_SCI_PER_LINK
             } else {
-                // Unibody or split peripheral
-                if subrating_enabled {
-                    SDC_MEM_UNIBODY + SDC_MEM_SUBRATING_BASE
-                } else {
-                    SDC_MEM_UNIBODY
-                }
+                0
             };
+
+            let sdc_mem_size = sci_mem
+                + if peripheral_id.is_none() && peri_num > 0 {
+                    // Split central
+                    let base = SDC_MEM_SPLIT_BASE
+                        + peri_num.saturating_sub(1) * SDC_MEM_PER_EXTRA_PERIPHERAL;
+                    if subrating_enabled {
+                        base + SDC_MEM_SUBRATING_BASE
+                            + peri_num.saturating_sub(1) * SDC_MEM_SUBRATING_PER_PERIPHERAL
+                            + peri_num.saturating_sub(2) * SDC_MEM_SUBRATING_PER_EXTRA_PERIPHERAL
+                    } else {
+                        base
+                    }
+                } else {
+                    // Unibody or split peripheral
+                    if subrating_enabled {
+                        SDC_MEM_UNIBODY + SDC_MEM_SUBRATING_BASE
+                    } else {
+                        SDC_MEM_UNIBODY
+                    }
+                };
             let ble_init = match &communication {
                 CommunicationConfig::Ble(_) | CommunicationConfig::Both(_, _) => quote! {
                     // Initialize nrf-sdc and ble stack
