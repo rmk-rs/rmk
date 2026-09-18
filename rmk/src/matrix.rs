@@ -363,6 +363,8 @@ where
     async fn read_event(&mut self) -> Self::Event {
         loop {
             let (out_idx_start, in_idx_start) = self.scan_pos;
+            #[cfg(not(feature = "async_matrix"))]
+            let mut any_active = false;
 
             // Scan matrix and send report
             for out_idx in out_idx_start..Self::OUTPUT_PIN_NUM {
@@ -414,6 +416,14 @@ where
                     if self.key_states[col_idx][row_idx].pressed {
                         self.rescan_needed = true;
                     }
+
+                    // Keep scanning at full rate while a key is held or bouncing,
+                    // so releases and chord changes are caught immediately.
+                    #[cfg(not(feature = "async_matrix"))]
+                    if self.key_states[col_idx][row_idx].pressed || matches!(debounce_state, DebounceState::InProgress)
+                    {
+                        any_active = true;
+                    }
                 }
 
                 // Pull it back to low
@@ -428,6 +438,12 @@ where
                     self.wait_for_key().await;
                 }
                 self.rescan_needed = false;
+            }
+            // Polling builds have no interrupt gate, so slow down when nothing is
+            // pressed or debouncing instead of busy-scanning the whole matrix.
+            #[cfg(not(feature = "async_matrix"))]
+            if !any_active {
+                Timer::after_millis(crate::MATRIX_IDLE_SCAN_MS.into()).await;
             }
             self.scan_pos = (0, 0);
         }
