@@ -16,7 +16,7 @@
 //! see [`keypress_step`] for the actions that cannot be classified.
 
 use embassy_futures::select::{Either, Either3, select, select3};
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Instant, Timer};
 use heapless::Vec;
 use rmk_macro::processor;
 use rmk_types::action::Action;
@@ -29,6 +29,7 @@ use crate::core_traits::Runnable;
 use crate::event::{
     ActionEvent, Axis, AxisValType, EventSubscriber, LayerChangeEvent, PointingEvent, SubscribableEvent,
 };
+use crate::keyboard::deadline::{DeadlineKey, DeadlineSet};
 use crate::keymap::KeyMap;
 use crate::processor::Processor;
 
@@ -47,10 +48,24 @@ use crate::processor::Processor;
 pub struct AutoMouseLayerRunner<'a, 'k> {
     keymap: &'a KeyMap<'k>,
     entries: Vec<EntryState, AUTO_MOUSE_LAYER_MAX_NUM>,
+    /// One deadline slot per entry, for the wait loop to race events against.
+    deadlines: EntryDeadlines,
     /// `true` if any entry has `deactivate_on_key` or `reset_timeout_on_key` set,
     /// so action events must be inspected.
     any_action_event_configured: bool,
 }
+
+/// Registry key: one deadline slot per configured entry.
+#[derive(Clone, Copy)]
+struct EntryKey(usize);
+
+impl DeadlineKey for EntryKey {
+    fn slot(self) -> usize {
+        self.0
+    }
+}
+
+type EntryDeadlines = DeadlineSet<EntryKey, AUTO_MOUSE_LAYER_MAX_NUM>;
 
 impl<'a, 'k> AutoMouseLayerRunner<'a, 'k> {
     /// Build the runner from the keymap's `[behavior.auto_mouse_layer]` config.
@@ -78,7 +93,6 @@ impl<'a, 'k> AutoMouseLayerRunner<'a, 'k> {
                 .push(EntryState {
                     config,
                     self_activated: false,
-                    deadline: None,
                     overlap_warned: false,
                 })
                 .is_err()
@@ -92,6 +106,7 @@ impl<'a, 'k> AutoMouseLayerRunner<'a, 'k> {
         Self {
             keymap,
             entries,
+            deadlines: DeadlineSet::new(),
             any_action_event_configured,
         }
     }
@@ -105,7 +120,14 @@ impl<'a, 'k> AutoMouseLayerRunner<'a, 'k> {
         }
         let target_layer = self.entries[idx].config.target_layer;
         let activated_by_us = self.keymap.activate_layer_if_inactive(target_layer);
-        if pointing_step(&mut self.entries, idx, Instant::now(), activated_by_us) == PointingOutcome::OverlapFirstSeen {
+        if pointing_step(
+            &mut self.entries,
+            &mut self.deadlines,
+            idx,
+            Instant::now(),
+            activated_by_us,
+        ) == PointingOutcome::OverlapFirstSeen
+        {
             warn!(
                 "auto_mouse_layer: layer {} is already active when motion was detected; \
                  the layer is likely driven by another key (MO/TG). The auto mouse layer \
@@ -118,10 +140,10 @@ impl<'a, 'k> AutoMouseLayerRunner<'a, 'k> {
     async fn on_layer_change_event(&mut self, LayerChangeEvent(top): LayerChangeEvent) {
         // Layer turned off externally (MO/TG key etc.) — release our hold.
         let keymap = self.keymap;
-        for entry in self.entries.iter_mut() {
+        for (i, entry) in self.entries.iter_mut().enumerate() {
             if entry.self_activated && !keymap.is_layer_active(entry.config.target_layer) {
                 entry.self_activated = false;
-                entry.deadline = None;
+                self.deadlines.clear(EntryKey(i));
                 trace!(
                     "auto_mouse_layer: cleared tracking for layer {} (top now {})",
                     entry.config.target_layer, top
@@ -137,7 +159,7 @@ impl<'a, 'k> AutoMouseLayerRunner<'a, 'k> {
         if !self.entries.iter().any(|e| e.self_activated) {
             return;
         }
-        for layer in keypress_step(&mut self.entries, event.action, Instant::now()) {
+        for layer in keypress_step(&mut self.entries, &mut self.deadlines, event.action, Instant::now()) {
             self.keymap.deactivate_layer_if_active(layer);
         }
     }
@@ -150,9 +172,6 @@ struct EntryState {
     /// `true` while this entry is holding the layer active. Multiple entries
     /// may hold the same layer simultaneously when they share `target_layer`.
     self_activated: bool,
-    /// Set when the entry is self-activated; the layer is deactivated when this
-    /// time is reached unless further motion pushes the deadline forward.
-    deadline: Option<Instant>,
     /// Whether we have already warned about the entry's layer overlapping a
     /// manually-activated layer.
     overlap_warned: bool,
@@ -166,12 +185,8 @@ enum PointingOutcome {
 }
 
 impl AutoMouseLayerRunner<'_, '_> {
-    fn deadline(&self) -> Option<Instant> {
-        earliest_deadline(&self.entries)
-    }
-
     async fn on_deadline(&mut self) {
-        for layer in timeout_step(&mut self.entries, Instant::now()) {
+        for layer in timeout_step(&mut self.entries, &mut self.deadlines, Instant::now()) {
             self.keymap.deactivate_layer_if_active(layer);
         }
     }
@@ -195,7 +210,7 @@ impl Runnable for AutoMouseLayerRunner<'_, '_> {
                     None => core::future::pending().await,
                 }
             };
-            match self.deadline() {
+            match self.deadlines.next() {
                 Some(deadline) => match select3(Timer::at(deadline), sub.next_event(), action_fut).await {
                     Either3::First(_) => self.on_deadline().await,
                     Either3::Second(event) => self.process(event).await,
@@ -208,10 +223,6 @@ impl Runnable for AutoMouseLayerRunner<'_, '_> {
             }
         }
     }
-}
-
-fn earliest_deadline(entries: &[EntryState]) -> Option<Instant> {
-    entries.iter().filter_map(|e| e.deadline).min()
 }
 
 /// Find the entry that should handle an event from `device_id`.
@@ -240,15 +251,19 @@ fn layer_shared_with_other(entries: &[EntryState], idx: usize, layer: u8) -> boo
         .any(|(i, e)| i != idx && e.self_activated && e.config.target_layer == layer)
 }
 
-fn timeout_step(entries: &mut [EntryState], now: Instant) -> Vec<u8, AUTO_MOUSE_LAYER_MAX_NUM> {
+fn timeout_step(
+    entries: &mut [EntryState],
+    deadlines: &mut EntryDeadlines,
+    now: Instant,
+) -> Vec<u8, AUTO_MOUSE_LAYER_MAX_NUM> {
     let mut released: Vec<u8, AUTO_MOUSE_LAYER_MAX_NUM> = Vec::new();
     for i in 0..entries.len() {
-        let expired = entries[i].self_activated && entries[i].deadline.is_some_and(|d| d <= now);
+        let expired = entries[i].self_activated && deadlines.is_due(EntryKey(i), now);
         if !expired {
             continue;
         }
         entries[i].self_activated = false;
-        entries[i].deadline = None;
+        deadlines.clear(EntryKey(i));
         let layer = entries[i].config.target_layer;
         if !layer_still_held(entries, layer) {
             let _ = released.push(layer);
@@ -257,17 +272,23 @@ fn timeout_step(entries: &mut [EntryState], now: Instant) -> Vec<u8, AUTO_MOUSE_
     released
 }
 
-fn pointing_step(entries: &mut [EntryState], idx: usize, now: Instant, activated_by_us: bool) -> PointingOutcome {
+fn pointing_step(
+    entries: &mut [EntryState],
+    deadlines: &mut EntryDeadlines,
+    idx: usize,
+    now: Instant,
+    activated_by_us: bool,
+) -> PointingOutcome {
     let target_layer = entries[idx].config.target_layer;
     let shared_with_other = layer_shared_with_other(entries, idx, target_layer);
     let entry = &mut entries[idx];
     if activated_by_us || shared_with_other {
         entry.self_activated = true;
         entry.overlap_warned = false;
-        entry.deadline = Some(now + entry.config.timeout);
+        deadlines.set(EntryKey(idx), now + entry.config.timeout);
         PointingOutcome::Holding
     } else if entry.self_activated {
-        entry.deadline = Some(now + entry.config.timeout);
+        deadlines.set(EntryKey(idx), now + entry.config.timeout);
         PointingOutcome::Idle
     } else if !entry.overlap_warned {
         entry.overlap_warned = true;
@@ -284,7 +305,12 @@ fn pointing_step(entries: &mut [EntryState], idx: usize, now: Instant, activated
 /// Actions that emit no single keycode/modifier set (layer switches, macros,
 /// `Again`/`Repeat`, `GraveEscape`, ...) are unclassifiable and never deactivate;
 /// the timeout path clears the layer instead.
-fn keypress_step(entries: &mut [EntryState], action: Action, now: Instant) -> Vec<u8, AUTO_MOUSE_LAYER_MAX_NUM> {
+fn keypress_step(
+    entries: &mut [EntryState],
+    deadlines: &mut EntryDeadlines,
+    action: Action,
+    now: Instant,
+) -> Vec<u8, AUTO_MOUSE_LAYER_MAX_NUM> {
     let mut released: Vec<u8, AUTO_MOUSE_LAYER_MAX_NUM> = Vec::new();
     for i in 0..entries.len() {
         if !entries[i].self_activated {
@@ -328,7 +354,7 @@ fn keypress_step(entries: &mut [EntryState], action: Action, now: Instant) -> Ve
             };
         if causes_deactivation {
             entries[i].self_activated = false;
-            entries[i].deadline = None;
+            deadlines.clear(EntryKey(i));
             entries[i].overlap_warned = false;
             let layer = entries[i].config.target_layer;
             if !layer_still_held(entries, layer) {
@@ -336,19 +362,10 @@ fn keypress_step(entries: &mut [EntryState], action: Action, now: Instant) -> Ve
             }
         } else if cfg.reset_timeout_on_key {
             let timeout = cfg.timeout;
-            extend_deadline(&mut entries[i], now, timeout);
+            deadlines.extend(EntryKey(i), now + timeout);
         }
     }
     released
-}
-
-/// Push `entry.deadline` forward to `now + timeout` if it would extend, not shorten, the current deadline.
-fn extend_deadline(entry: &mut EntryState, now: Instant, timeout: Duration) {
-    let new_deadline = now + timeout;
-    match entry.deadline {
-        Some(current) if current >= new_deadline => {}
-        _ => entry.deadline = Some(new_deadline),
-    }
 }
 
 /// Only relative X/Y axis deltas count as cursor motion. Scroll-only events
@@ -407,7 +424,6 @@ mod tests {
                 reset_timeout_on_key: false,
             },
             self_activated: false,
-            deadline: None,
             overlap_warned: false,
         }
     }
@@ -563,42 +579,45 @@ mod tests {
     #[test]
     fn timeout_step_releases_layer_when_last_holder_expires() {
         let mut entries = [entry_with_layer(Some(1), 3)];
+        let mut deadlines = EntryDeadlines::new();
         entries[0].self_activated = true;
-        entries[0].deadline = Some(at(100));
+        deadlines.set(EntryKey(0), at(100));
 
-        let released = timeout_step(&mut entries, at(150));
+        let released = timeout_step(&mut entries, &mut deadlines, at(150));
 
         assert_eq!(released.as_slice(), &[3]);
         assert!(!entries[0].self_activated);
-        assert!(entries[0].deadline.is_none());
+        assert!(deadlines.get(EntryKey(0)).is_none());
     }
 
     #[test]
     fn timeout_step_keeps_shared_layer_alive_while_a_sibling_still_holds_it() {
         let mut entries = [entry_with_layer(Some(1), 2), entry_with_layer(Some(2), 2)];
+        let mut deadlines = EntryDeadlines::new();
         entries[0].self_activated = true;
-        entries[0].deadline = Some(at(50));
+        deadlines.set(EntryKey(0), at(50));
         entries[1].self_activated = true;
-        entries[1].deadline = Some(at(500));
+        deadlines.set(EntryKey(1), at(500));
 
-        let released = timeout_step(&mut entries, at(100));
+        let released = timeout_step(&mut entries, &mut deadlines, at(100));
 
         assert!(released.is_empty());
         assert!(!entries[0].self_activated);
-        assert!(entries[0].deadline.is_none());
+        assert!(deadlines.get(EntryKey(0)).is_none());
         assert!(entries[1].self_activated);
-        assert_eq!(entries[1].deadline, Some(at(500)));
+        assert_eq!(deadlines.get(EntryKey(1)), Some(at(500)));
     }
 
     #[test]
     fn timeout_step_releases_shared_layer_when_all_holders_expire_simultaneously() {
         let mut entries = [entry_with_layer(Some(1), 4), entry_with_layer(Some(2), 4)];
+        let mut deadlines = EntryDeadlines::new();
         entries[0].self_activated = true;
-        entries[0].deadline = Some(at(50));
+        deadlines.set(EntryKey(0), at(50));
         entries[1].self_activated = true;
-        entries[1].deadline = Some(at(80));
+        deadlines.set(EntryKey(1), at(80));
 
-        let released = timeout_step(&mut entries, at(100));
+        let released = timeout_step(&mut entries, &mut deadlines, at(100));
 
         assert_eq!(released.as_slice(), &[4]);
         assert!(!entries[0].self_activated);
@@ -608,10 +627,11 @@ mod tests {
     #[test]
     fn timeout_step_ignores_entries_that_are_not_self_activated() {
         let mut entries = [entry_with_layer(Some(1), 1)];
+        let mut deadlines = EntryDeadlines::new();
         entries[0].self_activated = false;
-        entries[0].deadline = Some(at(10));
+        deadlines.set(EntryKey(0), at(10));
 
-        let released = timeout_step(&mut entries, at(500));
+        let released = timeout_step(&mut entries, &mut deadlines, at(500));
 
         assert!(released.is_empty());
     }
@@ -619,81 +639,87 @@ mod tests {
     #[test]
     fn pointing_step_holds_layer_when_activation_succeeds() {
         let mut entries = [entry_with_layer(Some(1), 2)];
+        let mut deadlines = EntryDeadlines::new();
 
-        let outcome = pointing_step(&mut entries, 0, at(1000), true);
+        let outcome = pointing_step(&mut entries, &mut deadlines, 0, at(1000), true);
 
         assert_eq!(outcome, PointingOutcome::Holding);
         assert!(entries[0].self_activated);
-        assert_eq!(entries[0].deadline, Some(at(1000) + entries[0].config.timeout));
+        assert_eq!(deadlines.get(EntryKey(0)), Some(at(1000) + entries[0].config.timeout));
         assert!(!entries[0].overlap_warned);
     }
 
     #[test]
     fn pointing_step_piggybacks_on_a_sibling_that_already_holds_the_shared_layer() {
         let mut entries = [entry_with_layer(Some(1), 2), entry_with_layer(Some(2), 2)];
+        let mut deadlines = EntryDeadlines::new();
         entries[0].self_activated = true;
-        entries[0].deadline = Some(at(500));
+        deadlines.set(EntryKey(0), at(500));
 
-        let outcome = pointing_step(&mut entries, 1, at(1000), false);
+        let outcome = pointing_step(&mut entries, &mut deadlines, 1, at(1000), false);
 
         assert_eq!(outcome, PointingOutcome::Holding);
         assert!(entries[1].self_activated);
-        assert_eq!(entries[1].deadline, Some(at(1000) + entries[1].config.timeout));
+        assert_eq!(deadlines.get(EntryKey(1)), Some(at(1000) + entries[1].config.timeout));
         assert!(entries[0].self_activated);
-        assert_eq!(entries[0].deadline, Some(at(500)));
+        assert_eq!(deadlines.get(EntryKey(0)), Some(at(500)));
     }
 
     #[test]
     fn pointing_step_warns_once_when_layer_is_externally_active() {
         let mut entries = [entry_with_layer(Some(1), 2)];
+        let mut deadlines = EntryDeadlines::new();
 
-        let first = pointing_step(&mut entries, 0, at(1000), false);
+        let first = pointing_step(&mut entries, &mut deadlines, 0, at(1000), false);
         assert_eq!(first, PointingOutcome::OverlapFirstSeen);
         assert!(!entries[0].self_activated);
-        assert!(entries[0].deadline.is_none());
+        assert!(deadlines.get(EntryKey(0)).is_none());
         assert!(entries[0].overlap_warned);
 
-        let second = pointing_step(&mut entries, 0, at(1100), false);
+        let second = pointing_step(&mut entries, &mut deadlines, 0, at(1100), false);
         assert_eq!(second, PointingOutcome::Idle);
     }
 
     #[test]
     fn pointing_step_extends_deadline_on_repeated_motion_from_holding_entry() {
         let mut entries = [entry_with_layer(Some(1), 3)];
+        let mut deadlines = EntryDeadlines::new();
         entries[0].self_activated = true;
-        entries[0].deadline = Some(at(200));
+        deadlines.set(EntryKey(0), at(200));
 
-        let outcome = pointing_step(&mut entries, 0, at(1000), false);
+        let outcome = pointing_step(&mut entries, &mut deadlines, 0, at(1000), false);
 
         assert_eq!(outcome, PointingOutcome::Idle);
         assert!(entries[0].self_activated);
-        assert_eq!(entries[0].deadline, Some(at(1000) + entries[0].config.timeout));
+        assert_eq!(deadlines.get(EntryKey(0)), Some(at(1000) + entries[0].config.timeout));
     }
 
     #[test]
     fn pointing_step_resets_overlap_warned_when_we_regain_hold() {
         let mut entries = [entry_with_layer(Some(1), 2)];
+        let mut deadlines = EntryDeadlines::new();
 
-        let first = pointing_step(&mut entries, 0, at(1000), false);
+        let first = pointing_step(&mut entries, &mut deadlines, 0, at(1000), false);
         assert_eq!(first, PointingOutcome::OverlapFirstSeen);
         assert!(entries[0].overlap_warned);
 
-        let second = pointing_step(&mut entries, 0, at(1100), true);
+        let second = pointing_step(&mut entries, &mut deadlines, 0, at(1100), true);
         assert_eq!(second, PointingOutcome::Holding);
         assert!(entries[0].self_activated);
         assert!(!entries[0].overlap_warned);
-        assert_eq!(entries[0].deadline, Some(at(1100) + entries[0].config.timeout));
+        assert_eq!(deadlines.get(EntryKey(0)), Some(at(1100) + entries[0].config.timeout));
     }
 
     #[test]
     fn timeout_step_releases_multiple_distinct_layers_that_expire_together() {
         let mut entries = [entry_with_layer(Some(1), 3), entry_with_layer(Some(2), 5)];
+        let mut deadlines = EntryDeadlines::new();
         entries[0].self_activated = true;
-        entries[0].deadline = Some(at(100));
+        deadlines.set(EntryKey(0), at(100));
         entries[1].self_activated = true;
-        entries[1].deadline = Some(at(150));
+        deadlines.set(EntryKey(1), at(150));
 
-        let released = timeout_step(&mut entries, at(200));
+        let released = timeout_step(&mut entries, &mut deadlines, at(200));
 
         assert_eq!(released.len(), 2);
         assert!(released.contains(&3));
@@ -705,10 +731,11 @@ mod tests {
     #[test]
     fn timeout_step_expires_entry_when_deadline_equals_now() {
         let mut entries = [entry_with_layer(Some(1), 3)];
+        let mut deadlines = EntryDeadlines::new();
         entries[0].self_activated = true;
-        entries[0].deadline = Some(at(100));
+        deadlines.set(EntryKey(0), at(100));
 
-        let released = timeout_step(&mut entries, at(100));
+        let released = timeout_step(&mut entries, &mut deadlines, at(100));
 
         assert_eq!(released.as_slice(), &[3]);
         assert!(!entries[0].self_activated);
@@ -721,7 +748,6 @@ mod tests {
         e.config.deactivate_on_key = true;
         e.config.extra_mouse_keys = exceptions;
         e.self_activated = true;
-        e.deadline = Some(at(1000));
         e
     }
 
@@ -740,12 +766,18 @@ mod tests {
         ];
         for hid in non_mouse_keys {
             let mut entries = [holding_entry_with_deactivate(3, &[])];
+            let mut deadlines = EntryDeadlines::new();
+            deadlines.set(EntryKey(0), at(1000));
 
-            let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(hid)), at(2000));
+            let released = keypress_step(&mut entries, &mut deadlines, Action::Key(KeyCode::Hid(hid)), at(2000));
 
             assert_eq!(released.as_slice(), &[3], "key {:?} should release layer", hid);
             assert!(!entries[0].self_activated, "key {:?} should clear self_activated", hid);
-            assert!(entries[0].deadline.is_none(), "key {:?} should clear deadline", hid);
+            assert!(
+                deadlines.get(EntryKey(0)).is_none(),
+                "key {:?} should clear deadline",
+                hid
+            );
         }
     }
 
@@ -780,8 +812,10 @@ mod tests {
                 hid
             );
             let mut entries = [holding_entry_with_deactivate(3, &[])];
+            let mut deadlines = EntryDeadlines::new();
+            deadlines.set(EntryKey(0), at(1000));
 
-            let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(hid)), at(2000));
+            let released = keypress_step(&mut entries, &mut deadlines, Action::Key(KeyCode::Hid(hid)), at(2000));
 
             assert!(
                 released.is_empty(),
@@ -799,13 +833,20 @@ mod tests {
     #[test]
     fn keypress_step_keeps_layer_active_for_exception_key() {
         let mut entries = [holding_entry_with_deactivate(3, &[KeyCode::Hid(HidKeyCode::LCtrl)])];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
-        let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(HidKeyCode::LCtrl)), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Key(KeyCode::Hid(HidKeyCode::LCtrl)),
+            at(2000),
+        );
 
         assert!(released.is_empty());
         assert!(entries[0].self_activated);
         // Exception keys do NOT extend the deadline; timeout still applies.
-        assert_eq!(entries[0].deadline, Some(at(1000)));
+        assert_eq!(deadlines.get(EntryKey(0)), Some(at(1000)));
     }
 
     #[test]
@@ -820,8 +861,10 @@ mod tests {
         ];
         for kc in non_hid_keys {
             let mut entries = [holding_entry_with_deactivate(3, &[])];
+            let mut deadlines = EntryDeadlines::new();
+            deadlines.set(EntryKey(0), at(1000));
 
-            let released = keypress_step(&mut entries, Action::Key(kc), at(2000));
+            let released = keypress_step(&mut entries, &mut deadlines, Action::Key(kc), at(2000));
 
             assert_eq!(released.as_slice(), &[3], "{:?} should release layer", kc);
             assert!(!entries[0].self_activated, "{:?} should clear self_activated", kc);
@@ -831,12 +874,18 @@ mod tests {
     #[test]
     fn keypress_step_ignores_entries_that_did_not_opt_in() {
         let mut entries = [entry_with_layer(Some(1), 3)];
+        let mut deadlines = EntryDeadlines::new();
         entries[0].self_activated = true;
-        entries[0].deadline = Some(at(1000));
+        deadlines.set(EntryKey(0), at(1000));
         // deactivate_on_key stays false, even a non-mouse key press
         // must NOT release the layer for this entry.
 
-        let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(HidKeyCode::A)), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Key(KeyCode::Hid(HidKeyCode::A)),
+            at(2000),
+        );
 
         assert!(released.is_empty());
         assert!(entries[0].self_activated);
@@ -845,12 +894,19 @@ mod tests {
     #[test]
     fn keypress_step_keeps_shared_layer_alive_when_sibling_still_holds_it() {
         let mut entries = [holding_entry_with_deactivate(4, &[]), entry_with_layer(Some(2), 4)];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
         // Sibling is a plain (non-opt-in) auto-mouse entry that also self-holds
         // layer 4; releasing the opt-in entry must leave the physical layer on.
         entries[1].self_activated = true;
-        entries[1].deadline = Some(at(2000));
+        deadlines.set(EntryKey(1), at(2000));
 
-        let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(HidKeyCode::A)), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Key(KeyCode::Hid(HidKeyCode::A)),
+            at(2000),
+        );
 
         assert!(released.is_empty());
         assert!(!entries[0].self_activated);
@@ -865,9 +921,17 @@ mod tests {
             holding_entry_with_deactivate(4, &[]),
             holding_entry_with_deactivate(4, &[]),
         ];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
+        deadlines.set(EntryKey(1), at(1000));
         entries[1].config.device_id = Some(2);
 
-        let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(HidKeyCode::A)), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Key(KeyCode::Hid(HidKeyCode::A)),
+            at(2000),
+        );
 
         assert_eq!(released.as_slice(), &[4]);
         assert!(!entries[0].self_activated);
@@ -885,9 +949,12 @@ mod tests {
             holding_entry_with_deactivate(4, &[]),
             holding_entry_with_deactivate(4, &[CTRL]),
         ];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
+        deadlines.set(EntryKey(1), at(1000));
         entries[1].config.device_id = Some(2);
 
-        let released = keypress_step(&mut entries, Action::Key(CTRL), at(2000));
+        let released = keypress_step(&mut entries, &mut deadlines, Action::Key(CTRL), at(2000));
 
         // First entry deactivates (LCtrl not in its exceptions), but layer 4
         // must not be released because the second entry (with LCtrl in exceptions) still holds it.
@@ -900,10 +967,17 @@ mod tests {
     fn keypress_step_does_nothing_when_no_entry_is_self_activated() {
         // Opt-in entries exist but none are currently holding the layer.
         let mut entries = [holding_entry_with_deactivate(3, &[])];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
         entries[0].self_activated = false;
-        entries[0].deadline = None;
+        deadlines.clear(EntryKey(0));
 
-        let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(HidKeyCode::A)), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Key(KeyCode::Hid(HidKeyCode::A)),
+            at(2000),
+        );
 
         assert!(released.is_empty());
         assert!(!entries[0].self_activated);
@@ -918,13 +992,19 @@ mod tests {
             entry_with_layer(Some(3), 5),
             entry_with_layer(Some(4), 6),
         ];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
+        deadlines.set(EntryKey(1), at(1000));
         entries[1].config.device_id = Some(2);
         entries[2].self_activated = true;
-        entries[2].deadline = Some(at(3000));
         entries[3].self_activated = true;
-        entries[3].deadline = Some(at(4000));
 
-        let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(HidKeyCode::A)), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Key(KeyCode::Hid(HidKeyCode::A)),
+            at(2000),
+        );
 
         // Layer 5 stays because the non-opt-in entry still holds it; layer 6 is untouched.
         assert!(released.is_empty());
@@ -950,8 +1030,10 @@ mod tests {
         ];
         let last = *EXCEPTIONS.last().unwrap();
         let mut entries = [holding_entry_with_deactivate(3, EXCEPTIONS)];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
-        let released = keypress_step(&mut entries, Action::Key(last), at(2000));
+        let released = keypress_step(&mut entries, &mut deadlines, Action::Key(last), at(2000));
 
         assert!(released.is_empty());
         assert!(entries[0].self_activated);
@@ -969,7 +1051,9 @@ mod tests {
             Action::OneShotModifier(ModifierCombination::LCTRL),
         ] {
             let mut entries = [holding_entry_with_deactivate(3, &[])];
-            let released = keypress_step(&mut entries, action, at(2000));
+            let mut deadlines = EntryDeadlines::new();
+            deadlines.set(EntryKey(0), at(1000));
+            let released = keypress_step(&mut entries, &mut deadlines, action, at(2000));
             assert!(released.is_empty(), "{:?} should not release layer", action);
             assert!(
                 entries[0].self_activated,
@@ -990,7 +1074,9 @@ mod tests {
             Action::Special(SpecialKey::GraveEscape),
         ] {
             let mut entries = [holding_entry_with_deactivate(3, &[])];
-            let released = keypress_step(&mut entries, action, at(2000));
+            let mut deadlines = EntryDeadlines::new();
+            deadlines.set(EntryKey(0), at(1000));
+            let released = keypress_step(&mut entries, &mut deadlines, action, at(2000));
             assert!(released.is_empty(), "{:?} should not release layer", action);
             assert!(
                 entries[0].self_activated,
@@ -1005,8 +1091,15 @@ mod tests {
     #[test]
     fn keypress_step_releases_layer_for_modifier_action_not_in_exceptions() {
         let mut entries = [holding_entry_with_deactivate(3, &[])];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
-        let released = keypress_step(&mut entries, Action::Modifier(ModifierCombination::LSHIFT), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Modifier(ModifierCombination::LSHIFT),
+            at(2000),
+        );
 
         assert_eq!(released.as_slice(), &[3]);
         assert!(!entries[0].self_activated);
@@ -1018,9 +1111,12 @@ mod tests {
             3,
             &[KeyCode::Hid(HidKeyCode::LCtrl), KeyCode::Hid(HidKeyCode::LShift)],
         )];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
         let released = keypress_step(
             &mut entries,
+            &mut deadlines,
             Action::Modifier(ModifierCombination::LCTRL | ModifierCombination::LSHIFT),
             at(2000),
         );
@@ -1028,16 +1124,19 @@ mod tests {
         assert!(released.is_empty());
         assert!(entries[0].self_activated);
         // Like exception keys, covered modifiers do NOT extend the deadline.
-        assert_eq!(entries[0].deadline, Some(at(1000)));
+        assert_eq!(deadlines.get(EntryKey(0)), Some(at(1000)));
     }
 
     #[test]
     fn keypress_step_releases_layer_for_modifier_action_partially_covered_by_exceptions() {
         // LCtrl is excepted but the action also contains LShift — deactivate.
         let mut entries = [holding_entry_with_deactivate(3, &[KeyCode::Hid(HidKeyCode::LCtrl)])];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
         let released = keypress_step(
             &mut entries,
+            &mut deadlines,
             Action::Modifier(ModifierCombination::LCTRL | ModifierCombination::LSHIFT),
             at(2000),
         );
@@ -1050,8 +1149,15 @@ mod tests {
     fn keypress_step_ignores_side_mismatch_between_modifier_action_and_exceptions() {
         // Left/right variants are distinct: RCtrl is not covered by LCtrl.
         let mut entries = [holding_entry_with_deactivate(3, &[KeyCode::Hid(HidKeyCode::LCtrl)])];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
-        let released = keypress_step(&mut entries, Action::Modifier(ModifierCombination::RCTRL), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Modifier(ModifierCombination::RCTRL),
+            at(2000),
+        );
 
         assert_eq!(released.as_slice(), &[3]);
         assert!(!entries[0].self_activated);
@@ -1060,8 +1166,15 @@ mod tests {
     #[test]
     fn keypress_step_keeps_layer_active_for_empty_modifier_action() {
         let mut entries = [holding_entry_with_deactivate(3, &[])];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
-        let released = keypress_step(&mut entries, Action::Modifier(ModifierCombination::new()), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Modifier(ModifierCombination::new()),
+            at(2000),
+        );
 
         assert!(released.is_empty());
         assert!(entries[0].self_activated);
@@ -1073,13 +1186,20 @@ mod tests {
         e.config.reset_timeout_on_key = true;
         e.config.timeout = embassy_time::Duration::from_millis(500);
         let mut entries = [e];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
-        let released = keypress_step(&mut entries, Action::Modifier(ModifierCombination::LCTRL), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Modifier(ModifierCombination::LCTRL),
+            at(2000),
+        );
 
         assert!(released.is_empty());
         assert!(entries[0].self_activated);
         assert_eq!(
-            entries[0].deadline,
+            deadlines.get(EntryKey(0)),
             Some(at(2000) + embassy_time::Duration::from_millis(500))
         );
     }
@@ -1091,7 +1211,6 @@ mod tests {
         e.config.reset_timeout_on_key = true;
         e.config.timeout = embassy_time::Duration::from_millis(timeout_ms);
         e.self_activated = true;
-        e.deadline = Some(at(1000));
         e
     }
 
@@ -1099,13 +1218,20 @@ mod tests {
     fn keypress_step_extends_deadline_on_any_key_when_extend_opt_in_alone() {
         // No `deactivate_on_key`: every key press must extend the deadline.
         let mut entries = [holding_entry_with_extend(3, 500)];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
-        let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(HidKeyCode::A)), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Key(KeyCode::Hid(HidKeyCode::A)),
+            at(2000),
+        );
 
         assert!(released.is_empty());
         assert!(entries[0].self_activated);
         assert_eq!(
-            entries[0].deadline,
+            deadlines.get(EntryKey(0)),
             Some(at(2000) + embassy_time::Duration::from_millis(500))
         );
     }
@@ -1113,13 +1239,20 @@ mod tests {
     #[test]
     fn keypress_step_extends_deadline_on_mouse_key_when_extend_opt_in() {
         let mut entries = [holding_entry_with_extend(3, 500)];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
-        let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(HidKeyCode::MouseBtn1)), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Key(KeyCode::Hid(HidKeyCode::MouseBtn1)),
+            at(2000),
+        );
 
         assert!(released.is_empty());
         assert!(entries[0].self_activated);
         assert_eq!(
-            entries[0].deadline,
+            deadlines.get(EntryKey(0)),
             Some(at(2000) + embassy_time::Duration::from_millis(500))
         );
     }
@@ -1128,13 +1261,15 @@ mod tests {
     fn keypress_step_extends_deadline_on_composite_action_when_extend_opt_in() {
         // Unclassifiable actions leave the layer intact; extend still applies.
         let mut entries = [holding_entry_with_extend(3, 500)];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
-        let released = keypress_step(&mut entries, Action::LayerOn(0), at(2000));
+        let released = keypress_step(&mut entries, &mut deadlines, Action::LayerOn(0), at(2000));
 
         assert!(released.is_empty());
         assert!(entries[0].self_activated);
         assert_eq!(
-            entries[0].deadline,
+            deadlines.get(EntryKey(0)),
             Some(at(2000) + embassy_time::Duration::from_millis(500))
         );
     }
@@ -1147,13 +1282,20 @@ mod tests {
         e.config.reset_timeout_on_key = true;
         e.config.timeout = embassy_time::Duration::from_millis(500);
         let mut entries = [e];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
-        let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(HidKeyCode::LCtrl)), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Key(KeyCode::Hid(HidKeyCode::LCtrl)),
+            at(2000),
+        );
 
         assert!(released.is_empty());
         assert!(entries[0].self_activated);
         assert_eq!(
-            entries[0].deadline,
+            deadlines.get(EntryKey(0)),
             Some(at(2000) + embassy_time::Duration::from_millis(500))
         );
     }
@@ -1166,37 +1308,58 @@ mod tests {
         e.config.reset_timeout_on_key = true;
         e.config.timeout = embassy_time::Duration::from_millis(500);
         let mut entries = [e];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
 
-        let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(HidKeyCode::A)), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Key(KeyCode::Hid(HidKeyCode::A)),
+            at(2000),
+        );
 
         assert_eq!(released.as_slice(), &[3]);
         assert!(!entries[0].self_activated);
-        assert!(entries[0].deadline.is_none());
+        assert!(deadlines.get(EntryKey(0)).is_none());
     }
 
     #[test]
     fn keypress_step_does_not_shorten_deadline_when_extending() {
         // Extending must never shorten a further-out deadline that motion set.
         let mut entries = [holding_entry_with_extend(3, 100)];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
         // A pointing event pushed the deadline much further out than key-press would.
-        entries[0].deadline = Some(at(10_000));
+        deadlines.set(EntryKey(0), at(10_000));
 
-        let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(HidKeyCode::A)), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Key(KeyCode::Hid(HidKeyCode::A)),
+            at(2000),
+        );
 
         assert!(released.is_empty());
         assert!(entries[0].self_activated);
-        assert_eq!(entries[0].deadline, Some(at(10_000)));
+        assert_eq!(deadlines.get(EntryKey(0)), Some(at(10_000)));
     }
 
     #[test]
     fn keypress_step_ignores_extend_for_entries_not_self_activated() {
         let mut entries = [holding_entry_with_extend(3, 500)];
+        let mut deadlines = EntryDeadlines::new();
+        deadlines.set(EntryKey(0), at(1000));
         entries[0].self_activated = false;
-        entries[0].deadline = None;
+        deadlines.clear(EntryKey(0));
 
-        let released = keypress_step(&mut entries, Action::Key(KeyCode::Hid(HidKeyCode::A)), at(2000));
+        let released = keypress_step(
+            &mut entries,
+            &mut deadlines,
+            Action::Key(KeyCode::Hid(HidKeyCode::A)),
+            at(2000),
+        );
 
         assert!(released.is_empty());
-        assert!(entries[0].deadline.is_none());
+        assert!(deadlines.get(EntryKey(0)).is_none());
     }
 }
