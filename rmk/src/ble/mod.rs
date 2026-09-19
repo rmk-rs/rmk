@@ -32,6 +32,8 @@ use crate::ble::sleep::{report_activity, request_sleep};
 use crate::channel::{BLE_REPORT_CHANNEL, LED_SIGNAL};
 use crate::config::{BleBatteryConfig, DeviceConfig, RmkConfig};
 use crate::core_traits::Runnable;
+#[cfg(feature = "dfu_ble")]
+use crate::event::EventSubscriber;
 use crate::event::SubscribableEvent;
 use crate::hid::{HidWriterTrait, run_led_reader};
 #[cfg(feature = "split")]
@@ -744,7 +746,17 @@ async fn disconnect(conn: &GattConnection<'_, '_, DefaultPacketPool>) {
     while !matches!(conn.next().await, GattConnectionEvent::Disconnected { .. }) {}
 }
 
-/// Set keyboard <-> host connection parameters
+/// Set keyboard <-> host connection parameters.
+///
+/// Transitions through Apple-compatible → high-performance intervals, each
+/// after a 5-second settle. When `dfu_ble` is active, each wait races
+/// against [`DfuStatusEvent`]: if a DFU transfer starts (`Started`), the
+/// normal sequence is interrupted and the connection is switched to
+/// 7.5 ms / 0 latency / 20 s timeout immediately. After the DFU session
+/// ends (`Finished` / `Error` / `Idle`), normal params are restored and the
+/// task loops to handle future DFU starts.
+///
+/// Never returns: this task lives as long as the connection.
 pub(crate) async fn set_conn_params<
     'a,
     'b,
@@ -762,8 +774,29 @@ pub(crate) async fn set_conn_params<
         (Duration::from_micros(7500), 60, Duration::from_secs(6)),
     ];
 
+    #[cfg(feature = "dfu_ble")]
+    let mut dfu_sub = crate::event::DfuStatusEvent::subscriber();
+
+    #[cfg(feature = "dfu_ble")]
+    let mut dfu_mode = false;
     for (interval, max_latency, supervision_timeout) in requests {
-        // Wait 5 seconds before each request to avoid connection drop
+        // Race each 5-second wait against the DFU status event so we can
+        // switch to low-latency mode immediately when a DFU transfer
+        // starts instead of waiting for the normal sequence to finish.
+        #[cfg(feature = "dfu_ble")]
+        {
+            let wait = embassy_time::Timer::after_secs(5);
+            let dfu_event = dfu_sub.next_event();
+            match select(dfu_event, wait).await {
+                Either::First(event) if *event == rmk_types::dfu::DfuStatus::Started => {
+                    dfu_mode = true;
+                    break;
+                }
+                Either::First(_) => {}
+                Either::Second(_) => {}
+            }
+        }
+        #[cfg(not(feature = "dfu_ble"))]
         embassy_time::Timer::after_secs(5).await;
 
         update_conn_params(
@@ -780,9 +813,72 @@ pub(crate) async fn set_conn_params<
         .await;
     }
 
-    // Wait forever. This is because we want the conn params setting can be interrupted when the connection is lost.
-    // So this task shouldn't quit after setting the conn params.
-    core::future::pending::<()>().await;
+    #[cfg(feature = "dfu_ble")]
+    if dfu_mode {
+        info!("ble dfu: switching to low-latency mode");
+        update_conn_params(stack, conn.raw(), &dfu_low_latency_params()).await;
+        // Wait for the DFU session to end before reverting.
+        loop {
+            let event = dfu_sub.next_event().await;
+            if !matches!(
+                *event,
+                rmk_types::dfu::DfuStatus::Started | rmk_types::dfu::DfuStatus::Downloading
+            ) {
+                info!("ble dfu: DFU ended, restoring normal connection params");
+                break;
+            }
+        }
+    }
+
+    // Never returns: this task lives as long as the connection. The loop
+    // catches DFU transfers that start after the normal param sequence
+    // above has finished.
+    #[cfg(feature = "dfu_ble")]
+    loop {
+        let event = dfu_sub.next_event().await;
+        if *event == rmk_types::dfu::DfuStatus::Started {
+            info!("ble dfu: switching to low-latency mode");
+            update_conn_params(stack, conn.raw(), &dfu_low_latency_params()).await;
+            // Wait for the DFU session to end, then revert and loop again.
+            loop {
+                let event = dfu_sub.next_event().await;
+                if !matches!(
+                    *event,
+                    rmk_types::dfu::DfuStatus::Started | rmk_types::dfu::DfuStatus::Downloading
+                ) {
+                    info!("ble dfu: DFU ended, restoring normal connection params");
+                    break;
+                }
+            }
+            for (interval, max_latency, supervision_timeout) in requests {
+                update_conn_params(
+                    stack,
+                    conn.raw(),
+                    &RequestedConnParams {
+                        min_connection_interval: interval,
+                        max_connection_interval: interval,
+                        max_latency,
+                        supervision_timeout,
+                        ..Default::default()
+                    },
+                )
+                .await;
+            }
+        }
+    }
+}
+
+/// BLE connection parameters for DFU transfers: 7.5 ms interval, zero
+/// latency, generous supervision timeout. Applied when a DFU download
+/// starts so the transfer isn't throttled by power-saving intervals.
+fn dfu_low_latency_params() -> RequestedConnParams {
+    RequestedConnParams {
+        min_connection_interval: Duration::from_micros(7500),
+        max_connection_interval: Duration::from_micros(7500),
+        max_latency: 0,
+        supervision_timeout: Duration::from_secs(20),
+        ..Default::default()
+    }
 }
 
 /// Serve one host keyboard connection.

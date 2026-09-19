@@ -154,3 +154,13 @@ events = [
     # dfu/mod.rs: DfuLock subscribes to DfuCmdEvent for UnlockRequest
     { name = "dfu_cmd" },
 ]
+
+# --- DFU BLE-gated internal subscribers ---
+
+[[subscriber]]
+features = ["dfu_ble"]
+events = [
+    # ble/mod.rs: set_conn_params() subscribes to DfuStatusEvent
+    # (covers peripheral dfu session + central keyboard connection)
+    { name = "dfu_status" },
+]

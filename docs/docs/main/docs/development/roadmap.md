@@ -66,6 +66,6 @@ There are a bunch of things to do with RMK in the near future. I plan to ship 1.
 - [x] USB DFU
 - [x] Flashing peripherals from the central via uart
 - [ ] Flashing peripherals from the central via ble
-- [ ] OTA updates
+- [x] OTA updates
 
 If you want to contribute, please feel free to open an issue or PR, or just ping me! Any forms of contribution are welcome :D

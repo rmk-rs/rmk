@@ -564,6 +564,7 @@ fn expand_split_peripheral(
         watchdog_task,
         usb_task_future,
         dfu_task,
+        &rmk_features,
     );
 
     quote! {
@@ -593,6 +594,7 @@ fn expand_split_peripheral_entry(
     watchdog_task: Option<TokenStream2>,
     usb_task_future: Option<TokenStream2>,
     dfu_task: Option<TokenStream2>,
+    rmk_features: &Option<Vec<String>>,
 ) -> TokenStream2 {
     // Add matrix to devices, and run all devices
     let mut devs = devices.clone();
@@ -619,11 +621,18 @@ fn expand_split_peripheral_entry(
 
     match split_config.connection {
         SplitConnection::Ble => {
+            let dfu_ble_enabled = is_feature_enabled(rmk_features, "dfu_ble");
+            let dfu_name_arg = if dfu_ble_enabled {
+                quote! { None, }
+            } else {
+                quote! {}
+            };
             let peripheral_run = quote! {
                 ::rmk::split::peripheral::run_rmk_split_peripheral(
                     #id,
                     ble_controller,
                     ble_addr,
+                    #dfu_name_arg
                 )
             };
             // Build task list: device, processor (if any), peripheral, registered_processors, dfu

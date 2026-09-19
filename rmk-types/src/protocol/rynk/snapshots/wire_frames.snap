@@ -19,7 +19,7 @@ GetBehaviorConfig reply Ok(BehaviorConfig{50..120})                             
 GetBehaviorConfig request ()                                                    04 01 06 01 00
 GetBleStatus reply Ok(BleStatus{1,Advertising})                                 04 03 07 01 02 01 01 00
 GetBleStatus request ()                                                         04 03 07 01 00
-GetCapabilities reply Ok(DeviceCapabilities{1..16})                             02 02 02 01 0c 01 02 03 04 05 06 07 08 09 0a 01 03 01 0b 07 0c 0d 0e 0f 10 01 00
+GetCapabilities reply Ok(DeviceCapabilities{1..16})                             02 02 02 01 0c 01 02 03 04 05 06 07 08 09 0a 01 01 03 01 0b 07 0c 0d 0e 0f 10 01 00
 GetCapabilities request ()                                                      02 02 02 01 00
 GetCombo reply Ok(Combo{[Single(A)],Morse(1),L2})                               04 01 03 01 04 01 02 01 06 04 05 01 01 02 00
 GetCombo request 3                                                              05 01 03 01 03 00
@@ -55,7 +55,7 @@ GetPeripheralStatus reply Ok(PeripheralStatus{true,Available{Discharging,85}})  
 GetPeripheralStatus request 1                                                   05 04 08 01 01 00
 GetSleepState reply Ok(true)                                                    04 06 08 01 02 01 00
 GetSleepState request ()                                                        04 06 08 01 00
-GetVersion reply Ok(CURRENT)                                                    02 01 02 01 01 02 01 00
+GetVersion reply Ok(CURRENT)                                                    02 01 02 01 01 02 02 00
 GetVersion request ()                                                           02 01 02 01 00
 GetWpm reply Ok(42)                                                             04 05 08 01 02 2a 00
 GetWpm request ()                                                               04 05 08 01 00
