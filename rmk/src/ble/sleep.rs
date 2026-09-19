@@ -10,7 +10,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_futures::select::{Either, select};
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Timer};
+use embassy_sync::watch::Watch;
+use embassy_time::{Duration, Instant, Timer};
 
 use crate::SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS;
 use crate::event::{SleepStateEvent, publish_event};
@@ -20,6 +21,9 @@ use crate::event::{SleepStateEvent, publish_event};
 /// - `false`: the keyboard is awake
 pub(crate) static SLEEPING_STATE: AtomicBool = AtomicBool::new(false);
 
+/// Timestamp of the latest keyboard, pointing, or host activity.
+pub(crate) static LAST_ACTIVITY_TIMESTAMP: Watch<crate::RawMutex, u32, 2> = Watch::new();
+
 /// Input to [`run_sleep_manager`], same encoding as [`SLEEPING_STATE`]:
 /// - `true`: sleep now, without waiting out the idle timeout
 /// - `false`: activity — wake up, or restart the idle timeout
@@ -28,6 +32,7 @@ static SLEEP_INPUT: Signal<crate::RawMutex, bool> = Signal::new();
 /// Report keyboard activity: wake the keyboard up, or restart the idle timeout
 /// when it's already awake.
 pub(crate) fn report_activity() {
+    LAST_ACTIVITY_TIMESTAMP.sender().send(Instant::now().as_secs() as u32);
     SLEEP_INPUT.signal(false);
 }
 
@@ -79,6 +84,7 @@ async fn manage_sleep_state(idle_timeout: Duration) -> ! {
 
         info!("Waking up from sleep mode due to activity");
         SLEEPING_STATE.store(false, Ordering::Release);
+        LAST_ACTIVITY_TIMESTAMP.sender().send(Instant::now().as_secs() as u32);
         publish_event(SleepStateEvent::new(false));
     }
 }
