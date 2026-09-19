@@ -9,21 +9,9 @@ repository = "https://github.com/rmk-rs/rmk"
 license = "MIT OR Apache-2.0"
 resolver = "2"
 
-[dependencies]
-rmk-config = { path = "../rmk-config", version = "=0.8.0"}
-rmk-types = { path = "../rmk-types", version = "=0.4.0", features = ["_codegen"] }
-quote = "1.0"
-syn = { version = "3.0", features = ["full", "extra-traits"] }
-proc-macro2 = "1.0"
-darling = "0.24"
-cargo_toml = "1"
-strum = { version = "0.28", default-features = false, features = ["derive"] }
-strsim = "0.11"
-# Simulator scenario parsing only (`_simulator`). Rynk payloads are handed to
-# the test as JSON, so the request type is named once, in the test crate.
-toml = { version = "1", optional = true }
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
+[lib]
+proc-macro = true
+doctest = false
 
 [features]
 ## Enable hardware watchdog code generation
@@ -37,11 +25,23 @@ dfu_nrf = ["_dfu"]
 dfu_split = []
 dfu_ext = []
 
-[lib]
-proc-macro = true
-doctest = false
+[dependencies]
+cargo_toml = "1"
+darling = "0.24"
+proc-macro2 = "1.0"
+quote = "1.0"
+rmk-config = { path = "../rmk-config", version = "=0.8.0" }
+rmk-types = { path = "../rmk-types", version = "=0.4.0", features = ["_codegen"] }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+strsim = "0.11"
+strum = { version = "0.28", default-features = false, features = ["derive"] }
+syn = { version = "3.0", features = ["full", "extra-traits"] }
+# Simulator scenario parsing only (`_simulator`). Rynk payloads are handed to
+# the test as JSON, so the request type is named once, in the test crate.
+toml = { version = "1", optional = true }
 
 [dev-dependencies]
 macrotest = "1.0"
-trybuild = "1.0"
 rmk = { path = "tests/rmk", package = "rmk-mock" }
+trybuild = "1.0"

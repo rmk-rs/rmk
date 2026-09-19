@@ -9,6 +9,12 @@ readme = "../README.md"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[[bin]]
+name = "rmk-nrf-dongle-central"
+path = "src/main.rs"
+test = false
+bench = false
+
 [dependencies]
 rmk = { path = "../../../../rmk", default-features = false, features = [
     "defmt",
@@ -18,22 +24,12 @@ rmk = { path = "../../../../rmk", default-features = false, features = [
     "split",
     "nrf52833_ble",
 ] }
-nrf-sdc = { version = "0.4.0", features = [
-    "defmt",
-    "peripheral",
-    "central",
-    "nrf52833",
-] }
-nrf-mpsl = { version = "0.4.0", features = [
-    "defmt",
-    "critical-section-impl",
-    "nrf52833",
-] }
-bt-hci = { version = "0.10", features = ["defmt"] }
 
-cortex-m = "0.7.7"
-cortex-m-rt = "0.7.5"
-embassy-time = { version = "0.5", features = ["tick-hz-32_768", "defmt", "defmt-timestamp-uptime"] }
+embassy-executor = { version = "0.10", features = [
+    "defmt",
+    "platform-cortex-m",
+    "executor-thread",
+] }
 embassy-nrf = { version = "0.11", features = [
     "defmt",
     "nrf52833",
@@ -42,21 +38,26 @@ embassy-nrf = { version = "0.11", features = [
     "unstable-pac",
     "time",
 ] }
-embassy-executor = { version = "0.10", features = [
+embassy-time = { version = "0.5", features = ["tick-hz-32_768", "defmt", "defmt-timestamp-uptime"] }
+nrf-mpsl = { version = "0.4.0", features = [
     "defmt",
-    "platform-cortex-m",
-    "executor-thread",
+    "critical-section-impl",
+    "nrf52833",
 ] }
+nrf-sdc = { version = "0.4.0", features = [
+    "defmt",
+    "peripheral",
+    "central",
+    "nrf52833",
+] }
+
+bt-hci = { version = "0.10", features = ["defmt"] }
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.5"
 defmt = "1"
 defmt-rtt = "1"
 panic-probe = { version = "1", features = ["print-defmt"] }
 static_cell = "2"
-
-[[bin]]
-name = "rmk-nrf-dongle-central"
-path = "src/main.rs"
-test = false
-bench = false
 
 [profile.dev]
 codegen-units = 1

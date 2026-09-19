@@ -9,47 +9,49 @@ readme = "../../README.md"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[[bin]]
+name = "rmk-pi-pico-w"
+test = false
+bench = false
+
+[features]
+skip-cyw43-firmware = []
+
 [dependencies]
 rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "pico_w_ble", "rp2040"] }
-embassy-time = { version = "0.5", features = ["defmt"] }
+
+embassy-executor = { version = "0.10", features = [
+    "defmt",
+    "platform-cortex-m",
+    "executor-thread",
+] }
 embassy-rp = { version = "0.10", features = [
     "rp2040",
     "defmt",
     "time-driver",
     "critical-section-impl",
 ] }
-embassy-executor = { version = "0.10", features = [
-    "defmt",
-    "platform-cortex-m",
-    "executor-thread",
-] }
+embassy-time = { version = "0.5", features = ["defmt"] }
+
+bt-hci = { version = "0.10", features = ["defmt"] }
 cortex-m-rt = "0.7.5"
-portable-atomic = { version = "1", features = ["critical-section"] }
+cyw43 = { version = "0.7", features = ["defmt", "firmware-logs", "bluetooth"] }
+cyw43-pio = { version = "0.10.0", features = ["defmt"] }
 defmt = "1"
 defmt-rtt = "1"
 panic-probe = { version = "1", features = ["print-defmt"] }
-cyw43 = { version = "0.7", features = ["defmt", "firmware-logs", "bluetooth"] }
-cyw43-pio = { version = "0.10.0", features = ["defmt"] }
+portable-atomic = { version = "1", features = ["critical-section"] }
 static_cell = "2"
-bt-hci = { version = "0.10", features = ["defmt"] }
 
-
-[features]
-skip-cyw43-firmware = []
 # avoid having to use --allow-multiple-definition linker flag
 # on macOS with Apple Silicon at least
 # default = ["rp-pico/disable-intrinsics"]
 
 [build-dependencies]
-xz2 = "0.1.7"
-json = "0.12"
 const-gen = "1.6"
-reqwest = { version = "0.13", features = ["blocking"]}
-
-[[bin]]
-name = "rmk-pi-pico-w"
-test = false
-bench = false
+json = "0.12"
+reqwest = { version = "0.13", features = ["blocking"] }
+xz2 = "0.1.7"
 
 [profile.dev]
 codegen-units = 1      # better optimizations

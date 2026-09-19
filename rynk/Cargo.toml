@@ -10,73 +10,10 @@ repository.workspace = true
 readme = "README.md"
 keywords = ["keyboard", "firmware", "rmk", "protocol", "host"]
 
-[dependencies]
-# No `host` by default: a dongle binary links rmk (firmware) and rynk together, and
-# feature unification must not switch the firmware's bulk types to alloc Vec.
-rmk-types = { path = "../rmk-types", version = "=0.4.0", default-features = false, features = ["rynk", "_ble", "split", "steno"] }
-embedded-io-async.workspace = true
-embassy-sync.workspace = true
-embassy-futures = "0.1"
-postcard = { version = "1.1", default-features = false }
-serde.workspace = true
-thiserror = { version = "2.0", default-features = false }
-log.workspace = true
-heapless = { version = "0.9", default-features = false, features = ["serde"] }
-# The client's channels need a critical-section implementation in the final
-# binary; `std` supplies the std one so every host consumer links.
-critical-section = { version = "1.2", features = ["std"], optional = true }
-# Layout blob types + decoder: defined once in rmk-config (the blob producer),
-# re-exported as `rynk::layout`.
-rmk-config = { path = "../rmk-config", version = "=0.8.0", optional = true }
-wasm-bindgen = { version = "0.2", optional = true }
-js-sys = { version = "0.3", optional = true }
-tsify = { version = "0.5", optional = true, default-features = false, features = ["js"] }
-
-[features]
-default = ["std"]
-std = ["alloc", "dep:critical-section", "embedded-io-async/std", "rmk-types/_codegen"]
-# Unbounded payloads (rmk-types `host`), layout decode, and whole-resource pagers.
-# Without it the client is no-alloc: frames live in heapless buffers sized by
-# `rmk_types::constants::RYNK_BUFFER_SIZE`.
-alloc = ["rmk-types/host", "postcard/alloc", "dep:rmk-config"]
-# Enable rmk-types'/rmk-config's wasm/TS type generation (tsify). Turned on by the rynk-wasm build.
-wasm = ["std", "rmk-types/wasm", "rmk-config/wasm", "dep:wasm-bindgen", "dep:js-sys", "dep:tsify"]
-
-[dev-dependencies]
-rmk = { path = "../rmk", default-features = false, features = [
-    "std",
-    "log",
-    "rynk",
-    "storage",
-    "_ble",
-    "split",
-    "steno",
-] }
-# TODO: remove once an embassy-usb release drops the stale `dep:ssmarshal`.
-ssmarshal = { version = "1.0", features = ["std"] }
-tokio = { version = "1.47", features = ["test-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
-
-embedded-io-adapters = { workspace = true, features = ["tokio-1"] }
-rynk-ble = { path = "rynk-ble" }
-rynk-usb = { path = "rynk-usb" }
-env_logger = "0.11"
-# Tests hand-compress layout blobs the way the build does.
-miniz_oxide = "0.9"
-
 [workspace]
 resolver = "2"
-members = [
-    "rynk-usb",
-    "rynk-ble",
-    "rynk-wasm",
-    "rynk-kle",
-]
-default-members = [
-    ".",
-    "rynk-usb",
-    "rynk-ble",
-    "rynk-kle",
-]
+members = ["rynk-ble", "rynk-kle", "rynk-usb", "rynk-wasm"]
+default-members = [".", "rynk-usb", "rynk-ble", "rynk-kle"]
 
 [workspace.package]
 authors = ["Haobo Gu <haobogu@outlook.com>"]
@@ -87,10 +24,75 @@ repository = "https://github.com/rmk-rs/rmk"
 rust-version = "1.85"
 
 [workspace.dependencies]
-embassy-sync = "0.8"
-embedded-io-async = "0.7"
-embedded-io-adapters = "0.7"
-serde = { version = "1.0", default-features = false, features = ["derive"] }
-log = "0.4"
 bluest = "0.6"
+embassy-sync = "0.8"
+embedded-io-adapters = "0.7"
+embedded-io-async = "0.7"
 futures-util = "0.3"
+log = "0.4"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+
+[features]
+default = ["std"]
+std = [
+    "alloc",
+    "dep:critical-section",
+    "embedded-io-async/std",
+    "rmk-types/_codegen",
+]
+# Unbounded payloads (rmk-types `host`), layout decode, and whole-resource pagers.
+# Without it the client is no-alloc: frames live in heapless buffers sized by
+# `rmk_types::constants::RYNK_BUFFER_SIZE`.
+alloc = ["rmk-types/host", "postcard/alloc", "dep:rmk-config"]
+# Enable rmk-types'/rmk-config's wasm/TS type generation (tsify). Turned on by the rynk-wasm build.
+wasm = [
+    "std",
+    "rmk-types/wasm",
+    "rmk-config/wasm",
+    "dep:wasm-bindgen",
+    "dep:js-sys",
+    "dep:tsify",
+]
+
+[dependencies]
+# The client's channels need a critical-section implementation in the final
+# binary; `std` supplies the std one so every host consumer links.
+critical-section = { version = "1.2", features = ["std"], optional = true }
+embassy-futures = "0.1"
+embassy-sync.workspace = true
+embedded-io-async.workspace = true
+heapless = { version = "0.9", default-features = false, features = ["serde"] }
+js-sys = { version = "0.3", optional = true }
+log.workspace = true
+postcard = { version = "1.1", default-features = false }
+# Layout blob types + decoder: defined once in rmk-config (the blob producer),
+# re-exported as `rynk::layout`.
+rmk-config = { path = "../rmk-config", version = "=0.8.0", optional = true }
+# No `host` by default: a dongle binary links rmk (firmware) and rynk together, and
+# feature unification must not switch the firmware's bulk types to alloc Vec.
+rmk-types = { path = "../rmk-types", version = "=0.4.0", default-features = false, features = ["rynk", "_ble", "split", "steno"] }
+serde.workspace = true
+thiserror = { version = "2.0", default-features = false }
+tsify = { version = "0.5", optional = true, default-features = false, features = ["js"] }
+wasm-bindgen = { version = "0.2", optional = true }
+
+[dev-dependencies]
+
+embedded-io-adapters = { workspace = true, features = ["tokio-1"] }
+env_logger = "0.11"
+# Tests hand-compress layout blobs the way the build does.
+miniz_oxide = "0.9"
+rmk = { path = "../rmk", default-features = false, features = [
+    "std",
+    "log",
+    "rynk",
+    "storage",
+    "_ble",
+    "split",
+    "steno",
+] }
+rynk-ble = { path = "rynk-ble" }
+rynk-usb = { path = "rynk-usb" }
+# TODO: remove once an embassy-usb release drops the stale `dep:ssmarshal`.
+ssmarshal = { version = "1.0", features = ["std"] }
+tokio = { version = "1.47", features = ["test-util", "macros", "net", "rt", "rt-multi-thread", "time"] }

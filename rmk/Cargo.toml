@@ -10,106 +10,12 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 resolver = "2"
 
-[dependencies]
-rmk-macro = { version = "=0.8.0", path = "../rmk-macro" }
-rmk-types = { version = "=0.4.0", path = "../rmk-types" }
-embedded-hal = { version = "1.0.0" }
-embedded-hal-async = { version = "1.0.0" }
-embedded-io-async = { version = "0.7" }
-embedded-storage = { version = "0.3", optional = true }
-embedded-storage-async = { version = "0.4", optional = true }
-
-embassy-embedded-hal = { version = "0.6", optional = true }
-embassy-time = { version = "0.5" }
-embassy-usb = { version = "0.6", features = [
-    "max-interface-count-8",
-    "max-handler-count-8",
-] }
-embassy-sync = { version = "0.8" }
-embassy-futures = { version = "0.1" }
-embassy-usb-logger = { version = "0.6", optional = true }
-
-futures = { version = "0.3", default-features = false, features = [
-    "async-await",
-] }
-
-heapless = "0.9"
-usbd-hid = "0.10"
-static_cell = "2"
-sequential-storage = { version = "8.0.1", features = ["postcard"] }
-
-defmt = { version = "1", optional = true }
-log = { version = "0.4", optional = true }
-byteorder = { version = "1", default-features = false, optional = true }
-serde = { version = "1", default-features = false, features = ["derive"] }
-postcard = { version = "1", features = ["experimental-derive"] }
-
-# Used in macro
-paste = "1"
-
-# Display dependencies
-ssd1306 = { version = "0.10", optional = true, features = ["async"] }
-oled_async = { version = "0.2.1", optional = true, features = ["i2c"] }
-lcd-async = { version = "0.1", optional = true, default-features = false }
-embedded-graphics = { version = "0.8", optional = true }
-display-interface = { version = "0.5", optional = true }
-display-interface-i2c = { version = "0.5", optional = true }
-
-# Optional dependencies
-# BLE dependencies
-trouble-host = { version = "0.8", default-features = false, features = [
-    "peripheral",
-    "gatt",
-    "derive",
-    "security",
-    "serde",
-    "default-packet-pool",
-    "default-packet-pool-size-32",
-], optional = true }
-bt-hci = { version = "0.10", optional = true }
-
-# nRF dependencies
-embassy-nrf = { version = "0.11", features = [
-    "unstable-pac",
-    "time",
-], optional = true }
-
-# RP2040 dependencies
-embassy-rp = { version = "0.10", optional = true }
-embassy-hal-internal = { version = "0.5.0", optional = true }
-pio = { version = "0.3.0", optional = true }
-fixed = { version = "1.28.0", optional = true }
-embassy-boot-rp = { version = "0.10.0", optional = true }
-embassy-boot = { version = "0.7", optional = true, default-features = false }
-
-# ESP32 dependencies
-esp-hal = { version = "1.2.0-rc.0", optional = true }
-
-# Document feature
-document-features = "0.2"
-
-[dev-dependencies]
-# A hack for enabling 'std' feature in testing, ref: https://github.com/rust-lang/cargo/issues/2911
-rmk = { path = ".", default-features = false, features = ["std", "log"] }
-# Same unification hack: turn on the `run_tests!` scenario macro for tests only
-rmk-macro = { path = "../rmk-macro", features = ["_simulator"] }
-critical-section = { version = "1.2", features = ["std"] }
-embedded-hal-mock = { version = "0.11.1", features = ["embedded-hal-async"] }
-# Scenario files spell Rynk payloads as data; `run_tests!` forwards them as JSON
-# for the test to deserialize into the real request type. Alloc-only: enabling
-# `serde/std` here would break `ssmarshal`, which implements `serde::de::Error`
-# without a `StdError` impl.
-serde_json = { version = "1", default-features = false, features = ["alloc"] }
-
-[build-dependencies]
-crc32fast = "1.3"
-
 [package.metadata.docs.rs]
 features = ["split", "vial", "async_matrix", "_ble"]
 
-# Architecture specific dependencies
-[target.'cfg(all(target_arch = "arm", target_os = "none"))'.dependencies]
-cortex-m = { version = "0.7" }
+[lib]
+# Don't run doctest for lib
+doctest = false
 
 [features]
 default = ["defmt", "storage", "vial", "host_lock", "watchdog"]
@@ -185,17 +91,24 @@ log = ["dep:log", "trouble-host?/log"]
 ## (Despite the historic name, this feature does NOT enable embassy-time/std —
 ## it swaps in the manually-advanced mock clock driven by
 ## `rmk::test_support::test_block_on`.)
-std = [
-    "embassy-time/mock-driver",
-    "embassy-time/generic-queue-128",
-]
+std = ["embassy-time/mock-driver", "embassy-time/generic-queue-128"]
 
 ## Enable display support (traits + processor)
 display = ["dep:embedded-graphics", "rmk-types/display"]
 ## Enable SSD1306 OLED driver
-ssd1306 = ["display", "dep:ssd1306", "dep:display-interface", "dep:display-interface-i2c"]
+ssd1306 = [
+    "display",
+    "dep:ssd1306",
+    "dep:display-interface",
+    "dep:display-interface-i2c",
+]
 ## Enable OLED drivers via oled_async (SH1106, SH1107, SH1108, SSD1309)
-oled_async = ["display", "dep:oled_async", "dep:display-interface", "dep:display-interface-i2c"]
+oled_async = [
+    "display",
+    "dep:oled_async",
+    "dep:display-interface",
+    "dep:display-interface-i2c",
+]
 sh1106 = ["oled_async"]
 sh1107 = ["oled_async"]
 sh1108 = ["oled_async"]
@@ -250,9 +163,22 @@ zsa_voyager_bl = []
 ## **Experimental.** Enable DFU firmware update support (USB DFU interface).
 ## The flash layout, config, and API can change in any release.
 ## Requires a chip backend (`dfu_rp` or `dfu_nrf`).
-_dfu = ["dep:embedded-storage", "dep:embedded-storage-async", "dep:embassy-embedded-hal", "dep:embassy-boot", "rmk-types/_dfu", "rmk-macro/_dfu"]
+_dfu = [
+    "dep:embedded-storage",
+    "dep:embedded-storage-async",
+    "dep:embassy-embedded-hal",
+    "dep:embassy-boot",
+    "rmk-types/_dfu",
+    "rmk-macro/_dfu",
+]
 ## **Experimental.** Enable RP2040-specific DFU with embassy-boot-rp (implies `dfu` and `rp2040`)
-dfu_rp = ["_dfu", "dep:embassy-boot-rp", "dep:embassy-boot", "rp2040", "rmk-macro/dfu_rp"]
+dfu_rp = [
+    "_dfu",
+    "dep:embassy-boot-rp",
+    "dep:embassy-boot",
+    "rp2040",
+    "rmk-macro/dfu_rp",
+]
 ## **Experimental.** Enable nRF DFU firmware update support (add a chip feature like `nrf52840` too)
 dfu_nrf = ["_dfu", "dep:embassy-boot", "dep:embassy-nrf", "rmk-macro/dfu_nrf"]
 ## **Experimental.** Enable split firmware update support — forward firmware to peripherals over
@@ -324,6 +250,100 @@ passkey_entry = ["_ble", "rmk-types/passkey_entry"]
 ## Enable feature if you want to use trouble BLE stack
 _ble = ["dep:trouble-host", "dep:bt-hci", "storage", "rmk-types/_ble"]
 
-[lib]
-# Don't run doctest for lib
-doctest = false
+[dependencies]
+bt-hci = { version = "0.10", optional = true }
+byteorder = { version = "1", default-features = false, optional = true }
+
+defmt = { version = "1", optional = true }
+display-interface = { version = "0.5", optional = true }
+display-interface-i2c = { version = "0.5", optional = true }
+
+# Document feature
+document-features = "0.2"
+embassy-boot = { version = "0.7", optional = true, default-features = false }
+embassy-boot-rp = { version = "0.10.0", optional = true }
+
+embassy-embedded-hal = { version = "0.6", optional = true }
+embassy-futures = { version = "0.1" }
+embassy-hal-internal = { version = "0.5.0", optional = true }
+
+# nRF dependencies
+embassy-nrf = { version = "0.11", features = [
+    "unstable-pac",
+    "time",
+], optional = true }
+
+# RP2040 dependencies
+embassy-rp = { version = "0.10", optional = true }
+embassy-sync = { version = "0.8" }
+embassy-time = { version = "0.5" }
+embassy-usb = { version = "0.6", features = [
+    "max-interface-count-8",
+    "max-handler-count-8",
+] }
+embassy-usb-logger = { version = "0.6", optional = true }
+embedded-graphics = { version = "0.8", optional = true }
+embedded-hal = { version = "1.0.0" }
+embedded-hal-async = { version = "1.0.0" }
+embedded-io-async = { version = "0.7" }
+embedded-storage = { version = "0.3", optional = true }
+embedded-storage-async = { version = "0.4", optional = true }
+
+# ESP32 dependencies
+esp-hal = { version = "1.2.0-rc.0", optional = true }
+fixed = { version = "1.28.0", optional = true }
+
+futures = { version = "0.3", default-features = false, features = [
+    "async-await",
+] }
+
+heapless = "0.9"
+lcd-async = { version = "0.1", optional = true, default-features = false }
+log = { version = "0.4", optional = true }
+oled_async = { version = "0.2.1", optional = true, features = ["i2c"] }
+
+# Used in macro
+paste = "1"
+pio = { version = "0.3.0", optional = true }
+postcard = { version = "1", features = ["experimental-derive"] }
+rmk-macro = { version = "=0.8.0", path = "../rmk-macro" }
+rmk-types = { version = "=0.4.0", path = "../rmk-types" }
+sequential-storage = { version = "8.0.1", features = ["postcard"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
+
+# Display dependencies
+ssd1306 = { version = "0.10", optional = true, features = ["async"] }
+static_cell = "2"
+
+# Optional dependencies
+# BLE dependencies
+trouble-host = { version = "0.8", default-features = false, features = [
+    "peripheral",
+    "gatt",
+    "derive",
+    "security",
+    "serde",
+    "default-packet-pool",
+    "default-packet-pool-size-32",
+], optional = true }
+usbd-hid = "0.10"
+
+# Architecture specific dependencies
+[target.'cfg(all(target_arch = "arm", target_os = "none"))'.dependencies]
+cortex-m = { version = "0.7" }
+
+[build-dependencies]
+crc32fast = "1.3"
+
+[dev-dependencies]
+critical-section = { version = "1.2", features = ["std"] }
+embedded-hal-mock = { version = "0.11.1", features = ["embedded-hal-async"] }
+# A hack for enabling 'std' feature in testing, ref: https://github.com/rust-lang/cargo/issues/2911
+rmk = { path = ".", default-features = false, features = ["std", "log"] }
+# Same unification hack: turn on the `run_tests!` scenario macro for tests only
+rmk-macro = { path = "../rmk-macro", features = ["_simulator"] }
+# Scenario files spell Rynk payloads as data; `run_tests!` forwards them as JSON
+# for the test to deserialize into the real request type. Alloc-only: enabling
+# `serde/std` here would break `ssmarshal`, which implements `serde::de::Error`
+# without a `StdError` impl.
+serde_json = { version = "1", default-features = false, features = ["alloc"] }

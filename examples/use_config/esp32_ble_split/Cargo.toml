@@ -9,6 +9,17 @@ readme = "../../README.md"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+# Split keyboard example
+[[bin]]
+name = "central"
+path = "src/central.rs"
+required-features = ["central"]
+
+[[bin]]
+name = "peripheral"
+path = "src/peripheral.rs"
+required-features = ["peripheral"]
+
 [features]
 default = []
 central = [
@@ -39,46 +50,36 @@ rmk = { path = "../../../rmk", default-features = false, features = [
     "storage",
     "vial",
 ] }
+
 embassy-executor = { version = "0.10" }
+esp-alloc = { version = "0.11" }
 esp-backtrace = { version = "0.20", features = [
     "panic-handler",
     "println",
 ] }
-esp-storage = { version = "0.10", features = ["embedded-storage"] }
+esp-bootloader-esp-idf = { version = "0.6", features = ["log-04"] }
 esp-hal = { version = "1.2.0-rc.0", features = ["unstable"] }
-esp-alloc = { version = "0.11" }
 esp-println = { version = "0.18", features = ["log-04"] }
 esp-radio = { version = "1.0.0-beta.0", features = ["ble", "unstable"] }
-esp-rtos = { version = "0.4", features = ["esp-radio", "embassy"]}
-esp-bootloader-esp-idf = { version = "0.6", features = ["log-04"] }
+esp-rtos = { version = "0.4", features = ["esp-radio", "embassy"] }
+esp-storage = { version = "0.10", features = ["embedded-storage"] }
+
 bt-hci = { version = "0.10" }
 
 [build-dependencies]
-xz2 = "0.1.7"
-json = "0.12"
+cc = "1.2.9"
 const-gen = "1.6"
 embuild = "0.33"
-cc = "1.2.9"
-
-# Split keyboard example
-[[bin]]
-name = "central"
-path = "src/central.rs"
-required-features = ["central"]
-
-[[bin]]
-name = "peripheral"
-path = "src/peripheral.rs"
-required-features = ["peripheral"]
-
-
-[profile.dev.package.esp-storage]
-opt-level = 3
+json = "0.12"
+xz2 = "0.1.7"
 
 [profile.dev]
 # Rust debug is too slow.
 # For debug builds always builds with some optimization
 opt-level = "s"
+
+[profile.dev.package.esp-storage]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1        # LLVM can perform better optimizations using a single thread

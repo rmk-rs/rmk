@@ -9,6 +9,11 @@ readme = "../../README.md"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[[bin]]
+name = "rmk-esp32c6"
+test = false
+bench = false
+
 [dependencies]
 rmk = { path = "../../../rmk", default-features = false, features = [
     "esp32c6_ble",
@@ -16,40 +21,37 @@ rmk = { path = "../../../rmk", default-features = false, features = [
     "storage",
     "vial",
 ] }
+
 embassy-executor = { version = "0.10" }
+esp-alloc = { version = "0.11" }
 esp-backtrace = { version = "0.20", features = [
     "esp32c6",
     "panic-handler",
     "println",
 ] }
-esp-storage = { version = "0.10", features = ["embedded-storage", "esp32c6"] }
+esp-bootloader-esp-idf = { version = "0.6", features = ["esp32c6", "log-04"] }
 esp-hal = { version = "1.2.0-rc.0", features = ["esp32c6", "unstable"] }
-esp-alloc = { version = "0.11" }
 esp-println = { version = "0.18", features = ["esp32c6", "log-04"] }
 esp-radio = { version = "1.0.0-beta.0", features = ["esp32c6", "unstable", "ble"] }
 esp-rtos = { version = "0.4", features = ["esp32c6", "esp-radio", "embassy"] }
-esp-bootloader-esp-idf = { version = "0.6", features = ["esp32c6", "log-04"] }
+esp-storage = { version = "0.10", features = ["embedded-storage", "esp32c6"] }
+
 bt-hci = { version = "0.10" }
 
 [build-dependencies]
-xz2 = "0.1.7"
-json = "0.12"
+cc = "1.2.9"
 const-gen = "1.6"
 embuild = "0.33"
-cc = "1.2.9"
-
-[[bin]]
-name = "rmk-esp32c6"
-test = false
-bench = false
-
-[profile.dev.package.esp-storage]
-opt-level = 3
+json = "0.12"
+xz2 = "0.1.7"
 
 [profile.dev]
 # Rust debug is too slow.
 # For debug builds always builds with some optimization
 opt-level = "s"
+
+[profile.dev.package.esp-storage]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1        # LLVM can perform better optimizations using a single thread

@@ -15,15 +15,15 @@ keywords = ["keyboard", "firmware", "rmk", "protocol", "wasm"]
 crate-type = ["cdylib"]
 
 [dependencies]
-rynk = { path = "..", version = "0.3", features = ["wasm"] }
-embassy-futures = "0.1"
-embassy-sync.workspace = true
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-js-sys = "0.3"
 console_error_panic_hook = "0.1"
 console_log = "1"
+embassy-futures = "0.1"
+embassy-sync.workspace = true
+js-sys = "0.3"
 log = "0.4"
+rynk = { path = "..", version = "0.3", features = ["wasm"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

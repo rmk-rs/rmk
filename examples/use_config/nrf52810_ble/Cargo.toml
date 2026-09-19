@@ -9,11 +9,19 @@ readme = "../../README.md"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[[bin]]
+name = "rmk-nrf52810-ble"
+test = false
+bench = false
+
 [dependencies]
 rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "nrf52810_ble"] }
-cortex-m = "0.7.7"
-cortex-m-rt = "0.7.5"
-embassy-time = { version = "0.5", features = ["tick-hz-32_768", "defmt"] }
+
+embassy-executor = { version = "0.10", features = [
+    "defmt",
+    "platform-cortex-m",
+    "executor-thread",
+] }
 embassy-nrf = { version = "0.11", features = [
     "defmt",
     "nrf52810",
@@ -22,25 +30,18 @@ embassy-nrf = { version = "0.11", features = [
     "unstable-pac",
     "time",
 ] }
-embassy-executor = { version = "0.10", features = [
-    "defmt",
-    "platform-cortex-m",
-    "executor-thread",
-] }
+embassy-time = { version = "0.5", features = ["tick-hz-32_768", "defmt"] }
+
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.5"
 defmt = "1"
 defmt-rtt = "1"
 panic-probe = { version = "1", features = ["print-defmt"] }
 
-
 [build-dependencies]
-xz2 = "0.1.7"
-json = "0.12"
 const-gen = "1.6"
-
-[[bin]]
-name = "rmk-nrf52810-ble"
-test = false
-bench = false
+json = "0.12"
+xz2 = "0.1.7"
 
 [profile.dev]
 codegen-units = 1      # better optimizations

@@ -38,6 +38,15 @@ Run format test from root:
 bash scripts/format_all.sh
 ```
 
+Check `Cargo.toml` dependency ordering from root (run without `--check` to fix):
+```bash
+bash scripts/sort_all.sh --check
+```
+Dependencies are sorted with `cargo sort --grouped`: the keys within each
+blank-line-separated group are alphabetised and the groups stay in place.
+In the examples, put `rmk` first, then the `esp-*`/`nrf-*`/`embassy-*`
+dependencies, then the rest, each group separated by a blank line.
+
 Behavioral test suite (the three RMK feature rows CI runs):
 ```bash
 bash scripts/test_all.sh

@@ -9,9 +9,19 @@ readme = "../../README.md"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[[bin]]
+name = "rmk-rp2350"
+test = false
+bench = false
+
 [dependencies]
 rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog"] }
-embassy-time = { version = "0.5", features = ["defmt"] }
+
+embassy-executor = { version = "0.10", features = [
+    "defmt",
+    "platform-cortex-m",
+    "executor-thread",
+] }
 embassy-rp = { version = "0.10", features = [
     "rp235xa",
     "defmt",
@@ -19,17 +29,13 @@ embassy-rp = { version = "0.10", features = [
     "time-driver",
     "critical-section-impl",
 ] }
-embassy-executor = { version = "0.10", features = [
-    "defmt",
-    "platform-cortex-m",
-    "executor-thread",
-] }
+embassy-time = { version = "0.5", features = ["defmt"] }
+
 cortex-m-rt = "0.7.5"
-portable-atomic = { version = "1", features = ["critical-section"] }
 defmt = "1"
 defmt-rtt = "1"
 panic-probe = { version = "1", features = ["print-defmt"] }
-
+portable-atomic = { version = "1", features = ["critical-section"] }
 
 # [features]
 # avoid having to use --allow-multiple-definition linker flag
@@ -37,14 +43,9 @@ panic-probe = { version = "1", features = ["print-defmt"] }
 # default = ["rp-pico/disable-intrinsics"]
 
 [build-dependencies]
-xz2 = "0.1.7"
-json = "0.12"
 const-gen = "1.6"
-
-[[bin]]
-name = "rmk-rp2350"
-test = false
-bench = false
+json = "0.12"
+xz2 = "0.1.7"
 
 [profile.dev]
 codegen-units = 1      # better optimizations

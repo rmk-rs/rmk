@@ -9,5 +9,6 @@ split = ["rmk/split"]
 
 [dependencies]
 rmk = { path = "../../../rmk", features = ["display"], default-features = false }
+
 embedded-graphics = "0.8"
 heapless = "0.9"

@@ -9,6 +9,11 @@ readme = "../../README.md"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[[bin]]
+name = "rmk-sf32lb52x-ble"
+test = false
+bench = false
+
 [dependencies]
 # This example's dependency version is LOCKED, and tracks the `compat/sf32lb52x-bt-hci-08`
 # branch rather than main: sifli-radio implements the bt-hci 0.8 traits, so rmk is pinned to
@@ -24,9 +29,32 @@ rmk = { git = "https://github.com/rmk-rs/rmk", rev = "70823945638594da4832e7f574
     "async_matrix",
     "gc9107",
 ] }
-lcd-async = { version = "0.1", default-features = false }
-embedded-hal = "1.0"
 
+embassy-executor = { version = "0.10", features = [
+    "defmt",
+    "platform-cortex-m",
+    "executor-thread",
+] }
+embassy-futures = { version = "0.1" }
+embassy-sync = { version = "0.8" }
+embassy-time = { version = "0.5", features = [
+    "defmt",
+    "defmt-timestamp-uptime",
+    "tick-hz-32_768",
+] }
+
+bt-hci = { version = "0.8", features = ["defmt"] }
+cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
+cortex-m-rt = { version = "0.7.5", features = ["set-sp", "set-vtor"] }
+defmt = "1"
+defmt-rtt = "1"
+embedded-graphics = "0.8"
+embedded-hal = "1.0"
+lcd-async = { version = "0.1", default-features = false }
+panic-probe = { version = "1", features = ["print-defmt"] }
+portable-atomic = { version = "1" }
+rand_chacha = { version = "0.3", default-features = false }
+rand_core = { version = "0.6", default-features = false }
 sifli-hal = { git = "https://github.com/OpenSiFli/sifli-rs", rev = "8b9da60c616a945d444fdd18b80c773f903d2796", features = [
     "defmt",
     "sf32lb52x",
@@ -37,7 +65,7 @@ sifli-radio = { git = "https://github.com/OpenSiFli/sifli-rs", rev = "8b9da60c61
     "sf32lb52x-lcpu",
     "defmt",
 ] }
-
+static_cell = "2"
 trouble-host = { git = "https://github.com/haobogu/trouble", rev = "690373fd1166d16225b875435dd0600c92570e7d", features = [
     "defmt",
     "peripheral",
@@ -45,41 +73,12 @@ trouble-host = { git = "https://github.com/haobogu/trouble", rev = "690373fd1166
     "derive",
     "security",
 ] }
-bt-hci = { version = "0.8", features = ["defmt"] }
-rand_core = { version = "0.6", default-features = false }
-rand_chacha = { version = "0.3", default-features = false }
-
-embassy-time = { version = "0.5", features = [
-    "defmt",
-    "defmt-timestamp-uptime",
-    "tick-hz-32_768",
-] }
-embassy-executor = { version = "0.10", features = [
-    "defmt",
-    "platform-cortex-m",
-    "executor-thread",
-] }
-embassy-futures = { version = "0.1" }
-embassy-sync = { version = "0.8" }
-cortex-m-rt = { version = "0.7.5", features = ["set-sp", "set-vtor"] }
-portable-atomic = { version = "1" }
-defmt = "1"
-defmt-rtt = "1"
-panic-probe = { version = "1", features = ["print-defmt"] }
-cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
-static_cell = "2"
-embedded-graphics = "0.8"
 u8g2-fonts = { version = "0.5", features = ["embedded_graphics_textstyle"] }
 
 [build-dependencies]
-xz2 = "0.1.7"
-json = "0.12"
 const-gen = "1.6"
-
-[[bin]]
-name = "rmk-sf32lb52x-ble"
-test = false
-bench = false
+json = "0.12"
+xz2 = "0.1.7"
 
 [profile.dev]
 codegen-units = 1      # better optimizations

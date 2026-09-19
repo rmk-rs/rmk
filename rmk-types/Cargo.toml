@@ -9,34 +9,9 @@ repository = "https://github.com/rmk-rs/rmk"
 license = "MIT OR Apache-2.0"
 resolver = "2"
 
-[dependencies]
-defmt = { version = "1", optional = true }
-
-serde = { version = "1", default-features = false, features = ["derive"] }
-postcard = { version = "1", default-features = false, features = ["experimental-derive"] }
-# COBS framing for the Rynk transport; core-only (no alloc/std). Enabled by `rynk`.
-cobs = { version = "0.3", default-features = false, optional = true }
-heapless = { version = "0.9", default-features = false, features = ["serde"] }
-strum = { version = "0.28", default-features = false, features = ["derive"] }
-
-bitfield-struct = "0.13"
-
-# TypeScript type + wasm-bindgen ABI generation for the web client
-tsify = { version = "0.5", optional = true, default-features = false, features = ["js"] }
-wasm-bindgen = { version = "0.2", optional = true }
-serde-wasm-bindgen = { version = "0.6", optional = true }
-
-[build-dependencies]
-rmk-config = { path = "../rmk-config", version = "=0.8.0" }
-toml = "1"
-
 [features]
 default = []
-defmt = [
-    "dep:defmt",
-    "postcard/defmt",
-    "heapless/defmt",
-]
+defmt = ["dep:defmt", "postcard/defmt", "heapless/defmt"]
 # Feature for proc-macro code generation only, not included in firmware
 _codegen = []
 # Enable RMK's Rynk protocol
@@ -60,3 +35,24 @@ dfu_split = []
 dfu_lock = []
 # Stenography (Plover HID) support: `StenoKey` + `Action::Steno` variant.
 steno = []
+
+[dependencies]
+
+bitfield-struct = "0.13"
+# COBS framing for the Rynk transport; core-only (no alloc/std). Enabled by `rynk`.
+cobs = { version = "0.3", default-features = false, optional = true }
+defmt = { version = "1", optional = true }
+heapless = { version = "0.9", default-features = false, features = ["serde"] }
+postcard = { version = "1", default-features = false, features = ["experimental-derive"] }
+
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde-wasm-bindgen = { version = "0.6", optional = true }
+strum = { version = "0.28", default-features = false, features = ["derive"] }
+
+# TypeScript type + wasm-bindgen ABI generation for the web client
+tsify = { version = "0.5", optional = true, default-features = false, features = ["js"] }
+wasm-bindgen = { version = "0.2", optional = true }
+
+[build-dependencies]
+rmk-config = { path = "../rmk-config", version = "=0.8.0" }
+toml = "1"

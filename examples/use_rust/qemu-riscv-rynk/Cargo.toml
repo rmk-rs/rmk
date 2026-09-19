@@ -11,13 +11,15 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 rmk = { path = "../../../rmk", default-features = false, features = ["rynk"] }
+
 embassy-executor = { version = "0.10", features = ["platform-riscv32", "executor-thread"] }
 embassy-futures = { version = "0.1" }
 embassy-time = { version = "0.5", features = ["mock-driver", "generic-queue-8"] }
-riscv-rt = "0.18"
-riscv = { version = "0.16", features = ["critical-section-single-hart"] }
-semihosting = { version = "0.1", features = ["stdio"] }
+
 embedded-io-async = "0.7"
 panic-halt = "1"
+riscv = { version = "0.16", features = ["critical-section-single-hart"] }
+riscv-rt = "0.18"
+semihosting = { version = "0.1", features = ["stdio"] }
 static_cell = "2"
 uart_16550 = "0.8"

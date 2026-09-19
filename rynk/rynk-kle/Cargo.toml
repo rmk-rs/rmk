@@ -15,20 +15,20 @@ keywords = ["keyboard", "rmk", "kle", "vial", "layout"]
 [lib]
 crate-type = ["rlib", "cdylib"]
 
+[features]
+# JS-facing bindings; build the package with `wasm-pack build --features wasm`.
+wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen"]
+
 [dependencies]
-serde.workspace = true
-serde_json = "1"
 # Upstream KLE deserializer — does the cursor walk (positions, sizes, rotation,
 # legend normalization) so we don't hand-roll it.
 kle-serial = "0.3"
 # Build and decode layout blobs through the firmware/host path.
 rmk-config = { path = "../../rmk-config", version = "=0.8.0" }
 rynk = { path = "..", version = "0.3" }
+serde.workspace = true
+serde-wasm-bindgen = { version = "0.6", optional = true }
+serde_json = "1"
 toml = "1.0"
 
 wasm-bindgen = { version = "0.2", optional = true }
-serde-wasm-bindgen = { version = "0.6", optional = true }
-
-[features]
-# JS-facing bindings; build the package with `wasm-pack build --features wasm`.
-wasm = ["dep:wasm-bindgen", "dep:serde-wasm-bindgen"]

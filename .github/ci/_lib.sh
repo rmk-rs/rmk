@@ -120,6 +120,11 @@ list_example_manifests() {
     done
 }
 
+# Echoes every git-tracked Cargo.toml path, one per line.
+list_all_manifests() {
+    git ls-files '*Cargo.toml'
+}
+
 # Echoes the default build target triple declared in the manifest's sibling
 # .cargo/config.toml ([build].target). Only the first uncommented occurrence
 # is emitted; returns empty if the file or the key is absent. Trailing

@@ -9,6 +9,11 @@ readme = "../../README.md"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[[bin]]
+name = "rmk-nrf52840-dfu-ext"
+test = false
+bench = false
+
 [dependencies]
 rmk = { path = "../../../rmk", default-features = false, features = [
     "defmt",
@@ -19,7 +24,14 @@ rmk = { path = "../../../rmk", default-features = false, features = [
     "vial",
     "watchdog",
 ] }
-embassy-time = { version = "0.5", features = ["defmt"] }
+
+embassy-boot = { version = "0.7" }
+embassy-embedded-hal = { version = "0.6" }
+embassy-executor = { version = "0.10", features = [
+    "defmt",
+    "platform-cortex-m",
+    "executor-thread",
+] }
 embassy-nrf = { version = "0.11", features = [
     "defmt",
     "nrf52840",
@@ -28,31 +40,21 @@ embassy-nrf = { version = "0.11", features = [
     "unstable-pac",
     "time",
 ] }
-embassy-boot = { version = "0.7" }
-embassy-executor = { version = "0.10", features = [
-    "defmt",
-    "platform-cortex-m",
-    "executor-thread",
-] }
 embassy-sync = { version = "0.8" }
-embassy-embedded-hal = { version = "0.6" }
-embedded-storage = "0.3"
+embassy-time = { version = "0.5", features = ["defmt"] }
+
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = { version = "0.7.5", features = ["set-vtor"] }
 defmt = "1"
 defmt-rtt = "1"
+embedded-storage = "0.3"
 panic-probe = { version = "1", features = ["print-defmt"] }
 static_cell = "2"
 
 [build-dependencies]
-xz2 = "0.1.7"
-json = "0.12"
 const-gen = "1.6"
-
-[[bin]]
-name = "rmk-nrf52840-dfu-ext"
-test = false
-bench = false
+json = "0.12"
+xz2 = "0.1.7"
 
 [profile.dev]
 codegen-units = 1

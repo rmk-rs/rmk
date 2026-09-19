@@ -9,30 +9,32 @@ readme = "../../README.md"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[[bin]]
+name = "rmk-rp2040-rynk"
+test = false
+bench = false
+
 [dependencies]
 rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "rynk", "watchdog", "rp2040"] }
-embassy-time = { version = "0.5", features = ["defmt"] }
+
+embassy-executor = { version = "0.10", features = [
+    "defmt",
+    "platform-cortex-m",
+    "executor-thread",
+] }
 embassy-rp = { version = "0.10", features = [
     "rp2040",
     "defmt",
     "time-driver",
     "critical-section-impl",
 ] }
-embassy-executor = { version = "0.10", features = [
-    "defmt",
-    "platform-cortex-m",
-    "executor-thread",
-] }
+embassy-time = { version = "0.5", features = ["defmt"] }
+
 cortex-m-rt = "0.7.5"
-portable-atomic = { version = "1", features = ["critical-section"] }
 defmt = "1"
 defmt-rtt = "1"
 panic-probe = { version = "1", features = ["print-defmt"] }
-
-[[bin]]
-name = "rmk-rp2040-rynk"
-test = false
-bench = false
+portable-atomic = { version = "1", features = ["critical-section"] }
 
 [profile.dev]
 codegen-units = 1      # better optimizations

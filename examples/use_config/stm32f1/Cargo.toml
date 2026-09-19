@@ -9,32 +9,34 @@ readme = "../../README.md"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[[bin]]
+name = "rmk-stm32f1"
+test = false
+bench = false
+
 [dependencies]
 rmk = { path = "../../../rmk", default-features = false }
-cortex-m = { version = "0.7.7", features = ['critical-section-single-core'] }
-cortex-m-rt = "0.7.5"
-embassy-time = { version = "0.5", features = ["tick-hz-32_768"] }
+
+embassy-executor = { version = "0.10", features = [
+    "platform-cortex-m",
+    "executor-thread",
+] }
 embassy-stm32 = { version = "0.6", features = [
     "stm32f103c8",
     "memory-x",
     "time-driver-any",
 ] }
-embassy-executor = { version = "0.10", features = [
-    "platform-cortex-m",
-    "executor-thread",
-] }
+embassy-time = { version = "0.5", features = ["tick-hz-32_768"] }
+
+cortex-m = { version = "0.7.7", features = ['critical-section-single-core'] }
+cortex-m-rt = "0.7.5"
 defmt = "1"
 panic-probe = { version = "1" }
 
 [build-dependencies]
-xz2 = "0.1.7"
-json = "0.12"
 const-gen = "1.6"
-
-[[bin]]
-name = "rmk-stm32f1"
-test = false
-bench = false
+json = "0.12"
+xz2 = "0.1.7"
 
 [profile.dev]
 codegen-units = 1      # better optimizations
