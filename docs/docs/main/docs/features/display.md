@@ -198,13 +198,13 @@ The `ctx` argument passed to `render` carries a snapshot of the current keyboard
 
 Feature-gated fields (require the corresponding RMK feature to be enabled):
 
-| Field                   | Feature          | Description                                        |
-| ----------------------- | ---------------- | -------------------------------------------------- |
-| `ble_status`            | `_ble`           | BLE connection profile and state                   |
-| `central_connected`     | `split`          | Whether the central is connected (peripheral side) |
-| `peripherals_connected` | `split`          | Per-peripheral connection state array              |
-| `peripheral_batteries`  | `split` + `_ble` | Per-peripheral battery state array                 |
-| `dongle_state`          | `dongle`         | The dongle's link to its keyboard (`DongleState`)  |
+| Field                   | Feature          | Description                                             |
+| ----------------------- | ---------------- | ------------------------------------------------------- |
+| `ble_status`            | `_ble`           | Active BLE profile, connection state, and bond presence |
+| `central_connected`     | `split`          | Whether the central is connected (peripheral side)      |
+| `peripherals_connected` | `split`          | Per-peripheral connection state array                   |
+| `peripheral_batteries`  | `split` + `_ble` | Per-peripheral battery state array                      |
+| `dongle_state`          | `dongle`         | The dongle's link to its keyboard (`DongleState`)       |
 
 ::: tip `key_press_latch` vs `key_pressed`
 Use `key_press_latch` when you want to react to a new key press — it stays `true` even if the key was released before the render ran. Use `key_pressed` to reflect the real-time held state (e.g. to display a held-key animation).

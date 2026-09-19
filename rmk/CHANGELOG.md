@@ -18,10 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Give dongles a USB DFU runtime interface: a DETACH in the 30 s after plug-in reboots into the bootloader (`jump_to_bootloader`), so a dongle can be updated with `dfu-util` or rmk-gui although its host protocol is relayed to the keyboard.
 - Publish the dongle's state.
 - Add `dfu_ext` feature for DFU writes to external SPI flash (e.g. W25Q64), so boards with limited internal flash can store the new firmware image externally.
-- Publish the dongle's state.
+- Expose whether the active BLE profile is bonded via `BleStatus::bonded`, so LEDs and displays can tell a paired-but-disconnected profile from an empty slot.
+- Make `rmk::state::current_ble_status()` and `current_connection_status()` public, so user code can read the current status without subscribing to `ConnectionStatusChangeEvent`.
+
+### Changed
+
+- **BREAKING**: Rynk protocol 0.2. `BleStatus` gained a `bonded` field, changing its wire format and that of `ConnectionStatus`.
 
 ### Fixed
 
+- Re-pairing a cleared BLE profile with the same host no longer leaves the profile marked as removed.
 - Keep other physically held one-shot modifiers active when one is released
 - Preserve unresolved keys from unrelated combos when another combo triggers, instead of silently discarding their press events
 - Identify the keyboard's HID report characteristics on the dongle by their Report Reference descriptor instead of `HidService`'s declaration order.

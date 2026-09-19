@@ -986,7 +986,7 @@ mod tests {
     fn set_ble_state_preserves_current_profile() {
         let _guard = ble_status_test_lock().lock().unwrap();
 
-        set_ble_profile(2);
+        set_ble_profile(2, true);
         set_ble_state(BleState::Advertising);
 
         assert_eq!(
@@ -994,6 +994,7 @@ mod tests {
             BleStatus {
                 profile: 2,
                 state: BleState::Advertising,
+                bonded: true,
             }
         );
     }
@@ -1002,15 +1003,16 @@ mod tests {
     fn set_ble_profile_resets_state_when_profile_changes() {
         let _guard = ble_status_test_lock().lock().unwrap();
 
-        set_ble_profile(1);
+        set_ble_profile(1, false);
         set_ble_state(BleState::Connected);
-        set_ble_profile(3);
+        set_ble_profile(3, true);
 
         assert_eq!(
             current_ble_status(),
             BleStatus {
                 profile: 3,
                 state: BleState::Inactive,
+                bonded: true,
             }
         );
     }

@@ -141,7 +141,7 @@ type.
 
 ```toml
 { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 0 }, action = { Single = { Key = { Hid = "B" } } } } } },
-{ rynk = { cmd = "GetVersion", reply = { major = 0, minor = 1 } } },
+{ rynk = { cmd = "GetVersion", reply = { major = 0, minor = 2 } } },
 { rynk = { cmd = "GetMatrixState", error = "Locked" } },
 ```
 

@@ -277,6 +277,7 @@ fn exemplars() -> Exemplars {
         ble: BleStatus {
             profile: 1,
             state: BleState::Advertising,
+            bonded: true,
         },
         preferred: ConnectionType::Ble,
     };
@@ -489,7 +490,10 @@ fn wire_values_locked() {
         ("DeviceCapabilities{1..16}", encode(&ex.capabilities)),
         ("DeviceInfo{1.2.3,4,5,RMK,..}", encode(&ex.device_info)),
         ("BehaviorConfig{50..120}", encode(&ex.behavior)),
-        ("ConnectionStatus{Configured,{1,Adv},Ble}", encode(&ex.connection)),
+        (
+            "ConnectionStatus{Configured,{1,Adv,bonded},Ble}",
+            encode(&ex.connection)
+        ),
         ("ProtocolVersion{1,0}", encode(&ProtocolVersion { major: 1, minor: 0 })),
         ("ProtocolVersion::CURRENT", encode(&ProtocolVersion::CURRENT)),
         ("LockStatus{true,false,2,[(1,2),(3,4)]}", encode(&lock_status),),
@@ -502,10 +506,11 @@ fn wire_values_locked() {
         ("BleState::Connected", encode(&BleState::Connected)),
         ("BleState::Inactive", encode(&BleState::Inactive)),
         (
-            "BleStatus{2,Connected}",
+            "BleStatus{2,Connected,bonded}",
             encode(&BleStatus {
                 profile: 2,
-                state: BleState::Connected
+                state: BleState::Connected,
+                bonded: true,
             })
         ),
         ("UsbState::Disabled", encode(&UsbState::Disabled)),
@@ -897,7 +902,7 @@ fn wire_frames_locked() {
             encode_frame(Cmd::GetConnectionStatus, SEQ, &())
         ),
         (
-            "GetConnectionStatus reply Ok(ConnectionStatus{Configured,{1,Adv},Ble})",
+            "GetConnectionStatus reply Ok(ConnectionStatus{Configured,{1,Adv,bonded},Ble})",
             encode_frame(
                 Cmd::GetConnectionStatus,
                 SEQ,
@@ -943,7 +948,7 @@ fn wire_frames_locked() {
         // Connection / status rows behind `_ble` and `split`.
         ("GetBleStatus request ()", encode_frame(Cmd::GetBleStatus, SEQ, &())),
         (
-            "GetBleStatus reply Ok(BleStatus{1,Advertising})",
+            "GetBleStatus reply Ok(BleStatus{1,Advertising,bonded})",
             encode_frame(Cmd::GetBleStatus, SEQ, &Ok::<BleStatus, RynkError>(ex.connection.ble)),
         ),
         (
@@ -989,7 +994,7 @@ fn wire_frames_locked() {
         ("LayerChange topic 3", encode_frame(Cmd::LayerChange, 0, &3u8)),
         ("WpmUpdate topic 42", encode_frame(Cmd::WpmUpdate, 0, &42u16)),
         (
-            "ConnectionChange topic ConnectionStatus{Configured,{1,Adv},Ble}",
+            "ConnectionChange topic ConnectionStatus{Configured,{1,Adv,bonded},Ble}",
             encode_frame(Cmd::ConnectionChange, 0, &ex.connection)
         ),
         ("SleepState topic true", encode_frame(Cmd::SleepState, 0, &true)),

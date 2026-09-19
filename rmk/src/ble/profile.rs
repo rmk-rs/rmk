@@ -12,7 +12,7 @@ use crate::NUM_BLE_PROFILE;
 use crate::channel::BLE_PROFILE_CHANNEL;
 #[cfg(feature = "storage")]
 use crate::channel::FLASH_CHANNEL;
-use crate::state::{current_profile, set_ble_profile};
+use crate::state::{current_profile, set_ble_bonded, set_ble_profile};
 
 pub(crate) static UPDATED_PROFILE: Signal<crate::RawMutex, ProfileInfo> = Signal::new();
 pub(crate) static UPDATED_CCCD_TABLE: Signal<crate::RawMutex, heapless::Vec<u8, CCCD_TABLE_SIZE>> = Signal::new();
@@ -78,6 +78,36 @@ impl Default for ProfileInfo {
             cccd_table: heapless::Vec::new(),
         }
     }
+}
+
+/// Live bonding information for a profile slot, skipping cleared entries.
+fn bond_info_of(bonded_devices: &[ProfileInfo], slot_num: u8) -> Option<&ProfileInfo> {
+    bonded_devices
+        .iter()
+        .find(|info| !info.removed && info.slot_num == slot_num)
+}
+
+/// Upserts bonding information for a profile slot.
+///
+/// Returns `Ok(true)` if the entry was inserted, changed, or revived from
+/// `removed`, `Ok(false)` if a live entry already held the same info, and
+/// `Err(())` if the cache is full.
+fn upsert_bond_info<const SLOTS: usize>(
+    bonded_devices: &mut heapless::Vec<ProfileInfo, SLOTS>,
+    profile_info: &ProfileInfo,
+) -> Result<bool, ()> {
+    if let Some(index) = bonded_devices
+        .iter()
+        .position(|info| info.slot_num == profile_info.slot_num)
+    {
+        if !bonded_devices[index].removed && bonded_devices[index].info == profile_info.info {
+            return Ok(false);
+        }
+        bonded_devices[index] = profile_info.clone();
+    } else {
+        bonded_devices.push(profile_info.clone()).map_err(|_| ())?;
+    }
+    Ok(true)
 }
 
 /// BLE profile switch action
@@ -156,17 +186,17 @@ where
             debug!("Loaded default active profile",);
             0
         };
-        set_ble_profile(profile);
+        set_ble_profile(profile, self.is_bonded(profile));
+    }
+
+    fn is_bonded(&self, slot_num: u8) -> bool {
+        bond_info_of(&self.bonded_devices, slot_num).is_some()
     }
 
     /// Cached bond info for the currently active profile, cloned to free the
     /// caller from borrow conflicts with concurrent `update_profile()`.
     pub(crate) fn active_bond_info(&self) -> Option<ProfileInfo> {
-        let active_profile = current_profile();
-        self.bonded_devices
-            .iter()
-            .find(|bond_info| !bond_info.removed && bond_info.slot_num == active_profile)
-            .cloned()
+        bond_info_of(&self.bonded_devices, current_profile()).cloned()
     }
 
     /// Check if the `identity` is the bonded dongle's identity.
@@ -183,6 +213,10 @@ where
     }
 
     /// Update bonding information in the stack according to the current active profile
+    ///
+    /// Also republishes `BleStatus::bonded`. Every change to `bonded_devices` that can
+    /// alter bond presence is followed by this call, so the flag is derived here once
+    /// instead of at each mutation site.
     pub(crate) fn update_stack_bonds(&self) {
         // Drain one at a time rather than collecting: the stack holds bonds this
         // manager has no slot for — a fresh pairing lands there before we prune —
@@ -197,7 +231,10 @@ where
             }
         }
 
-        if let Some(info) = self.active_bond_info() {
+        let active = self.active_bond_info();
+        set_ble_bonded(active.is_some());
+
+        if let Some(info) = active {
             debug!("Add bond info of profile {}: {:?}", info.slot_num, info);
             if let Err(e) = self.stack.add_bond_information(info.info) {
                 debug!("Add bond info error: {:?}", e);
@@ -207,22 +244,20 @@ where
 
     /// Add/update bonding information
     pub(crate) async fn add_profile_info(&mut self, profile_info: ProfileInfo) {
-        // Update profile information in memory
-        if let Some(index) = self
-            .bonded_devices
-            .iter()
-            .position(|info| info.slot_num == profile_info.slot_num)
-        {
-            if self.bonded_devices[index].info == profile_info.info {
+        match upsert_bond_info(&mut self.bonded_devices, &profile_info) {
+            Ok(false) => {
                 info!("Skip saving same bonding info");
                 return;
             }
-            // If the bonding information with the same slot number exists, update it
-            self.bonded_devices[index] = profile_info.clone();
-        } else {
-            // If there is no bonding information with the same slot number, add it
-            if let Err(e) = self.bonded_devices.push(profile_info.clone()) {
-                error!("Failed to add bond info: {:?}", e);
+            Ok(true) => {}
+            Err(()) => {
+                // Nothing entered the cache, so skip the flash write too: persisting a
+                // bond the cache rejected would leave flash holding an entry RAM lacks.
+                error!(
+                    "Failed to add bond info for profile {}: cache is full",
+                    profile_info.slot_num
+                );
+                return;
             }
         }
 
@@ -293,7 +328,7 @@ where
             return false;
         }
 
-        set_ble_profile(profile);
+        set_ble_profile(profile, self.is_bonded(profile));
 
         // Update the active bonding information in the stack
         self.update_stack_bonds();
@@ -368,5 +403,67 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LongTermKey, ProfileInfo, bond_info_of, upsert_bond_info};
+
+    #[test]
+    fn cleared_profile_can_be_paired_again_with_same_bond_information() {
+        let profile_info = ProfileInfo::default();
+        let mut bonded_devices = heapless::Vec::<ProfileInfo, 1>::new();
+
+        assert_eq!(upsert_bond_info(&mut bonded_devices, &profile_info), Ok(true));
+        assert_eq!(upsert_bond_info(&mut bonded_devices, &profile_info), Ok(false));
+
+        bonded_devices[0].removed = true;
+        assert_eq!(upsert_bond_info(&mut bonded_devices, &profile_info), Ok(true));
+        assert!(!bonded_devices[0].removed);
+    }
+
+    #[test]
+    fn upsert_fails_without_evicting_when_the_cache_is_full() {
+        let mut bonded_devices = heapless::Vec::<ProfileInfo, 1>::new();
+        assert_eq!(upsert_bond_info(&mut bonded_devices, &ProfileInfo::default()), Ok(true));
+
+        let other_slot = ProfileInfo {
+            slot_num: 1,
+            ..Default::default()
+        };
+        assert_eq!(upsert_bond_info(&mut bonded_devices, &other_slot), Err(()));
+        assert_eq!(bonded_devices.len(), 1);
+        assert_eq!(bonded_devices[0].slot_num, 0);
+    }
+
+    #[test]
+    fn cleared_slot_has_no_bond_info() {
+        let mut bonded_devices = heapless::Vec::<ProfileInfo, 1>::new();
+        assert_eq!(upsert_bond_info(&mut bonded_devices, &ProfileInfo::default()), Ok(true));
+        assert!(bond_info_of(&bonded_devices, 0).is_some());
+
+        bonded_devices[0].removed = true;
+        assert!(bond_info_of(&bonded_devices, 0).is_none());
+    }
+
+    #[test]
+    fn bonding_one_slot_leaves_the_others_unbonded() {
+        let mut bonded_devices = heapless::Vec::<ProfileInfo, 2>::new();
+        assert_eq!(upsert_bond_info(&mut bonded_devices, &ProfileInfo::default()), Ok(true));
+
+        assert!(bond_info_of(&bonded_devices, 0).is_some());
+        assert!(bond_info_of(&bonded_devices, 1).is_none());
+    }
+
+    #[test]
+    fn re_pairing_a_slot_with_different_bond_information_replaces_it() {
+        let mut bonded_devices = heapless::Vec::<ProfileInfo, 1>::new();
+        assert_eq!(upsert_bond_info(&mut bonded_devices, &ProfileInfo::default()), Ok(true));
+
+        let mut new_host = ProfileInfo::default();
+        new_host.info.ltk = LongTermKey(1);
+        assert_eq!(upsert_bond_info(&mut bonded_devices, &new_host), Ok(true));
+        assert_eq!(bonded_devices[0].info.ltk, LongTermKey(1));
     }
 }

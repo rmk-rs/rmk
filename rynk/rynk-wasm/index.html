@@ -266,7 +266,7 @@
       // Keep the loader keyed by protocol major even while there is one wasm artifact.
       async function loadCore(major) {
         switch (major) {
-          case 0: // protocol v0.x (ProtocolVersion::CURRENT = {0, 1})
+          case 0: // protocol v0.x
             return await import("./pkg/rynk_wasm.js");
           default:
             throw new Error(`no rynk-core wasm for protocol major ${major}`);
