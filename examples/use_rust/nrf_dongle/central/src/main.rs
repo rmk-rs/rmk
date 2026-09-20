@@ -63,6 +63,7 @@ fn build_sdc<'d, const N: usize>(
         .support_central()
         .support_adv()
         .support_peripheral()
+        .support_le_privacy()
         .support_dle_peripheral()
         .support_dle_central()
         .support_phy_update_central()
