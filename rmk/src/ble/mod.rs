@@ -10,7 +10,7 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(feature = "split")]
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use rmk_types::ble::BleState;
 use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
@@ -282,6 +282,9 @@ async fn run_ble_keyboard<
     let profile_manager = &mut profile_manager;
 
     let connection_loop = async {
+        // Deadline at which the current advertising session stops; `None` until
+        // the first advertise below sets it.
+        let mut adv_deadline: Option<Instant> = None;
         loop {
             // On the dongle slot, advertise directed to the bonded dongle or
             // as a seeking broadcast; on the normal profiles, plain HID.
@@ -302,8 +305,14 @@ async fn run_ble_keyboard<
             info!("[adv] advertising");
             set_ble_state(BleState::Advertising);
 
+            // Advertise only for the time left in this session, so rejected
+            // reconnects can't push the timeout out indefinitely.
+            let now = Instant::now();
+            let deadline = *adv_deadline.get_or_insert(now + Duration::from_secs(300));
+            let timeout = deadline.saturating_duration_since(now);
+
             match select(
-                advertise(&mut peripheral, &server.server, adv, Duration::from_secs(300)),
+                advertise(&mut peripheral, &server.server, adv, timeout),
                 profile_manager.update_profile(),
             )
             .await
@@ -376,6 +385,9 @@ async fn run_ble_keyboard<
                 }
                 Either::Second(()) => {}
             };
+
+            // Starts a fresh advertising session.
+            adv_deadline = None;
 
             // Skip the Inactive transition if we never moved off Advertising
             if crate::state::current_ble_status().state != BleState::Advertising {
