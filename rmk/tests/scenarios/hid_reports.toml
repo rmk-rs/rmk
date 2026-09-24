@@ -54,9 +54,12 @@ steps = [
 ]
 expect = [{ mouse = { x = 5 } }, { mouse = { } }]
 
-# `]` and its `SHIFTED()` twin `}` share one HID usage. The report
-# deduplicates held keycodes so the shared usage stays down until the
-# last holder releases it; the second key no longer vanishes on a roll.
+# `]` and its `SHIFTED()` twin `}` share one HID usage. Two halves must hold
+# at once: the report deduplicates held keycodes so the usage stays down until
+# the last holder releases it, and a press that re-strikes a usage another
+# position already holds gets one report without it first, so the host sees the
+# absent->present transition that produces the second character. Pressing `}`
+# at (1,2) while (1,1) still holds `]` is that re-strike.
 [[test]]
 name = "shared_keycode_roll_keeps_second_key"
 steps = [
@@ -75,6 +78,7 @@ expect = [
   ["LShift", "Dot"],
   ["Dot", "RightBracket"],
   ["RightBracket"],
+  ["LShift"],
   ["LShift", "RightBracket"],
   ["LShift", "RightBracket"],
   ["LShift", "RightBracket", "Kc0"],
