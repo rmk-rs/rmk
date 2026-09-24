@@ -26,6 +26,8 @@ max_patterns_per_key = 8
 macro_space_size = 256
 # Default debounce time in ms
 debounce_time = 20
+# Matrix idle scan interval (ms) when no key is pressed or debouncing
+matrix_idle_scan_ms = 10
 # Report channel size
 report_channel_size = 16
 # Vial channel size
@@ -74,6 +76,7 @@ Increasing the number of combos, forks, morses (tap dances), and macros will inc
 ### Matrix Configuration
 
 - `debounce_time`: Default key debounce time in milliseconds, default value is 20.
+- `matrix_idle_scan_ms`: How long to wait between scan passes once no key is pressed or debouncing, default value is 10. Only applies to polling matrix scans (builds without `async_matrix`, which instead wake on a GPIO interrupt); raising this saves power at the cost of that much extra latency on the next fresh keypress.
 
 ### Channel Configuration
 
