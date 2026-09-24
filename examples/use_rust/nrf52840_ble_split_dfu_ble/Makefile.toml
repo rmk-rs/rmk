@@ -1,0 +1,45 @@
+[tasks.install-llvm-tools]
+install_crate = { rustup_component_name = "llvm-tools" }
+
+[tasks.flip-link]
+install_crate = { crate_name = "flip-link", binary = "flip-link", test_arg = ["-h"] }
+
+[tasks.build]
+command = "cargo"
+args = ["build", "--release"]
+dependencies = ["bin-peripheral", "install-llvm-tools", "flip-link"]
+
+[tasks.objcopy-central]
+install_crate = { crate_name = "cargo-binutils", binary = "cargo", test_arg = ["objcopy", "--help"] }
+command = "cargo"
+args = ["objcopy", "--release", "--bin", "central", "--", "-O", "ihex", "rmk-nrf52840-split-dfu-ble-central.hex"]
+dependencies = ["build"]
+
+[tasks.objcopy-peripheral]
+install_crate = { crate_name = "cargo-binutils", binary = "cargo", test_arg = ["objcopy", "--help"] }
+command = "cargo"
+args = ["objcopy", "--release", "--bin", "peripheral", "--", "-O", "ihex", "rmk-nrf52840-split-dfu-ble-peripheral.hex"]
+dependencies = ["build"]
+
+[tasks.build-peripheral]
+command = "cargo"
+args = ["build", "--bin", "peripheral", "--release"]
+dependencies = ["install-llvm-tools", "flip-link"]
+
+[tasks.bin-peripheral]
+command = "cargo"
+args = ["objcopy", "--release", "--bin", "peripheral", "--", "-O", "binary", "rmk-nrf52840-split-dfu-ble-peripheral.bin"]
+dependencies = ["build-peripheral"]
+
+[tasks.build-central]
+command = "cargo"
+args = ["build", "--bin", "central", "--release"]
+dependencies = ["bin-peripheral", "install-llvm-tools", "flip-link"]
+
+[tasks.bin-central]
+command = "cargo"
+args = ["objcopy", "--release", "--bin", "central", "--", "-O", "binary", "rmk-nrf52840-split-dfu-ble-central.bin"]
+dependencies = ["build-central"]
+
+[tasks.bin]
+dependencies = ["bin-central"]

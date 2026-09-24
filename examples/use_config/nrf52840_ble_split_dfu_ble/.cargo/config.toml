@@ -1,0 +1,12 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+runner = "probe-rs run --chip nRF52840_xxAA"
+
+# Use flip-link overflow check: https://github.com/knurling-rs/flip-link
+linker = "flip-link"
+
+[build]
+target = "thumbv7em-none-eabihf"     # Cortex-M4F and Cortex-M7F (with FPU)
+
+[env]
+DEFMT_LOG = "debug"
+KEYBOARD_TOML_PATH =  { value = "keyboard.toml", relative = true }

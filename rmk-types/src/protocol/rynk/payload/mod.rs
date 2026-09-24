@@ -2,6 +2,7 @@
 
 mod bulk_capacity;
 mod combo;
+mod dfu;
 mod encoder;
 mod fork;
 mod keymap;
@@ -13,6 +14,7 @@ mod system;
 
 pub use self::bulk_capacity::*;
 pub use self::combo::*;
+pub use self::dfu::*;
 pub use self::encoder::*;
 pub use self::fork::*;
 pub use self::keymap::*;

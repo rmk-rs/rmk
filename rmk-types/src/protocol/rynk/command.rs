@@ -14,11 +14,12 @@ use serde::de::DeserializeOwned;
 
 use super::message::{RynkHeader, encode_frame};
 use super::{
-    BehaviorConfig, DeviceCapabilities, DeviceInfo, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest,
-    GetKeymapBulkRequest, GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse,
-    KeyPosition, LayoutChunk, LockStatus, MacroData, MatrixState, ProtocolVersion, RynkError, SetComboBulkRequest,
-    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest,
-    SetMorseBulkRequest, SetMorseRequest, StorageResetMode,
+    BehaviorConfig, DeviceCapabilities, DeviceInfo, DfuCrcRewindRequest, DfuCrcSyncRequest, DfuVerifyRequest,
+    DfuWriteRequest, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest, GetKeymapBulkRequest,
+    GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse, KeyPosition, LayoutChunk,
+    LockStatus, MacroData, MatrixState, ProtocolVersion, RynkError, SetComboBulkRequest, SetComboRequest,
+    SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest, SetMorseBulkRequest,
+    SetMorseRequest, StorageResetMode,
 };
 use crate::action::{EncoderAction, KeyAction};
 #[cfg(feature = "_ble")]
@@ -338,7 +339,25 @@ endpoints! {
     /// Latest HID LED bitmap, sourced from the `LedIndicatorChange` topic snapshot.
     GetLedIndicator = 0x0807: () => LedIndicator;
 
-    // 0x09xx is reserved for a relay to answer for itself; nothing needs it yet.
+    // DFU (0x09xx).
+    /// Start a DFU download session. Requires unlock when `dfu_lock` is active.
+    DfuStart = 0x0901: () => ();
+    /// Write a chunk of firmware data at the given offset.
+    DfuWrite = 0x0902: DfuWriteRequest => ();
+    /// Finalize the DFU transfer: sanity-check the image and reset into it.
+    DfuFinish = 0x0903: () => ();
+    /// Request a hard system reset without finishing a DFU transfer.
+    DfuReset = 0x0904: () => ();
+    /// Periodic CRC-32 synchronization: host sends its running CRC, firmware
+    /// compares and returns `Ok` on match or `Err(RynkError::Internal)` on
+    /// mismatch.
+    DfuCrcSync = 0x0905: DfuCrcSyncRequest => ();
+    /// Rewind the firmware's DFU state to a previous CRC checkpoint so the
+    /// host can retransmit from that offset.
+    DfuCrcRewind = 0x0906: DfuCrcRewindRequest => ();
+    /// End-of-transfer verification: firmware reads back the DFU partition,
+    /// recomputes CRC-32, and runs the vector-table sanity check.
+    DfuVerify = 0x0907: DfuVerifyRequest => ();
 }
 
 // Define topics: `Name = value: Payload;`

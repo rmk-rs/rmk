@@ -4,7 +4,7 @@
 //! [`run_session`](RynkService::run_session) creates its own authorization gate
 //! ([`HostLock`]) and topic subscriptions, so transports never share either.
 
-mod handlers;
+pub(crate) mod handlers;
 mod topics;
 
 use embassy_futures::select::{Either, select};
@@ -68,6 +68,8 @@ impl<'a> RynkService<'a> {
     fn requires_unlock(&self, cmd: Cmd) -> bool {
         match cmd {
             Cmd::BootloaderJump | Cmd::StorageReset | Cmd::GetMatrixState => true,
+            // DFU start requires unlock for physical-presence gate.
+            Cmd::DfuStart => true,
             // Deleting a bond opens a re-pair hijack window; BLE-only command.
             #[cfg(feature = "_ble")]
             Cmd::ClearBleProfile => true,
@@ -142,6 +144,31 @@ impl<'a> RynkService<'a> {
             Cmd::GetLedIndicator => serve::<command::GetLedIndicator, _>(self, msg).await,
 
             Cmd::GetLayout => serve::<command::GetLayout, _>(self, msg).await,
+
+            // DFU commands — routed to ProxyRynkDfuHandler via dispatch_dfu_cmd.
+            #[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
+            Cmd::DfuStart
+            | Cmd::DfuWrite
+            | Cmd::DfuCrcSync
+            | Cmd::DfuCrcRewind
+            | Cmd::DfuVerify
+            | Cmd::DfuFinish
+            | Cmd::DfuReset => {
+                let payload = msg.payload();
+                match handlers::dfu::dispatch_dfu_cmd(cmd, payload).await {
+                    Ok(()) => msg.encode_response(&()),
+                    Err(e) => Err(e),
+                }
+            }
+            // DFU commands when the feature is disabled — return UnknownCmd.
+            #[cfg(not(all(feature = "dfu_ble", feature = "_dfu")))]
+            Cmd::DfuStart
+            | Cmd::DfuWrite
+            | Cmd::DfuCrcSync
+            | Cmd::DfuCrcRewind
+            | Cmd::DfuVerify
+            | Cmd::DfuFinish
+            | Cmd::DfuReset => Err(RynkError::UnknownCmd),
 
             _ => Err(RynkError::UnknownCmd),
         }
@@ -249,7 +276,7 @@ mod tests {
     use embedded_io_async::{ErrorKind, ErrorType, Read, Write};
     use rmk_types::action::KeyAction;
     use rmk_types::protocol::rynk::{
-        LockStatus, MatrixState, ProtocolVersion, RYNK_HEADER_SIZE, RynkHeader, encode_frame,
+        LockStatus, MAX_BULK_KEYS, MatrixState, ProtocolVersion, RYNK_HEADER_SIZE, RynkHeader, encode_frame,
     };
 
     use super::*;
@@ -538,8 +565,8 @@ mod tests {
     #[test]
     fn run_session_shrinks_a_bulk_page_beside_a_parked_tail() {
         let mut behavior = BehaviorConfig::default();
-        let positional: PositionalConfig<8, 8> = PositionalConfig::default();
-        let mut data: KeymapData<8, 8, 1, 0> = KeymapData::new([[[KeyAction::No; 8]; 8]]);
+        let positional: PositionalConfig<15, 16> = PositionalConfig::default();
+        let mut data: KeymapData<15, 16, 1, 0> = KeymapData::new([[[KeyAction::No; 16]; 15]]);
         let keymap = block_on(KeyMap::new(&mut data, &mut behavior, &positional));
         let config = RmkConfig::default();
         let service = RynkService::new(&keymap, &config);
@@ -565,7 +592,7 @@ mod tests {
         );
         let resp = decode_frames(&tx.captured);
         assert_eq!(resp.len(), 1);
-        let page = postcard::from_bytes::<Result<heapless::Vec<KeyAction, 64>, RynkError>>(&resp[0].2)
+        let page = postcard::from_bytes::<Result<heapless::Vec<KeyAction, MAX_BULK_KEYS>, RynkError>>(&resp[0].2)
             .unwrap()
             .unwrap();
         assert_eq!(page.len(), expected, "page sized to the actual window");

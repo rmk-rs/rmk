@@ -93,9 +93,12 @@ pub(crate) static BLE_PROFILE_CHANNEL: Channel<RawMutex, BleProfileAction, 1> = 
 #[cfg(all(feature = "vial", feature = "_ble"))]
 pub(crate) static VIAL_BLE_RX_CHANNEL: Channel<RawMutex, [u8; 32], VIAL_CHANNEL_SIZE> = Channel::new();
 
-/// Rynk RX from the BLE `output_data` writes. The 512 B ring is ~2× one MTU's maximal payload.
+/// Rynk RX from the BLE `output_data` writes. The pipe is drained by
+/// [`HostGattHandler::run`](crate::ble::host::HostGattHandler::run).
+/// Sized for two full DFU frames (~2050 B each) so backpressure doesn't
+/// stall bulk writes.
 #[cfg(all(feature = "rynk", feature = "_ble"))]
-pub(crate) static RYNK_BLE_RX_PIPE: embassy_sync::pipe::Pipe<RawMutex, 512> = embassy_sync::pipe::Pipe::new();
+pub(crate) static RYNK_BLE_RX_PIPE: embassy_sync::pipe::Pipe<RawMutex, 4096> = embassy_sync::pipe::Pipe::new();
 
 /// Macros are triggered on key press but run by the keyboard loop to avoid recursion
 /// (`execute_macro` dispatches a macro's ops back through the action path).

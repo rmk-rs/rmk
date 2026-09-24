@@ -46,7 +46,7 @@ use core::cell::RefCell;
 use rmk::dfu::{FlashMutex, partitions_from_linkerscript};
 
 let flash_mutex = FlashMutex::new(RefCell::new(Flash::new_blocking(p.FLASH)));
-let (storage_partition, mut state_partition, dfu_partition) = partitions_from_linkerscript(&flash_mutex);
+let (storage_partition, state_partition, dfu_partition) = partitions_from_linkerscript(&flash_mutex);
 ```
 
 The `#[rmk_keyboard]` macro generates this call automatically when RMK is built with the `dfu_rp` or `dfu_nrf` feature. The macro reads the `[dfu]` section for LED and unlock-key options; the chip defaults for RP2040, nRF52840, nice!nano and Pico W already ship an empty `[dfu]`, so you only add one to override those options.
@@ -132,7 +132,7 @@ led = "PIN_25"          # optional DFU activity LED
 unlock_keys = [[0, 0], [1, 1]]  # optional DFU lock key combo
 ```
 
-All partition offsets are read at link time via `partitions_from_linkerscript()`.
+All partition offsets are read at runtime via `partitions_from_linkerscript()`.
 
 **Important:** The flash size variant of your `memory.x` must match the rmk-boot binary flashed to your board.
 
@@ -153,7 +153,7 @@ On nRF52840 / nRF52833, rmk-boot implements both entry paths known from the Adaf
 :::
 
 ::: tip
-On nRF52840 / nRF52833, DFU and BLE can be used **simultaneously**. Enable both `dfu_nrf` and `nrf52840_ble` features in RMK, set `[ble] enabled = true` in `keyboard.toml`, and your keyboard works over USB + BLE with DFU updates (over USB).
+On nRF52840 / nRF52833, DFU and BLE can be used **simultaneously**. Enable both `dfu_nrf` and `nrf52840_ble` features in RMK, set `[ble] enabled = true` in `keyboard.toml`, and your keyboard works over USB + BLE with DFU updates (over USB). For over-the-air updates, see [BLE DFU](#ble-dfu-dfu_ble) below.
 :::
 
 ## Step-by-step guide
@@ -211,7 +211,7 @@ cargo run --release
 
 ### All subsequent updates via DFU
 
-After rmk-boot and the RMK firmware have been flashed once, all future updates can be done **easily over USB via DFU**. As stated above, as long as you build with `memory.x` present, you can still use probe-rs (RP2040 and nRF52), the DFU functionality of rmk-boot (nRF52) or the UF2 bootloader. (RP2040)
+After rmk-boot and the RMK firmware have been flashed once, all future updates can be done **easily over USB via DFU**. As stated above, as long as you build with `memory.x` present, you can still use probe-rs (RP2040 and nRF52), the DFU functionality of rmk-boot (nRF52) or the UF2 bootloader (RP2040).
 
 #### Generate the .bin file
 
@@ -275,6 +275,7 @@ If an LED pin is configured in `keyboard.toml` (default `PIN_25` on RP2040 and `
 | DFU unlocked (ready for dfu-util)     | Blinks (toggles every 200 ms)    |
 | DFU download started                  | On                               |
 | Writing data blocks                   | Toggles on each block (flickers) |
+| DFU error / aborted                   | Blinks for 5 s, then off         |
 | DFU finished / system reset           | Off                              |
 
 Additionally the rmk-boot bootloader has blinking codes using PIN_25 (RP2040) / P0_15 (nRF52) as well:
@@ -298,7 +299,7 @@ In order for this to work, both, central and peripheral need to be flashed with 
 
 ::: note
 
-This feature currently only works for split keyboards that use UART (serial) as the interface between them. Split BLE and updates over the air wont work.
+This feature currently only works for split keyboards that use UART (serial) as the interface between them. Split BLE and updates over the air won't work — use [`dfu_ble`](#ble-dfu-dfu_ble) instead.
 
 :::
 
@@ -476,3 +477,76 @@ This setup also enables DFU updates via USB for the peripheral, if a USB connect
 |---|---|
 | Peripheral DFU LED flashes 3 times after update | Firmware crashed before `mark_booted()` was called automatically. Build with the `dfu_rp`/`dfu_nrf` feature (using config) or ensure `FlashDfuHandler` is used (using Rust). |
 | `dfu-util -a 1` shows `dfuERROR` or hangs at 0% | Peripheral not connected or its firmware is built without the `dfu_split` feature. |
+
+## BLE DFU (dfu_ble)
+
+`dfu_ble` enables over-the-air firmware updates for BLE keyboards.
+When a split peripheral can't find its central for 10 seconds after boot, it enters DFU advertising mode — a BLE host ([rynk-wtf](https://github.com/rmk-rs/rmk/tree/main/rynk/rynk-wtf)) can
+discover it and transfer a new firmware image directly.
+
+### Feature flags
+
+```toml title="Cargo.toml"
+[dependencies]
+rmk = { features = [ "dfu_nrf", "dfu_ble", "split" ] }
+```
+
+`dfu_ble` implies `rynk` and requires a chip-specific DFU feature
+(`dfu_nrf` or `dfu_rp`). It is not compatible with `dfu_split`.
+
+::: note
+On the central, DFU start requires an unlocked device. With `dfu_lock` enabled, the user must hold the challenge keys during the unlock window; the split-peripheral DFU path does not enforce the lock. With `insecure = true` in the `[host]` config, the device starts unlocked and DFU can begin immediately.
+:::
+
+### Peripheral flashing on split keyboard
+During normal operation the peripheral is not connected to the host via bluetooth.
+To be able to flash the peripheral via BLE, after booting the peripheral first seeks its central for ~20 seconds; if it cannot find it, it advertises for 60 seconds under the name `rmk per{N}` (peripheral id `N`). Pass `Some("name")` as the `dfu_name` argument of `run_rmk_split_peripheral()` to override it — names longer than 16 bytes are truncated to fit the 31-byte advertisement. If no host connects, it enters soft sleep and wakes on any keypress —
+returning to normal operation if the central is now available. Pass the advertised (possibly truncated) name to `rynk-wtf --device`.
+
+So to flash a peripheral via `dfu_ble`, follow this:
+1. switch off central, switch off peripheral
+2. switch on peripheral
+3. try to find peripheral using bluetooth on the host
+4. flash the peripheral using `rynk-wtf`
+5. `rmk-boot` does its swapping
+6. switch central back on, peripheral should connect to it again
+
+### Rust API
+
+The peripheral-side firmware needs a `FlashDfuHandler` wired into its `run_all!` macro. The central side doesn't need any `dfu_ble`-specific configuration — it already speaks rynk DFU when built with `dfu_ble`.
+
+```rust title="peripheral.rs"
+use rmk::dfu::{FlashDfuHandler, FlashMutex, partitions_from_linkerscript};
+
+let flash = Flash::take(mpsl, p.NVMC);
+let flash_mutex = FlashMutex::new(flash);
+let (_, state_partition, dfu_partition) = partitions_from_linkerscript(&flash_mutex);
+
+let mut dfu_handler = FlashDfuHandler::new(dfu_partition, state_partition);
+
+join3(
+    run_all!(matrix, storage, dfu_handler, watchdog_runner),
+    run_all!(battery_processor),
+    run_rmk_split_peripheral(0, sdc, ble_addr(), None),
+)
+.await;
+```
+
+Using the TOML configuration only the feature activation in `Cargo.toml` and the `[dfu]` section in `keyboard.toml` is needed.
+
+### Using rynk-wtf
+
+[rynk-wtf](https://github.com/rmk-rs/rmk/tree/main/rynk/rynk-wtf) is the host-side tool for
+BLE DFU.
+
+```bash
+rynk-wtf my-firmware.bin
+```
+This lets you pick a bluetooth device interactively.
+Use `--device <NAME>` to connect to a specific device without the interactive picker.
+Use `--reset` to reset the device after a successful update.
+
+CRC-32 checks are performed periodically during transfer —
+on mismatch, rynk-wtf rewinds to the last checkpoint and retransmits.
+The interval at which CRC checks are performed can be set using the parameter `--crc-interval`.
+Omit the checks by setting `--crc-interval` to 0.

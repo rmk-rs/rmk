@@ -20,7 +20,7 @@ unlock_keys = [[0, 1]]
 [[test]]
 name = "version_is_the_frozen_handshake"
 steps = [
-  { rynk = { cmd = "GetVersion", reply = { major = 0, minor = 1 } } },
+  { rynk = { cmd = "GetVersion", reply = { major = 0, minor = 2 } } },
 ]
 
 # Layout counts come from the live keymap; the rest are compile-time constants
@@ -33,10 +33,10 @@ steps = [
     num_layers = 1, num_rows = 1, num_cols = 2, num_encoders = 0,
     max_combos = 8, max_combo_keys = 4, macro_space_size = 256,
     max_morse = 8, max_patterns_per_key = 8, max_forks = 8,
-    storage_enabled = true, lighting_enabled = false,
+    storage_enabled = true, lighting_enabled = false, dfu_enabled = false,
     is_split = true, num_split_peripherals = 1,
     ble_enabled = true, num_ble_profiles = 3,
-    max_payload_size = 482, max_bulk_keys = 47, max_bulk_items = 7,
+    max_payload_size = 2035, max_bulk_keys = 203, max_bulk_items = 30,
     macro_chunk_size = 64, bulk_transfer_supported = true,
   } } },
 ]

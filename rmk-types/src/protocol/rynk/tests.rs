@@ -247,6 +247,7 @@ fn exemplars() -> Exemplars {
         max_bulk_items: 15,
         macro_chunk_size: 16,
         bulk_transfer_supported: true,
+        dfu_enabled: false,
     };
     // Ascending version/id values; distinct strings so a field swap shows.
     let device_info = DeviceInfo {

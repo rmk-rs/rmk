@@ -58,5 +58,6 @@ passkey_entry = []
 _dfu = []
 dfu_split = []
 dfu_lock = []
+dfu_ble = []
 # Stenography (Plover HID) support: `StenoKey` + `Action::Steno` variant.
 steno = []

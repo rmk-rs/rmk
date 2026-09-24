@@ -4,6 +4,10 @@ use crate::{DEFAULT_PASSKEY_ENTRY_TIMEOUT_SECS, MIN_PASSKEY_ENTRY_TIMEOUT_SECS};
 
 const SUBSCRIBER_DEFAULT_CONFIG: &str = include_str!("../default_config/subscriber_default.toml");
 
+/// Minimum `[event.dfu_cmd]` channel size enforced when `dfu_ble` is active.
+/// Must stay in sync with the default in `default_config/event_default.toml`.
+const CHANNEL_SIZE_DFU_CMD_DFU_BLE: usize = 16;
+
 /// Parsed representation of `subscriber_default.toml`.
 #[derive(Deserialize)]
 struct SubscriberConfig {
@@ -212,6 +216,13 @@ impl crate::KeyboardTomlConfig {
         {
             event.subs += split_peripherals_num;
             event.pubs += 1; // Split-Loop as second publisher (USB-Proxy is first)
+        }
+        // Larger dfu_cmd buffer for BLE DFU: bursty writes need
+        // headroom so the FlashDfuHandler can stay ahead of the host.
+        if active_features.contains(&"dfu_ble")
+            && let Some(event) = events.iter_mut().find(|e| e.name == "dfu_cmd")
+        {
+            event.channel_size = event.channel_size.max(CHANNEL_SIZE_DFU_CMD_DFU_BLE);
         }
 
         if !split_battery_peripheral_ids.is_empty()

@@ -37,12 +37,6 @@ compile_error!(
      Use `defmt` logging on these chips."
 );
 
-#[cfg(all(feature = "dfu_split", feature = "_ble"))]
-compile_error!(
-    "`dfu_split` is not supported on BLE keyboards yet: the DFU passthrough only \
-     runs over the wired split transport. Disable `dfu_split` on BLE builds."
-);
-
 // The DFU features are layered: `dfu` is the base, and everything on top of
 // it needs a chip backend (`dfu_rp` or `dfu_nrf`) to provide the updater.
 #[cfg(all(feature = "_dfu", not(any(feature = "dfu_rp", feature = "dfu_nrf"))))]
@@ -53,6 +47,8 @@ compile_error!("feature `dfu_split` requires the `_dfu` feature — enable `dfu_
 compile_error!("feature `dfu_ext` requires the `_dfu` feature — enable `dfu_rp` or `dfu_nrf`");
 #[cfg(all(feature = "dfu_lock", not(feature = "_dfu")))]
 compile_error!("feature `dfu_lock` requires the `_dfu` feature — enable `dfu_rp` or `dfu_nrf`");
+#[cfg(all(feature = "dfu_ble", not(any(feature = "dfu_rp", feature = "dfu_nrf"))))]
+compile_error!("feature `dfu_ble` requires `dfu_rp` or `dfu_nrf`");
 
 // Re-export self as ::rmk for macro-generated code to work both inside and outside the crate
 extern crate self as rmk;
@@ -92,7 +88,7 @@ pub mod boot;
 pub mod channel;
 pub mod config;
 pub mod core_traits;
-#[cfg(feature = "dfu_split")]
+#[cfg(any(feature = "dfu_split", feature = "dfu_ble"))]
 pub mod crc32;
 #[cfg(feature = "custom_message")]
 pub mod custom_message;

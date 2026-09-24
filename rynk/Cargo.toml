@@ -70,6 +70,7 @@ members = [
     "rynk-ble",
     "rynk-wasm",
     "rynk-kle",
+    "rynk-wtf",
 ]
 default-members = [
     ".",
