@@ -3,6 +3,7 @@ use crate::validate_unlock_keys;
 /// Resolved host-tool configuration.
 pub struct Host {
     pub vial_enabled: bool,
+    pub vial_macro_count: u8,
     pub rynk_enabled: bool,
     pub unlock_keys: Vec<[u8; 2]>,
     pub insecure: bool,
@@ -20,6 +21,7 @@ impl crate::KeyboardTomlConfig {
 
         Host {
             vial_enabled: host_toml.vial_enabled,
+            vial_macro_count: host_toml.vial_macro_count,
             rynk_enabled: host_toml.rynk_enabled,
             unlock_keys,
             insecure: host_toml.insecure,

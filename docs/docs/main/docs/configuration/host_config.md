@@ -4,6 +4,7 @@ The `[host]` section selects the firmware protocol used by host-side tools.
 RMK currently supports two mutually exclusive protocols:
 
 - `vial_enabled`: the Vial/VIA-compatible protocol for the Vial app. This is the default.
+- `vial_macro_count`: the number of dynamic macro slots reported to Vial. It defaults to 32 and is independent of `rmk.macro_space_size`.
 - `rynk_enabled`: RMK's native protocol for RMK-aware host tools. **Experimental** — see
   [Rynk](../features/rynk).
 
@@ -44,6 +45,7 @@ Use Vial with the `rmk` default Cargo features:
 [host]
 vial_enabled = true
 rynk_enabled = false
+vial_macro_count = 32
 unlock_keys = [[0, 0], [0, 1]]
 ```
 
