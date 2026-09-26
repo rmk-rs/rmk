@@ -262,3 +262,27 @@ steps = [
   { release = [1, 8] },
 ]
 expect = [["A"], [], ["LShift"], ["LShift", "U"], ["LShift"], []]
+
+# MT(B, LShift)@(1,1) and MT(B, LShift, p0)@(3,6) share tap/hold actions.
+# Releasing either used to resolve both as taps, so the held key never shifted.
+[[test]]
+name = "duplicate_mod_tap_releasing_first_keeps_second_pending"
+steps = [
+  { press = [1, 1] },
+  { press = [3, 6] },
+  { release = [1, 1] },
+  { delay = 300 },
+  { release = [3, 6] },
+]
+expect = [["B"], [], ["LShift"], []]
+
+[[test]]
+name = "duplicate_mod_tap_releasing_second_keeps_first_pending"
+steps = [
+  { press = [1, 1] },
+  { press = [3, 6] },
+  { release = [3, 6] },
+  { delay = 300 },
+  { release = [1, 1] },
+]
+expect = [["B"], [], ["LShift"], []]
