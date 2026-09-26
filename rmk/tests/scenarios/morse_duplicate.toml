@@ -1,0 +1,38 @@
+# Releasing one of two identical Mod-Tap bindings used to resolve both as taps,
+# so the key still held past its timeout never produced its modifier.
+
+[layout]
+rows = 1
+cols = 2
+map = "(0,0) (0,1)"
+
+[[keymap.layer]]
+keys = "MT(B, LShift) MT(B, LShift)"
+
+[behavior.morse]
+normal_mode = true
+unilateral_tap = false
+enable_flow_tap = false
+hold_timeout = "250ms"
+
+[[test]]
+name = "releasing_first_keeps_second_pending"
+steps = [
+  { press = [0, 0] },
+  { press = [0, 1] },
+  { release = [0, 0] },
+  { delay = 300 },
+  { release = [0, 1] },
+]
+expect = [["B"], [], ["LShift"], []]
+
+[[test]]
+name = "releasing_second_keeps_first_pending"
+steps = [
+  { press = [0, 0] },
+  { press = [0, 1] },
+  { release = [0, 1] },
+  { delay = 300 },
+  { release = [0, 0] },
+]
+expect = [["B"], [], ["LShift"], []]
