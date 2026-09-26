@@ -20,7 +20,7 @@ Presses and releases a key. Modifiers pressed outside of a macro sequence are co
 
 ### Press(HidKeyCode)
 
-Press (and hold) a keycode. Useful for modifier keys.
+Press (and hold) a keycode. Useful for modifier keys. A key the macro never releases is released when the macro ends.
 
 ### Release(HidKeyCode)
 

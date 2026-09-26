@@ -155,8 +155,8 @@ impl Runnable for Keyboard<'_> {
             }
 
             // Run any macros triggered while handling the event.
-            while let Ok((macro_idx, event)) = crate::channel::MACRO_TRIGGER_CHANNEL.try_receive() {
-                self.execute_macro(macro_idx, event).await;
+            while let Ok(macro_idx) = crate::channel::MACRO_TRIGGER_CHANNEL.try_receive() {
+                self.execute_macro(macro_idx).await;
             }
         }
     }
@@ -218,8 +218,8 @@ pub struct Keyboard<'a> {
     fork_states: [Option<ActiveFork>; FORK_MAX_NUM], // chosen replacement key of the currently triggered forks and the related modifier suppression
     fork_keep_mask: ModifierCombination, // aggregate here the explicit modifiers pressed since the last fork activations
 
-    /// The held modifiers for the keyboard hid report
-    held_modifiers: ModifierCombination,
+    /// Explicit modifiers and who holds them; the modifier counterpart of `registered_keys`.
+    registered_modifiers: Vec<(KeyboardEventPos, ModifierCombination), 8>,
 
     /// The held keys for the keyboard hid report, except the modifiers
     held_keycodes: [HidKeyCode; 6],
@@ -269,7 +269,7 @@ impl<'a> Keyboard<'a> {
             fork_keep_mask: ModifierCombination::default(),
             held_buffer: HeldBuffer::new(),
             registered_keys: [None; 6],
-            held_modifiers: ModifierCombination::default(),
+            registered_modifiers: Vec::new(),
             held_keycodes: [HidKeyCode::No; 6],
             mouse: MouseState::new(),
             media_report: MediaKeyboardReport { usage_id: 0 },
@@ -371,8 +371,7 @@ impl<'a> Keyboard<'a> {
                             .filter(|combo| !combo.is_triggered() && combo.config.contains(&key.action))
                             .for_each(Combo::reset);
                     });
-                    self.process_key_action(&key.action, key.event, false, key.press_time)
-                        .await;
+                    self.process_key_action(&key.action, key.event, key.press_time).await;
                 }
             }
             _ => {
@@ -408,21 +407,15 @@ impl<'a> Keyboard<'a> {
         let key_action = &self.keymap.get_action_with_layer_cache(event);
 
         if self.combo_on {
-            if let (Some(key_action), is_combo) = self.process_combo(key_action, event, event_time).await {
-                self.process_key_action(&key_action, event, is_combo, event_time).await
+            if let Some((key_action, event)) = self.process_combo(key_action, event, event_time).await {
+                self.process_key_action(&key_action, event, event_time).await
             }
         } else {
-            self.process_key_action(key_action, event, false, event_time).await
+            self.process_key_action(key_action, event, event_time).await
         }
     }
 
-    async fn process_key_action(
-        &mut self,
-        key_action: &KeyAction,
-        event: KeyboardEvent,
-        is_combo: bool,
-        event_time: Instant,
-    ) {
+    async fn process_key_action(&mut self, key_action: &KeyAction, event: KeyboardEvent, event_time: Instant) {
         // First, make the decision for current key and held keys
         let (decision_for_current_key, decisions) = self.make_decisions_for_keys(key_action, event);
 
@@ -441,7 +434,7 @@ impl<'a> Keyboard<'a> {
         match updated_decision_for_cur_key {
             KeyBehaviorDecision::CleanBuffer | KeyBehaviorDecision::Release => {
                 debug!("Clean buffer, then process current key normally");
-                let key_action = if keyboard_state_updated && !is_combo {
+                let key_action = if keyboard_state_updated && event.pos.is_physical() {
                     // The key_action needs to be updated due to the morse key might be triggered
                     &self.keymap.get_action_with_layer_cache(event)
                 } else {
@@ -468,7 +461,7 @@ impl<'a> Keyboard<'a> {
             KeyBehaviorDecision::Ignore => {
                 debug!("Current key is ignored or not buffered, process normally: {:?}", event);
                 // Process current key normally
-                let key_action = if keyboard_state_updated && !is_combo {
+                let key_action = if keyboard_state_updated && event.pos.is_physical() {
                     // The key_action needs to be updated due to the morse key might be triggered
                     &self.keymap.get_action_with_layer_cache(event)
                 } else {
@@ -477,7 +470,7 @@ impl<'a> Keyboard<'a> {
                 self.process_key_action_inner(key_action, event, event_time).await
             }
             KeyBehaviorDecision::FlowTap => {
-                let key_action = if keyboard_state_updated && !is_combo {
+                let key_action = if keyboard_state_updated && event.pos.is_physical() {
                     &self.keymap.get_action_with_layer_cache(event)
                 } else {
                     key_action
@@ -1028,24 +1021,25 @@ impl<'a> Keyboard<'a> {
         let triggered_combo = self.keymap.with_combos_mut(|combos| {
             combos
                 .iter_mut()
-                .filter_map(|c| c.as_mut())
-                .filter_map(|c| {
+                .enumerate()
+                .filter_map(|(i, c)| c.as_mut().map(|c| (i, c)))
+                .filter_map(|(i, c)| {
                     if c.is_all_pressed() && !c.is_triggered() {
                         // When a key is pressed (interrupting a combo wait), trigger any delayed combo.
                         // When releasing a key, only trigger combos that contain the key_action.
                         if event.pressed || c.config.contains(key_action) {
                             // All keys are pressed but the combo is not triggered, trigger it
-                            return Some((c.size(), c));
+                            return Some((c.size(), i, c));
                         }
                     }
                     None
                 }) // Find all delayed combos
                 .max_by_key(|x| x.0) // Find only the longest one
-                .map(|(_, c)| (c.trigger(), c.config.actions.clone())) // Trigger it and get the actions
+                .map(|(_, i, c)| (i, c.trigger(), c.config.actions.clone())) // Trigger it and get the actions
         });
 
         // Clean the held buffer, process the combo output action and clear other combos
-        if let Some((action, combo_actions)) = triggered_combo {
+        if let Some((idx, action, combo_actions)) = triggered_combo {
             // Only remove keys that are part of the triggered combo from the held buffer
             self.held_buffer.keys.retain(|item| {
                 if item.state != KeyState::WaitingCombo {
@@ -1055,9 +1049,11 @@ impl<'a> Keyboard<'a> {
                 !combo_actions.contains(&item.action)
             });
 
-            let mut new_event = event;
-            new_event.pressed = true;
-            self.process_key_action(&action, new_event, true, Instant::now()).await;
+            let output_event = KeyboardEvent {
+                pos: KeyboardEventPos::Combo(idx as u8),
+                pressed: true,
+            };
+            self.process_key_action(&action, output_event, Instant::now()).await;
             debug!("[Combo] {:?} triggered", action);
             // Reset other combos shadowed by the one that just fired.
             self.reset_shadowed_combos(&combo_actions);
@@ -1083,13 +1079,15 @@ impl<'a> Keyboard<'a> {
 
     /// Check combo before process keys.
     ///
-    /// This function returns key action after processing combo, and a boolean indicates that if current returned key action is a combo output
+    /// Returns the action to dispatch and the event to dispatch it under: the key
+    /// itself, or a combo output under the combo's own position. `None` means the
+    /// event was consumed here.
     async fn process_combo(
         &mut self,
         key_action: &KeyAction,
         event: KeyboardEvent,
         event_time: Instant,
-    ) -> (Option<KeyAction>, bool) {
+    ) -> Option<(KeyAction, KeyboardEvent)> {
         let current_layer = self.keymap.get_activated_layer();
 
         // First, when releasing a key, check whether there's untriggered combo, if so, triggerer it first
@@ -1100,9 +1098,8 @@ impl<'a> Keyboard<'a> {
         // If this is a re-press of a key belonging to an already-triggered combo
         // (the user released one chord key and pressed it again while the other
         // is still down), reassert its bit in the combo state and swallow the
-        // press. Otherwise the press would reach `register_keycode` at the same
-        // pos where the combo output was registered and overwrite it in the
-        // HID report, stranding the re-pressed key after the combo completes.
+        // press: its release is consumed by the combo below, so dispatching the
+        // press would leave the key stuck on the host.
         if event.pressed {
             let reasserted = self.keymap.with_combos_mut(|combos| {
                 let mut any = false;
@@ -1115,7 +1112,7 @@ impl<'a> Keyboard<'a> {
             });
             if reasserted {
                 debug!("[Combo] re-press of triggered-combo key swallowed: {:?}", key_action);
-                return (None, true);
+                return None;
             }
         }
         // Combo idle cooldown: skip combo recording if within idle window
@@ -1160,24 +1157,32 @@ impl<'a> Keyboard<'a> {
 
             // Only one combo is updated, and triggered
             let triggered = self.keymap.with_combos_mut(|combos| {
-                combos.iter_mut().filter_map(|c| c.as_mut()).find_map(|c| {
-                    if c.is_all_pressed() && !c.is_triggered() && c.size() == max_size {
-                        Some((c.trigger(), c.config.actions.clone()))
-                    } else {
-                        None
-                    }
-                })
+                combos
+                    .iter_mut()
+                    .enumerate()
+                    .filter_map(|(i, c)| c.as_mut().map(|c| (i, c)))
+                    .find_map(|(i, c)| {
+                        if c.is_all_pressed() && !c.is_triggered() && c.size() == max_size {
+                            Some((i, c.trigger(), c.config.actions.clone()))
+                        } else {
+                            None
+                        }
+                    })
             });
 
-            if let Some((next_action, triggered_actions)) = triggered {
+            if let Some((idx, next_action, triggered_actions)) = triggered {
                 debug!("[Combo] {:?} triggered", next_action);
                 self.held_buffer
                     .keys
                     .retain(|item| item.state != KeyState::WaitingCombo || !triggered_actions.contains(&item.action));
                 self.reset_shadowed_combos(&triggered_actions);
-                return (Some(next_action), true);
+                let output_event = KeyboardEvent {
+                    pos: KeyboardEventPos::Combo(idx as u8),
+                    pressed: true,
+                };
+                return Some((next_action, output_event));
             }
-            (None, false)
+            None
         } else {
             // No combo is updated, dispatch combos
             if !event.pressed {
@@ -1187,11 +1192,15 @@ impl<'a> Keyboard<'a> {
                 // (e.g. `M+,` and `,+.` both sharing Comma), so collect every combo
                 // output that unwinds — not just the first — otherwise the others
                 // stay stuck on the host.
-                let mut combo_outputs: Vec<KeyAction, COMBO_MAX_NUM> = Vec::new();
+                let mut combo_outputs: Vec<(u8, KeyAction), COMBO_MAX_NUM> = Vec::new();
                 let mut releasing_triggered_combo = false;
 
                 self.keymap.with_combos_mut(|combos| {
-                    for combo in combos.iter_mut().filter_map(|c| c.as_mut()) {
+                    for (i, combo) in combos
+                        .iter_mut()
+                        .enumerate()
+                        .filter_map(|(i, c)| c.as_mut().map(|c| (i, c)))
+                    {
                         if combo.config.contains(key_action) {
                             // Releasing a combo key in triggered combo
                             releasing_triggered_combo |= combo.is_triggered();
@@ -1200,7 +1209,7 @@ impl<'a> Keyboard<'a> {
                             // Release the combo key, check whether the combo is fully released
                             if combo.update_released(key_action) {
                                 debug!("[Combo] {:?} is released", combo.config.output);
-                                let _ = combo_outputs.push(combo.config.output);
+                                let _ = combo_outputs.push((i as u8, combo.config.output));
                             }
                         }
                     }
@@ -1209,19 +1218,23 @@ impl<'a> Keyboard<'a> {
                 // Releasing a triggered combo:
                 // - Dispatch every combo output whose combo fully unwound, in iteration
                 //   order. Returning `None` tells the caller not to dispatch again.
-                // - Return `(None, true)` on a partial release too (combo output still
-                //   held), which consumes the release event without sending anything.
+                // - Return `None` on a partial release too (combo output still held),
+                //   which consumes the release event without sending anything.
                 if releasing_triggered_combo {
-                    for output in &combo_outputs {
-                        self.process_key_action(output, event, true, event_time).await;
+                    for (idx, output) in &combo_outputs {
+                        let output_event = KeyboardEvent {
+                            pos: KeyboardEventPos::Combo(*idx),
+                            pressed: false,
+                        };
+                        self.process_key_action(output, output_event, event_time).await;
                     }
-                    return (None, true);
+                    return None;
                 }
             }
 
             // When no key is updated(the combo is interruptted), or a key is released,
             self.dispatch_combos(key_action, event).await;
-            (Some(*key_action), false)
+            Some((*key_action, event))
         }
     }
 
@@ -1243,8 +1256,7 @@ impl<'a> Keyboard<'a> {
         {
             let key = self.held_buffer.keys.remove(i);
             debug!("[Combo] Dispatching combo: {:?}", key);
-            self.process_key_action(&key.action, key.event, false, key.press_time)
-                .await;
+            self.process_key_action(&key.action, key.event, key.press_time).await;
         }
 
         // Reset triggered combo states
@@ -1325,9 +1337,9 @@ impl<'a> Keyboard<'a> {
             }
             Action::Modifier(modifiers) => {
                 if event.pressed {
-                    self.register_modifiers(modifiers);
+                    self.register_modifiers(modifiers, event);
                 } else {
-                    self.unregister_modifiers(modifiers);
+                    self.unregister_modifiers(modifiers, event);
                 }
                 //report the modifier press/release in its own hid report
                 self.send_keyboard_report_with_resolved_modifiers(event.pressed).await;
@@ -1335,11 +1347,7 @@ impl<'a> Keyboard<'a> {
             }
             Action::TriggerMacro(macro_idx) => {
                 // Macros are fired on press.
-                if event.pressed
-                    && crate::channel::MACRO_TRIGGER_CHANNEL
-                        .try_send((macro_idx, event))
-                        .is_err()
-                {
+                if event.pressed && crate::channel::MACRO_TRIGGER_CHANNEL.try_send(macro_idx).is_err() {
                     warn!("Macro trigger queue full, dropped macro {}", macro_idx);
                 }
             }
@@ -1357,13 +1365,9 @@ impl<'a> Keyboard<'a> {
             }
             Action::LayerOnWithModifier(layer_num, modifiers) => {
                 if event.pressed {
-                    // These modifiers will be combined into the hid report, so
-                    // they will be "pressed" the same time as the key (in same hid report)
-                    self.held_modifiers |= modifiers;
+                    self.register_modifiers(modifiers, event);
                 } else {
-                    // The modifiers will not be part of the hid report, so
-                    // they will be "released" the same time as the key (in same hid report)
-                    self.held_modifiers &= !(modifiers);
+                    self.unregister_modifiers(modifiers, event);
                 }
                 self.process_action_layer_switch(layer_num, event);
                 self.send_keyboard_report_with_resolved_modifiers(event.pressed).await
@@ -1431,7 +1435,7 @@ impl<'a> Keyboard<'a> {
     /// - one-shot modifiers
     pub fn resolve_explicit_modifiers(&self, pressed: bool) -> ModifierCombination {
         // if a one-shot modifier is active, decorate the hid report of keypress with those modifiers
-        let mut result = self.held_modifiers;
+        let mut result = self.held_modifiers();
 
         // OneShotState::Held keeps the temporary modifiers active until the key is released
         if pressed {
@@ -1534,7 +1538,7 @@ impl<'a> Keyboard<'a> {
     async fn process_action_special(&mut self, key: SpecialKey, event: KeyboardEvent) {
         match key {
             SpecialKey::GraveEscape => {
-                let hid_keycode = if self.held_modifiers.into_bits() == 0 {
+                let hid_keycode = if self.held_modifiers().into_bits() == 0 {
                     HidKeyCode::Escape
                 } else {
                     HidKeyCode::Grave
@@ -1784,10 +1788,14 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    async fn execute_macro(&mut self, macro_idx: u8, event: KeyboardEvent) {
+    async fn execute_macro(&mut self, macro_idx: u8) {
+        // Every op registers under the macro's own identity, never the trigger key's.
+        let event = KeyboardEvent {
+            pos: KeyboardEventPos::Macro(macro_idx),
+            pressed: true,
+        };
         // Read macro operations until the end of the macro
-        let macro_idx = self.keymap.get_macro_sequence_start(macro_idx);
-        if let Some(macro_start_idx) = macro_idx {
+        if let Some(macro_start_idx) = self.keymap.get_macro_sequence_start(macro_idx) {
             let mut offset = 0;
             loop {
                 // First, get the next macro operation
@@ -1877,8 +1885,22 @@ impl<'a> Keyboard<'a> {
                         embassy_time::Timer::after_millis(t as u64).await;
                     }
                     MacroOperation::End => {
-                        if self.macro_texting {
-                            // Restore held modifiers after text typing stops suppressing them.
+                        // A press without its release ends with the macro; a physical
+                        // key can't clear it, since it's held under the macro's identity.
+                        let mut unpaired = false;
+                        if let Some(&(_, held)) = self.registered_modifiers.iter().find(|(p, _)| *p == event.pos) {
+                            self.unregister_modifiers(held, event);
+                            unpaired = true;
+                        }
+                        for (key, registered) in self.held_keycodes.iter_mut().zip(self.registered_keys.iter_mut()) {
+                            if registered.is_some_and(|e| e.pos == event.pos) {
+                                *key = HidKeyCode::No;
+                                *registered = None;
+                                unpaired = true;
+                            }
+                        }
+                        // Also restore held modifiers after text typing stops suppressing them.
+                        if unpaired || self.macro_texting {
                             self.macro_texting = false;
                             self.send_keyboard_report_with_resolved_modifiers(false).await;
                         }
@@ -1961,7 +1983,7 @@ impl<'a> Keyboard<'a> {
     /// Register a key, the key can be a basic keycode or a modifier.
     fn register_key(&mut self, key: HidKeyCode, event: KeyboardEvent) {
         if key.is_modifier() {
-            self.register_modifier_key(key);
+            self.register_modifiers(key.to_hid_modifiers(), event);
         } else {
             self.register_keycode(key, event);
         }
@@ -1970,7 +1992,7 @@ impl<'a> Keyboard<'a> {
     /// Unregister a key, the key can be a basic keycode or a modifier.
     fn unregister_key(&mut self, key: HidKeyCode, event: KeyboardEvent) {
         if key.is_modifier() {
-            self.unregister_modifier_key(key);
+            self.unregister_modifiers(key.to_hid_modifiers(), event);
         } else {
             self.unregister_keycode(key, event);
         }
@@ -1978,12 +2000,12 @@ impl<'a> Keyboard<'a> {
 
     /// Register a key to be sent in hid report.
     fn register_keycode(&mut self, key: HidKeyCode, event: KeyboardEvent) {
-        // First, find the key event slot according to the position, then the first
-        // free slot.
+        // A position holds one keycode, so a re-press replaces whatever a lost
+        // release left in its slot. A macro holds one keycode per op instead.
         let slot = self
             .registered_keys
             .iter()
-            .position(|k| k.is_some_and(|e| e.pos == event.pos))
+            .position(|k| !matches!(event.pos, KeyboardEventPos::Macro(_)) && k.is_some_and(|e| e.pos == event.pos))
             .or_else(|| self.held_keycodes.iter().position(|&k| k == HidKeyCode::No));
 
         if let Some(slot) = slot {
@@ -1994,10 +2016,7 @@ impl<'a> Keyboard<'a> {
 
     /// Unregister a key from hid report.
     fn unregister_keycode(&mut self, key: HidKeyCode, event: KeyboardEvent) {
-        // Prefer a slot whose recorded pos AND keycode both match. Combo outputs are
-        // registered under the triggering key's pos, so a pos-only match can hit a
-        // slot that holds a different keycode — and clear the wrong combo output,
-        // leaving the intended one stuck on the host.
+        // Match pos and keycode: a macro holds several keycodes under one pos.
         let slot = self.registered_keys.iter().enumerate().find_map(|(i, k)| {
             if let Some(e) = k
                 && event.pos == e.pos
@@ -2008,8 +2027,18 @@ impl<'a> Keyboard<'a> {
             None
         });
 
-        // Fall back to any slot holding the same keycode.
-        let slot = slot.or_else(|| self.held_keycodes.iter().position(|&k| k == key));
+        // A physical release with no slot of its own still clears the keycode from
+        // another physical key. A combo or macro output releases only under its own
+        // identity, so nothing else can take a key from it, and it takes none.
+        let slot = slot.or_else(|| {
+            if !event.pos.is_physical() {
+                return None;
+            }
+            self.held_keycodes
+                .iter()
+                .enumerate()
+                .position(|(i, &k)| k == key && self.registered_keys[i].is_some_and(|e| e.pos.is_physical()))
+        });
 
         if let Some(index) = slot {
             self.held_keycodes[index] = HidKeyCode::No;
@@ -2017,33 +2046,29 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    /// Register a modifier to be sent in hid report.
-    fn register_modifier_key(&mut self, key: HidKeyCode) {
-        self.held_modifiers |= key.to_hid_modifiers();
-
-        publish_event(ModifierEvent {
-            modifier: self.held_modifiers,
-        });
-
-        // if a modifier key arrives after fork activation, it should be kept
-        self.fork_keep_mask |= key.to_hid_modifiers();
-    }
-
-    /// Unregister a modifier from hid report.
-    fn unregister_modifier_key(&mut self, key: HidKeyCode) {
-        self.held_modifiers &= !key.to_hid_modifiers();
-
-        publish_event(ModifierEvent {
-            modifier: self.held_modifiers,
-        });
+    /// Every explicit modifier some holder has down.
+    fn held_modifiers(&self) -> ModifierCombination {
+        self.registered_modifiers
+            .iter()
+            .fold(ModifierCombination::new(), |acc, (_, m)| acc | *m)
     }
 
     /// Register a modifier combination to be sent in hid report.
-    fn register_modifiers(&mut self, modifiers: ModifierCombination) {
-        self.held_modifiers |= modifiers;
+    fn register_modifiers(&mut self, modifiers: ModifierCombination, event: KeyboardEvent) {
+        match self.registered_modifiers.iter_mut().find(|(p, _)| *p == event.pos) {
+            // A macro holds everything its ops pressed; any other holder is one action,
+            // so a re-press replaces whatever a lost release left behind.
+            Some((KeyboardEventPos::Macro(_), held)) => *held |= modifiers,
+            Some((_, held)) => *held = modifiers,
+            None => {
+                if self.registered_modifiers.push((event.pos, modifiers)).is_err() {
+                    warn!("Modifier holders full, dropped {:?}", modifiers);
+                }
+            }
+        }
 
         publish_event(ModifierEvent {
-            modifier: self.held_modifiers,
+            modifier: self.held_modifiers(),
         });
 
         // if a modifier key arrives after fork activation, it should be kept
@@ -2051,11 +2076,20 @@ impl<'a> Keyboard<'a> {
     }
 
     /// Unregister a modifier combination from hid report.
-    fn unregister_modifiers(&mut self, modifiers: ModifierCombination) {
-        self.held_modifiers &= !modifiers;
+    ///
+    /// Only the holder that registered a modifier releases it: two keys sharing a
+    /// modifier, or a macro and a physical key, each keep it down until their own
+    /// release.
+    fn unregister_modifiers(&mut self, modifiers: ModifierCombination, event: KeyboardEvent) {
+        if let Some(i) = self.registered_modifiers.iter().position(|(p, _)| *p == event.pos) {
+            self.registered_modifiers[i].1 &= !modifiers;
+            if self.registered_modifiers[i].1.into_bits() == 0 {
+                self.registered_modifiers.swap_remove(i);
+            }
+        }
 
         publish_event(ModifierEvent {
-            modifier: self.held_modifiers,
+            modifier: self.held_modifiers(),
         });
     }
 }
@@ -2208,13 +2242,13 @@ mod test {
             // Press Shift key
             keyboard.register_key(HidKeyCode::LShift, KeyboardEvent::key(3, 0, true));
             assert_eq!(
-                keyboard.held_modifiers,
+                keyboard.held_modifiers(),
                 ModifierCombination::new().with_left_shift(true)
             ); // Left Shift's modifier bit is 0x02
 
             // Release Shift key
             keyboard.unregister_key(HidKeyCode::LShift, KeyboardEvent::key(3, 0, false));
-            assert_eq!(keyboard.held_modifiers, ModifierCombination::new());
+            assert_eq!(keyboard.held_modifiers(), ModifierCombination::new());
         };
         block_on(main);
     }
@@ -2462,7 +2496,7 @@ mod test {
 
             // Release LShift key
             keyboard.process_inner(KeyboardEvent::key(3, 0, false)).await;
-            assert_eq!(keyboard.held_modifiers, ModifierCombination::new());
+            assert_eq!(keyboard.held_modifiers(), ModifierCombination::new());
             assert_eq!(keyboard.resolve_modifiers(false), ModifierCombination::new());
 
             // Press Comma key, by itself it should emit ','
@@ -2491,7 +2525,7 @@ mod test {
 
             // Release LShift key
             keyboard.process_inner(KeyboardEvent::key(3, 0, false)).await;
-            assert_eq!(keyboard.held_modifiers, ModifierCombination::new());
+            assert_eq!(keyboard.held_modifiers(), ModifierCombination::new());
             assert_eq!(keyboard.resolve_modifiers(false), ModifierCombination::new());
         };
 

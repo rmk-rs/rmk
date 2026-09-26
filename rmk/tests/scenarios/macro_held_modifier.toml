@@ -27,3 +27,35 @@ steps = [
   { release = [0, 0] },
 ]
 expect = [["LCtrl"], ["LShift"], ["LShift", "A"], ["LShift"], [], ["LCtrl"], []]
+
+# The macro's own Ctrl and the held key's Ctrl are two holders of one modifier.
+# Regression: `up LCtrl` in the macro cleared the modifier bit outright, so the
+# physically held Ctrl went up with it.
+[[test]]
+name = "macro_releasing_a_modifier_keeps_the_physical_one"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "down", keycode = "LCtrl" },
+    { operation = "tap", keycode = "A" },
+    { operation = "up", keycode = "LCtrl" },
+  ] },
+] }
+steps = [
+  { press = [0, 0] },
+  { tap = { pos = [0, 1], duration = 100 } },
+  { release = [0, 0] },
+]
+expect = [["LCtrl"], ["LCtrl"], ["LCtrl", "A"], ["LCtrl"], ["LCtrl"], []]
+
+# A press the macro never releases ends with the macro. It is held under the
+# macro's identity, so no physical key could release it later.
+[[test]]
+name = "macro_press_without_release_ends_with_the_macro"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "down", keycode = "LCtrl" },
+    { operation = "tap", keycode = "A" },
+  ] },
+] }
+steps = [{ tap = { pos = [0, 1], duration = 100 } }]
+expect = [["LCtrl"], ["LCtrl", "A"], ["LCtrl"], []]
