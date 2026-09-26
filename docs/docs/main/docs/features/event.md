@@ -50,7 +50,7 @@ RMK provides built-in event types organized by category. All of them are exporte
 
 **Connection Events**:
 
-- `ConnectionStatusChangeEvent` - Full `ConnectionStatus` snapshot (USB lifecycle, BLE profile/state, preferred transport); fires on every transition
+- `ConnectionStatusChangeEvent` - Full `ConnectionStatus` snapshot (USB lifecycle, BLE profile/state/bond, preferred transport); fires on every transition.
 
 **Split Keyboard Events** (when split is enabled):
 
@@ -132,6 +132,8 @@ publish_event_async(MyCustomEvent(42)).await;
 ```
 
 `publish_event` never waits: on a full Channel the event is dropped, and on a full PubSub the oldest unread event is overwritten. Use `publish_event_async` when every event must be delivered.
+
+No event is retained: a subscriber sees nothing until the next publish. To start from the current value, subscribe first, then read the snapshot getter (e.g. `rmk::state::current_connection_status()`).
 
 ## Related Documentation
 

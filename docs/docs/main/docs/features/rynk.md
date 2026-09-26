@@ -26,8 +26,9 @@ Through Rynk, a host tool can read and change:
 
 It can also watch live status — the current layer, a key tester (matrix state),
 typing speed (WPM), the caps-lock/num-lock indicators, sleep state, battery
-level, and, on wireless boards, the connection and BLE profile (including
-switching or clearing a profile) and split peripheral status. It can read the
+level, and, on wireless boards, the connection and BLE profile status (the active
+profile, its connection state, and whether that profile has bond information) and
+split peripheral status; it can also switch or clear a profile. It can read the
 device info (RMK version, USB IDs, names) and the physical layout, so a tool can
 draw your keyboard. Finally it can reboot the keyboard, enter the bootloader,
 and reset stored settings.

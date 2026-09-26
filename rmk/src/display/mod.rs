@@ -115,7 +115,7 @@ pub struct RenderContext {
     pub battery: BatteryStatusEvent,
     /// Whether the keyboard is sleeping.
     pub sleeping: bool,
-    /// Current BLE connection status (profile + state).
+    /// Current BLE status (active profile, connection state, and bond presence).
     #[cfg(feature = "_ble")]
     pub ble_status: BleStatus,
     /// Whether the central is connected (only meaningful on peripherals).

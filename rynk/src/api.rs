@@ -372,7 +372,7 @@ impl Client {
         self.request::<command::GetConnectionStatus>(&()).await
     }
 
-    /// Read BLE status (active profile, connection state). Requires
+    /// Read BLE status (active profile, connection state, and bond presence). Requires
     /// [`DeviceCapabilities::ble_enabled`]; nothing is sent otherwise.
     pub async fn get_ble_status(&self) -> Result<BleStatus, RynkHostError> {
         self.require_ble(Cmd::GetBleStatus)?;

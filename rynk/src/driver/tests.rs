@@ -4,6 +4,7 @@ use std::time::Duration;
 use embassy_futures::join::join;
 use rmk_types::action::KeyAction;
 use rmk_types::battery::BatteryStatus;
+use rmk_types::ble::BleStatus;
 use rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rmk_types::protocol::rynk::{
     GetComboBulkResponse, GetKeymapBulkResponse, GetMorseBulkResponse, PeripheralStatus, ProtocolVersion,
@@ -414,13 +415,20 @@ async fn topic_queue_overflow_drops_oldest() {
 #[tokio::test]
 async fn next_topic_decodes_typed_payload() {
     let status = ConnectionStatus {
+        ble: BleStatus {
+            bonded: true,
+            ..Default::default()
+        },
         preferred: ConnectionType::Ble,
         ..Default::default()
     };
     let (client, mut driver) = raw_session(vec![Step::Chunk(topic(Cmd::ConnectionChange, status)), Step::Hang]);
     let ev = drive(&mut driver, &client, client.next_topic()).await;
     match ev {
-        TopicEvent::ConnectionChange(s) => assert_eq!(s.preferred, ConnectionType::Ble),
+        TopicEvent::ConnectionChange(s) => {
+            assert_eq!(s.preferred, ConnectionType::Ble);
+            assert!(s.ble.bonded);
+        }
         other => panic!("expected ConnectionChange, got {other:?}"),
     }
 }

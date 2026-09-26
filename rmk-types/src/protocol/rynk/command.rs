@@ -317,6 +317,7 @@ endpoints! {
     GetConnectionType = 0x0701: () => ConnectionType;
     /// Full `ConnectionStatus` snapshot.
     GetConnectionStatus = 0x0702: () => ConnectionStatus;
+    /// Active profile, BLE state, and whether that profile currently has bond information.
     #[cfg(feature = "_ble")]
     GetBleStatus = 0x0703: () => BleStatus;
     #[cfg(feature = "_ble")]

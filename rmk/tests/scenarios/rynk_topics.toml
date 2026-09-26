@@ -22,7 +22,7 @@ keys = "B  _"
 name = "no_topic_is_pushed_before_the_handshake"
 steps = [
   # A served request that is not `GetCapabilities` must not open the gate.
-  { rynk = { cmd = "GetVersion", reply = { major = 0, minor = 1 } } },
+  { rynk = { cmd = "GetVersion", reply = { major = 0, minor = 2 } } },
   { press = [0, 1] },
   { rynk_no_reply = 50 },
   { release = [0, 1] },
@@ -70,8 +70,8 @@ steps = [
   { rynk_topic = { topic = "SleepState", payload = true } },
   { rynk_publish = { topic = "LedIndicatorChange", payload = { caps_lock = true } } },
   { rynk_topic = { topic = "LedIndicatorChange", payload = { num_lock = false, caps_lock = true, scroll_lock = false, compose = false, kana = false } } },
-  { rynk_publish = { topic = "ConnectionChange", payload = { usb = "Suspended", ble = { profile = 1, state = "Advertising" }, preferred = "Ble" } } },
-  { rynk_topic = { topic = "ConnectionChange", payload = { usb = "Suspended", ble = { profile = 1, state = "Advertising" }, preferred = "Ble" } } },
+  { rynk_publish = { topic = "ConnectionChange", payload = { usb = "Suspended", ble = { profile = 1, state = "Advertising", bonded = true }, preferred = "Ble" } } },
+  { rynk_topic = { topic = "ConnectionChange", payload = { usb = "Suspended", ble = { profile = 1, state = "Advertising", bonded = true }, preferred = "Ble" } } },
   { rynk_publish = { topic = "BatteryStatusChange", payload = { Available = { charge_state = "Discharging", level = 85 } } } },
   { rynk_topic = { topic = "BatteryStatusChange", payload = { Available = { charge_state = "Discharging", level = 85 } } } },
 ]
