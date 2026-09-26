@@ -724,7 +724,7 @@ impl<'a> Keyboard<'a> {
         let check_held_buffer = event.pressed
             || self
                 .held_buffer
-                .find_action(key_action)
+                .find_pos(event.pos)
                 .is_some_and(|k| matches!(k.state, KeyState::Pressed(_) | KeyState::Released(_)));
 
         if check_held_buffer {
@@ -739,7 +739,7 @@ impl<'a> Keyboard<'a> {
                 .filter(|k| matches!(k.state, KeyState::Pressed(_) | KeyState::Released(_)))
             {
                 // Releasing a key is already buffered
-                if !event.pressed && held_key.action == *key_action {
+                if !event.pressed && held_key.event.pos == event.pos {
                     debug!("Releasing a held key: {:?}", event);
                     let _ = decisions.push((held_key.event.pos, HeldKeyDecision::Release));
                     decision_for_current_key = KeyBehaviorDecision::Release;
