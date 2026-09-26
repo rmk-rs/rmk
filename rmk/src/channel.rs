@@ -12,7 +12,6 @@ use {crate::ble::profile::BleProfileAction, rmk_types::led_indicator::LedIndicat
 
 #[cfg(all(feature = "vial", feature = "_ble"))]
 use crate::VIAL_CHANNEL_SIZE;
-use crate::event::KeyboardEvent;
 use crate::hid::{KeyboardReport, Report};
 use crate::{REPORT_CHANNEL_SIZE, RawMutex};
 
@@ -100,4 +99,4 @@ pub(crate) static RYNK_BLE_RX_PIPE: embassy_sync::pipe::Pipe<RawMutex, 512> = em
 /// Macros are triggered on key press but run by the keyboard loop to avoid recursion
 /// (`execute_macro` dispatches a macro's ops back through the action path).
 /// Producer: the `TriggerMacro` action. Consumer: the keyboard loop.
-pub(crate) static MACRO_TRIGGER_CHANNEL: Channel<RawMutex, (u8, KeyboardEvent), 4> = Channel::new();
+pub(crate) static MACRO_TRIGGER_CHANNEL: Channel<RawMutex, u8, 4> = Channel::new();

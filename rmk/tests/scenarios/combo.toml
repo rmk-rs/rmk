@@ -31,6 +31,22 @@ steps = [
 ]
 expect = [["E"], [], ["R"], [], ["T"], []]
 
+# A combo output is held under the combo's own identity, so it and a physical
+# key sharing its modifier release independently. Regression: the combo's
+# release cleared the modifier bit the still-held `MT(B, LShift)` owned.
+[[test]]
+name = "combo_modifier_output_and_held_key_release_independently"
+steps = [
+  { press = [1, 1] },   # MT(B, LShift)
+  { delay = 300 },      # hold: LShift
+  { press = [2, 3] },   # V
+  { press = [2, 4] },   # B: V+B fires LShift
+  { release = [2, 3] },
+  { release = [2, 4] }, # combo releases its LShift
+  { release = [1, 1] },
+]
+expect = [["LShift"], ["LShift"], ["LShift"], []]
+
 [[test]]
 name = "combo_timeout_and_ignore"
 steps = [{ tap = { pos = [2, 3], duration = 100 } }]

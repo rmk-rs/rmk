@@ -65,6 +65,23 @@ expect = [
   [],
 ]
 
+# Each op takes its own report slot. Regression: every op registered under the
+# trigger key's position, so `down B` reused `down A`'s slot and A vanished.
+[[test]]
+name = "macro_holds_two_keys_at_once"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "down", keycode = "A" },
+    { operation = "down", keycode = "B" },
+    { operation = "up", keycode = "A" },
+    { operation = "up", keycode = "B" },
+  ] },
+] }
+steps = [
+  { tap = { pos = [0, 6], duration = 100 } },
+]
+expect = [["A"], ["A", "B"], ["B"], []]
+
 [[test]]
 name = "macro_with_delay"
 behavior.macro = { macros = [

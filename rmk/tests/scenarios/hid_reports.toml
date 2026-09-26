@@ -5,7 +5,8 @@
 #
 # `MO(1)` at (0,3) adds a second layer for the rollover cases below: layer 1
 # row 1 pairs a plain keycode with its `SHIFTED()` twin, row 2 is four
-# distinct keycodes as a control.
+# distinct keycodes as a control. Layer 0 row 1 holds two `LShift` keys for
+# the shared-modifier case.
 
 [layout]
 rows = 3
@@ -19,7 +20,7 @@ map = """
 [[keymap.layer]]
 keys = """
 AudioVolUp  SystemSleep  MouseRight  MO(1)
-No          No           No          No
+LShift      LShift       No          No
 No          No           No          No
 """
 
@@ -81,6 +82,19 @@ expect = [
   ["Kc0"],
   [],
 ]
+
+# Two keys sharing a modifier are two holders of it, like two keys sharing a
+# keycode above. Regression: modifiers were one bitmask, so releasing either
+# Shift key cleared the bit while the other was still held.
+[[test]]
+name = "shared_modifier_stays_down_until_last_holder_releases"
+steps = [
+  { press = [1, 0] },
+  { press = [1, 1] },
+  { release = [1, 0] },
+  { release = [1, 1] },
+]
+expect = [["LShift"], ["LShift"], ["LShift"], []]
 
 # Control: same roll shape over `-`, `7`, `8`, `9`, four distinct keycodes
 # with no collision. Plays clean, which rules out a general rollover or
