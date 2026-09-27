@@ -1,4 +1,4 @@
-use byteorder::{BigEndian, ByteOrder, LittleEndian};
+use byteorder::{BigEndian, ByteOrder};
 use embassy_time::Instant;
 use embedded_io_async::{Read, Write};
 use rmk_types::protocol::vial::{VIA_FIRMWARE_VERSION, VIA_PROTOCOL_VERSION, ViaCommand, ViaKeyboardInfo};
@@ -212,21 +212,32 @@ impl<'a> VialService<'a> {
             }
             ViaCommand::DynamicKeymapSetBuffer => {
                 debug!("Dynamic keymap set buffer");
-                let offset = BigEndian::read_u16(&report.output_data[1..3]);
-                // size <= 28
-                let size = report.output_data[3];
-                let mut idx = 4;
-                let (rows, cols, _) = self.ctx.keymap_dimensions();
-                for i in 0..(size as usize) {
-                    let via_keycode = LittleEndian::read_u16(&report.output_data[idx..idx + 2]);
-                    let action = from_via_keycode(via_keycode);
-                    let flat_index = offset as usize + i;
+                let offset = BigEndian::read_u16(&report.output_data[1..3]) as usize;
+                let size = report.output_data[3] as usize;
+                if size > 28 {
+                    report.input_data[0] = 0xFF;
+                    return;
+                }
+                if size == 0 {
+                    return;
+                }
+                let (rows, cols, layers) = self.ctx.keymap_dimensions();
+                let end = (offset + size).min(layers * rows * cols * 2);
+                for flat_index in offset / 2..end.div_ceil(2) {
+                    let mut bytes = to_via_keycode(self.ctx.get_action_flat(flat_index)).to_be_bytes();
+                    // Byte ranges can start or end halfway through a keycode.
+                    for (i, byte) in bytes.iter_mut().enumerate() {
+                        let pos = flat_index * 2 + i;
+                        if pos >= offset && pos < end {
+                            *byte = report.output_data[4 + pos - offset];
+                        }
+                    }
+                    let action = from_via_keycode(u16::from_be_bytes(bytes));
                     let (layer, in_layer) = (flat_index / (rows * cols), flat_index % (rows * cols));
                     let _ = self
                         .ctx
                         .set_action(layer as u8, (in_layer / cols) as u8, (in_layer % cols) as u8, action)
                         .await;
-                    idx += 2;
                 }
             }
             ViaCommand::DynamicKeymapGetEncoder => {

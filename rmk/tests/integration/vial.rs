@@ -215,3 +215,64 @@ fn behavior_write_survives_restart() {
             .await;
     });
 }
+
+// VIA uploads a keymap as byte offsets and big-endian keycodes in 28-byte pages.
+#[cfg(feature = "storage")]
+#[test]
+fn keymap_buffer_upload_survives_restart() {
+    test_block_on(async {
+        let flash = rmk::test_support::InMemoryFlash::<8192, 4096, 4>::new();
+        for restart in [false, true] {
+            let mut keyboard = SimKeyboard::builder([[[k!(A); 8]; 2]])
+                .build_with_flash(flash.clone())
+                .await;
+            if !restart {
+                let mut request = via(ViaCommand::DynamicKeymapSetBuffer);
+                request[1..4].copy_from_slice(&[0, 2, 28]);
+                for key in request[4..].chunks_exact_mut(2) {
+                    key.copy_from_slice(&to_via_keycode(k!(B)).to_be_bytes());
+                }
+                keyboard.echo(request);
+            }
+            for (row, col, key) in [
+                (0, 0, HidKeyCode::A),
+                (0, 1, HidKeyCode::B),
+                (1, 6, HidKeyCode::B),
+                (1, 7, HidKeyCode::A),
+            ] {
+                keyboard.tap(row, col, 10).expect_keys([key]).expect_keys([]);
+            }
+            keyboard.run().await;
+        }
+    });
+}
+
+#[test]
+fn keymap_buffer_byte_ranges_preserve_neighbors() {
+    for (offset, size, bytes, updated) in [
+        (2, 2, [0, 0x1d], HidKeyCode::Z),
+        (3, 1, [0x1d, 0], HidKeyCode::Z),
+        (8, 2, [0, 0x1d], HidKeyCode::B),
+        (1, 0, [0, 0], HidKeyCode::B),
+        (0, 29, [0, 0], HidKeyCode::B),
+    ] {
+        test_block_on(async {
+            let mut keyboard = SimKeyboard::builder([[[k!(A), k!(B), k!(C), k!(D)]]]).build().await;
+            let mut request = via(ViaCommand::DynamicKeymapSetBuffer);
+            request[1..4].copy_from_slice(&[0, offset, size]);
+            request[4..6].copy_from_slice(&bytes);
+            let mut reply = request;
+            if size > 28 {
+                reply[0] = 0xFF;
+            }
+            keyboard.host_exchange(request, reply);
+            for (col, key) in [HidKeyCode::A, updated, HidKeyCode::C, HidKeyCode::D]
+                .into_iter()
+                .enumerate()
+            {
+                keyboard.tap(0, col as u8, 10).expect_keys([key]).expect_keys([]);
+            }
+            keyboard.run().await;
+        });
+    }
+}
