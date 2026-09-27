@@ -1684,7 +1684,27 @@ impl<'a> Keyboard<'a> {
         self.keymap.set_mouse_buttons(self.mouse.report.buttons);
 
         if let MouseAction::SendReport = action {
-            self.send_mouse_report().await;
+            let mut report = self.mouse.get_report();
+            // Relative axes belong to this event's category; held axes repeat on their own deadlines.
+            if !matches!(
+                key,
+                HidKeyCode::MouseUp | HidKeyCode::MouseDown | HidKeyCode::MouseLeft | HidKeyCode::MouseRight
+            ) {
+                report.x = 0;
+                report.y = 0;
+            }
+            if !matches!(
+                key,
+                HidKeyCode::MouseWheelUp
+                    | HidKeyCode::MouseWheelDown
+                    | HidKeyCode::MouseWheelLeft
+                    | HidKeyCode::MouseWheelRight
+            ) {
+                report.wheel = 0;
+                report.pan = 0;
+            }
+            self.send_report(Report::MouseReport(report)).await;
+            yield_now().await;
         }
     }
 
@@ -1948,13 +1968,6 @@ impl<'a> Keyboard<'a> {
     pub(crate) async fn send_media_report(&mut self) {
         self.send_report(Report::MediaKeyboardReport(self.media_report)).await;
         self.media_report.usage_id = 0;
-        yield_now().await;
-    }
-
-    /// Send mouse report. Rate is implicitly bounded by the repeat interval
-    /// for movement/wheel, but button events are sent immediately.
-    pub(crate) async fn send_mouse_report(&mut self) {
-        self.send_report(Report::MouseReport(self.mouse.get_report())).await;
         yield_now().await;
     }
 

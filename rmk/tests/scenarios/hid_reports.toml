@@ -1,7 +1,6 @@
 # Consumer, system-control and mouse keys each report on their own HID page
 # rather than in the keyboard report, and each sends an all-released report on
-# key up. Three keys, three pages — this file carries its own keyboard instead
-# of the shared board because none of these keys is a fixture anyone else needs.
+# key up. This file carries its own board for the report types exercised below.
 #
 # `MO(1)` at (0,3) adds a second layer for the rollover cases below: layer 1
 # row 1 pairs a plain keycode with its `SHIFTED()` twin, row 2 is four
@@ -19,7 +18,7 @@ map = """
 [[keymap.layer]]
 keys = """
 AudioVolUp  SystemSleep  MouseRight  MO(1)
-No          No           No          No
+MouseBtn1   MouseWheelUp No          No
 No          No           No          No
 """
 
@@ -109,3 +108,47 @@ expect = [
   ["Kc9"],
   [],
 ]
+
+# Button changes must not replay held relative motion; scheduled repeats still fire.
+[[test]]
+name = "mouse_button_does_not_replay_movement"
+steps = [
+  { press = [0, 2] },
+  { press = [1, 0] },
+  { delay = 95 },
+  { release = [1, 0] },
+  { release = [0, 2] },
+]
+expect = [{ mouse = { x = 5 } }, { mouse = { buttons = 1 } }, { mouse = { buttons = 1, x = 5 } }, { mouse = {} }, { mouse = {} }]
+
+[[test]]
+name = "mouse_button_does_not_replay_wheel"
+steps = [
+  { press = [1, 1] },
+  { press = [1, 0] },
+  { delay = 95 },
+  { release = [1, 0] },
+  { release = [1, 1] },
+]
+expect = [{ mouse = { wheel = -1 } }, { mouse = { buttons = 1 } }, { mouse = { buttons = 1, wheel = -1 } }, { mouse = {} }, { mouse = {} }]
+
+# Movement and wheel key events must not replay the other category's delta.
+[[test]]
+name = "mouse_wheel_event_does_not_replay_movement"
+steps = [
+  { press = [0, 2] },
+  { press = [1, 1] },
+  { release = [1, 1] },
+  { release = [0, 2] },
+]
+expect = [{ mouse = { x = 5 } }, { mouse = { wheel = -1 } }, { mouse = {} }, { mouse = {} }]
+
+[[test]]
+name = "mouse_movement_event_does_not_replay_wheel"
+steps = [
+  { press = [1, 1] },
+  { press = [0, 2] },
+  { release = [0, 2] },
+  { release = [1, 1] },
+]
+expect = [{ mouse = { wheel = -1 } }, { mouse = { x = 5 } }, { mouse = {} }, { mouse = {} }]
