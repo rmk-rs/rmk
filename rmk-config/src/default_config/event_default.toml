@@ -107,7 +107,9 @@ pubs = 1
 subs = 1
 
 [event.dfu_cmd]
-channel_size = 4
+# 16 slots absorb pipelined DFU writes (4 chunks × 4 events each) without
+# blocking the rynk session. Each slot holds ~520 B → ~8 KB total.
+channel_size = 16
 pubs = 1
 subs = 1
 

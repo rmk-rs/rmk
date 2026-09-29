@@ -83,9 +83,6 @@ Add a `[dfu]` section to your `keyboard.toml` or use the Rust API directly.
 
 ```toml title="keyboard.toml"
 [dfu]
-# (Optional) Flash page size in bytes (4096 for nRF52840 / nRF52833).
-page_size = 4096
-
 # (Optional) DFU activity LED pin, default "P0_15".
 led = "P0_15"
 # led = "none" to omit DFU LED
@@ -135,7 +132,7 @@ run_all!(
 </Tabs>
 
 ::: tip mark_booted is automatic
-When using `FlashDfuHandler` (in `run_all!`) or `run_rmk_split_peripheral()`, `mark_booted()` is called automatically — no manual call needed. You only need `rmk::dfu::mark_booted(&mut state_partition)` when using a embassy-boot based bootloader to flash the firmware that still provides safe firmware updates and rollback.  E.g. rmk-boot's DFU flash feature without it's `noswap` feature and you don't use DFU flashing/ `FlashDfuHandler` in RMK itself.
+When using `FlashDfuHandler` (in `run_all!`) or `run_rmk_split_peripheral()`, `mark_booted()` is called automatically — no manual call needed. You only need `rmk::dfu::mark_booted(&mut state_partition)` when using an embassy-boot based bootloader to flash firmware that still provides safe firmware updates and rollback — e.g. rmk-boot's DFU flash feature without its `noswap` feature while you don't use DFU flashing / `FlashDfuHandler` in RMK itself.
 :::
 
 ## Partition layout
@@ -152,7 +149,7 @@ The bootloader divides flash into regions. All offsets and sizes come from linke
 
 The DFU partition size follows embassy-boot guidelines, the additional page is used for status information during flashing.
 
-The `[dfu]` section is **optional** and configures only DFU behaviour (LED, unlock keys). Partition offsets are read at link time from `memory.x` — you do **not** set `state_offset`, `dfu_offset`, or `flash_size` in `keyboard.toml`.
+The `[dfu]` section is **optional** and configures only DFU behaviour (LED, unlock keys). Partition offsets are read at runtime from `memory.x` — you do **not** set `state_offset`, `dfu_offset`, or `flash_size` in `keyboard.toml`.
 
 ## Custom bootloader
 

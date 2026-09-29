@@ -1,71 +1,70 @@
 //! # DFU — Device Firmware Update
 //!
-//! This module implements USB DFU firmware updates for RMK keyboards.
+//! This module implements DFU firmware updates for RMK keyboards. DFU is
+//! available over USB (via `ProxyUsbDfuHandler`) and over BLE via the rynk
+//! protocol (via `ProxyRynkDfuHandler`). Both paths feed into the same
+//! `DfuCmdEvent` pubsub and `FlashDfuHandler`.
 //!
 //! ## Data flow
 //!
 //! ```text
-//!                                  ┌──────────────────────┐
-//!                                  │  Host (dfu-util)     │
-//!                                  └──────────┬───────────┘
-//!                                             │ USB DFU_DNLOAD
-//!                          ┌──────────────────┴──────────────────┐
-//!                          ▼                                     ▼
-//!               ┌──────────────────┐               ┌───────────────────────┐
-//!               │  CENTRAL USB     │               │  PERIPHERAL USB (opt) │
-//!               │  alt 0 = Central │               │  alt 0 = Central      │
-//!               │  alt 1 = FwdPeri │               └─────────────┬─────────┘
-//!               └────────┬─────────┘                             │
-//!                        │ publish_event                         │ publish_event
-//!                        │                                       │ DfuCmdEvent(Write(Central))
-//!                        │ DfuCmdEvent(Write(Central))           │ DfuCmdEvent(Write(Central))
-//!                        └───────┐                               │
-//!    DfuCmdEvent(Write(Central)) │    DfuCmdEvent(Write(FwdPeri))│
-//!               ┌────────────────┴──────────────┐                │
-//!               ▼                               ▼                │
-//!  ┌────────────────────────┐     ┌──────────────────┐           │
-//!  │ FlashDfuHandler        │     │ PeripheralManager│           │
-//!  │ (central Runnable)     │     │ (central loop)   │           │
-//!  │                        │     │                  │           │
-//!  │ Match: Central →       │     │ Match:           │           │
-//!  │   handle_cmd()         │     │   ForwardPeri →  │           │
-//!  │   write_chunk()        │     │   UART forward   │           │
-//!  └────────────────────────┘     └────────┬─────────┘           │
-//!                                          │ FirmwareChunk       │
-//!                                   ┌──────┴──────┐              │
-//!                                   │  UART link  │              │
-//!                                   └──────┬──────┘              │
-//!                                          │                     │
-//!                                          ▼                     │
-//!  ┌─────────────────────────────────────────────────────┐       │
-//!  │ SplitPeripheral::run()                              │       │
-//!  │                                                     │       │
-//!  │ SplitMessage::FirmwareChunk →                       │       │
-//!  │   publish_event(DfuCmdEvent(Write(Local, ...))) ────┼───┐   │
-//!  │   ↓ wait for SPLIT_RESPONSE_CHANNEL                 │   │   │
-//!  │   ← SplitResponse::Write(result)                    │   │   │
-//!  │   → UART FirmwareChunkAck                           │   │   │
-//!  └─────────────────────────────────────────────────────┘   │   │
-//!                                                            │   │
-//!   DfuCmdEvent(Write(Local)) ┌──────────────────────────────┘   │
-//!                             │                                  │
-//!                             │ DfuCmdEvent(Write(Central)) ◄────┘
-//!                             ▼
-//!  ┌─────────────────────────────────────────────────────┐
-//!  │ FlashDfuHandler (peripheral Runnable)               │
-//!  │                                                     │
-//!  │ Match: Local → write_chunk() + signal channel       │
-//!  │ Match: Central → handle_cmd() (direct USB)          │
-//!  │ ComputeCrc → SPLIT_RESPONSE_CHANNEL                 │
-//!  │ Finish(Local) → sanity check + mark_updated_reset(  │
-//!  └─────────────────────────────────────────────────────┘
+//! ┌──────────────────────────────────────────────────────────────────┐
+//! │  Host (dfu-util / WebUSB / rynk-wtf)                             │
+//! │    USB Control Transfer (GET_DESCRIPTOR / DFU_DNLOAD)            │
+//! │    OR BLE rynk DFU commands                                      │
+//! └──────────────┬──────────────────────────────────┬────────────-───┘
+//!                │ USB                              │ BLE (rynk)
+//!                ▼                                  ▼
+//! ┌─-─────────────────────────┐        ┌────-─-─────────────────────────┐
+//! │  UsbDfuIface              │        │  ProxyRynkDfuHandler           │
+//! │  (USB control handler)    │        │  (DFU commands → publish_event)│
+//! │                           │        │  CRC checkpoint/rewind state   │
+//! │  alt 0 → Central          │        └──────────┬─────────────────────┘
+//! │  alt 1 → Peripheral(0)    │                   │
+//! │  alt 2 → Peripheral(1)    │                   │
+//! │  ...                      │                   │
+//! └──-────────────────────┬───┘                   │
+//!                         │                       │
+//!                         ▼                       │
+//!  ┌────-─-─────────────────────────┐             │                       
+//!  │  ProxyUsbDfuHandler            │             │                       
+//!  │  (DFU commands → publish_event)│             │                      
+//!  │                                │             │                       
+//!  └────────────────────────────────┘             │                       
+//!                         │                       │
+//!                         │                       │
+//!                         ▼ DfuCmdEvent (PubSub)  ▼
+//! ┌───────────────────────────────────────────────────────────────┐
+//! │                                                               │
+//! │  ┌─── PeripheralManager (central event loop) ──────────────┐  │
+//! │  │  DfuCmdEvent::subscriber() → filter Peripheral(id)      │  │
+//! │  │  forward as SplitMessage::FirmwareChunk → split link    │──────────┐
+//! │  │  → peripheral FlashDfuHandler                           │  │       │
+//! │  └─────────────────────────────────────────────────────────┘  │       │
+//! │                                                               │       │
+//! │  ┌─── FlashDfuHandler (central) ─────────────────────────-─┐  │       │
+//! │  │  DfuCmdEvent::subscriber() → filter Central             │  │       │
+//! │  │  start → write_chunk(offset, data[512]) → finish        │  │       │
+//! │  │  background erase after boot, on-demand fallback        │  │       │
+//! │  │  finish → sanity check (MSP+reset vector)               │  │       │
+//! │  │         → mark_updated_and_reset()                      │  │       │
+//! │  └──────────────────────────────────────────────────────-──┘  │       │
+//! └───────────────────────────────────────────────────────────────┘       │
+//!                                                                         │
+//!                                                ┌─────split link (UART)──┘
+//!                                                ▼                         
+//! ┌─── Peripheral (direct calls, no channel) ─────────────────────┐       
+//! │  FlashDfuHandler::write_chunk(offset, data)                   │       
+//! │  FlashDfuHandler::compute_dfu_crc() → FirmwareCrcReport       │       
+//! │  mark_updated_and_reset() only on FirmwareCrcOk               │
+//! └───────────────────────────────────────────────────────────────┘
+//!
 //! ```
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_boot::FirmwareState;
 pub use embassy_embedded_hal::flash::partition::Partition;
-#[cfg(feature = "dfu_lock")]
 use embassy_futures::select::{Either, select};
 #[cfg(feature = "dfu_split")]
 use embassy_sync::channel::Channel;
@@ -200,6 +199,7 @@ pub(crate) enum DfuTarget {
     /// Commands from the split peripheral to its own FlashDfuHandler.
     /// Only used on the peripheral side — the central never publishes this target.
     Local,
+    /// Forward a DFU command to a specific split peripheral (identified by slot ID).
     ForwardPeripheral(u8),
 }
 
@@ -324,8 +324,12 @@ pub(crate) const MAX_DFU_ALTS: usize = crate::SPLIT_PERIPHERALS_NUM + 1;
 pub struct FlashDfuHandler<DFU: NorFlash + Clone, STATE: NorFlash + Clone> {
     dfu_partition: DFU,
     state_partition: STATE,
-    last_erased_page: Option<u32>,
+    /// Next page to erase in the background (0 = nothing erased yet).
+    erase_next_page: u32,
+    /// Total number of pages in the DFU partition.
+    erase_total_pages: u32,
     written_len: u32,
+    dfu_session_active: bool,
 }
 
 impl<DFU: NorFlash + Clone, STATE: NorFlash + Clone> FlashDfuHandler<DFU, STATE> {
@@ -335,16 +339,17 @@ impl<DFU: NorFlash + Clone, STATE: NorFlash + Clone> FlashDfuHandler<DFU, STATE>
         Self {
             dfu_partition,
             state_partition,
-            last_erased_page: None,
+            erase_next_page: 0,
+            erase_total_pages: 0,
             written_len: 0,
+            dfu_session_active: false,
         }
     }
 
     /// Write a chunk of firmware data at the given partition offset.
     ///
-    /// Pages are erased on demand — only the first time a particular page
-    /// is encountered. This avoids a long blocking erase of the entire
-    /// DFU partition on the very first chunk.
+    /// If the background boot-time erase hasn't reached the target pages
+    /// yet, they are erased on demand here.
     pub async fn write_chunk(&mut self, offset: u32, data: &[u8]) -> Result<(), ()> {
         let mut dfu = self.dfu_partition.clone();
         if data.is_empty() {
@@ -360,26 +365,58 @@ impl<DFU: NorFlash + Clone, STATE: NorFlash + Clone> FlashDfuHandler<DFU, STATE>
             );
             return Err(());
         }
-        // Calculate which flash pages overlap with [offset .. offset+len)
-        // and erase each one exactly once.
+        // Erase any pages the background hasn't reached yet.
         let erase_size = <DFU as NorFlash>::ERASE_SIZE as u32;
         let start_page = offset / erase_size;
         let end = offset + data.len() as u32;
         let end_page = (end - 1) / erase_size;
         for page in start_page..=end_page {
-            if self.last_erased_page != Some(page) {
+            if page >= self.erase_next_page {
                 dfu.erase(page * erase_size, (page + 1) * erase_size)
                     .await
                     .map_err(|_| ())?;
-                self.last_erased_page = Some(page);
+                self.erase_next_page = page + 1;
             }
         }
-        // Write the actual firmware bytes.
         dfu.write(offset, data).await.map_err(|_| ())?;
         // Track the highest written offset (used by compute_dfu_crc).
         self.written_len = self.written_len.max(offset + data.len() as u32);
         publish_event(DfuStatusEvent::new(DfuStatus::Downloading));
         Ok(())
+    }
+
+    /// Check whether the DFU partition is already erased (all 0xFF).
+    /// Used at boot to skip the background erase when no DFU has
+    /// happened since the last boot.
+    async fn is_partition_clean(&self) -> bool {
+        let mut dfu = self.dfu_partition.clone();
+        // Read the first page — if it's all 0xFF the partition is erased.
+        let read_size = <DFU as NorFlash>::ERASE_SIZE.min(256) as usize;
+        let mut buf = [0u8; 256];
+        if dfu.read(0, &mut buf[..read_size]).await.is_err() {
+            return false;
+        }
+        buf[..read_size].iter().all(|&b| b == 0xFF)
+    }
+
+    /// Erase the next page in the background. Called from the run loop
+    /// between command processing to keep the erase ahead of writes.
+    async fn erase_one_page(&mut self) {
+        if self.erase_next_page >= self.erase_total_pages {
+            return;
+        }
+        let mut dfu = self.dfu_partition.clone();
+        let erase_size = <DFU as NorFlash>::ERASE_SIZE as u32;
+        let page = self.erase_next_page;
+        let start = page * erase_size;
+        let end = start + erase_size;
+        if dfu.erase(start, end).await.is_err() {
+            error!("dfu: background erase failed at page {}", page);
+        }
+        self.erase_next_page = page + 1;
+        if self.erase_next_page >= self.erase_total_pages {
+            info!("dfu: background erase complete — partition ready for DFU");
+        }
     }
 
     /// Read back the entire DFU partition and compute its CRC-32.
@@ -455,9 +492,50 @@ impl<DFU: NorFlash + Clone, STATE: NorFlash + Clone> FlashDfuHandler<DFU, STATE>
 impl<DFU: NorFlash + Clone, STATE: NorFlash + Clone> Runnable for FlashDfuHandler<DFU, STATE> {
     async fn run(&mut self) -> ! {
         self.mark_booted().await;
+
+        // Kick off background erase of the DFU partition — but only if
+        // it actually contains data.  After a DFU transfer the partition
+        // is dirty; after the erase completes it is clean (all 0xFF).
+        // Skipping the erase when already clean avoids unnecessary flash
+        // wear.
+        let erase_size = <DFU as NorFlash>::ERASE_SIZE as u32;
+        let total_bytes = self.dfu_partition.capacity() as u32;
+        self.erase_total_pages = (total_bytes + erase_size - 1) / erase_size;
+        if self.is_partition_clean().await {
+            info!("dfu: partition already clean — skipping erase");
+            self.erase_next_page = self.erase_total_pages;
+        } else {
+            self.erase_next_page = 0;
+            info!(
+                "dfu: background erase of {} pages ({} bytes) after boot",
+                self.erase_total_pages, total_bytes
+            );
+        }
+
         let mut sub = DfuCmdEvent::subscriber();
         loop {
-            let cmd_event = sub.next_message_pure().await;
+            // During the erase phase use a very short timeout so we
+            // alternate between checking for commands and erasing one
+            // page at a time.  Once the erase is done, fall back to
+            // a long idle timeout.
+            let timeout_dur = if self.erase_next_page < self.erase_total_pages {
+                embassy_time::Duration::from_millis(1)
+            } else {
+                embassy_time::Duration::from_secs(10)
+            };
+            let timeout = embassy_time::Timer::after(timeout_dur);
+            let cmd_event = match select(sub.next_message_pure(), timeout).await {
+                Either::First(cmd_event) => cmd_event,
+                Either::Second(_) => {
+                    if self.erase_next_page < self.erase_total_pages {
+                        self.erase_one_page().await;
+                    } else if self.dfu_session_active {
+                        self.dfu_session_active = false;
+                        publish_event(DfuStatusEvent::new(DfuStatus::Idle));
+                    }
+                    continue;
+                }
+            };
             #[cfg(feature = "dfu_split")]
             if matches!(cmd_event.0, DfuCmd::ComputeCrc) {
                 let crc = self.compute_dfu_crc().await;
@@ -510,19 +588,20 @@ impl<DFU: NorFlash + Clone, STATE: NorFlash + Clone> FlashDfuHandler<DFU, STATE>
             DfuCmd::UnlockRequest => {}
             DfuCmd::Start(DfuTarget::Central) | DfuCmd::Start(DfuTarget::Local) => {
                 self.written_len = 0;
-                self.last_erased_page = None;
+                self.dfu_session_active = true;
                 DFU_WRITE_FAILED.store(false, Ordering::Release);
                 info!("dfu: firmware update started");
             }
             DfuCmd::Write(DfuTarget::Central, offset, data) => match self.write_chunk(offset, &data).await {
+                Ok(()) => {}
                 Err(()) => {
                     error!("dfu: firmware write failed at offset {:#010x}", offset);
                     DFU_WRITE_FAILED.store(true, Ordering::Release);
                     publish_event(DfuStatusEvent::new(DfuStatus::Error));
                 }
-                _ => {}
             },
             DfuCmd::Finish(DfuTarget::Central) | DfuCmd::Finish(DfuTarget::Local) => {
+                self.dfu_session_active = false;
                 if DFU_WRITE_FAILED.load(Ordering::Acquire) {
                     error!("dfu: update aborted - write errors occurred");
                     publish_event(DfuStatusEvent::new(DfuStatus::Error));
@@ -534,6 +613,11 @@ impl<DFU: NorFlash + Clone, STATE: NorFlash + Clone> FlashDfuHandler<DFU, STATE>
                         publish_event(DfuStatusEvent::new(DfuStatus::Error));
                     } else {
                         info!("dfu: looks good, restarting");
+                        // Let the finish response flush out before resetting:
+                        // on BLE the notification is still queued in the
+                        // controller here, and a reset would drop it, leaving
+                        // the host hanging on the reply.
+                        embassy_time::Timer::after_millis(500).await;
                         match self.mark_updated_and_reset().await {
                             Ok(()) => info!("dfu: update complete, resetting"),
                             Err(()) => {

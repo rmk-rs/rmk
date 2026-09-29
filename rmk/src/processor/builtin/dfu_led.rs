@@ -6,10 +6,15 @@ use rmk_types::dfu::DfuStatus;
 use crate::driver::gpio::OutputController;
 use crate::event::DfuStatusEvent;
 
+/// Number of poll cycles (at 200 ms each) the error LED stays active
+/// before automatically turning off — 5 seconds total.
+const ERROR_BLINK_CYCLES: u8 = 25;
+
 #[processor(subscribe = [DfuStatusEvent], poll_interval = 200)]
 pub struct DfuLedProcessor<P: StatefulOutputPin> {
     pin: OutputController<P>,
     blink: bool,
+    auto_off_polls: u8,
 }
 
 impl<P: StatefulOutputPin> DfuLedProcessor<P> {
@@ -17,6 +22,7 @@ impl<P: StatefulOutputPin> DfuLedProcessor<P> {
         Self {
             pin: OutputController::new(pin, low_active),
             blink: false,
+            auto_off_polls: 0,
         }
     }
 
@@ -24,23 +30,27 @@ impl<P: StatefulOutputPin> DfuLedProcessor<P> {
         match *event {
             DfuStatus::Idle | DfuStatus::Finished => {
                 self.blink = false;
+                self.auto_off_polls = 0;
                 self.pin.deactivate();
             }
             DfuStatus::Started => {
                 self.blink = false;
+                self.auto_off_polls = 0;
                 self.pin.activate();
             }
             DfuStatus::Downloading => self.pin.toggle(),
             DfuStatus::Error => {
-                self.blink = false;
-                self.pin.activate();
+                self.blink = true;
+                self.auto_off_polls = ERROR_BLINK_CYCLES;
             }
             DfuStatus::LockWaiting => {
                 self.blink = false;
+                self.auto_off_polls = 0;
                 self.pin.activate();
             }
             DfuStatus::LockUnlocked => {
                 self.blink = true;
+                self.auto_off_polls = 0;
             }
         }
     }
@@ -48,6 +58,13 @@ impl<P: StatefulOutputPin> DfuLedProcessor<P> {
     async fn poll(&mut self) {
         if self.blink {
             self.pin.toggle();
+        }
+        if self.auto_off_polls > 0 {
+            self.auto_off_polls -= 1;
+            if self.auto_off_polls == 0 {
+                self.blink = false;
+                self.pin.deactivate();
+            }
         }
     }
 }

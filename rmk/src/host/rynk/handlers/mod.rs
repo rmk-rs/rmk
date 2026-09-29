@@ -7,6 +7,8 @@ mod behavior;
 mod bulk;
 mod combo;
 mod connection;
+#[cfg(all(feature = "dfu_ble", feature = "_dfu"))]
+pub(crate) mod dfu;
 mod fork;
 mod keymap;
 mod layout;

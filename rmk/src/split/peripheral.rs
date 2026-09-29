@@ -1,6 +1,13 @@
 #[cfg(feature = "_ble")]
 #[cfg(all(feature = "_ble", feature = "subrating"))]
-use bt_hci::{cmd::le::LeSetHostFeature, controller::ControllerCmdSync};
+use bt_hci::cmd::le::LeSetHostFeature;
+#[cfg(all(feature = "_ble", any(feature = "subrating", feature = "dfu_ble")))]
+use bt_hci::controller::ControllerCmdSync;
+#[cfg(all(feature = "_ble", feature = "dfu_ble"))]
+use bt_hci::{
+    cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy},
+    controller::ControllerCmdAsync,
+};
 use embassy_futures::select::{Either, select};
 #[cfg(not(feature = "_ble"))]
 use embedded_io_async::{Read, Write};
@@ -47,14 +54,23 @@ use crate::state::update_status;
 /// * `controller` - (optional) The BLE controller
 /// * `address` - (optional) The BLE address of this peripheral
 /// * `serial` - (optional) serial port used to send peripheral split message. This argument is enabled only for serial split now
+/// * `dfu_name` - (optional) BLE advertise name in DFU mode. `None` keeps the default `rmk per{id}`.
+///   This argument is enabled only for BLE split with `dfu_ble`
 pub async fn run_rmk_split_peripheral<
-    #[cfg(all(feature = "_ble", feature = "subrating"))] C: Controller + ControllerCmdSync<LeSetHostFeature>,
-    #[cfg(all(feature = "_ble", not(feature = "subrating")))] C: Controller,
+    #[cfg(all(feature = "_ble", feature = "dfu_ble"))] 'a,
+    #[cfg(all(feature = "_ble", feature = "subrating", feature = "dfu_ble"))] C: Controller
+        + ControllerCmdSync<LeSetHostFeature>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>
+        + ControllerCmdAsync<LeSetPhy>,
+    #[cfg(all(feature = "_ble", feature = "subrating", not(feature = "dfu_ble")))] C: Controller + ControllerCmdSync<LeSetHostFeature>,
+    #[cfg(all(feature = "_ble", not(feature = "subrating"), feature = "dfu_ble"))] C: Controller + ControllerCmdSync<LeReadLocalSupportedFeatures> + ControllerCmdAsync<LeSetPhy>,
+    #[cfg(all(feature = "_ble", not(feature = "subrating"), not(feature = "dfu_ble")))] C: Controller,
     #[cfg(not(feature = "_ble"))] S: Write + Read,
 >(
     #[cfg(feature = "_ble")] id: usize,
     #[cfg(feature = "_ble")] controller: C,
     #[cfg(feature = "_ble")] address: [u8; 6],
+    #[cfg(all(feature = "_ble", feature = "dfu_ble"))] dfu_name: Option<&'a str>,
     #[cfg(not(feature = "_ble"))] serial: S,
 ) {
     #[cfg(not(feature = "_ble"))]
@@ -73,6 +89,9 @@ pub async fn run_rmk_split_peripheral<
         let stack = trouble_host::new(controller, &mut resources)
             .set_random_address(Address::random(address))
             .build();
+        #[cfg(feature = "dfu_ble")]
+        crate::split::ble::peripheral::initialize_nrf_ble_split_peripheral_and_run(id, &stack, dfu_name).await;
+        #[cfg(not(feature = "dfu_ble"))]
         crate::split::ble::peripheral::initialize_nrf_ble_split_peripheral_and_run(id, &stack).await;
     }
 }
