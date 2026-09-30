@@ -53,6 +53,7 @@ impl<Pin: FlexPin, D: DebouncerTrait<ROW, COL>, const PIN_NUM: usize, const ROW:
     async fn read_keyboard_event(&mut self) -> KeyboardEvent {
         loop {
             let (scan_x_start, scan_y_start) = self.scan_pos;
+            let mut any_active = false;
 
             // Scan following the scan map and send report
             // Loop through rows.
@@ -87,12 +88,24 @@ impl<Pin: FlexPin, D: DebouncerTrait<ROW, COL>, const PIN_NUM: usize, const ROW:
                             );
                         }
 
+                        // Keep scanning at full rate while a key is held or bouncing.
+                        if self.key_state[scan_y_idx][scan_x_idx].pressed
+                            || matches!(debounce_state, DebounceState::InProgress)
+                        {
+                            any_active = true;
+                        }
+
                         // Pull output pin back to low
                         out_pin.set_low().ok();
                         out_pin.set_as_input();
                         Timer::after_micros(1).await;
                     }
                 }
+            }
+            // Nothing is pressed or debouncing: idle-scan instead of busy-scanning
+            // the whole matrix so the CPU can sleep between passes.
+            if !any_active {
+                Timer::after_millis(crate::MATRIX_IDLE_SCAN_MS.into()).await;
             }
             self.scan_pos = (0, 0);
         }
