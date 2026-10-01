@@ -265,6 +265,7 @@ impl Client {
     /// slot, so it is never handed out.
     fn alloc_seq(&self) -> u8 {
         // `fetch_update` cannot fail because the closure always returns `Some`.
+        #[allow(deprecated, reason = "try_update requires Rust 1.95; Rynk supports Rust 1.85")]
         let (Ok(seq) | Err(seq)) = self.next_seq.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
             Some(if s == u8::MAX { 1 } else { s + 1 })
         });
