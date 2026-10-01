@@ -15,6 +15,10 @@ use crate::event::{ConnectionStatusChangeEvent, publish_event};
 pub(crate) static CONNECTION_STATUS: Mutex<RawMutex, Cell<ConnectionStatus>> =
     Mutex::new(Cell::new(ConnectionStatus::new()));
 
+/// Invalidates stationary-report caches on connection changes and BLE resynchronization.
+/// Also catches a disconnect/reconnect entirely between two input samples.
+pub(crate) static CONNECTION_EPOCH: Mutex<RawMutex, Cell<u32>> = Mutex::new(Cell::new(0));
+
 pub(crate) fn active_transport() -> Option<ConnectionType> {
     CONNECTION_STATUS.lock(|c| c.get().decide_active())
 }
@@ -55,6 +59,7 @@ pub(crate) fn update_status(f: impl FnOnce(&mut ConnectionStatus)) {
             return None;
         }
         c.set(new);
+        CONNECTION_EPOCH.lock(|epoch| epoch.set(epoch.get().wrapping_add(1)));
         Some((prev, new))
     }) else {
         return;
