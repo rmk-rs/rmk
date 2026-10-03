@@ -54,7 +54,7 @@ pub struct Hardware {
     pub dependency: DependencyConfig,
 }
 
-/// Battery inputs and indicator for one board, after applying TOML overrides.
+/// Battery inputs and indicator resolved for a single board.
 #[derive(Clone, Debug, Default)]
 pub struct BatteryConfig {
     pub adc: Option<BatteryAdcConfig>,
@@ -62,6 +62,7 @@ pub struct BatteryConfig {
     pub charge_led: Option<PinConfig>,
 }
 
+/// ADC input and effective divider, including the fixed 1:5 VDDH divider.
 #[derive(Clone, Debug)]
 pub struct BatteryAdcConfig {
     pub pin: String,
@@ -70,7 +71,11 @@ pub struct BatteryAdcConfig {
 }
 
 impl Hardware {
-    /// Resolve the central/unibody battery (`None`) or one split peripheral (`Some(id)`).
+    /// Resolves battery hardware for a unibody/central (`None`) or peripheral (`Some(id)`).
+    ///
+    /// A central ADC pin overrides the whole `[ble]` ADC group. Unset central
+    /// charger pins inherit independently; peripherals use only their own settings.
+    /// Unsupported chips and connections return an empty configuration.
     pub fn battery_config(&self, peripheral: Option<usize>) -> Result<BatteryConfig, String> {
         if self.chip.series != ChipSeries::Nrf52 {
             return Ok(BatteryConfig::default());

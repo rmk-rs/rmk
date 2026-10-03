@@ -35,10 +35,10 @@ pub(crate) fn last_battery_level() -> Option<u8> {
     LAST_BATTERY_LEVEL.lock(|c| c.get())
 }
 
-/// Reads charging state from a GPIO pin and publishes ChargingStateEvent.
+/// Publishes the initial GPIO charging state and subsequent changes.
 ///
-/// This input device monitors a charging state pin and publishes events when
-/// the charging state changes.
+/// Run this input alongside [`BatteryProcessor`] to include charger status in
+/// battery reports. The pin's active level is selected by [`Self::new`].
 #[input_device(publish = ChargingStateEvent)]
 pub struct ChargingStateReader<I: InputPin> {
     // Charging state pin or standby pin
@@ -49,6 +49,7 @@ pub struct ChargingStateReader<I: InputPin> {
 }
 
 impl<I: InputPin> ChargingStateReader<I> {
+    /// Uses a low pin level for charging when `low_active` is `true`, or high otherwise.
     pub fn new(state_input: I, low_active: bool) -> Self {
         Self {
             state_input,
@@ -82,8 +83,10 @@ impl<I: InputPin> ChargingStateReader<I> {
     }
 }
 
-/// BatteryProcessor processes battery adc value and charging state,
-/// emits `BatteryStatusEvent` when battery status changes.
+/// Converts ADC samples and charger state into [`BatteryStatusEvent`] updates.
+///
+/// Use [`Self::new`] with an ADC input, or [`Self::charging_only`] when only charger
+/// status is available. Run the inputs and this processor together with `run_all!`.
 #[processor(subscribe = [BatteryAdcEvent, ChargingStateEvent])]
 pub struct BatteryProcessor {
     adc_divider: Option<(u32, u32)>,
@@ -92,7 +95,12 @@ pub struct BatteryProcessor {
 }
 
 impl BatteryProcessor {
-    /// Process ADC readings using the board's divider ratio (`1, 5` for nRF VDDH).
+    /// Converts nRF SAADC samples using the supplied voltage divider.
+    ///
+    /// `adc_divider_measured` is the resistance across which voltage is sampled;
+    /// `adc_divider_total` is the whole divider. Both values must be positive
+    /// and use the same units.
+    /// Use `(1, 5)` for the internal nRF VDDH input.
     pub fn new(adc_divider_measured: u32, adc_divider_total: u32) -> Self {
         BatteryProcessor {
             adc_divider: Some((adc_divider_measured, adc_divider_total)),
@@ -100,7 +108,10 @@ impl BatteryProcessor {
         }
     }
 
-    /// Process charging state without an ADC; battery level remains unknown.
+    /// Reports charger state without measuring a battery percentage.
+    ///
+    /// Run a [`ChargingStateReader`] alongside this processor. ADC events are
+    /// ignored, and the reported percentage remains unknown.
     pub fn charging_only() -> Self {
         Self {
             adc_divider: None,
