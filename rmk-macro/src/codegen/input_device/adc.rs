@@ -1,5 +1,5 @@
 use quote::{format_ident, quote};
-use rmk_config::resolved::hardware::{BleConfig, ChipSeries, JoystickConfig};
+use rmk_config::resolved::hardware::{BatteryAdcConfig, ChipSeries, JoystickConfig};
 
 use super::Initializer;
 
@@ -7,7 +7,7 @@ use super::Initializer;
 /// Returns (device initializers, processor initializers)
 pub(crate) fn expand_adc_device(
     joystick_config: Vec<JoystickConfig>,
-    ble_config: Option<BleConfig>,
+    battery_adc: Option<&BatteryAdcConfig>,
     chip_model: ChipSeries,
 ) -> (Vec<Initializer>, Vec<Initializer>) {
     match chip_model {
@@ -22,10 +22,8 @@ pub(crate) fn expand_adc_device(
             let mut devices = vec![];
             let mut processors = vec![];
 
-            if let Some(ble) = ble_config
-                && ble.enabled
-                && let Some(adc_pin) = ble.battery_adc_pin
-            {
+            if let Some(adc) = battery_adc {
+                let adc_pin = &adc.pin;
                 let adc_pin_def = if adc_pin == "vddh" {
                     quote! {
                         saadc::ChannelConfig::single_ended(saadc::VddhDiv5Input.degrade_saadc())
@@ -42,23 +40,6 @@ pub(crate) fn expand_adc_device(
                 });
                 // Battery event slot: device_id unused, fill with 0
                 event_device_ids.push(0u8);
-
-                let (adc_divider_measured, adc_divider_total) = if adc_pin == "vddh" {
-                    (1, 5)
-                } else {
-                    (
-                        ble.adc_divider_measured.unwrap_or(1),
-                        ble.adc_divider_total.unwrap_or(1),
-                    )
-                };
-                let bat_ident = format_ident!("battery_processor");
-                let battery_processor = Initializer {
-                    initializer: quote! {
-                        let mut #bat_ident = ::rmk::input_device::battery::BatteryProcessor::new(#adc_divider_measured, #adc_divider_total);
-                    },
-                    var_name: bat_ident,
-                };
-                processors.push(battery_processor);
             }
 
             // polling interval with joystick
@@ -102,7 +83,7 @@ pub(crate) fn expand_adc_device(
                 processors.push(joystick_processor);
             }
 
-            if !processors.is_empty() {
+            if !channel_cfg.is_empty() {
                 let light_sleep_option = if let Some(light_sleep_interval) = light_sleep {
                     quote! {Some(Duration::from_millis(#light_sleep_interval as u64))}
                 } else {

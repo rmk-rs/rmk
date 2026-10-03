@@ -29,10 +29,10 @@ use_2m_phy = true
 passkey_entry = false
 # Timeout in seconds for passkey entry, defaults to 120
 passkey_entry_timeout = 120
-# [Deprecated] Pin that reads battery's charging state, `low-active` means the battery is charging when `charge_state.pin` is low
+# Charging status input; `low_active = true` means low indicates charging
 # charge_state = { pin = "PIN_1", low_active = true }
-# [Deprecated] Output LED pin that blinks when the battery is low
-# charge_led= { pin = "PIN_2", low_active = true }
+# Output LED pin that lights while charging and blinks when the battery is low
+# charge_led = { pin = "PIN_2", low_active = true }
 ```
 
 Some legacy BLE adapters cannot connect to devices using 2M PHY at all. For those hosts, enable the `use_1m_phy` Cargo feature of the `rmk` crate, which makes the keyboard use 1M PHY for the host connection.
@@ -64,9 +64,9 @@ During passkey mode, the keyboard intercepts all keypresses. Only the following 
 
 All other keys are silently discarded while passkey mode is active.
 
-### Split battery ADC configuration
+### Split battery configuration
 
-For split keyboards, you can configure battery ADC separately for the central and each peripheral:
+For split keyboards, you can configure battery ADC and the charger pins separately for the central and each peripheral:
 
 ```toml
 [split.central]
@@ -74,18 +74,39 @@ battery_adc_pin = "P0_01"
 battery_user_description = "Left"
 adc_divider_measured = 2000
 adc_divider_total = 2806
+charge_state = { pin = "P1_08", low_active = true }
 
 [[split.peripheral]]
 battery_adc_pin = "P0_02"
 battery_user_description = "Right"
 adc_divider_measured = 2000
 adc_divider_total = 2806
+charge_state = { pin = "P0_07", low_active = true }
+charge_led = { pin = "P0_13", low_active = false }
 ```
 
 Notes:
 
 - If `[split.central]` provides battery ADC settings, they override the top-level `[ble]` battery settings for the central.
 - Peripherals do **not** fall back to `[ble]`; to enable peripheral battery reporting, set ADC values per peripheral.
+- Unset `charge_state` and `charge_led` values on the central inherit from `[ble]`. Configure peripheral pins separately.
+- `charge_state` works without ADC. Add `battery_adc_pin` for percentage reporting and low-battery blinking. `charge_led` needs either input on the same board.
+
+With the Rust API, run a charging indicator without ADC as follows:
+
+```rust
+use rmk::input_device::battery::{BatteryProcessor, ChargingStateReader};
+use rmk::processor::builtin::battery_led::BatteryLedProcessor;
+use rmk::run_all;
+
+let mut charging = ChargingStateReader::new(status_pin, true);
+let mut battery = BatteryProcessor::charging_only();
+let mut led = BatteryLedProcessor::new(led_pin, false);
+
+run_all!(charging, battery, led, ble_transport, keyboard).await;
+```
+
+With ADC, use `BatteryProcessor::new(adc_divider_measured, adc_divider_total)` instead.
 
 ### Peripheral battery reporting over BLE GATT
 
@@ -93,6 +114,8 @@ When peripherals are configured to sample their batteries (see above), their lev
 
 - the central's own battery level, and
 - each `[[split.peripheral]]` that defines `battery_adc_pin`.
+
+Each side reports its own battery level. Before its first sample, the host may show no percentage or `0%`.
 
 Each peripheral's Battery Service uses its peripheral ID to set the description field in the Characteristic Presentation Format descriptor. Peripheral IDs `0`, `1`, and `2` use the Bluetooth SIG ordinal values `first`, `second`, and `third`, respectively. No host-side configuration is required; any host that already reads the central's Battery Level characteristic can discover the additional instances the same way.
 

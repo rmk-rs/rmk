@@ -12,8 +12,7 @@ use {
 };
 #[cfg(feature = "_ble")]
 use {
-    crate::event::{BatteryStatusEvent, ChargingStateEvent, EventSubscriber},
-    rmk_types::battery::BatteryStatus,
+    crate::event::{BatteryStatusEvent, EventSubscriber},
     trouble_host::prelude::*,
 };
 
@@ -105,8 +104,6 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
         }
 
         let mut key_sub = KeyboardEvent::subscriber();
-        #[cfg(feature = "_ble")]
-        let mut charging_state_sub = ChargingStateEvent::subscriber();
         let mut pointing_sub = PointingEvent::subscriber();
         #[cfg(feature = "_ble")]
         let mut battery_sub = BatteryStatusEvent::subscriber();
@@ -115,12 +112,6 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
             let read_message_to_send = async {
                 crate::select_biased_with_feature! {
                     e = key_sub.next_message_pure().fuse() => SplitMessage::Key(e),
-                    with_feature("_ble"): e = charging_state_sub.next_message_pure().fuse() => {
-                        SplitMessage::BatteryStatus(BatteryStatus::Available {
-                            charge_state: e.charging.into(),
-                            level: None,
-                        }.into())
-                    },
                     e = pointing_sub.next_message_pure().fuse() => SplitMessage::Pointing(e),
                     with_feature("_ble"): e = battery_sub.next_event().fuse() => SplitMessage::BatteryStatus(e),
                 }

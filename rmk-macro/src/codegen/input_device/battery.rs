@@ -1,0 +1,138 @@
+use quote::{format_ident, quote};
+use rmk_config::resolved::hardware::{BatteryConfig, ChipModel};
+
+use super::Initializer;
+use crate::codegen::chip::gpio::{convert_gpio_str_to_input_pin, convert_gpio_str_to_output_pin};
+
+/// Build the same battery pipeline on every board. ADC channels are initialized with other analog inputs.
+pub(crate) fn expand_battery_devices(
+    chip: &ChipModel,
+    config: &BatteryConfig,
+) -> (Vec<Initializer>, Vec<Initializer>) {
+    let mut devices = Vec::new();
+    let mut processors = Vec::new();
+
+    if config.adc.is_some() || config.charge_state.is_some() {
+        let constructor = if let Some(adc) = &config.adc {
+            let measured = adc.divider_measured;
+            let total = adc.divider_total;
+            quote! { ::rmk::input_device::battery::BatteryProcessor::new(#measured, #total) }
+        } else {
+            quote! { ::rmk::input_device::battery::BatteryProcessor::charging_only() }
+        };
+        processors.push(Initializer {
+            initializer: quote! { let mut battery_processor = #constructor; },
+            var_name: format_ident!("battery_processor"),
+        });
+    }
+
+    if let Some(pin) = &config.charge_state {
+        let input =
+            convert_gpio_str_to_input_pin(chip, pin.pin.clone(), false, Some(pin.low_active));
+        let low_active = pin.low_active;
+        devices.push(Initializer {
+            initializer: quote! {
+                let mut charging_state_reader = ::rmk::input_device::battery::ChargingStateReader::new(#input, #low_active);
+            },
+            var_name: format_ident!("charging_state_reader"),
+        });
+    }
+
+    if let Some(pin) = &config.charge_led {
+        let output = convert_gpio_str_to_output_pin(chip, pin.pin.clone(), pin.low_active);
+        let low_active = pin.low_active;
+        processors.push(Initializer {
+            initializer: quote! {
+                let mut charge_led_processor = ::rmk::processor::builtin::battery_led::BatteryLedProcessor::new(#output, #low_active);
+            },
+            var_name: format_ident!("charge_led_processor"),
+        });
+    }
+    (devices, processors)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use rmk_config::resolved::hardware::{BoardConfig, CommunicationConfig};
+    use rmk_config::{KeyboardTomlConfig, PinConfig};
+
+    use crate::codegen::input_device::expand_input_device_config;
+    use crate::codegen::split::peripheral::expand_peripheral_input_device_config;
+
+    #[test]
+    fn every_board_assembles_one_processor_for_either_battery_source() {
+        for (example, side) in [
+            ("nrf52840_ble", None),
+            ("nrf52840_ble_split", None),
+            ("nrf52840_ble_split", Some(0)),
+        ] {
+            for (adc, charging) in [(false, false), (false, true), (true, false), (true, true)] {
+                let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(format!("../examples/use_config/{example}/keyboard.toml"));
+                let mut hardware = KeyboardTomlConfig::new_from_toml_path(&path)
+                    .hardware()
+                    .unwrap();
+                let pin = adc.then(|| "P0_05".to_string());
+                let state = charging.then(|| PinConfig {
+                    pin: "P0_20".into(),
+                    low_active: true,
+                });
+                let led = (adc || charging).then(|| PinConfig {
+                    pin: "P0_21".into(),
+                    low_active: false,
+                });
+                let ble = match &mut hardware.communication {
+                    CommunicationConfig::Ble(ble) | CommunicationConfig::Both(_, ble) => ble,
+                    _ => panic!("expected BLE"),
+                };
+                ble.battery_adc_pin = None;
+                ble.charge_state = None;
+                ble.charge_led = None;
+                if let BoardConfig::Split(split) = &mut hardware.board {
+                    let board = match side {
+                        Some(id) => &mut split.peripheral[id],
+                        None => &mut split.central,
+                    };
+                    board.battery_adc_pin = pin;
+                    board.charge_state = state;
+                    board.charge_led = led;
+                } else {
+                    ble.battery_adc_pin = pin;
+                    ble.charge_state = state;
+                    ble.charge_led = led;
+                }
+                let (init, devices, processors) = match side {
+                    None => expand_input_device_config(&hardware),
+                    Some(id) => expand_peripheral_input_device_config(id, &hardware),
+                };
+                let device_names: Vec<_> = devices.iter().map(ToString::to_string).collect();
+                let processor_names: Vec<_> = processors.iter().map(ToString::to_string).collect();
+                assert_eq!(device_names.contains(&"adc_device".into()), adc);
+                assert_eq!(
+                    device_names.contains(&"charging_state_reader".into()),
+                    charging
+                );
+                assert_eq!(
+                    processor_names
+                        .iter()
+                        .filter(|name| *name == "battery_processor")
+                        .count(),
+                    usize::from(adc || charging)
+                );
+                assert_eq!(
+                    processor_names.contains(&"charge_led_processor".into()),
+                    adc || charging
+                );
+                assert_eq!(init.to_string().contains("charging_only"), charging && !adc);
+                if charging {
+                    assert!(init.to_string().contains("Pull :: Up"));
+                }
+                if adc || charging {
+                    assert!(init.to_string().contains("Level :: Low"));
+                }
+            }
+        }
+    }
+}
