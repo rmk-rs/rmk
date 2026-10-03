@@ -140,10 +140,8 @@ MouseWheelLeft   MouseDown  MouseWheelRight  MouseWheelDown
 # Tri Layer configuration
 tri_layer = { upper = 1, lower = 2, adjust = 3 }
 
-# OneShot configuration
+# Sticky key configuration, which OSM/OSL run on too
 sticky_key = { timeout = "1s", ignore = [], activate_on_press = false, release_on_next_press = false, release_on_layer = "none" }
-
-# One Shot Modifiers configuration
 
 [behavior.morse]
 # default profile for morse, tap dance and tap-hold keys:

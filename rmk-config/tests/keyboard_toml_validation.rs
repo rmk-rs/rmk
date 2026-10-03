@@ -457,3 +457,62 @@ led = "PIN_9"
         "peripheral should keep the global external flash"
     );
 }
+
+#[test]
+fn sticky_profiles_resolve_inheritance_and_explicit_empty_values() {
+    use rmk_config::resolved::behavior::LayerRelease;
+
+    let path = write_temp_keyboard_toml(
+        "sticky-inheritance",
+        r#"
+[behavior.sticky_key]
+timeout = "750ms"
+ignore = ["Tab"]
+activate_on_press = true
+release_on_next_press = true
+release_on_layer = "both"
+
+[behavior.sticky_key.profiles.z_inherited]
+
+[behavior.sticky_key.profiles.a_overridden]
+timeout = "0ms"
+ignore = []
+activate_on_press = false
+release_on_next_press = false
+release_on_layer = "none"
+"#,
+    );
+    let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+    std::fs::remove_file(&path).unwrap();
+    let sticky = config.behavior().unwrap().sticky_key.unwrap();
+    assert_eq!(sticky.default.timeout_ms, 750);
+    assert_eq!(sticky.default.ignore, ["Tab"]);
+    assert!(sticky.default.activate_on_press);
+    assert!(sticky.default.release_on_next_press);
+    assert_eq!(sticky.default.release_on_layer, LayerRelease::Both);
+    assert_eq!(sticky.profiles[0].0, "a_overridden");
+    assert_eq!(sticky.profiles[1].0, "z_inherited");
+    assert_eq!(sticky.profiles[1].1, sticky.default);
+    let overridden = &sticky.profiles[0].1;
+    assert_eq!(overridden.timeout_ms, 0);
+    assert!(overridden.ignore.is_empty());
+    assert!(!overridden.activate_on_press);
+    assert!(!overridden.release_on_next_press);
+    assert_eq!(overridden.release_on_layer, LayerRelease::None);
+}
+
+#[test]
+fn sticky_empty_profiles_resolve_builtin_defaults() {
+    use rmk_config::resolved::behavior::{DEFAULT_STICKY_TIMEOUT_MS, LayerRelease};
+
+    let path = write_temp_keyboard_toml("sticky-defaults", "[behavior.sticky_key.profiles.empty]");
+    let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+    std::fs::remove_file(&path).unwrap();
+    let sticky = config.behavior().unwrap().sticky_key.unwrap();
+    assert_eq!(sticky.default.timeout_ms, DEFAULT_STICKY_TIMEOUT_MS);
+    assert!(sticky.default.ignore.is_empty());
+    assert!(!sticky.default.activate_on_press);
+    assert!(!sticky.default.release_on_next_press);
+    assert_eq!(sticky.default.release_on_layer, LayerRelease::None);
+    assert_eq!(sticky.profiles[0].1, sticky.default);
+}

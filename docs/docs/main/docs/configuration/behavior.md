@@ -64,7 +64,13 @@ mouse, where the host has to see the modifier before the click.
 
 `release_on_next_press` off means the effect disappears with the next key's own
 release report. Turn it on to have the host see it end the moment that key goes
-down, which is what `OSL` does so the key after it resolves on the right layer.
+down. Sticky layers deactivate as soon as the next input is resolved, regardless
+of this report setting, so later keys use the original layer. `OSL(n)` and
+`SK(MO(n))` follow the same layer behavior.
+
+Momentary layer keys share the layer: releasing one `MO`, `OSL` or `SK(MO(...))`
+leaves it active while another source still holds it. Explicit `TG` and `TO`
+layer switches still take effect immediately.
 
 ### Profiles
 
@@ -598,7 +604,7 @@ subs = 1
 | `reset_timeout_on_key` | bool             | `false`   | When `true`, key presses that do NOT deactivate `target_layer` push the `timeout` deadline forward (reset it to _now + `timeout`_). When `deactivate_on_key` is `false`, every key press extends the timeout.                                                            |
 
 ::: warning
-Prefer a dedicated layer that is not bound to any manual keys (like `MO` or `TG`). The auto-mouse task releases its ownership when keyboard-driven changes deactivate the layer, so transient overlap is handled cleanly. Layer state is still a single boolean, however, so pressing `TG(target_layer)` while auto-mouse is active toggles the layer off instead of pinning it on.
+Prefer a dedicated layer that is not bound to any manual keys (like `MO` or `TG`). The auto-mouse task releases its ownership when keyboard-driven changes deactivate the layer, so transient overlap is handled cleanly. Pressing `TG(target_layer)` while auto-mouse is active toggles the layer off instead of pinning it on.
 
 Entries that share the same `target_layer` cooperate: the layer stays active until the last device stops moving, so per-device `timeout`/`threshold` differences on a shared layer are safe.
 :::

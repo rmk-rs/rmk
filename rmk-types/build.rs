@@ -117,6 +117,10 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         bc.morse_profile_max_num
     ));
     lines.push(format!(
+        "pub const DEFAULT_STICKY_TIMEOUT_MS: u16 = {};",
+        rmk_config::resolved::behavior::DEFAULT_STICKY_TIMEOUT_MS
+    ));
+    lines.push(format!(
         "pub const STICKY_PROFILE_MAX_NUM: usize = {};",
         bc.sticky_profile_max_num
     ));

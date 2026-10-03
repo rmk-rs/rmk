@@ -966,7 +966,7 @@ pub(crate) struct StickyKeyConfig {
     pub ignore: Option<Vec<String>>,
     pub activate_on_press: Option<bool>,
     pub release_on_next_press: Option<bool>,
-    pub release_on_layer: Option<String>,
+    pub release_on_layer: Option<crate::resolved::behavior::LayerRelease>,
     /// Named profiles, referenced from the keymap as `SK(action, name)`
     pub profiles: Option<HashMap<String, StickyProfileConfig>>,
 }
@@ -979,7 +979,7 @@ pub(crate) struct StickyProfileConfig {
     pub ignore: Option<Vec<String>>,
     pub activate_on_press: Option<bool>,
     pub release_on_next_press: Option<bool>,
-    pub release_on_layer: Option<String>,
+    pub release_on_layer: Option<crate::resolved::behavior::LayerRelease>,
 }
 
 /// Configurations for combos

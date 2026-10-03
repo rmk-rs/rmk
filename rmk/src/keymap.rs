@@ -4,6 +4,7 @@ use embassy_time::Duration;
 use rmk_types::action::{EncoderAction, KeyAction};
 use rmk_types::fork::Fork;
 use rmk_types::morse::{Morse, MorseProfile};
+use rmk_types::sticky::{STICKY_PROFILE_LAYER, StickyFlags, StickyProfile};
 #[cfg(all(feature = "storage", feature = "host"))]
 use {
     crate::{boot::reboot_keyboard, storage::Storage},
@@ -107,8 +108,10 @@ struct KeyMapInner<'a> {
     layers: &'a mut [KeyAction],
     /// Flat encoder data: num_layer * num_encoder (None if no encoders)
     encoders: Option<&'a mut [EncoderAction]>,
-    /// Per-layer activation state
+    /// Explicit layer state (toggles and direct activation).
     layer_state: &'a mut [bool],
+    /// Momentary layer holders, identified by the same sources as keyboard keys.
+    held_layers: heapless::Vec<(KeyboardEventPos, u8), HOLD_BUFFER_SIZE>,
     /// Layer cache for keys: row * col
     layer_cache: &'a mut [u8],
     /// Layer cache for encoders: num_encoder * 2
@@ -242,7 +245,7 @@ impl KeyMapInner<'_> {
         }
 
         for layer_idx in (0..self.num_layer).rev() {
-            if self.layer_state[layer_idx] || layer_idx as u8 == self.behavior.default_layer {
+            if self.is_layer_active(layer_idx) || layer_idx as u8 == self.behavior.default_layer {
                 let action = self.get_action_at(event.pos, layer_idx);
                 if action == KeyAction::Transparent {
                     continue;
@@ -261,18 +264,20 @@ impl KeyMapInner<'_> {
     }
 
     /// Active layers as a bitmask, for spotting a layer transition by comparing
-    /// it across an action's dispatch.
+    /// it across an action's dispatch. Layers past 32 are left out rather than
+    /// folded onto bit 31, which would read as a transition of layer 31.
     pub(crate) fn layer_bits(&self) -> u32 {
         self.layer_state
             .iter()
+            .take(32)
             .enumerate()
-            .filter(|(_, on)| **on)
-            .fold(0u32, |acc, (i, _)| acc | (1 << i.min(31)))
+            .filter(|(i, _)| self.is_layer_active(*i))
+            .fold(0u32, |acc, (i, _)| acc | (1 << i))
     }
 
     fn get_activated_layer(&self) -> u8 {
         for layer_idx in (0..self.num_layer).rev() {
-            if self.layer_state[layer_idx] || layer_idx as u8 == self.behavior.default_layer {
+            if self.is_layer_active(layer_idx) || layer_idx as u8 == self.behavior.default_layer {
                 return layer_idx as u8;
             }
         }
@@ -329,7 +334,7 @@ impl KeyMapInner<'_> {
 
     fn update_fn_layer_state(&mut self) {
         if self.num_layer > 3 {
-            self.layer_state[3] = self.layer_state[1] && self.layer_state[2];
+            self.layer_state[3] = self.is_layer_active(1) && self.is_layer_active(2);
             let layer = self.get_activated_layer();
             publish_event(LayerChangeEvent::new(layer));
         }
@@ -338,10 +343,26 @@ impl KeyMapInner<'_> {
     fn update_tri_layer(&mut self) {
         if let Some(ref tri_layer) = self.behavior.tri_layer {
             self.layer_state[tri_layer[2] as usize] =
-                self.layer_state[tri_layer[0] as usize] && self.layer_state[tri_layer[1] as usize];
+                self.is_layer_active(tri_layer[0] as usize) && self.is_layer_active(tri_layer[1] as usize);
         }
         let layer = self.get_activated_layer();
         publish_event(LayerChangeEvent::new(layer));
+    }
+
+    fn is_layer_active(&self, layer: usize) -> bool {
+        self.layer_state[layer] || self.held_layers.iter().any(|(_, held)| *held as usize == layer)
+    }
+
+    fn hold_layer(&mut self, layer: u8, event: KeyboardEvent) {
+        if layer as usize >= self.num_layer {
+            warn!("Not a valid layer {}", layer);
+            return;
+        }
+        self.held_layers.retain(|holder| *holder != (event.pos, layer));
+        if event.pressed && self.held_layers.push((event.pos, layer)).is_err() {
+            warn!("Layer holder table full, dropped layer {}", layer);
+        }
+        self.update_tri_layer();
     }
 
     fn activate_layer(&mut self, layer_num: u8) {
@@ -364,6 +385,7 @@ impl KeyMapInner<'_> {
             );
             return;
         }
+        self.held_layers.retain(|(_, layer)| *layer != layer_num);
         self.layer_state[layer_num as usize] = false;
         self.update_tri_layer();
     }
@@ -376,7 +398,9 @@ impl KeyMapInner<'_> {
             );
             return;
         }
-        self.layer_state[layer_num as usize] = !self.layer_state[layer_num as usize];
+        let active = self.is_layer_active(layer_num as usize);
+        self.held_layers.retain(|(_, layer)| *layer != layer_num);
+        self.layer_state[layer_num as usize] = !active;
         self.update_tri_layer();
     }
 }
@@ -417,6 +441,7 @@ impl<'a> KeyMap<'a> {
                 layers,
                 encoders,
                 layer_state,
+                held_layers: heapless::Vec::new(),
                 layer_cache,
                 encoder_layer_cache,
                 behavior,
@@ -501,6 +526,10 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow_mut().set_action_at(pos, layer, action);
     }
 
+    pub(crate) fn hold_layer(&self, layer: u8, event: KeyboardEvent) {
+        self.inner.borrow_mut().hold_layer(layer, event);
+    }
+
     pub(crate) fn activate_layer(&self, layer_num: u8) {
         self.inner.borrow_mut().activate_layer(layer_num);
     }
@@ -522,7 +551,7 @@ impl<'a> KeyMap<'a> {
     pub(crate) fn activate_layer_if_inactive(&self, layer_num: u8) -> bool {
         let mut inner = self.inner.borrow_mut();
         let idx = layer_num as usize;
-        if idx >= inner.num_layer || inner.layer_state[idx] {
+        if idx >= inner.num_layer || inner.is_layer_active(idx) {
             return false;
         }
         inner.layer_state[idx] = true;
@@ -537,7 +566,7 @@ impl<'a> KeyMap<'a> {
     pub(crate) fn deactivate_layer_if_active(&self, layer_num: u8) {
         let mut inner = self.inner.borrow_mut();
         let idx = layer_num as usize;
-        if idx >= inner.num_layer || !inner.layer_state[idx] {
+        if idx >= inner.num_layer || !inner.is_layer_active(idx) {
             return;
         }
         inner.layer_state[idx] = false;
@@ -557,7 +586,7 @@ impl<'a> KeyMap<'a> {
     pub(crate) fn is_layer_active(&self, layer_num: u8) -> bool {
         let inner = self.inner.borrow();
         let idx = layer_num as usize;
-        idx < inner.num_layer && inner.layer_state[idx]
+        idx < inner.num_layer && inner.is_layer_active(idx)
     }
 
     pub(crate) fn num_layer(&self) -> usize {
@@ -644,27 +673,29 @@ impl<'a> KeyMap<'a> {
     }
 
     /// Resolve a sticky profile by its table index: the entry if present,
-    /// otherwise the configured default profile.
-    pub(crate) fn sticky_profile(&self, idx: u8) -> rmk_types::sticky::StickyProfile {
+    /// otherwise the configured default profile. Clones the `ignore` list, so
+    /// prefer [`Self::sticky_flags`] / [`Self::sticky_timeout`] when one field
+    /// is enough.
+    pub(crate) fn sticky_profile(&self, idx: u8) -> StickyProfile {
         let inner = self.inner.borrow();
+        Self::resolve_sticky(&inner, idx).clone()
+    }
+
+    pub(crate) fn sticky_flags(&self, idx: u8) -> StickyFlags {
+        let inner = self.inner.borrow();
+        Self::resolve_sticky(&inner, idx).flags
+    }
+
+    pub(crate) fn sticky_timeout(&self, idx: u8) -> u16 {
+        Self::resolve_sticky(&self.inner.borrow(), idx).timeout_ms
+    }
+
+    fn resolve_sticky<'k>(inner: &'k KeyMapInner<'_>, idx: u8) -> &'k StickyProfile {
         let config = &inner.behavior.sticky_key;
-        if idx == rmk_types::sticky::STICKY_PROFILE_LAYER {
-            // A layer decides how the *next* key resolves, and that lookup
-            // happens before any dispatch, so it can't be held back the way a
-            // modifier can. Holding it back would also buy nothing: a layer is
-            // never sent to the host.
-            let mut profile = config.default_profile.clone();
-            profile.flags = profile
-                .flags
-                .with_activate_on_press(true)
-                .with_release_on_next_press(true);
-            return profile;
+        if idx == STICKY_PROFILE_LAYER {
+            return &config.default_profile;
         }
-        config
-            .profiles
-            .get(idx as usize)
-            .cloned()
-            .unwrap_or_else(|| config.default_profile.clone())
+        config.profiles.get(idx as usize).unwrap_or(&config.default_profile)
     }
 
     pub(crate) fn morse_default_profile(&self) -> MorseProfile {
