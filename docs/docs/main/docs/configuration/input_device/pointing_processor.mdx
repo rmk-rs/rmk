@@ -85,7 +85,11 @@ Caret mode currently gets rid of all pressed modifiers (shift, CTRL) and sends t
 
 ## Mode switching
 
-Users can define a processor, in this case called `PointingProcessorController`, which subscribes to events (e.g. layer changes) and updates the active mode. The example below extends the shipped [`rp2040_pointing_modes`](https://github.com/rmk-rs/rmk/tree/main/examples/use_config/rp2040_pointing_modes) example, which switches to Cursor on layer 0, Sniper on layer 1, Scroll on layer 2, and Caret on layer 3, with an `ActionEvent` handler that also switches to Caret when a key bound to `User0` is pressed:
+To change modes when a layer or key changes, create a controller that receives those events and publishes `PointingProcessorEvent`.
+
+Add the following module to your project. It selects Cursor on layer 0, Sniper on layer 1, Scroll on layer 2, and Caret on layer 3. Pressing a key bound to `User0` also selects Caret.
+
+The example uses `device_id = 255` with the default pointing processor. If your processor is configured for a specific device ID, use that same ID in these events.
 
 ```rust title="src/pointing_processor_controller.rs"
 use rmk::event::{ActionEvent, LayerChangeEvent, PointingProcessorEvent, publish_event};
@@ -94,7 +98,7 @@ use rmk::macros::processor;
 use rmk::types::action::Action;
 use rmk::types::keycode::HidKeyCode;
 
-#[processor(subscribe = [LayerChangeEvent, ActionEvent])] // could be any other event
+#[processor(subscribe = [LayerChangeEvent, ActionEvent])]
 pub struct PointingProcessorController;
 
 impl PointingProcessorController {
@@ -156,7 +160,6 @@ impl PointingProcessorController {
     }
 
     async fn on_action_event(&mut self, event: ActionEvent) {
-        // Every resolved key action is published as an ActionEvent.
         if event.keyboard_event.pressed && event.action == Action::User(0) {
             publish_event(PointingProcessorEvent {
                 device_id: 255,
@@ -169,7 +172,7 @@ impl PointingProcessorController {
 
 ::: note
 
-`ActionEvent` ships with zero subscriber slots by default, so subscribing to it requires reserving one in `keyboard.toml`:
+Reserve a subscriber slot for `ActionEvent` in `keyboard.toml`. Its default subscriber count is zero:
 
 ```toml
 [event.action]
@@ -178,7 +181,7 @@ subs = 1
 
 :::
 
-Register the controller on the **central** side (always — even if the sensor is on a peripheral):
+Run the controller on the central, including when the sensor is connected to a peripheral. For a unibody keyboard, run it on the keyboard itself. Choose the setup that matches your project:
 
 import { Rust, Toml, Tab, Tabs } from '@theme'
 
@@ -186,8 +189,6 @@ import { Rust, Toml, Tab, Tabs } from '@theme'
 <Tab label={<Toml />}>
 
 ```rust title="src/main.rs"
-// always into main.rs (or central.rs with #[rmk_central] for a split keyboard),
-// regardless of where the sensor is connected.
 #![no_main]
 #![no_std]
 
@@ -204,19 +205,25 @@ mod keyboard {
 }
 ```
 
+For a split keyboard, use the central's `#[rmk_central]` module in `src/central.rs` instead. See [running a processor](../../features/processor#run-the-processor).
+
 </Tab>
 <Tab label={<Rust />}>
 
-```rust title="src/main.rs"
-// always into main.rs/ central.rs, regardless of where the sensor is connected.
-	mod pointing_processor_controller;
-	use crate::pointing_processor_controller::PointingProcessorController;
-// ...
-    let mut pointing_controller = PointingProcessorController::new();
-    run_all!(
-		/* other processors go here */
-        pointing_controller,
-    ),
+Declare the module and import the controller in `src/main.rs` or `src/central.rs`:
+
+```rust
+mod pointing_processor_controller;
+
+use pointing_processor_controller::PointingProcessorController;
+use rmk::run_all;
+```
+
+After initializing your keyboard and transport, add the controller to the existing task list:
+
+```rust
+let mut pointing_controller = PointingProcessorController::new();
+run_all!(pointing_controller, keyboard, transport).await;
 ```
 
 </Tab>

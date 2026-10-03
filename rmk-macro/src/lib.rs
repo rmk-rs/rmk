@@ -72,8 +72,10 @@ pub fn rmk_peripheral(attr: TokenStream, item: TokenStream) -> TokenStream {
     parse_split_peripheral_mod(peripheral_id, attr, item_mod).into()
 }
 
-/// Suppress Runnable generation when another macro or a manual implementation provides it.
-/// Place this marker below `#[processor]` or `#[input_device]` so the macro can see it.
+/// Keeps a `Runnable` implementation provided by the user or another macro.
+///
+/// Place this marker below `#[processor]` or `#[input_device]`. The preceding
+/// macro still generates its device or processor traits, but skips `Runnable`.
 #[proc_macro_attribute]
 pub fn runnable_generated(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item // Pass through unchanged
@@ -166,45 +168,43 @@ pub fn event(attr: TokenStream, item: TokenStream) -> TokenStream {
     event::event_impl(attr, item)
 }
 
-/// Unified macro for defining event processors.
+/// Implements event handling and timer scheduling for a struct.
 ///
-/// Generates `Processor`, `Runnable`, and the requested scheduling traits.
+/// The macro generates `Processor` and `Runnable`, plus the traits required by
+/// the selected timer options. Construct an instance and run it with `run_all!`,
+/// or return it from a `#[register_processor]` function in a keyboard module.
 ///
-/// # Parameters
+/// # Options
 ///
-/// - `subscribe`: Optional array of event types; omission and `[]` both mean no subscriptions
-/// - `poll_interval`: Optional positive polling interval in milliseconds
-/// - `deadline`: Generate deadline scheduling from `deadline()` and `on_deadline()` methods
+/// - `subscribe = [EventType, ...]`: provide an async `on_<event_name>_event` handler
+///   for each event. Omit this option or use `[]` for a timer-only processor.
+/// - `poll_interval = N`: provide an async `poll()` method. `N` must be a positive
+///   interval in milliseconds.
+/// - `deadline`: provide `fn deadline(&self) -> Option<embassy_time::Instant>` and
+///   `async fn on_deadline(&mut self)`. Clear or advance the deadline after it fires.
 ///
-/// Polling and deadlines can be combined. Register the type with `#[register_processor]`
-/// in a keyboard module, or pass an instance to `run_all!` in a Rust project.
-/// At least one event or timer source is required unless `#[runnable_generated]`
-/// is present and the user provides `Runnable`.
+/// Options can be combined. Callbacks run serially, with ready deadlines before
+/// polling ticks and events. Events do not restart the polling interval.
 ///
-/// # Examples
+/// At least one event or timer source is required. To supply a custom `Runnable`,
+/// place `#[runnable_generated]` below this attribute; it suppresses the generated
+/// run loop and permits a bare `#[processor]`.
+///
+/// # Example
 ///
 /// ```rust,ignore
-/// // Event-driven processor
-/// #[processor(subscribe = [LedIndicatorEvent])]
-/// struct LedController { /* ... */ }
+/// use rmk::event::LayerChangeEvent;
+/// use rmk::macros::processor;
 ///
-/// impl LedController {
-///     async fn on_led_indicator_event(&mut self, event: LedIndicatorEvent) {
-///         // Handle event
-///     }
+/// #[processor(subscribe = [LayerChangeEvent])]
+/// #[derive(Default)]
+/// struct LayerTracker {
+///     layer: u8,
 /// }
 ///
-/// // Polling processor
-/// #[processor(subscribe = [BatteryStatusEvent], poll_interval = 1000)]
-/// struct BatteryMonitor { /* ... */ }
-///
-/// impl BatteryMonitor {
-///     async fn on_battery_status_event(&mut self, event: BatteryStatusEvent) {
-///         // Handle event
-///     }
-///
-///     async fn poll(&mut self) {
-///         // Called every 1000ms
+/// impl LayerTracker {
+///     async fn on_layer_change_event(&mut self, event: LayerChangeEvent) {
+///         self.layer = event.0;
 ///     }
 /// }
 /// ```

@@ -1,10 +1,7 @@
-//! Runtime traits for event consumers in RMK.
+//! Process keyboard events and schedule periodic work or state-dependent timeouts.
 //!
-//! In RMK's event system, `crate::event` defines how event types are published
-//! and subscribed, while `Processor` defines how a task consumes those events.
-//! `Processor` provides the core consume loop (`subscriber` -> `next_event` ->
-//! `process`). `PollingProcessor` adds fixed polling ticks and `DeadlineProcessor`
-//! adds dynamic deadlines; both can run alongside event handling in one loop.
+//! Use `#[processor]` to generate the traits and run loop for a processor.
+//! Implement [`Runnable`] yourself when you need a different run loop.
 
 pub mod builtin;
 
@@ -14,35 +11,13 @@ use embassy_time::{Instant, Timer};
 use crate::core_traits::Runnable;
 use crate::event::EventSubscriber;
 
-/// Unified trait for event and timer processors.
+/// Receives events and handles them one at a time.
 ///
-/// This trait provides the interface for all event-driven processors in RMK.
-/// Use the `#[processor]` macro to automatically implement this trait.
+/// Use `#[processor(subscribe = [...])]` to generate this implementation and
+/// provide an async `on_<event_name>_event` handler for each subscribed event.
+/// A timer-only processor uses [`core::convert::Infallible`] as its event type.
 ///
-/// ```rust,ignore
-/// use rmk_macro::processor;
-///
-/// // Single event subscription
-/// #[processor(subscribe = [LedIndicatorEvent])]
-/// struct MyProcessor { /* ... */ }
-///
-/// impl MyProcessor {
-///     // You MUST implement on_{event_name}_event handler method
-///     // for each event type in `subscribe = [..]`
-///     async fn on_led_indicator_event(&mut self, event: LedIndicatorEvent) {
-///         // handle event
-///     }
-/// }
-///
-/// // Multiple event subscription
-/// #[processor(subscribe = [EventA, EventB])]
-/// struct MyMultiProcessor { /* ... */ }
-///
-/// impl MyMultiProcessor {
-///     async fn on_event_a_event(&mut self, event: EventA) { /* ... */ }
-///     async fn on_event_b_event(&mut self, event: EventB) { /* ... */ }
-/// }
-/// ```
+/// [`process_loop`](Self::process_loop) runs event handling without polling or deadlines.
 pub trait Processor: Runnable {
     /// Type of the received events, or [`core::convert::Infallible`] without subscriptions.
     type Event;
@@ -63,34 +38,15 @@ pub trait Processor: Runnable {
     }
 }
 
-/// Trait for processors with periodic updates.
+/// Adds periodic work to a processor's event handling.
 ///
-/// This trait extends `Processor` with periodic update capability.
-/// The polling loop alternates between waiting for events and calling `update()`
-/// at the specified interval.
+/// Use `#[processor(poll_interval = N)]` and provide an async `poll()` method.
+/// `N` is a positive interval in milliseconds. Subscriptions are optional.
 ///
-/// ```rust,ignore
-/// use rmk_macro::processor;
-///
-/// #[processor(subscribe = [BatteryStatusEvent], poll_interval = 1000)]
-/// struct BatteryLedProcessor {
-///     led_on: bool,
-/// }
-///
-/// impl BatteryLedProcessor {
-///     async fn on_battery_status_event(&mut self, event: BatteryStatusEvent) {
-///         // Update internal state based on battery event
-///     }
-///
-///     // Called every 1000ms (poll_interval)
-///     async fn poll(&mut self) {
-///         // Toggle LED based on battery status
-///         self.led_on = !self.led_on;
-///     }
-/// }
-/// ```
+/// [`polling_loop`](Self::polling_loop) preserves the polling schedule across events.
+/// When a tick and an event are both ready, it handles the tick first.
 pub trait PollingProcessor: Processor {
-    /// Returns the interval between `update` calls.
+    /// Returns a positive interval between `update` calls.
     fn interval(&self) -> embassy_time::Duration;
 
     /// Update periodically, will be called according to [`Self::interval()`]
@@ -110,17 +66,14 @@ pub trait PollingProcessor: Processor {
     }
 }
 
-/// Trait for processors driven by a dynamic timeout in addition to events.
+/// Schedules a timeout from the processor's current state.
 ///
-/// Unlike [`PollingProcessor`], whose tick fires at a fixed interval, a
-/// deadline processor produces the next deadline on demand from its own
-/// state -- motion may extend it, external state may clear it. When
-/// [`next_deadline`](Self::next_deadline) returns `None`, the deadline timer is inactive;
-/// events and any configured polling continue.
+/// Use `#[processor(deadline)]` and provide inherent `deadline()` and
+/// `on_deadline()` methods. The macro maps them to [`next_deadline`](Self::next_deadline)
+/// and [`handle_deadline`](Self::handle_deadline), then generates the run loop.
 ///
-/// Add `deadline` to `#[processor]` and provide inherent `deadline()` and
-/// `on_deadline()` methods. The macro implements this trait and [`Runnable`],
-/// including polling when `poll_interval` is also set.
+/// Return `None` to disable the timeout. After it fires, clear or advance it.
+/// To also poll, add `poll_interval` and provide `poll()`.
 pub trait DeadlineProcessor: Processor {
     /// The next moment at which [`handle_deadline`](Self::handle_deadline) should
     /// fire, or `None` when no timeout is currently armed.
