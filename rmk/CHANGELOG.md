@@ -13,8 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Retain each board's last measured BLE battery percentage across host reconnects.
 - **BREAKING**: Use bare `#[register_processor]` to run the type's `Runnable`. See [processor migration](https://rmk.rs/docs/migration/v09_v10#processors).
 - **BREAKING**: Rename manually implemented `DeadlineProcessor` methods to `next_deadline()` and `handle_deadline()`. Macro callbacks remain `deadline()` and `on_deadline()`.
+- **BREAKING**: Configure charging GPIOs through `ChargingStateReader` and `BatteryLedProcessor` instead of `BleBatteryConfig`. See [battery setup migration](https://rmk.rs/docs/migration/v09_v10#battery-setup).
 - **BREAKING**: Keyboard macros are reworked around `MacroOp` lists.
 - **BREAKING**: Bump Rynk protocol version to 0.2: now `GetMacro`/`SetMacro` read and write a whole macro by index, and `BleStatus` gained a `bonded` field, changing its wire format and that of `ConnectionStatus`.
 
@@ -22,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add timer-only processors and combine polling with resettable deadlines through `#[processor]`.
 - Macro operations accept any single action (`WM`, `MO`, `OSM`, ...) without the `vial` feature, and a new `pause_for_release` operation (`MacroOp::PauseForRelease`) runs the rest of the macro when the macro key is released
+- Add `BatteryProcessor::charging_only()` for charging indicators without ADC measurement.
+- Configure charging-state and LED pins separately under `[split.central]` and `[[split.peripheral]]`.
 - PMW3610 `force_awake` now follows the keyboard's sleep state, ZMK style: the sensor is held in RUN while the keyboard is awake and released to its REST modes when the idle sleep starts. `PointingDriver` gained a default-implemented `set_low_power` hint and `PointingDevice` subscribes to `SleepStateEvent`; each sensor in `keyboard.toml` reserves its subscriber slot automatically.
 - Make Trouble BLE roles explicit, document environment-variable memory tuning, update the nRF52832 examples to peripheral-only SDC, and derive split notification capacity from Trouble's configured packet-pool MTU.
 - Give dongles a USB DFU runtime interface: a DETACH in the 30 s after plug-in reboots into the bootloader (`jump_to_bootloader`), so a dongle can be updated with `dfu-util` or rmk-gui although its host protocol is relayed to the keyboard.
@@ -33,8 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Re-pairing a cleared BLE profile with the same host no longer leaves the profile marked as removed.
+- Read central and peripheral BLE battery levels independently.
+- Show unknown OLED battery levels with empty bars and `?` or `CHG`.
 - Apply processor registration conditions to both construction and execution.
 - Reject zero processor polling intervals at compile time.
+- Preserve sampled battery percentages when the first charging-state reading reports not charging.
+- Use the configured ADC divider for all battery samples, including low readings previously mistaken for VDDH.
 - `[chip.nrf52833] dcdc_reg0_voltage` was ignored; it now sets the REG0 output voltage.
 - Keep other physically held one-shot modifiers active when one is released
 - Preserve unresolved keys from unrelated combos when another combo triggers, instead of silently discarding their press events

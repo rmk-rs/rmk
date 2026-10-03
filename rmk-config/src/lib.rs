@@ -1145,6 +1145,10 @@ pub struct SplitBoardConfig {
     pub adc_divider_measured: Option<u32>,
     /// ADC divider total value for battery
     pub adc_divider_total: Option<u32>,
+    /// Charger status pin of this split board, as `charge_state` under `[ble]`
+    pub charge_state: Option<PinConfig>,
+    /// Charging LED of this split board, as `charge_led` under `[ble]`
+    pub charge_led: Option<PinConfig>,
     /// Output Pin config for the split
     pub output: Option<Vec<OutputConfig>>,
     /// DFU config for this split board.

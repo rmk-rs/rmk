@@ -1,108 +1,186 @@
-# Wireless/Bluetooth
+# Wireless and Bluetooth
 
-### `[ble]`
+Enable Bluetooth in `keyboard.toml`, then configure the battery inputs and pairing options your board needs.
 
-To enable BLE, add `enabled = true` under the `[ble]` section.
+## Enable Bluetooth
 
-There are several more configs for reading battery level and charging state; they are currently available for nRF52 (SAADC) chips.
+Add or update the `[ble]` section:
 
 ```toml
-# Ble configuration
-# To use the default configuration, ignore this section completely
 [ble]
-# Whether to enable BLE feature
 enabled = true
-# Optional Battery Level name exposed through GATT. Defaults to "Central".
-battery_user_description = "Main"
-# nRF52 SAADC pin for reading battery level, you can use a pin number or "vddh"
-battery_adc_pin = "vddh"
-# The voltage divider setting for saadc. This setting should be ignored when using "vddh" as the adc pin.
-# For example, nice!nano has 806 + 2M resistors. The saadc measures voltage on the 2M resistor, so the two values should be set to 2000 and 2806
+```
+
+On nRF52 boards, you can also set the radio's transmit power and enable 2M PHY:
+
+```toml
+[ble]
+enabled = true
+default_tx_power = 0
+use_2m_phy = true
+```
+
+`default_tx_power` is in dBm. The supported range depends on the chip. These two radio settings apply to nRF52 boards.
+
+If a legacy host adapter cannot connect at 2M PHY, enable RMK's `use_1m_phy` Cargo feature. This changes the host connection; dongle and split links continue to use 2M PHY.
+
+## Configure battery monitoring
+
+The TOML battery inputs described here are supported on nRF52 BLE boards. Choose unused GPIO pins that match your board's wiring.
+
+| Setting                                        | Purpose                                                                                                                |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `battery_adc_pin`                              | Measure battery voltage through an ADC pin, or use `"vddh"` for the internal nRF VDDH input.                           |
+| `adc_divider_measured` and `adc_divider_total` | Describe the voltage divider connected to a GPIO ADC input.                                                            |
+| `charge_state`                                 | Read the charger's status. Works with or without an ADC input.                                                         |
+| `charge_led`                                   | Light an LED while charging and blink it below 10% battery. Requires an ADC or charging-state input on the same board. |
+| `battery_user_description`                     | Name the battery in its BLE Battery Service.                                                                           |
+
+### Measure battery voltage
+
+For an external voltage divider, set the ADC pin and the divider values. Use the same units for both values:
+
+```toml
+[ble]
+enabled = true
+battery_adc_pin = "P0_05"
 adc_divider_measured = 2000
 adc_divider_total = 2806
-# Set the BLE tx power; higher means better signal but more power consumption. For nRF52840 the maximum tx power is 8.
-# nRF52 only, ignored on other chips
-default_tx_power = 0
-# Whether to enable 2M PHY, defaults to true. nRF52 only, ignored on other chips
-use_2m_phy = true
-# Enable or disable passkey entry, defaults to false
-passkey_entry = false
-# Timeout in seconds for passkey entry, defaults to 120
-passkey_entry_timeout = 120
-# [Deprecated] Pin that reads battery's charging state, `low-active` means the battery is charging when `charge_state.pin` is low
-# charge_state = { pin = "PIN_1", low_active = true }
-# [Deprecated] Output LED pin that blinks when the battery is low
-# charge_led= { pin = "PIN_2", low_active = true }
 ```
 
-Some legacy BLE adapters cannot connect to devices using 2M PHY at all. For those hosts, enable the `use_1m_phy` Cargo feature of the `rmk` crate, which makes the keyboard use 1M PHY for the host connection.
-This only affects host connections. The dongle link and the split link between the halves always run at 2M PHY, so a keyboard built with both `dongle` and `use_1m_phy` keeps those links fast and still connects to a legacy adapter on its other BLE profiles.
+`adc_divider_measured` is the resistance across which the ADC measures voltage. `adc_divider_total` is the total resistance of the divider. For example, an ADC measuring across a 2 MΩ resistor in series with an 806 kΩ resistor uses `2000` and `2806`. Both values must be greater than zero; omitted values default to `1`.
 
-### Passkey entry
-
-RMK supports typing a BLE passkey directly on the keyboard during pairing. This is disabled by default, and requires the `passkey_entry` Cargo feature of the `rmk` crate in addition to the configuration below.
+For the internal VDDH input on nRF52833 or nRF52840, use this configuration instead:
 
 ```toml
 [ble]
-# Enable or disable passkey entry (default: false)
-# When disabled, passkey pairing requests from the host are automatically rejected.
-passkey_entry = true
-# Timeout in seconds for passkey entry (default: 120, minimum: 30)
-# If the user does not finish entering the passkey within this time, pairing is cancelled.
-# Setting this below 30 will cause a build error.
-passkey_entry_timeout = 120
+enabled = true
+battery_adc_pin = "vddh"
 ```
 
-During passkey mode, the keyboard intercepts all keypresses. Only the following keys are recognized:
+RMK applies the internal 1:5 divider automatically. Omit the divider settings when using `"vddh"`; they are ignored for this input.
 
-| Key                         | Action                     |
-| --------------------------- | -------------------------- |
-| `0`–`9` (top row or numpad) | Enter a digit              |
-| `Enter` / `Numpad Enter`    | Submit the 6-digit passkey |
-| `Escape`                    | Cancel pairing             |
-| `Backspace`                 | Delete the last digit      |
+### Add a charging indicator
 
-All other keys are silently discarded while passkey mode is active.
+Add the charger's status pin and an optional LED to the same section as your battery configuration:
 
-### Split battery ADC configuration
+```toml
+[ble]
+enabled = true
+charge_state = { pin = "P0_20", low_active = true }
+charge_led = { pin = "P0_21", low_active = false }
+```
 
-For split keyboards, you can configure battery ADC separately for the central and each peripheral:
+For `charge_state`, `low_active = true` means a low pin level indicates charging. For `charge_led`, it means RMK drives the pin low to turn on the LED.
+
+This example works without ADC measurement: the LED follows the charging state, while the percentage remains unknown. Add the ADC settings from the previous section to enable percentage reporting and low-battery blinking.
+
+### Split battery configuration
+
+Add battery fields to the existing `[split.central]` and `[[split.peripheral]]` sections. Each board uses its own pins and divider:
 
 ```toml
 [split.central]
-battery_adc_pin = "P0_01"
-battery_user_description = "Left"
+battery_adc_pin = "P0_05"
 adc_divider_measured = 2000
 adc_divider_total = 2806
+battery_user_description = "Left"
+charge_state = { pin = "P0_20", low_active = true }
 
 [[split.peripheral]]
-battery_adc_pin = "P0_02"
-battery_user_description = "Right"
+battery_adc_pin = "P0_05"
 adc_divider_measured = 2000
 adc_divider_total = 2806
+battery_user_description = "Right"
+charge_state = { pin = "P0_20", low_active = true }
+charge_led = { pin = "P0_21", low_active = false }
 ```
 
-Notes:
+| Settings                        | Central                                                                                      | Peripheral                            |
+| ------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------- |
+| ADC pin and divider             | Uses the central's ADC settings when `battery_adc_pin` is set there; otherwise uses `[ble]`. | Uses only that peripheral's settings. |
+| `charge_state` and `charge_led` | Each unset key falls back to `[ble]` independently.                                          | Uses only that peripheral's settings. |
 
-- If `[split.central]` provides battery ADC settings, they override the top-level `[ble]` battery settings for the central.
-- Peripherals do **not** fall back to `[ble]`; to enable peripheral battery reporting, set ADC values per peripheral.
+Setting a central ADC pin replaces the whole ADC configuration, including the divider. Divider values omitted from `[split.central]` default to `1`; they do not inherit the `[ble]` values. Peripherals never inherit battery hardware settings from `[ble]`.
 
-### Peripheral battery reporting over BLE GATT
+A charging-only peripheral can report its charging state to the central. To expose its battery percentage to the BLE host, configure `battery_adc_pin` on that peripheral.
 
-When peripherals are configured to sample their batteries (see above), their levels are forwarded to the central over the split BLE links and re-exposed to the host through standard Battery Service instances (UUID `0x180F`) on the central's GATT server. The host sees one Battery Service instance for:
+### Battery readings and indicators
 
-- the central's own battery level, and
-- each `[[split.peripheral]]` that defines `battery_adc_pin`.
+BLE reports the last measured percentage for each board, including after a host reconnects. These measurements are retained until the central restarts. While charging, RMK pauses percentage updates. When charging ends, the current percentage becomes unknown until the next ADC sample; the host can still read the previous measurement.
 
-Each peripheral's Battery Service uses its peripheral ID to set the description field in the Characteristic Presentation Format descriptor. Peripheral IDs `0`, `1`, and `2` use the Bluetooth SIG ordinal values `first`, `second`, and `third`, respectively. No host-side configuration is required; any host that already reads the central's Battery Level characteristic can discover the additional instances the same way.
+Before the first sample, no measured percentage is available. Depending on how the host reads the service, it may display no percentage or `0%`. A charging-state pin alone does not measure battery level.
 
-Battery Level characteristics also expose a Characteristic User Description descriptor. The defaults are `Central` for the central and `Peripheral 0`, `Peripheral 1`, and so on for peripherals. Set `battery_user_description` under `[ble]`, `[split.central]`, or an individual `[[split.peripheral]]` to provide a custom name. `[split.central].battery_user_description` overrides `[ble].battery_user_description` for the central.
+The default OLED renderer leaves the battery bars empty when the percentage is unknown. Where space allows, it also shows these labels:
 
-The split feature uses trouble-host's default client ATT table size. To reserve more space for client-specific attributes such as CCCDs, set `TROUBLE_HOST_CLIENT_ATT_TABLE_SIZE` in the project environment, for example in `.cargo/config.toml`:
+| State                            | Label                                            |
+| -------------------------------- | ------------------------------------------------ |
+| No battery status available      | `N/A`                                            |
+| Percentage unknown, not charging | `?`                                              |
+| Percentage unknown, charging     | `CHG`                                            |
+| Percentage known                 | The percentage, with `+` appended while charging |
+
+### Using the Rust API
+
+After initializing the status pin, LED pin, keyboard, and BLE transport, construct the battery components and add them to your existing task list:
+
+```rust
+use rmk::input_device::battery::{BatteryProcessor, ChargingStateReader};
+use rmk::processor::builtin::battery_led::BatteryLedProcessor;
+use rmk::run_all;
+
+let mut charging = ChargingStateReader::new(status_pin, true);
+let mut battery = BatteryProcessor::charging_only();
+let mut led = BatteryLedProcessor::new(led_pin, false);
+
+run_all!(charging, battery, led, keyboard, ble_transport).await;
+```
+
+With ADC measurement, replace `charging_only()` with `BatteryProcessor::new(measured, total)` and also run your ADC input device. Use `BatteryProcessor::new(1, 5)` for VDDH. The percentage calculation always uses the supplied divider.
+
+`BleBatteryConfig` controls BLE reporting. It does not configure GPIO pins or start these local components.
+
+## Peripheral battery reporting over BLE GATT
+
+A split central exposes a standard BLE Battery Service (UUID `0x180F`) for its own level and for each peripheral that configures `battery_adc_pin`. A host that supports multiple Battery Services can read each board independently.
+
+Set `battery_user_description` to give a service a readable name. The defaults are `Central` and `Peripheral 0`, `Peripheral 1`, and so on. A name in `[split.central]` overrides the name in `[ble]`. Peripheral names must be set on their own sections and require `battery_adc_pin`.
+
+Peripheral IDs are also exposed in the Characteristic Presentation Format descriptor: IDs `0`, `1`, and `2` map to the Bluetooth ordinal descriptions `first`, `second`, and `third`.
+
+If additional services need more client attribute slots, set the capacity in your project's `.cargo/config.toml`:
 
 ```toml
 [env]
 TROUBLE_HOST_CLIENT_ATT_TABLE_SIZE = "128"
 ```
 
-This project-wide override takes precedence over trouble-host Cargo feature settings and can be set to the size required by the enabled services.
+This environment setting overrides trouble-host's Cargo feature settings.
+
+## Passkey entry
+
+To enter a BLE pairing passkey on the keyboard, enable RMK's `passkey_entry` Cargo feature and configure:
+
+```toml
+[ble]
+enabled = true
+passkey_entry = true
+passkey_entry_timeout = 120
+```
+
+Passkey entry is disabled by default. The timeout defaults to 120 seconds and must be at least 30 seconds. RMK rejects smaller values at build time and cancels pairing if entry is not completed before the timeout.
+
+While entering a passkey, the keyboard accepts these keys:
+
+| Key                              | Action                        |
+| -------------------------------- | ----------------------------- |
+| `0`–`9` on the top row or numpad | Enter a digit.                |
+| `Enter` or `Numpad Enter`        | Submit the six-digit passkey. |
+| `Escape`                         | Cancel pairing.               |
+| `Backspace`                      | Delete the last digit.        |
+
+Other keys are ignored until passkey entry finishes.
+
+## Related documentation
+
+- [Upgrade from v0.9 to v0.10](../migration/v09_v10#battery-setup): migrate GPIO-based battery configuration.

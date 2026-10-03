@@ -47,6 +47,8 @@ pub(crate) trait SplitWriter {
 struct PeripheralSlot {
     connected: bool,
     battery: BatteryStatus,
+    #[cfg(feature = "_ble")]
+    last_battery_level: Option<u8>,
 }
 
 static PERIPHERAL_SLOTS: BlockingMutex<crate::RawMutex, Cell<[PeripheralSlot; crate::SPLIT_PERIPHERALS_NUM]>> =
@@ -54,6 +56,8 @@ static PERIPHERAL_SLOTS: BlockingMutex<crate::RawMutex, Cell<[PeripheralSlot; cr
         [PeripheralSlot {
             connected: false,
             battery: BatteryStatus::Unavailable,
+            #[cfg(feature = "_ble")]
+            last_battery_level: None,
         }; crate::SPLIT_PERIPHERALS_NUM],
     ));
 
@@ -85,7 +89,12 @@ pub(crate) fn set_peripheral_connected(id: usize, connected: bool) {
 /// Latch peripheral `id`'s battery status and broadcast the change.
 #[cfg(feature = "_ble")]
 pub(crate) fn set_peripheral_battery(id: usize, battery: BatteryStatus) {
-    if update_slot(id, |s| s.battery = battery) {
+    if update_slot(id, |s| {
+        s.battery = battery;
+        if let BatteryStatus::Available { level: Some(level), .. } = battery {
+            s.last_battery_level = Some(level);
+        }
+    }) {
         publish_event(PeripheralBatteryEvent {
             id,
             state: BatteryStatusEvent(battery),
@@ -97,6 +106,12 @@ pub(crate) fn set_peripheral_battery(id: usize, battery: BatteryStatus) {
 #[cfg(feature = "_ble")]
 pub(crate) fn current_peripheral_battery_status(id: usize) -> Option<BatteryStatus> {
     PERIPHERAL_SLOTS.lock(|slots| slots.get().get(id).map(|slot| slot.battery))
+}
+
+/// Last percentage received for this peripheral, retained across unknown states and reconnects.
+#[cfg(feature = "_ble")]
+pub(crate) fn last_peripheral_battery_level(id: usize) -> Option<u8> {
+    PERIPHERAL_SLOTS.lock(|slots| slots.get().get(id).and_then(|slot| slot.last_battery_level))
 }
 
 /// Latest snapshot for peripheral `id`, or `None` when `id` is out of range.
@@ -112,12 +127,13 @@ pub(crate) fn current_peripheral_status(id: usize) -> Option<PeripheralStatus> {
 
 #[cfg(all(test, feature = "_ble"))]
 mod tests {
-    use rmk_types::battery::ChargeState;
+    use rmk_types::battery::{BatteryStatus, ChargeState};
 
-    use super::{current_peripheral_battery_status, set_peripheral_battery};
+    use super::{current_peripheral_battery_status, last_peripheral_battery_level, set_peripheral_battery};
 
     #[test]
     fn caches_latest_peripheral_battery_status() {
+        assert_eq!(last_peripheral_battery_level(0), None);
         let status = rmk_types::battery::BatteryStatus::Available {
             charge_state: ChargeState::Discharging,
             level: Some(73),
@@ -127,6 +143,19 @@ mod tests {
 
         assert_eq!(current_peripheral_battery_status(0), Some(status));
         assert_eq!(current_peripheral_battery_status(crate::SPLIT_PERIPHERALS_NUM), None);
+        assert_eq!(last_peripheral_battery_level(0), Some(73));
+        for status in [
+            BatteryStatus::Available {
+                charge_state: ChargeState::Charging,
+                level: None,
+            },
+            BatteryStatus::Unavailable,
+        ] {
+            set_peripheral_battery(0, status);
+            assert_eq!(current_peripheral_battery_status(0), Some(status));
+            assert_eq!(last_peripheral_battery_level(0), Some(73));
+        }
+        assert_eq!(last_peripheral_battery_level(crate::SPLIT_PERIPHERALS_NUM), None);
     }
 }
 

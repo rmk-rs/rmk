@@ -9,7 +9,6 @@ use rmk_types::ble::{BLE_ADV_NAME_MAX_LEN, BLE_DIS_STRING_MAX_LEN};
 
 use super::behavior::expand_behavior_config;
 use super::chip::bind_interrupt::expand_bind_interrupt;
-use super::chip::ble::expand_ble_config;
 use super::chip::chip_init::expand_chip_init;
 use super::chip::comm::expand_usb_init;
 use super::chip::flash::expand_flash_init;
@@ -366,7 +365,6 @@ fn expand_main(
     let behavior_config = expand_behavior_config(behavior);
     let matrix_config = expand_matrix_config(hardware, rmk_features);
     let output_config = expand_output_config(hardware);
-    let (ble_config, set_ble_config) = expand_ble_config(hardware);
     let keymap_and_storage = expand_keymap_and_storage(hardware, keymap);
     let split_central_config = expand_split_central_config(hardware);
     let (input_device_config, devices, processors) = expand_input_device_config(hardware);
@@ -465,7 +463,6 @@ fn expand_main(
                 #lock_config
                 #rynk_layout_field
                 storage_config,
-                #set_ble_config
                 ..Default::default()
             };
         }
@@ -477,7 +474,6 @@ fn expand_main(
                 #vial_config
                 #lock_config
                 #rynk_layout_field
-                #set_ble_config
                 ..Default::default()
             };
         }
@@ -518,9 +514,6 @@ fn expand_main(
 
             // Initialize flash driver as `storage_partition` and storage config as `storage_config`
             #flash_init
-
-            // Initialize ble config as `ble_battery_config`
-            #ble_config
 
             // Bake the physical-layout blob (rynk) as a compile-time const
             #layout_blob_static

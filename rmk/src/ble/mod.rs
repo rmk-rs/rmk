@@ -95,7 +95,7 @@ where
     controller: Option<C>,
     address: [u8; 6],
     device_config: DeviceConfig<'static>,
-    config: BleBatteryConfig<'static>,
+    config: BleBatteryConfig,
     /// One matrix region per split peripheral.
     #[cfg(feature = "split")]
     peripheral_matrices: [PeripheralMatrixConfig; crate::SPLIT_PERIPHERALS_NUM],
@@ -227,7 +227,7 @@ async fn run_ble_keyboard<
 >(
     stack: &Stack<'_, C, DefaultPacketPool>,
     device_config: &DeviceConfig<'static>,
-    config: &BleBatteryConfig<'static>,
+    config: &BleBatteryConfig,
     #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
 ) -> ! {
     let product_name = device_config.product_name;
@@ -507,28 +507,36 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                 set_ble_state(BleState::Connected);
             }
             GattConnectionEvent::Gatt { event: gatt_event } => {
+                let mut battery_read_error = None;
+                if matches!(&gatt_event, GattEvent::Read(_) | GattEvent::Other(_)) {
+                    let levels = core::iter::once((level, crate::input_device::battery::last_battery_level()));
+                    #[cfg(feature = "split")]
+                    let levels = levels.chain(
+                        peripheral_levels
+                            .iter()
+                            .copied()
+                            .zip(crate::SPLIT_BATTERY_PERIPHERAL_IDS)
+                            .map(|(level, id)| (level, crate::split::driver::last_peripheral_battery_level(id))),
+                    );
+                    for (attribute, measured) in levels {
+                        let result = measured.ok_or(AttErrorCode::UNLIKELY_ERROR).and_then(|measured| {
+                            server
+                                .set(&attribute, &measured)
+                                .map_err(|_| AttErrorCode::UNLIKELY_ERROR)
+                        });
+                        if let GattEvent::Read(event) = &gatt_event
+                            && event.handle() == attribute.handle
+                        {
+                            battery_read_error = result.err();
+                        }
+                    }
+                }
                 let mut cccd_updated = false;
                 let result = match &gatt_event {
                     GattEvent::Read(event) => {
-                        if event.handle() == level.handle {
-                            let value = server.get(&level);
-                            debug!("Read GATT Event to Level: {:?}", value);
-                        } else {
-                            #[cfg(feature = "split")]
-                            let peripheral_level =
-                                peripheral_levels.iter().find(|level| event.handle() == level.handle);
-                            #[cfg(not(feature = "split"))]
-                            let peripheral_level: Option<&Characteristic<u8>> = None;
-                            if let Some(peripheral_level) = peripheral_level {
-                                let value = server.get(peripheral_level);
-                                debug!("Read GATT Event to Peripheral Level: {:?}", value);
-                            } else {
-                                debug!("Read GATT Event to Unknown: {:?}", event.handle());
-                            }
-                        }
-
+                        debug!("Read GATT Event: {:?}", event.handle());
                         if conn.raw().security_level()?.encrypted() {
-                            None
+                            battery_read_error
                         } else {
                             Some(AttErrorCode::INSUFFICIENT_ENCRYPTION)
                         }
@@ -819,7 +827,7 @@ async fn serve_keyboard_connection<
     conn: &GattConnection<'a, 'b, DefaultPacketPool>,
     stack: &Stack<'_, C, DefaultPacketPool>,
     active_bond_info: Option<crate::ble::profile::ProfileInfo>,
-    config: &BleBatteryConfig<'a>,
+    config: &BleBatteryConfig,
     #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);

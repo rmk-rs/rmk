@@ -54,49 +54,120 @@ pub struct Hardware {
     pub dependency: DependencyConfig,
 }
 
+/// Battery inputs and indicator resolved for a single board.
+#[derive(Clone, Debug, Default)]
+pub struct BatteryConfig {
+    pub adc: Option<BatteryAdcConfig>,
+    pub charge_state: Option<PinConfig>,
+    pub charge_led: Option<PinConfig>,
+}
+
+/// ADC input and effective divider, including the fixed 1:5 VDDH divider.
+#[derive(Clone, Debug)]
+pub struct BatteryAdcConfig {
+    pub pin: String,
+    pub divider_measured: u32,
+    pub divider_total: u32,
+}
+
+impl Hardware {
+    /// Resolves battery hardware for a unibody/central (`None`) or peripheral (`Some(id)`).
+    ///
+    /// A central ADC pin overrides the whole `[ble]` ADC group. Unset central
+    /// charger pins inherit independently; peripherals use only their own settings.
+    /// Unsupported chips and connections return an empty configuration.
+    pub fn battery_config(&self, peripheral: Option<usize>) -> Result<BatteryConfig, String> {
+        if self.chip.series != ChipSeries::Nrf52 {
+            return Ok(BatteryConfig::default());
+        }
+        let ble = self.communication.get_ble_config().unwrap_or_default();
+        let side = match (&self.board, peripheral) {
+            (BoardConfig::Split(split), Some(id)) => {
+                if split.connection != crate::SplitConnection::Ble {
+                    return Ok(BatteryConfig::default());
+                }
+                Some(
+                    split
+                        .peripheral
+                        .get(id)
+                        .ok_or_else(|| format!("Invalid peripheral index {id}"))?,
+                )
+            }
+            (BoardConfig::Split(split), None) => Some(&split.central),
+            (BoardConfig::UniBody(_), None) => None,
+            (BoardConfig::UniBody(_), Some(_)) => return Err("Unibody keyboard has no peripherals".into()),
+        };
+        if peripheral.is_none() && !ble.enabled {
+            return Ok(BatteryConfig::default());
+        }
+
+        let section = match peripheral {
+            Some(id) => format!("[[split.peripheral]] #{id}"),
+            None if side.is_some() => "[split.central]".into(),
+            None => "[ble]".into(),
+        };
+
+        // A central overrides the ADC group as a whole, and each charger pin independently.
+        let (pin, measured, total, adc_section) = match side {
+            Some(board) if peripheral.is_some() || board.battery_adc_pin.is_some() => (
+                board.battery_adc_pin.clone(),
+                board.adc_divider_measured,
+                board.adc_divider_total,
+                section.as_str(),
+            ),
+            _ => (
+                ble.battery_adc_pin,
+                ble.adc_divider_measured,
+                ble.adc_divider_total,
+                "[ble]",
+            ),
+        };
+        let charge_state = side
+            .and_then(|board| board.charge_state.clone())
+            .or_else(|| peripheral.is_none().then_some(ble.charge_state).flatten());
+        let charge_led = side
+            .and_then(|board| board.charge_led.clone())
+            .or_else(|| peripheral.is_none().then_some(ble.charge_led).flatten());
+        if charge_led.is_some() && pin.is_none() && charge_state.is_none() {
+            return Err(format!(
+                "keyboard.toml: {section}.charge_led requires battery_adc_pin or charge_state on the same board"
+            ));
+        }
+        let adc = if let Some(pin) = pin {
+            let (divider_measured, divider_total) = if pin == "vddh" {
+                (1, 5)
+            } else {
+                (measured.unwrap_or(1), total.unwrap_or(1))
+            };
+            for (field, value) in [
+                ("adc_divider_measured", divider_measured),
+                ("adc_divider_total", divider_total),
+            ] {
+                if value == 0 {
+                    return Err(format!(
+                        "keyboard.toml: {adc_section}.{field} must be greater than zero"
+                    ));
+                }
+            }
+            Some(BatteryAdcConfig {
+                pin,
+                divider_measured,
+                divider_total,
+            })
+        } else {
+            None
+        };
+        Ok(BatteryConfig {
+            adc,
+            charge_state,
+            charge_led,
+        })
+    }
+}
+
 impl crate::KeyboardTomlConfig {
     /// Resolve hardware configuration from TOML config.
     pub fn hardware(&self) -> Result<Hardware, String> {
-        let validate_divider = |section: &str, pin: Option<&str>, measured, total| {
-            if pin.is_some_and(|pin| pin != "vddh") {
-                for (field, value) in [("adc_divider_measured", measured), ("adc_divider_total", total)] {
-                    if value == Some(0) {
-                        return Err(format!("keyboard.toml: {section}.{field} must be greater than zero"));
-                    }
-                }
-            }
-            Ok(())
-        };
-        if let Some(ble) = &self.ble
-            && ble.enabled
-            && self
-                .split
-                .as_ref()
-                .is_none_or(|split| split.central.battery_adc_pin.is_none())
-        {
-            validate_divider(
-                "[ble]",
-                ble.battery_adc_pin.as_deref(),
-                ble.adc_divider_measured,
-                ble.adc_divider_total,
-            )?;
-        }
-        if let Some(split) = &self.split {
-            validate_divider(
-                "[split.central]",
-                split.central.battery_adc_pin.as_deref(),
-                split.central.adc_divider_measured,
-                split.central.adc_divider_total,
-            )?;
-            for (id, peripheral) in split.peripheral.iter().enumerate() {
-                validate_divider(
-                    &format!("[[split.peripheral]] #{id}"),
-                    peripheral.battery_adc_pin.as_deref(),
-                    peripheral.adc_divider_measured,
-                    peripheral.adc_divider_total,
-                )?;
-            }
-        }
         let chip = self.get_chip_model()?;
         let chip_config = self.get_chip_config();
         let communication = self.get_communication_config()?;
@@ -125,7 +196,7 @@ impl crate::KeyboardTomlConfig {
         let display = self.get_display_config();
         let output = self.get_output_config()?;
         let dependency = self.get_dependency_config();
-        Ok(Hardware {
+        let hardware = Hardware {
             chip,
             chip_config,
             communication,
@@ -136,7 +207,14 @@ impl crate::KeyboardTomlConfig {
             display,
             output,
             dependency,
-        })
+        };
+        hardware.battery_config(None)?;
+        if let BoardConfig::Split(split) = &hardware.board {
+            for id in 0..split.peripheral.len() {
+                hardware.battery_config(Some(id))?;
+            }
+        }
+        Ok(hardware)
     }
 
     /// Resolve a raw TOML DFU section into the resolved [`DfuConfig`].
@@ -205,6 +283,23 @@ impl crate::KeyboardTomlConfig {
             },
         }
     }
+}
+
+/// The DFU download partition must fit the flash and respect the sector erase
+/// granularity, matching what [`crate::resolved`] hands to codegen and what
+/// the W25Q driver can actually erase.
+fn validate_dfu_partition_size(flash_size: u32, dfu_partition_size: u32) -> Result<(), String> {
+    if dfu_partition_size == 0 || dfu_partition_size > flash_size {
+        return Err(format!(
+            "[dfu.external_flash] dfu_partition_size ({dfu_partition_size}) must be between 1 and flash_size ({flash_size})"
+        ));
+    }
+    if !dfu_partition_size.is_multiple_of(4096) {
+        return Err(format!(
+            "[dfu.external_flash] dfu_partition_size ({dfu_partition_size}) must be a multiple of 4096 (sector erase size)"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -288,21 +383,4 @@ col_pins = ["PIN_10"]
             assert!(err.contains("between 1 and"), "unexpected error for {size}: {err}");
         }
     }
-}
-
-/// The DFU download partition must fit the flash and respect the sector erase
-/// granularity, matching what [`crate::resolved`] hands to codegen and what
-/// the W25Q driver can actually erase.
-fn validate_dfu_partition_size(flash_size: u32, dfu_partition_size: u32) -> Result<(), String> {
-    if dfu_partition_size == 0 || dfu_partition_size > flash_size {
-        return Err(format!(
-            "[dfu.external_flash] dfu_partition_size ({dfu_partition_size}) must be between 1 and flash_size ({flash_size})"
-        ));
-    }
-    if !dfu_partition_size.is_multiple_of(4096) {
-        return Err(format!(
-            "[dfu.external_flash] dfu_partition_size ({dfu_partition_size}) must be a multiple of 4096 (sector erase size)"
-        ));
-    }
-    Ok(())
 }

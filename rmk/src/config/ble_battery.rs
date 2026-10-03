@@ -1,67 +1,24 @@
-#[cfg(feature = "_nrf_ble")]
-use embassy_nrf::gpio::{Input, Output};
-
-/// BLE battery/charging GPIO configuration.
-pub struct BleBatteryConfig<'a> {
+/// Controls BLE battery-level notifications.
+///
+/// Configure charger GPIOs through `ChargingStateReader` and `BatteryLedProcessor`,
+/// then run them with a `BatteryProcessor` alongside the transport using `run_all!`.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(feature = "_nrf_ble"), derive(Default))]
+pub struct BleBatteryConfig {
+    /// Enables battery-level notifications to the connected host.
     pub enabled: bool,
-    #[cfg(feature = "_nrf_ble")]
-    pub charge_state_pin: Option<Input<'a>>,
-    #[cfg(feature = "_nrf_ble")]
-    pub charge_led_pin: Option<Output<'a>>,
-    #[cfg(feature = "_nrf_ble")]
-    pub charge_state_low_active: bool,
-    #[cfg(feature = "_nrf_ble")]
-    pub charge_led_low_active: bool,
-    #[cfg(not(feature = "_nrf_ble"))]
-    pub _marker: core::marker::PhantomData<&'a ()>,
 }
 
-impl BleBatteryConfig<'_> {
+impl BleBatteryConfig {
+    /// Disables BLE battery-level notifications.
     pub fn disabled() -> Self {
-        Self {
-            enabled: false,
-            ..Default::default()
-        }
+        Self { enabled: false }
     }
 }
 
 #[cfg(feature = "_nrf_ble")]
-impl<'a> Default for BleBatteryConfig<'a> {
+impl Default for BleBatteryConfig {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            charge_state_pin: None,
-            charge_led_pin: None,
-            charge_state_low_active: false,
-            charge_led_low_active: false,
-        }
-    }
-}
-
-#[cfg(not(feature = "_nrf_ble"))]
-impl<'a> Default for BleBatteryConfig<'a> {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            _marker: core::marker::PhantomData,
-        }
-    }
-}
-
-#[cfg(feature = "_nrf_ble")]
-impl<'a> BleBatteryConfig<'a> {
-    pub fn new(
-        charge_state_pin: Option<Input<'a>>,
-        charge_state_low_active: bool,
-        charge_led_pin: Option<Output<'a>>,
-        charge_led_low_active: bool,
-    ) -> Self {
-        Self {
-            enabled: true,
-            charge_state_pin,
-            charge_state_low_active,
-            charge_led_pin,
-            charge_led_low_active,
-        }
+        Self { enabled: true }
     }
 }

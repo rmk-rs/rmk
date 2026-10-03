@@ -134,8 +134,6 @@ features = ["split", "_ble"]
 events = [
     # split/ble/peripheral.rs: KeyboardEvent::subscriber() (temporary, on timeout)
     { name = "keyboard" },
-    # split/peripheral.rs: ChargingStateEvent::subscriber() (cfg _ble)
-    { name = "charging_state" },
     # split/peripheral.rs: BatteryStatusEvent::subscriber() (cfg _ble)
     { name = "battery_status" },
     # split/driver.rs: ClearPeerEvent::subscriber() (cfg _ble)

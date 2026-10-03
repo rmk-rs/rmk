@@ -3,8 +3,8 @@ use quote::{format_ident, quote};
 use rmk_config::SplitConnection;
 use rmk_config::resolved::Hardware;
 use rmk_config::resolved::hardware::{
-    BleConfig, BoardConfig, ChipModel, ChipSeries, CommunicationConfig, DfuConfig,
-    InputDeviceConfig, MatrixType, SplitBoardConfig, SplitConfig,
+    BoardConfig, ChipModel, ChipSeries, DfuConfig, InputDeviceConfig, MatrixType, SplitBoardConfig,
+    SplitConfig,
 };
 use syn::ItemMod;
 
@@ -18,6 +18,7 @@ use crate::codegen::entry::join_all_tasks;
 use crate::codegen::feature::{get_rmk_features, is_feature_enabled};
 use crate::codegen::import::expand_custom_imports;
 use crate::codegen::input_device::adc::expand_adc_device;
+use crate::codegen::input_device::battery::expand_battery_devices;
 use crate::codegen::input_device::encoder::expand_encoder_device;
 use crate::codegen::input_device::iqs5xx::{expand_iqs5xx_device, expand_iqs5xx_interrupts};
 use crate::codegen::input_device::pmw33xx::expand_pmw33xx_device;
@@ -704,51 +705,25 @@ pub(crate) fn expand_peripheral_input_device_config(
     let mut devices = Vec::new();
     let mut processors = Vec::new();
 
-    let communication = &hardware.communication;
-    let ble_config = match communication {
-        CommunicationConfig::Ble(ble_config) | CommunicationConfig::Both(_, ble_config) => {
-            Some(ble_config.clone())
-        }
-        _ => None,
-    };
     let board = &hardware.board;
     let chip = &hardware.chip;
-
-    // Create peripheral-specific BLE config for battery
-    // Only use peripheral's own battery config, do NOT fallback to top-level BLE config
-    let peripheral_ble_config = match board {
-        BoardConfig::Split(split_config) => {
-            let peripheral_board = &split_config.peripheral[id];
-            // If peripheral has battery config, create a BleConfig with those settings
-            if peripheral_board.battery_adc_pin.is_some() {
-                Some(BleConfig {
-                    enabled: true,
-                    battery_adc_pin: peripheral_board.battery_adc_pin.clone(),
-                    adc_divider_measured: peripheral_board.adc_divider_measured,
-                    adc_divider_total: peripheral_board.adc_divider_total,
-                    ..Default::default()
-                })
-            } else {
-                None
-            }
-        }
-        _ => ble_config.clone(),
+    let battery = hardware
+        .battery_config(Some(id))
+        .expect("invalid peripheral battery config");
+    let joystick = match board {
+        BoardConfig::Split(split) => split.peripheral[id]
+            .input_device
+            .clone()
+            .unwrap_or_default()
+            .joystick
+            .unwrap_or_default(),
+        _ => Vec::new(),
     };
-
-    // generate ADC configuration
-    let (adc_devices, adc_processors) = match board {
-        BoardConfig::Split(split_config) => expand_adc_device(
-            split_config.peripheral[id]
-                .input_device
-                .clone()
-                .unwrap_or(InputDeviceConfig::default())
-                .joystick
-                .unwrap_or(Vec::new()),
-            peripheral_ble_config,
-            chip.series.clone(),
-        ),
-        _ => (vec![], vec![]),
-    };
+    let (mut adc_devices, mut adc_processors) =
+        expand_adc_device(joystick, battery.adc.as_ref(), chip.series.clone());
+    let (battery_devices, battery_processors) = expand_battery_devices(chip, &battery);
+    adc_devices.extend(battery_devices);
+    adc_processors.extend(battery_processors);
 
     for initializer in adc_devices {
         initializations.extend(initializer.initializer);

@@ -163,7 +163,7 @@ async fn main(spawner: Spawner) {
         ..DeviceConfig::default()
     };
     let vial_config = VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, UNLOCK_KEYS);
-    let ble_battery_config = BleBatteryConfig::new(Some(is_charging_pin), true, None, false);
+    let ble_battery_config = BleBatteryConfig::default();
     let storage_config = StorageConfig {
         start_addr: 0xA0000, // FIXME: use 0x70000 after we can build without softdevice controller
         num_sectors: 6,
@@ -210,6 +210,7 @@ async fn main(spawner: Spawner) {
         None,
     );
     let mut batt_proc = BatteryProcessor::new(2000, 2806);
+    let mut charging = rmk::input_device::battery::ChargingStateReader::new(is_charging_pin, true);
 
     let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config).with_host_service(&host_service);
     let mut ble_transport = BleTransport::new(sdc, ble_addr(), rmk_config).with_host_service(&host_service);
@@ -226,6 +227,7 @@ async fn main(spawner: Spawner) {
         ble_transport,
         wpm_processor,
         batt_proc,
+        charging,
         keyboard,
         watchdog_runner
     )
