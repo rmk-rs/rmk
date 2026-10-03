@@ -1,0 +1,5 @@
+error: unknown attribute `dedline`. Expected one of: `subscribe = ...`, `poll_interval = ...`, `deadline`
+ --> tests/compile_fail/processor_unknown_flag.rs:6:37
+  |
+6 | #[processor(subscribe = [KeyEvent], dedline)]
+  |                                     ^^^^^^^

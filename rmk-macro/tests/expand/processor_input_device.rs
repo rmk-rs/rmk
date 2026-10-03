@@ -78,3 +78,25 @@ mod multi_event_polling {
         pub counter: u32,
     }
 }
+
+/// The input-device macro sees the same merged processor configuration.
+mod sibling_polling {
+    use super::{ConfigEvent, ModeEvent, SensorEvent, input_device, processor};
+
+    #[input_device(publish = SensorEvent)]
+    #[processor(subscribe = [ConfigEvent])]
+    #[processor(subscribe = [ModeEvent], poll_interval = 100)]
+    pub struct MergedSensorController;
+}
+
+mod polling_without_subscription {
+    use super::{SensorEvent, input_device, processor};
+
+    #[input_device(publish = SensorEvent)]
+    #[processor(poll_interval = 100)]
+    pub struct PollingSensor;
+
+    #[processor(subscribe = [], poll_interval = 100)]
+    #[input_device(publish = SensorEvent)]
+    pub struct ReversedPollingSensor;
+}

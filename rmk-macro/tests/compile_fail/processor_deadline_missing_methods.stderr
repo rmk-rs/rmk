@@ -1,0 +1,19 @@
+error[E0599]: no associated function or constant named `on_deadline` found for struct `MissingHandler` in the current scope
+  --> tests/compile_fail/processor_deadline_missing_methods.rs:32:1
+   |
+32 | #[processor(subscribe = [TickEvent], deadline)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ associated function or constant not found in `MissingHandler`
+33 | struct MissingHandler;
+   | --------------------- associated function or constant `on_deadline` not found for this struct
+   |
+   = note: this error originates in the attribute macro `processor` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0599]: no associated function or constant named `deadline` found for struct `MissingDeadline` in the current scope
+  --> tests/compile_fail/processor_deadline_missing_methods.rs:24:1
+   |
+24 | #[processor(subscribe = [TickEvent], deadline)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ associated function or constant not found in `MissingDeadline`
+25 | struct MissingDeadline;
+   | ---------------------- associated function or constant `deadline` not found for this struct
+   |
+   = note: this error originates in the attribute macro `processor` (in Nightly builds, run with -Z macro-backtrace for more info)

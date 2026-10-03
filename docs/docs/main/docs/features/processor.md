@@ -1,221 +1,196 @@
 # Processor
 
-RMK's processor system provides a unified interface for components that consume events and react to them, such as displays, LEDs, and other output peripherals.
+A processor reacts to keyboard events or timers. Use one to update an LED, refresh a display, or handle an inactivity timeout.
 
-## Overview
+## Create an event processor
 
-Processors subscribe to events and react accordingly. Events are published by [Input Devices](./input_device) or other processors. For details about events, see the [Event](./event) documentation.
+Add `#[processor]` to a struct and list the events it should receive. For each event, provide an async handler named `on_<event_name>_event`.
 
-Processors can operate in three modes:
+This processor keeps track of the active layer:
 
-- **Event-driven** - React to events as they arrive
-- **Polling** - Perform periodic updates at specified intervals (in addition to handling events)
-- **Deadline** - Fire a callback at a deadline the processor computes from its own state (in addition to handling events)
-
-## Defining Processors
-
-Use the `#[processor]` macro to define custom processors:
-
-```rust
+```rust title="src/layer_tracker.rs"
 use rmk::event::LayerChangeEvent;
 use rmk::macros::processor;
 
 #[processor(subscribe = [LayerChangeEvent])]
-pub struct MyProcessor {
-    // Your processor fields
+#[derive(Default)]
+pub struct LayerTracker {
+    layer: u8,
 }
 
-impl MyProcessor {
+impl LayerTracker {
     async fn on_layer_change_event(&mut self, event: LayerChangeEvent) {
-        // Handle layer changes
+        self.layer = event.0;
     }
 }
 ```
 
-**Parameters:**
+The macro implements the processor traits and `Runnable`. Defining the type does not start it; add an instance to your keyboard's tasks as described below.
 
-- `subscribe = [Event1, Event2, ...]` (required): Event types to subscribe to (see [Built-in Events](./event#built-in-events))
-- `poll_interval = <ms>` (optional): Enable polling with fixed interval, requires `poll()` method
+## Run the processor
 
-**How it works:**
+### With keyboard.toml
 
-- `#[processor]` implements `Processor` and `Runnable` traits automatically
-- Event handlers are automatically routed based on method naming: `on_<event_name>_event()`
-- Method names follow snake_case conversion of event type names
+Declare the module in `src/main.rs`, then add a constructor marked with `#[register_processor]` inside your keyboard module:
 
-## Registering Processors
+```rust title="src/main.rs"
+#![no_main]
+#![no_std]
 
-If you use the Rust API directly, no registration is needed — every processor implements `Runnable`, so just pass it to `run_all!` alongside your other tasks (see [Input Device](./input_device#running-input-devices)).
+mod layer_tracker;
 
-For `keyboard.toml` users, processors are registered in the `#[rmk_keyboard]` module using the `#[register_processor]` attribute:
+use rmk::macros::rmk_keyboard;
 
-```rust
 #[rmk_keyboard]
-mod my_keyboard {
-    use super::*;
-
-    #[register_processor(event)]  // Event-driven mode
-    fn my_processor() -> MyProcessor {
-        MyProcessor::new()
+mod keyboard {
+    #[register_processor]
+    fn layer_tracker() -> crate::layer_tracker::LayerTracker {
+        crate::layer_tracker::LayerTracker::default()
     }
 }
 ```
 
-Available registration modes:
+For a split keyboard, register it in the central's `#[rmk_central]` module instead.
 
-- `#[register_processor(event)]`: Event-driven mode, reacts to subscribed events
-- `#[register_processor(poll)]`: Polling mode, requires `poll_interval` parameter in `#[processor]` macro
+The constructor runs after chip initialization and can use the peripherals in `p`. Choose pins that `keyboard.toml` does not already use. To enable a processor conditionally, add `#[cfg(...)]` to its registration function; the condition applies to both construction and execution.
 
-## Multi-event Subscription
+### With the Rust API
 
-Processors can subscribe to multiple event types and handle them with separate methods:
+After initializing your keyboard and transport, add the processor to the existing `run_all!` call:
 
 ```rust
-use rmk::event::{BatteryStatusEvent, LayerChangeEvent};
-use rmk::macros::processor;
+use rmk::run_all;
 
-#[processor(subscribe = [LayerChangeEvent, BatteryStatusEvent])]
-pub struct MultiEventProcessor {
-    layer: u8,
-}
-
-impl MultiEventProcessor {
-    async fn on_layer_change_event(&mut self, event: LayerChangeEvent) {
-        self.layer = event.0;
-        // Update display with new layer
-    }
-
-    async fn on_battery_status_event(&mut self, event: BatteryStatusEvent) {
-        // Update battery indicator
-    }
-}
+let mut layer_tracker = LayerTracker::default();
+run_all!(layer_tracker, keyboard, transport).await;
 ```
 
-## Polling Processor
+Both approaches run the type's `Runnable` implementation. Select event and timer behavior on the type's `#[processor]` attribute.
 
-For processors that need periodic updates (e.g., display refresh, LED animations), use the `poll_interval` parameter:
+## Polling processor
 
-```rust
-use rmk::event::LayerChangeEvent;
+Use `poll_interval` for work that repeats at a fixed interval. The value is in milliseconds and must be greater than zero. Provide an async `poll()` method.
+
+A processor that only polls does not need a `subscribe` list. This example toggles a GPIO every 500 ms:
+
+```rust title="src/blinker.rs"
+use embedded_hal::digital::{OutputPin, PinState};
 use rmk::macros::processor;
 
-#[processor(subscribe = [LayerChangeEvent], poll_interval = 500)]
-pub struct StatusScreen<D: DrawTarget> {
-    display: D,
-    layer: u8,
-    needs_refresh: bool,
+#[processor(poll_interval = 500)]
+pub struct Blinker<P: OutputPin> {
+    pin: P,
+    on: bool,
 }
 
-impl<D: DrawTarget> StatusScreen<D> {
-    pub fn new(display: D) -> Self {
-        Self {
-            display,
-            layer: 0,
-            needs_refresh: true,
-        }
+impl<P: OutputPin> Blinker<P> {
+    pub fn new(mut pin: P) -> Self {
+        pin.set_low().ok();
+        Self { pin, on: false }
     }
 
-    // Event handler - triggered when layer changes
-    async fn on_layer_change_event(&mut self, event: LayerChangeEvent) {
-        self.layer = event.0;
-        self.needs_refresh = true;
-    }
-
-    // Called every 500ms
     async fn poll(&mut self) {
-        if self.needs_refresh {
-            self.render_layer();
-            self.needs_refresh = false;
-        }
-    }
-
-    fn render_layer(&mut self) {
-        // Render current layer to display
+        self.on = !self.on;
+        self.pin.set_state(PinState::from(self.on)).ok();
     }
 }
 ```
 
-## Deadline Processor
+To also react to events, add `subscribe = [...]` and the corresponding event handlers. Events do not restart the polling interval.
 
-For timeouts that move — a layer that deactivates some time after the last mouse motion, for example — a fixed `poll_interval` doesn't fit. Implement `DeadlineProcessor` instead: `deadline()` returns the next `Instant` to fire at, or `None` when nothing is armed, and `on_deadline()` runs when that instant passes without an event in between. `deadline_loop()` drives it, re-reading `deadline()` after every event.
+## Deadline processor
 
-The `Runnable` that `#[processor]` generates only runs the event loop, so mark the struct with `#[::rmk::macros::runnable_generated]` to suppress it and write `Runnable` yourself:
+Use `deadline` for a timeout that can be reset or cancelled. Provide these methods:
 
-```rust
+- `fn deadline(&self) -> Option<Instant>` returns the next timeout, or `None` when no timeout is armed.
+- `async fn on_deadline(&mut self)` handles the timeout and clears or advances it.
+
+This example marks pointing activity as inactive 500 ms after the last `PointingEvent`:
+
+```rust title="src/motion_activity.rs"
 use embassy_time::{Duration, Instant};
-use rmk::core_traits::Runnable;
 use rmk::event::PointingEvent;
 use rmk::macros::processor;
-use rmk::processor::DeadlineProcessor;
 
-#[processor(subscribe = [PointingEvent])]
-#[::rmk::macros::runnable_generated]
-pub struct MotionTimeout {
+#[processor(subscribe = [PointingEvent], deadline)]
+#[derive(Default)]
+pub struct MotionActivity {
+    active: bool,
     armed_until: Option<Instant>,
 }
 
-impl MotionTimeout {
+impl MotionActivity {
     async fn on_pointing_event(&mut self, _event: PointingEvent) {
-        // Every motion pushes the deadline back
+        self.active = true;
         self.armed_until = Some(Instant::now() + Duration::from_millis(500));
     }
-}
 
-impl DeadlineProcessor for MotionTimeout {
     fn deadline(&self) -> Option<Instant> {
         self.armed_until
     }
 
     async fn on_deadline(&mut self) {
+        self.active = false;
         self.armed_until = None;
-        // Motion stopped 500ms ago
-    }
-}
-
-impl Runnable for MotionTimeout {
-    async fn run(&mut self) -> ! {
-        self.deadline_loop().await
     }
 }
 ```
 
-## Example: LED Indicator Processor
+An event handler can reset the timeout by storing a later deadline, or cancel it by setting the deadline to `None`. The task checks the deadline again after each callback. A deadline-only processor can omit `subscribe`; its initial state must arm the first timeout.
 
-A complete example of a processor that controls an LED based on keyboard indicators:
+### Combine polling and deadlines
 
-```rust
-use embedded_hal::digital::StatefulOutputPin;
-use rmk::event::LedIndicatorEvent;
+Set both `poll_interval` and `deadline` on the same `#[processor]` attribute. Provide `poll()`, `deadline()`, and `on_deadline()`; either polling or an event handler can arm a timeout.
+
+Callbacks run one at a time. When several sources are ready, RMK handles deadlines first, polling ticks second, and events third. Clear or advance a deadline in `on_deadline()` to avoid calling it repeatedly for the same expired timeout.
+
+## Handle multiple event types
+
+List each event in `subscribe` and provide a handler for each one:
+
+```rust title="src/status.rs"
+use rmk::event::{LayerChangeEvent, LedIndicatorEvent};
 use rmk::macros::processor;
 
-#[processor(subscribe = [LedIndicatorEvent])]
-pub struct CapsLockLed<P: StatefulOutputPin> {
-    led: P,
-    low_active: bool,
+#[processor(subscribe = [LayerChangeEvent, LedIndicatorEvent])]
+#[derive(Default)]
+pub struct Status {
+    layer: u8,
+    caps_lock: bool,
 }
 
-impl<P: StatefulOutputPin> CapsLockLed<P> {
-    pub fn new(pin: P, low_active: bool) -> Self {
-        Self {
-            led: pin,
-            low_active,
-        }
+impl Status {
+    async fn on_layer_change_event(&mut self, event: LayerChangeEvent) {
+        self.layer = event.0;
     }
 
     async fn on_led_indicator_event(&mut self, event: LedIndicatorEvent) {
-        let should_light = event.caps_lock();
-        if should_light != self.low_active {
-            self.led.set_high().ok();
-        } else {
-            self.led.set_low().ok();
-        }
+        self.caps_lock = event.caps_lock();
     }
 }
 ```
 
-RMK ships this functionality as the built-in `rmk::processor::builtin::led_indicator::KeyboardIndicatorProcessor`, so you only need a custom processor like this for behavior the built-in doesn't cover.
+Event names use snake case: `LayerChangeEvent` maps to `on_layer_change_event`, and `LedIndicatorEvent` maps to `on_led_indicator_event`. Ensure each event has enough subscriber slots; see [event configuration](../configuration/event).
 
-## Related Documentation
+## Attribute reference
 
-- [Event](./event) - Event concepts, built-in events, and custom event definition
-- [Input Device](./input_device) - How to create input devices that publish events
+| Option                         | Required methods                                                              | Behavior                                                  |
+| ------------------------------ | ----------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `subscribe = [EventType, ...]` | `async fn on_<event_name>_event(&mut self, event: EventType)` for each event  | Handle events as they arrive.                             |
+| `poll_interval = <ms>`         | `async fn poll(&mut self)`                                                    | Run periodic work at a positive interval in milliseconds. |
+| `deadline`                     | `fn deadline(&self) -> Option<Instant>` and `async fn on_deadline(&mut self)` | Handle a timeout determined by the processor's state.     |
+
+You can combine these options. Omit `subscribe` or set it to `[]` when no events are needed. At least one event or timer source is required unless you provide a custom `Runnable`.
+
+## Custom Runnable
+
+To provide your own run loop, implement `rmk::core_traits::Runnable` and place `#[rmk::macros::runnable_generated]` below `#[processor]`. The marker suppresses the generated run loop; the macro still implements the requested processor traits. A bare `#[processor]` is valid with this marker.
+
+Combining `deadline` with `#[input_device]` requires a custom run loop. Choose how that loop schedules input reads, event handling, and timeouts.
+
+## Related documentation
+
+- [Events](./event): built-in events and custom event types.
+- [Input devices](./input_device): publish events from hardware.
+- [Event configuration](../configuration/event): reserve channel capacity and subscriber slots.
+- [Upgrade from v0.9 to v0.10](../migration/v09_v10#processors): migrate existing processor registrations and trait implementations.

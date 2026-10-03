@@ -152,17 +152,73 @@ impl AttributeParser {
         })
     }
 
+    /// Create a new parser that also accepts the bare `flags`, e.g. `deadline`.
+    pub fn new_validated_with_flags(
+        tokens: impl Into<TokenStream>,
+        allowed_keys: &[&str],
+        allowed_flags: &[&str],
+    ) -> Result<Self, TokenStream> {
+        let parser = Self::new(tokens).map_err(|e| e.to_compile_error())?;
+        parser.validate(allowed_keys, allowed_flags)?;
+        Ok(parser)
+    }
+
+    /// Whether the bare flag `name` is present.
+    pub fn has_flag(&self, name: &str) -> bool {
+        self.metas
+            .iter()
+            .any(|meta| matches!(meta, Meta::Path(path) if path.is_ident(name)))
+    }
+
     /// Validate attribute key/value pairs against the allowed set.
     ///
     /// Enforces `key = value` syntax and rejects unknown keys.
     pub fn validate_keys(&self, allowed: &[&str]) -> Result<(), TokenStream> {
+        self.validate(allowed, &[])
+    }
+
+    /// [`Self::validate_keys`], plus the bare `flags`.
+    ///
+    /// Without flags the errors are exactly [`Self::validate_keys`]'s. With flags, every error
+    /// lists what the attribute accepts, and a key or flag written the wrong way says so.
+    fn validate(&self, allowed: &[&str], flags: &[&str]) -> Result<(), TokenStream> {
+        let expected = || {
+            allowed
+                .iter()
+                .map(|key| format!("`{key} = ...`"))
+                .chain(flags.iter().map(|flag| format!("`{flag}`")))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+
         for meta in &self.metas {
+            // A bare word is a flag, but only where flags exist; elsewhere it falls through to
+            // the `key = value` error below, unchanged.
+            if let Meta::Path(path) = meta
+                && !flags.is_empty()
+            {
+                if flags.iter().any(|flag| path.is_ident(flag)) {
+                    continue;
+                }
+                let name = quote!(#path).to_string().replace(' ', "");
+                let message = if allowed.contains(&name.as_str()) {
+                    format!("`{name}` needs a value: `{name} = ...`")
+                } else {
+                    format!(
+                        "unknown attribute `{name}`. Expected one of: {}",
+                        expected()
+                    )
+                };
+                return Err(syn::Error::new_spanned(path, message).to_compile_error());
+            }
+
             let Meta::NameValue(nv) = meta else {
-                return Err(syn::Error::new_spanned(
-                    meta,
-                    "invalid attribute syntax. Expected `key = value`",
-                )
-                .to_compile_error());
+                let message = if flags.is_empty() {
+                    "invalid attribute syntax. Expected `key = value`".to_string()
+                } else {
+                    format!("invalid attribute syntax. Expected one of: {}", expected())
+                };
+                return Err(syn::Error::new_spanned(meta, message).to_compile_error());
             };
 
             let Some(key_ident) = nv.path.get_ident() else {
@@ -175,12 +231,17 @@ impl AttributeParser {
 
             let key = key_ident.to_string();
             if !allowed.contains(&key.as_str()) {
-                let allowed_list = allowed.join(", ");
-                return Err(syn::Error::new_spanned(
-                    &nv.path,
-                    format!("unknown attribute `{key}`. Expected one of: {allowed_list}"),
-                )
-                .to_compile_error());
+                let message = if flags.contains(&key.as_str()) {
+                    format!("`{key}` is a flag and takes no value: write `{key}`")
+                } else if flags.is_empty() {
+                    format!(
+                        "unknown attribute `{key}`. Expected one of: {}",
+                        allowed.join(", ")
+                    )
+                } else {
+                    format!("unknown attribute `{key}`. Expected one of: {}", expected())
+                };
+                return Err(syn::Error::new_spanned(&nv.path, message).to_compile_error());
             }
         }
         Ok(())
@@ -262,21 +323,9 @@ pub fn has_derive(attrs: &[Attribute], derive_name: &str) -> bool {
 /// Check for the runnable_generated marker.
 /// Prevents duplicate Runnable impls when macros combine.
 pub fn has_runnable_marker(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(is_runnable_generated_attr)
-}
-
-/// Check runnable_generated attribute.
-/// Accepts `#[runnable_generated]`, `#[rmk::runnable_generated]`, and `#[rmk::macros::runnable_generated]`.
-pub fn is_runnable_generated_attr(attr: &Attribute) -> bool {
-    let path = attr.path();
-    path.is_ident("runnable_generated")
-        || (path.segments.len() == 2
-            && path.segments[0].ident == "rmk"
-            && path.segments[1].ident == "runnable_generated")
-        || (path.segments.len() == 3
-            && path.segments[0].ident == "rmk"
-            && path.segments[1].ident == "macros"
-            && path.segments[2].ident == "runnable_generated")
+    attrs
+        .iter()
+        .any(|attr| attr_matches_name(attr, "runnable_generated"))
 }
 
 /// Check if an attribute matches a given name, supporting both simple and qualified paths.

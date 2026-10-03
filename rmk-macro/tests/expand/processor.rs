@@ -5,6 +5,7 @@
 //! - Multiple event subscription
 //! - Polling processor with poll_interval
 //! - Multiple #[processor] attributes (merged subscriptions)
+//! - Deadline processor (`deadline`)
 
 use rmk_macro::processor;
 
@@ -69,4 +70,41 @@ mod polling_multi {
     pub struct MultiPollingProcessor {
         pub state: u8,
     }
+}
+
+/// Deadline processor: the generated `Runnable` drives `deadline_loop()`
+mod deadline {
+    use super::{KeyEvent, processor};
+
+    #[processor(subscribe = [KeyEvent], deadline)]
+    pub struct Blinker {
+        pub armed: bool,
+    }
+}
+
+/// Independent timing sources can be declared on sibling attributes.
+mod polling_deadline {
+    use super::{ConfigEvent, KeyEvent, processor};
+
+    #[processor(subscribe = [KeyEvent], poll_interval = 100)]
+    #[processor(subscribe = [ConfigEvent], deadline)]
+    pub struct StatusDisplay;
+}
+
+mod timer_only {
+    use super::processor;
+
+    #[processor(poll_interval = 100)]
+    pub struct Polling;
+
+    #[processor(subscribe = [], deadline)]
+    pub struct Deadline;
+
+    #[processor]
+    #[processor(poll_interval = 100, deadline)]
+    pub struct Both;
+
+    #[processor]
+    #[::rmk::macros::runnable_generated]
+    pub struct Custom;
 }
