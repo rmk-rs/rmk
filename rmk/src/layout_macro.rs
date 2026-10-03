@@ -350,7 +350,10 @@ macro_rules! osl {
 #[macro_export]
 macro_rules! osm {
     ($m: expr) => {
-        $crate::types::action::KeyAction::Sticky($crate::types::action::Action::Modifier($m), u8::MAX)
+        $crate::types::action::KeyAction::Sticky(
+            $crate::types::action::Action::Modifier($m),
+            $crate::types::sticky::STICKY_PROFILE_DEFAULT,
+        )
     };
 }
 
@@ -368,7 +371,7 @@ macro_rules! osm {
 #[macro_export]
 macro_rules! sk {
     ($a: expr) => {
-        $crate::types::action::KeyAction::Sticky($a, u8::MAX)
+        $crate::types::action::KeyAction::Sticky($a, $crate::types::sticky::STICKY_PROFILE_DEFAULT)
     };
 }
 
