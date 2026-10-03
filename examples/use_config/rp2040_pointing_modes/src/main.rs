@@ -7,7 +7,7 @@ use rmk::macros::rmk_keyboard;
 
 #[rmk_keyboard]
 mod keyboard {
-    #[register_processor(event)]
+    #[register_processor]
     fn pointing_processor_controller() -> crate::pointing_processor_controller::PointingProcessorController {
         crate::pointing_processor_controller::PointingProcessorController::new()
     }

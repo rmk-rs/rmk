@@ -4,13 +4,13 @@ RMK's processor system provides a unified interface for components that consume 
 
 ## Overview
 
-Processors subscribe to events and react accordingly. Events are published by [Input Devices](./input_device) or other processors. For details about events, see the [Event](./event) documentation.
+Processors can subscribe to events published by [Input Devices](./input_device) or other processors. For details about events, see the [Event](./event) documentation.
 
-Processors can operate in three modes:
+Processors can combine events, polling, and deadlines:
 
 - **Event-driven** - React to events as they arrive
-- **Polling** - Perform periodic updates at specified intervals (in addition to handling events)
-- **Deadline** - Fire a callback at a deadline the processor computes from its own state (in addition to handling events)
+- **Polling** - Perform periodic updates at specified intervals
+- **Deadline** - Run work after a resettable timeout
 
 ## Defining Processors
 
@@ -34,8 +34,11 @@ impl MyProcessor {
 
 **Parameters:**
 
-- `subscribe = [Event1, Event2, ...]` (required): Event types to subscribe to (see [Built-in Events](./event#built-in-events))
-- `poll_interval = <ms>` (optional): Enable polling with fixed interval, requires `poll()` method
+- `subscribe = [Event1, Event2, ...]`: Events to handle (see [Built-in Events](./event#built-in-events)).
+- `poll_interval = <ms>`: Call `poll()` at a fixed interval greater than zero.
+- `deadline`: Enable a resettable timeout using `deadline()` and `on_deadline()`.
+
+Choose at least one option, unless you provide a [custom run loop](#custom-runnable). For timer-only processors, omit `subscribe`.
 
 **How it works:**
 
@@ -54,17 +57,16 @@ For `keyboard.toml` users, processors are registered in the `#[rmk_keyboard]` mo
 mod my_keyboard {
     use super::*;
 
-    #[register_processor(event)]  // Event-driven mode
+    #[register_processor]
     fn my_processor() -> MyProcessor {
         MyProcessor::new()
     }
 }
 ```
 
-Available registration modes:
+Replace `#[register_processor(event)]` or `#[register_processor(poll)]` with `#[register_processor]`. Set timer options on the processor's `#[processor]` attribute.
 
-- `#[register_processor(event)]`: Event-driven mode, reacts to subscribed events
-- `#[register_processor(poll)]`: Polling mode, requires `poll_interval` parameter in `#[processor]` macro
+The registration function can use `p` to take pins not used by `keyboard.toml`. Add `#[cfg(...)]` to the function to enable it conditionally.
 
 ## Multi-event Subscription
 
@@ -137,19 +139,14 @@ impl<D: DrawTarget> StatusScreen<D> {
 
 ## Deadline Processor
 
-For timeouts that move — a layer that deactivates some time after the last mouse motion, for example — a fixed `poll_interval` doesn't fit. Implement `DeadlineProcessor` instead: `deadline()` returns the next `Instant` to fire at, or `None` when nothing is armed, and `on_deadline()` runs when that instant passes without an event in between. `deadline_loop()` drives it, re-reading `deadline()` after every event.
-
-The `Runnable` that `#[processor]` generates only runs the event loop, so mark the struct with `#[::rmk::macros::runnable_generated]` to suppress it and write `Runnable` yourself:
+Use `deadline` for a timeout that can be reset, such as deactivating a layer after the last mouse motion. `deadline()` returns when to call `on_deadline()`, or `None` to disable the timeout. Clear or advance the deadline after it fires.
 
 ```rust
 use embassy_time::{Duration, Instant};
-use rmk::core_traits::Runnable;
 use rmk::event::PointingEvent;
 use rmk::macros::processor;
-use rmk::processor::DeadlineProcessor;
 
-#[processor(subscribe = [PointingEvent])]
-#[::rmk::macros::runnable_generated]
+#[processor(subscribe = [PointingEvent], deadline)]
 pub struct MotionTimeout {
     armed_until: Option<Instant>,
 }
@@ -159,9 +156,7 @@ impl MotionTimeout {
         // Every motion pushes the deadline back
         self.armed_until = Some(Instant::now() + Duration::from_millis(500));
     }
-}
 
-impl DeadlineProcessor for MotionTimeout {
     fn deadline(&self) -> Option<Instant> {
         self.armed_until
     }
@@ -171,13 +166,13 @@ impl DeadlineProcessor for MotionTimeout {
         // Motion stopped 500ms ago
     }
 }
-
-impl Runnable for MotionTimeout {
-    async fn run(&mut self) -> ! {
-        self.deadline_loop().await
-    }
-}
 ```
+
+You can combine `deadline` with `poll_interval` when you also need periodic work. Add a `poll()` method as shown above.
+
+## Custom Runnable
+
+To write your own run loop, add `#[rmk::macros::runnable_generated]` to the processor and implement `rmk::core_traits::Runnable`. This is required when combining `deadline` with `#[input_device]`.
 
 ## Example: LED Indicator Processor
 

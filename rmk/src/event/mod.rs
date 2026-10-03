@@ -92,6 +92,15 @@ pub trait EventSubscriber {
     async fn next_event(&mut self) -> Self::Event;
 }
 
+// Timer-only processors keep the same run loops without allocating a channel or subscriber slot.
+impl EventSubscriber for core::future::Pending<core::convert::Infallible> {
+    type Event = core::convert::Infallible;
+
+    async fn next_event(&mut self) -> Self::Event {
+        self.await
+    }
+}
+
 /// Trait for events that can be published.
 pub trait PublishableEvent: Clone + Send {
     type Publisher: EventPublisher<Event = Self>;

@@ -1,12 +1,12 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{DeriveInput, Meta, parse_macro_input};
+use syn::{DeriveInput, parse_macro_input};
 
 use super::config::InputDeviceConfig;
 use super::parser::parse_input_device_config;
 use super::runnable::generate_runnable;
 use super::utils::{attr_matches_name, deduplicate_type_generics, has_runnable_marker};
-use crate::processor::{ProcessorConfig, parse_processor_config};
+use crate::processor::{ProcessorConfig, merge_processor_attrs};
 use crate::utils::to_snake_case;
 
 /// Generates InputDevice and Runnable trait implementations for single-event devices.
@@ -51,28 +51,19 @@ pub fn input_device_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Parse processor config if present (for combined Runnable)
     let processor_config: Option<ProcessorConfig> = if has_processor {
-        let attr = input
-            .attrs
-            .iter()
-            .find(|attr| attr_matches_name(attr, "processor"))
-            .unwrap(); // Safe because has_processor is true
-
-        if let Meta::List(meta_list) = &attr.meta {
-            match parse_processor_config(meta_list.tokens.clone()) {
-                Ok(config) => Some(config),
-                Err(err) => return err.into(),
-            }
-        } else {
-            return syn::Error::new_spanned(
-                attr,
-                "#[processor] requires parameters. Use `#[processor(subscribe = [EventType])]`",
-            )
-            .to_compile_error()
-            .into();
+        match merge_processor_attrs(ProcessorConfig::default(), &input.attrs) {
+            Ok(config) => Some(config),
+            Err(err) => return err.into(),
         }
     } else {
         None
     };
+
+    if let Some(config) = &processor_config
+        && let Err(err) = config.validate_runnable(&input.ident, has_marker)
+    {
+        return quote! { #input #err }.into();
+    }
 
     let struct_name = &input.ident;
     let generics = &input.generics;

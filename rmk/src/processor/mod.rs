@@ -3,18 +3,18 @@
 //! In RMK's event system, `crate::event` defines how event types are published
 //! and subscribed, while `Processor` defines how a task consumes those events.
 //! `Processor` provides the core consume loop (`subscriber` -> `next_event` ->
-//! `process`), and `PollingProcessor` extends it with timer-driven `update`
-//! calls interleaved with event handling.
+//! `process`). `PollingProcessor` adds fixed polling ticks and `DeadlineProcessor`
+//! adds dynamic deadlines; both can run alongside event handling in one loop.
 
 pub mod builtin;
 
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_time::{Instant, Timer};
 
 use crate::core_traits::Runnable;
 use crate::event::EventSubscriber;
 
-/// Unified trait for event processors.
+/// Unified trait for event and timer processors.
 ///
 /// This trait provides the interface for all event-driven processors in RMK.
 /// Use the `#[processor]` macro to automatically implement this trait.
@@ -44,10 +44,10 @@ use crate::event::EventSubscriber;
 /// }
 /// ```
 pub trait Processor: Runnable {
-    /// Type of the received events.
+    /// Type of the received events, or [`core::convert::Infallible`] without subscriptions.
     type Event;
 
-    /// Create a new event subscriber.
+    /// Create an event subscriber, or a permanently pending source without subscriptions.
     fn subscriber() -> impl EventSubscriber<Event = Self::Event>;
 
     /// Process the received event.
@@ -115,36 +115,57 @@ pub trait PollingProcessor: Processor {
 /// Unlike [`PollingProcessor`], whose tick fires at a fixed interval, a
 /// deadline processor produces the next deadline on demand from its own
 /// state -- motion may extend it, external state may clear it. When
-/// [`deadline`](Self::deadline) returns `None`, the loop simply waits for the
-/// next event.
+/// [`next_deadline`](Self::next_deadline) returns `None`, the deadline timer is inactive;
+/// events and any configured polling continue.
 ///
-/// [`deadline_loop`](Self::deadline_loop) is the driver: call it from your
-/// [`Runnable::run`] implementation (marking the struct with
-/// `#[::rmk::macros::runnable_generated]` so the `#[processor]` macro does
-/// not emit its own `Runnable`).
+/// Add `deadline` to `#[processor]` and provide inherent `deadline()` and
+/// `on_deadline()` methods. The macro implements this trait and [`Runnable`],
+/// including polling when `poll_interval` is also set.
 pub trait DeadlineProcessor: Processor {
-    /// The next moment at which [`on_deadline`](Self::on_deadline) should
+    /// The next moment at which [`handle_deadline`](Self::handle_deadline) should
     /// fire, or `None` when no timeout is currently armed.
-    fn deadline(&self) -> Option<Instant>;
+    fn next_deadline(&self) -> Option<Instant>;
 
-    /// Called when the deadline returned by [`deadline`](Self::deadline)
-    /// elapses without an intervening event.
-    async fn on_deadline(&mut self);
+    /// Called when the deadline returned by [`next_deadline`](Self::next_deadline)
+    /// elapses. Clear or advance the deadline before returning to avoid firing again immediately.
+    async fn handle_deadline(&mut self);
 
     /// Loop that interleaves event processing with a dynamic deadline timer.
     async fn deadline_loop(&mut self) -> ! {
         let mut sub = Self::subscriber();
         loop {
-            match self.deadline() {
-                Some(deadline) => match select(Timer::at(deadline), sub.next_event()).await {
-                    Either::First(_) => self.on_deadline().await,
-                    Either::Second(event) => self.process(event).await,
-                },
-                None => {
-                    let event = sub.next_event().await;
-                    self.process(event).await;
-                }
+            match select(wait_for_deadline(self.next_deadline()), sub.next_event()).await {
+                Either::First(_) => self.handle_deadline().await,
+                Either::Second(event) => self.process(event).await,
             }
         }
+    }
+
+    /// Process events, fixed polling ticks, and dynamic deadlines in one loop.
+    ///
+    /// Simultaneously ready sources run in deadline, polling, event order. Callbacks are
+    /// serial; each may change the next deadline without resetting the polling cadence.
+    async fn polling_deadline_loop(&mut self) -> !
+    where
+        Self: PollingProcessor,
+    {
+        let mut sub = Self::subscriber();
+        let mut ticker = embassy_time::Ticker::every(self.interval());
+        loop {
+            match select3(wait_for_deadline(self.next_deadline()), ticker.next(), sub.next_event()).await {
+                Either3::First(_) => self.handle_deadline().await,
+                Either3::Second(_) => self.update().await,
+                Either3::Third(event) => self.process(event).await,
+            }
+        }
+    }
+}
+
+async fn wait_for_deadline(deadline: Option<Instant>) {
+    match deadline {
+        // A new Timer yields once even when overdue; a ready deadline must win immediately.
+        Some(at) if at <= Instant::now() => {}
+        Some(at) => Timer::at(at).await,
+        None => core::future::pending().await,
     }
 }

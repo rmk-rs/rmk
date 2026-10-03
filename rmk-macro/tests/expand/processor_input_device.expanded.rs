@@ -1304,3 +1304,760 @@ mod multi_event_polling {
         }
     }
 }
+/// The input-device macro sees the same merged processor configuration.
+mod sibling_polling {
+    use super::{ConfigEvent, ModeEvent, SensorEvent, input_device, processor};
+    #[::rmk::macros::runnable_generated]
+    pub struct MergedSensorController;
+    pub enum MergedSensorControllerProcessorEventEnum {
+        Config(ConfigEvent),
+        Mode(ModeEvent),
+    }
+    #[automatically_derived]
+    impl ::core::clone::Clone for MergedSensorControllerProcessorEventEnum {
+        #[inline]
+        fn clone(&self) -> MergedSensorControllerProcessorEventEnum {
+            match self {
+                MergedSensorControllerProcessorEventEnum::Config(__self_0) => {
+                    MergedSensorControllerProcessorEventEnum::Config(
+                        ::core::clone::Clone::clone(__self_0),
+                    )
+                }
+                MergedSensorControllerProcessorEventEnum::Mode(__self_0) => {
+                    MergedSensorControllerProcessorEventEnum::Mode(
+                        ::core::clone::Clone::clone(__self_0),
+                    )
+                }
+            }
+        }
+    }
+    /// Event subscriber for aggregated events
+    pub struct MergedSensorControllerProcessorEventSubscriber {
+        sub0: <ConfigEvent as ::rmk::event::SubscribableEvent>::Subscriber,
+        sub1: <ModeEvent as ::rmk::event::SubscribableEvent>::Subscriber,
+    }
+    impl MergedSensorControllerProcessorEventSubscriber {
+        /// Create a new event subscriber
+        pub fn new() -> Self {
+            Self {
+                sub0: <ConfigEvent as ::rmk::event::SubscribableEvent>::subscriber(),
+                sub1: <ModeEvent as ::rmk::event::SubscribableEvent>::subscriber(),
+            }
+        }
+    }
+    impl ::rmk::event::EventSubscriber
+    for MergedSensorControllerProcessorEventSubscriber {
+        type Event = MergedSensorControllerProcessorEventEnum;
+        async fn next_event(&mut self) -> Self::Event {
+            use ::rmk::event::EventSubscriber;
+            use ::rmk::futures::FutureExt;
+            {
+                use ::futures_util::__private as __futures_crate;
+                {
+                    enum __PrivResult<_0, _1> {
+                        _0(_0),
+                        _1(_1),
+                    }
+                    let __select_result = {
+                        let mut _0 = self.sub0.next_event().fuse();
+                        let mut _1 = self.sub1.next_event().fuse();
+                        let mut __poll_fn = |
+                            __cx: &mut __futures_crate::task::Context<'_>|
+                        {
+                            let mut __any_polled = false;
+                            let mut _0 = |__cx: &mut __futures_crate::task::Context<'_>| {
+                                let mut _0 = unsafe {
+                                    __futures_crate::Pin::new_unchecked(&mut _0)
+                                };
+                                if __futures_crate::future::FusedFuture::is_terminated(
+                                    &_0,
+                                ) {
+                                    __futures_crate::None
+                                } else {
+                                    __futures_crate::Some(
+                                        __futures_crate::future::FutureExt::poll_unpin(
+                                                &mut _0,
+                                                __cx,
+                                            )
+                                            .map(__PrivResult::_0),
+                                    )
+                                }
+                            };
+                            let _0: &mut dyn FnMut(
+                                &mut __futures_crate::task::Context<'_>,
+                            ) -> __futures_crate::Option<
+                                    __futures_crate::task::Poll<_>,
+                                > = &mut _0;
+                            let mut _1 = |__cx: &mut __futures_crate::task::Context<'_>| {
+                                let mut _1 = unsafe {
+                                    __futures_crate::Pin::new_unchecked(&mut _1)
+                                };
+                                if __futures_crate::future::FusedFuture::is_terminated(
+                                    &_1,
+                                ) {
+                                    __futures_crate::None
+                                } else {
+                                    __futures_crate::Some(
+                                        __futures_crate::future::FutureExt::poll_unpin(
+                                                &mut _1,
+                                                __cx,
+                                            )
+                                            .map(__PrivResult::_1),
+                                    )
+                                }
+                            };
+                            let _1: &mut dyn FnMut(
+                                &mut __futures_crate::task::Context<'_>,
+                            ) -> __futures_crate::Option<
+                                    __futures_crate::task::Poll<_>,
+                                > = &mut _1;
+                            let mut __select_arr = [_0, _1];
+                            for poller in &mut __select_arr {
+                                let poller: &mut &mut dyn FnMut(
+                                    &mut __futures_crate::task::Context<'_>,
+                                ) -> __futures_crate::Option<
+                                        __futures_crate::task::Poll<_>,
+                                    > = poller;
+                                match poller(__cx) {
+                                    __futures_crate::Some(
+                                        x @ __futures_crate::task::Poll::Ready(_),
+                                    ) => return x,
+                                    __futures_crate::Some(
+                                        __futures_crate::task::Poll::Pending,
+                                    ) => {
+                                        __any_polled = true;
+                                    }
+                                    __futures_crate::None => {}
+                                }
+                            }
+                            if !__any_polled {
+                                {
+                                    ::std::rt::begin_panic(
+                                        "all futures in select! were completed, \
+                    but no `complete =>` handler was provided",
+                                    );
+                                }
+                            } else {
+                                __futures_crate::task::Poll::Pending
+                            }
+                        };
+                        __futures_crate::future::poll_fn(__poll_fn).await
+                    };
+                    match __select_result {
+                        __PrivResult::_0(event) => {
+                            MergedSensorControllerProcessorEventEnum::Config(event)
+                        }
+                        __PrivResult::_1(event) => {
+                            MergedSensorControllerProcessorEventEnum::Mode(event)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    impl ::rmk::event::SubscribableEvent for MergedSensorControllerProcessorEventEnum {
+        type Subscriber = MergedSensorControllerProcessorEventSubscriber;
+        fn subscriber() -> Self::Subscriber {
+            MergedSensorControllerProcessorEventSubscriber::new()
+        }
+    }
+    impl ::rmk::processor::Processor for MergedSensorController {
+        type Event = MergedSensorControllerProcessorEventEnum;
+        fn subscriber() -> impl ::rmk::event::EventSubscriber<Event = Self::Event> {
+            <MergedSensorControllerProcessorEventEnum as ::rmk::event::SubscribableEvent>::subscriber()
+        }
+        async fn process(&mut self, event: Self::Event) {
+            match event {
+                MergedSensorControllerProcessorEventEnum::Config(event) => {
+                    self.on_config_event(event).await
+                }
+                MergedSensorControllerProcessorEventEnum::Mode(event) => {
+                    self.on_mode_event(event).await
+                }
+            }
+        }
+    }
+    impl ::rmk::processor::PollingProcessor for MergedSensorController {
+        fn interval(&self) -> ::embassy_time::Duration {
+            ::embassy_time::Duration::from_millis(100u64)
+        }
+        async fn update(&mut self) {
+            self.poll().await;
+        }
+    }
+    impl ::rmk::input_device::InputDevice for MergedSensorController {
+        type Event = SensorEvent;
+        async fn read_event(&mut self) -> Self::Event {
+            self.read_sensor_event().await
+        }
+    }
+    impl ::rmk::core_traits::Runnable for MergedSensorController {
+        async fn run(&mut self) -> ! {
+            use ::rmk::event::publish_event_async;
+            use ::rmk::input_device::InputDevice;
+            use ::rmk::event::SubscribableEvent;
+            use ::rmk::processor::Processor;
+            use ::rmk::event::EventSubscriber;
+            use ::rmk::futures::FutureExt;
+            use ::rmk::processor::PollingProcessor;
+            enum __RmkSelectEventMergedSensorController {
+                Input(SensorEvent),
+                Processor(MergedSensorControllerProcessorEventEnum),
+                Timer,
+            }
+            let mut proc_sub = <Self as ::rmk::processor::Processor>::subscriber();
+            let mut ticker = ::embassy_time::Ticker::every(
+                ::embassy_time::Duration::from_millis(100u64),
+            );
+            loop {
+                let select_result = {
+                    {
+                        use ::futures_util::__private as __futures_crate;
+                        {
+                            enum __PrivResult<_0, _1, _2> {
+                                _0(_0),
+                                _1(_1),
+                                _2(_2),
+                            }
+                            let __select_result = {
+                                let mut _0 = ticker.next().fuse();
+                                let mut _1 = self.read_event().fuse();
+                                let mut _2 = proc_sub.next_event().fuse();
+                                let mut __poll_fn = |
+                                    __cx: &mut __futures_crate::task::Context<'_>|
+                                {
+                                    let mut __any_polled = false;
+                                    let mut _0 = |
+                                        __cx: &mut __futures_crate::task::Context<'_>|
+                                    {
+                                        let mut _0 = unsafe {
+                                            __futures_crate::Pin::new_unchecked(&mut _0)
+                                        };
+                                        if __futures_crate::future::FusedFuture::is_terminated(
+                                            &_0,
+                                        ) {
+                                            __futures_crate::None
+                                        } else {
+                                            __futures_crate::Some(
+                                                __futures_crate::future::FutureExt::poll_unpin(
+                                                        &mut _0,
+                                                        __cx,
+                                                    )
+                                                    .map(__PrivResult::_0),
+                                            )
+                                        }
+                                    };
+                                    let _0: &mut dyn FnMut(
+                                        &mut __futures_crate::task::Context<'_>,
+                                    ) -> __futures_crate::Option<
+                                            __futures_crate::task::Poll<_>,
+                                        > = &mut _0;
+                                    let mut _1 = |
+                                        __cx: &mut __futures_crate::task::Context<'_>|
+                                    {
+                                        let mut _1 = unsafe {
+                                            __futures_crate::Pin::new_unchecked(&mut _1)
+                                        };
+                                        if __futures_crate::future::FusedFuture::is_terminated(
+                                            &_1,
+                                        ) {
+                                            __futures_crate::None
+                                        } else {
+                                            __futures_crate::Some(
+                                                __futures_crate::future::FutureExt::poll_unpin(
+                                                        &mut _1,
+                                                        __cx,
+                                                    )
+                                                    .map(__PrivResult::_1),
+                                            )
+                                        }
+                                    };
+                                    let _1: &mut dyn FnMut(
+                                        &mut __futures_crate::task::Context<'_>,
+                                    ) -> __futures_crate::Option<
+                                            __futures_crate::task::Poll<_>,
+                                        > = &mut _1;
+                                    let mut _2 = |
+                                        __cx: &mut __futures_crate::task::Context<'_>|
+                                    {
+                                        let mut _2 = unsafe {
+                                            __futures_crate::Pin::new_unchecked(&mut _2)
+                                        };
+                                        if __futures_crate::future::FusedFuture::is_terminated(
+                                            &_2,
+                                        ) {
+                                            __futures_crate::None
+                                        } else {
+                                            __futures_crate::Some(
+                                                __futures_crate::future::FutureExt::poll_unpin(
+                                                        &mut _2,
+                                                        __cx,
+                                                    )
+                                                    .map(__PrivResult::_2),
+                                            )
+                                        }
+                                    };
+                                    let _2: &mut dyn FnMut(
+                                        &mut __futures_crate::task::Context<'_>,
+                                    ) -> __futures_crate::Option<
+                                            __futures_crate::task::Poll<_>,
+                                        > = &mut _2;
+                                    let mut __select_arr = [_0, _1, _2];
+                                    for poller in &mut __select_arr {
+                                        let poller: &mut &mut dyn FnMut(
+                                            &mut __futures_crate::task::Context<'_>,
+                                        ) -> __futures_crate::Option<
+                                                __futures_crate::task::Poll<_>,
+                                            > = poller;
+                                        match poller(__cx) {
+                                            __futures_crate::Some(
+                                                x @ __futures_crate::task::Poll::Ready(_),
+                                            ) => return x,
+                                            __futures_crate::Some(
+                                                __futures_crate::task::Poll::Pending,
+                                            ) => {
+                                                __any_polled = true;
+                                            }
+                                            __futures_crate::None => {}
+                                        }
+                                    }
+                                    if !__any_polled {
+                                        {
+                                            ::std::rt::begin_panic(
+                                                "all futures in select! were completed, \
+                    but no `complete =>` handler was provided",
+                                            );
+                                        }
+                                    } else {
+                                        __futures_crate::task::Poll::Pending
+                                    }
+                                };
+                                __futures_crate::future::poll_fn(__poll_fn).await
+                            };
+                            match __select_result {
+                                __PrivResult::_0(_) => {
+                                    __RmkSelectEventMergedSensorController::Timer
+                                }
+                                __PrivResult::_1(event) => {
+                                    __RmkSelectEventMergedSensorController::Input(event)
+                                }
+                                __PrivResult::_2(proc_event) => {
+                                    __RmkSelectEventMergedSensorController::Processor(
+                                        proc_event,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                };
+                match select_result {
+                    __RmkSelectEventMergedSensorController::Input(event) => {
+                        publish_event_async(event).await;
+                    }
+                    __RmkSelectEventMergedSensorController::Processor(event) => {
+                        <Self as ::rmk::processor::Processor>::process(self, event)
+                            .await;
+                    }
+                    __RmkSelectEventMergedSensorController::Timer => {
+                        <Self as ::rmk::processor::PollingProcessor>::update(self).await;
+                    }
+                }
+            }
+        }
+    }
+}
+mod polling_without_subscription {
+    use super::{SensorEvent, input_device, processor};
+    #[::rmk::macros::runnable_generated]
+    pub struct PollingSensor;
+    impl ::rmk::processor::Processor for PollingSensor {
+        type Event = ::core::convert::Infallible;
+        fn subscriber() -> impl ::rmk::event::EventSubscriber<Event = Self::Event> {
+            ::core::future::pending::<Self::Event>()
+        }
+        async fn process(&mut self, event: Self::Event) {
+            match event {}
+        }
+    }
+    impl ::rmk::processor::PollingProcessor for PollingSensor {
+        fn interval(&self) -> ::embassy_time::Duration {
+            ::embassy_time::Duration::from_millis(100u64)
+        }
+        async fn update(&mut self) {
+            self.poll().await;
+        }
+    }
+    impl ::rmk::input_device::InputDevice for PollingSensor {
+        type Event = SensorEvent;
+        async fn read_event(&mut self) -> Self::Event {
+            self.read_sensor_event().await
+        }
+    }
+    impl ::rmk::core_traits::Runnable for PollingSensor {
+        async fn run(&mut self) -> ! {
+            use ::rmk::event::publish_event_async;
+            use ::rmk::input_device::InputDevice;
+            use ::rmk::event::SubscribableEvent;
+            use ::rmk::processor::Processor;
+            use ::rmk::event::EventSubscriber;
+            use ::rmk::futures::FutureExt;
+            use ::rmk::processor::PollingProcessor;
+            enum __RmkSelectEventPollingSensor {
+                Input(SensorEvent),
+                Processor(::core::convert::Infallible),
+                Timer,
+            }
+            let mut proc_sub = <Self as ::rmk::processor::Processor>::subscriber();
+            let mut ticker = ::embassy_time::Ticker::every(
+                ::embassy_time::Duration::from_millis(100u64),
+            );
+            loop {
+                let select_result = {
+                    {
+                        use ::futures_util::__private as __futures_crate;
+                        {
+                            enum __PrivResult<_0, _1, _2> {
+                                _0(_0),
+                                _1(_1),
+                                _2(_2),
+                            }
+                            let __select_result = {
+                                let mut _0 = ticker.next().fuse();
+                                let mut _1 = self.read_event().fuse();
+                                let mut _2 = proc_sub.next_event().fuse();
+                                let mut __poll_fn = |
+                                    __cx: &mut __futures_crate::task::Context<'_>|
+                                {
+                                    let mut __any_polled = false;
+                                    let mut _0 = |
+                                        __cx: &mut __futures_crate::task::Context<'_>|
+                                    {
+                                        let mut _0 = unsafe {
+                                            __futures_crate::Pin::new_unchecked(&mut _0)
+                                        };
+                                        if __futures_crate::future::FusedFuture::is_terminated(
+                                            &_0,
+                                        ) {
+                                            __futures_crate::None
+                                        } else {
+                                            __futures_crate::Some(
+                                                __futures_crate::future::FutureExt::poll_unpin(
+                                                        &mut _0,
+                                                        __cx,
+                                                    )
+                                                    .map(__PrivResult::_0),
+                                            )
+                                        }
+                                    };
+                                    let _0: &mut dyn FnMut(
+                                        &mut __futures_crate::task::Context<'_>,
+                                    ) -> __futures_crate::Option<
+                                            __futures_crate::task::Poll<_>,
+                                        > = &mut _0;
+                                    let mut _1 = |
+                                        __cx: &mut __futures_crate::task::Context<'_>|
+                                    {
+                                        let mut _1 = unsafe {
+                                            __futures_crate::Pin::new_unchecked(&mut _1)
+                                        };
+                                        if __futures_crate::future::FusedFuture::is_terminated(
+                                            &_1,
+                                        ) {
+                                            __futures_crate::None
+                                        } else {
+                                            __futures_crate::Some(
+                                                __futures_crate::future::FutureExt::poll_unpin(
+                                                        &mut _1,
+                                                        __cx,
+                                                    )
+                                                    .map(__PrivResult::_1),
+                                            )
+                                        }
+                                    };
+                                    let _1: &mut dyn FnMut(
+                                        &mut __futures_crate::task::Context<'_>,
+                                    ) -> __futures_crate::Option<
+                                            __futures_crate::task::Poll<_>,
+                                        > = &mut _1;
+                                    let mut _2 = |
+                                        __cx: &mut __futures_crate::task::Context<'_>|
+                                    {
+                                        let mut _2 = unsafe {
+                                            __futures_crate::Pin::new_unchecked(&mut _2)
+                                        };
+                                        if __futures_crate::future::FusedFuture::is_terminated(
+                                            &_2,
+                                        ) {
+                                            __futures_crate::None
+                                        } else {
+                                            __futures_crate::Some(
+                                                __futures_crate::future::FutureExt::poll_unpin(
+                                                        &mut _2,
+                                                        __cx,
+                                                    )
+                                                    .map(__PrivResult::_2),
+                                            )
+                                        }
+                                    };
+                                    let _2: &mut dyn FnMut(
+                                        &mut __futures_crate::task::Context<'_>,
+                                    ) -> __futures_crate::Option<
+                                            __futures_crate::task::Poll<_>,
+                                        > = &mut _2;
+                                    let mut __select_arr = [_0, _1, _2];
+                                    for poller in &mut __select_arr {
+                                        let poller: &mut &mut dyn FnMut(
+                                            &mut __futures_crate::task::Context<'_>,
+                                        ) -> __futures_crate::Option<
+                                                __futures_crate::task::Poll<_>,
+                                            > = poller;
+                                        match poller(__cx) {
+                                            __futures_crate::Some(
+                                                x @ __futures_crate::task::Poll::Ready(_),
+                                            ) => return x,
+                                            __futures_crate::Some(
+                                                __futures_crate::task::Poll::Pending,
+                                            ) => {
+                                                __any_polled = true;
+                                            }
+                                            __futures_crate::None => {}
+                                        }
+                                    }
+                                    if !__any_polled {
+                                        {
+                                            ::std::rt::begin_panic(
+                                                "all futures in select! were completed, \
+                    but no `complete =>` handler was provided",
+                                            );
+                                        }
+                                    } else {
+                                        __futures_crate::task::Poll::Pending
+                                    }
+                                };
+                                __futures_crate::future::poll_fn(__poll_fn).await
+                            };
+                            match __select_result {
+                                __PrivResult::_0(_) => __RmkSelectEventPollingSensor::Timer,
+                                __PrivResult::_1(event) => {
+                                    __RmkSelectEventPollingSensor::Input(event)
+                                }
+                                __PrivResult::_2(proc_event) => {
+                                    __RmkSelectEventPollingSensor::Processor(proc_event)
+                                }
+                            }
+                        }
+                    }
+                };
+                match select_result {
+                    __RmkSelectEventPollingSensor::Input(event) => {
+                        publish_event_async(event).await;
+                    }
+                    __RmkSelectEventPollingSensor::Processor(event) => {
+                        <Self as ::rmk::processor::Processor>::process(self, event)
+                            .await;
+                    }
+                    __RmkSelectEventPollingSensor::Timer => {
+                        <Self as ::rmk::processor::PollingProcessor>::update(self).await;
+                    }
+                }
+            }
+        }
+    }
+    #[::rmk::macros::runnable_generated]
+    pub struct ReversedPollingSensor;
+    impl ::rmk::input_device::InputDevice for ReversedPollingSensor {
+        type Event = SensorEvent;
+        async fn read_event(&mut self) -> Self::Event {
+            self.read_sensor_event().await
+        }
+    }
+    impl ::rmk::processor::Processor for ReversedPollingSensor {
+        type Event = ::core::convert::Infallible;
+        fn subscriber() -> impl ::rmk::event::EventSubscriber<Event = Self::Event> {
+            ::core::future::pending::<Self::Event>()
+        }
+        async fn process(&mut self, event: Self::Event) {
+            match event {}
+        }
+    }
+    impl ::rmk::processor::PollingProcessor for ReversedPollingSensor {
+        fn interval(&self) -> ::embassy_time::Duration {
+            ::embassy_time::Duration::from_millis(100u64)
+        }
+        async fn update(&mut self) {
+            self.poll().await;
+        }
+    }
+    impl ::rmk::core_traits::Runnable for ReversedPollingSensor {
+        async fn run(&mut self) -> ! {
+            use ::rmk::event::publish_event_async;
+            use ::rmk::input_device::InputDevice;
+            use ::rmk::event::SubscribableEvent;
+            use ::rmk::processor::Processor;
+            use ::rmk::event::EventSubscriber;
+            use ::rmk::futures::FutureExt;
+            use ::rmk::processor::PollingProcessor;
+            enum __RmkSelectEventReversedPollingSensor {
+                Input(SensorEvent),
+                Processor(::core::convert::Infallible),
+                Timer,
+            }
+            let mut proc_sub = <Self as ::rmk::processor::Processor>::subscriber();
+            let mut ticker = ::embassy_time::Ticker::every(
+                ::embassy_time::Duration::from_millis(100u64),
+            );
+            loop {
+                let select_result = {
+                    {
+                        use ::futures_util::__private as __futures_crate;
+                        {
+                            enum __PrivResult<_0, _1, _2> {
+                                _0(_0),
+                                _1(_1),
+                                _2(_2),
+                            }
+                            let __select_result = {
+                                let mut _0 = ticker.next().fuse();
+                                let mut _1 = self.read_event().fuse();
+                                let mut _2 = proc_sub.next_event().fuse();
+                                let mut __poll_fn = |
+                                    __cx: &mut __futures_crate::task::Context<'_>|
+                                {
+                                    let mut __any_polled = false;
+                                    let mut _0 = |
+                                        __cx: &mut __futures_crate::task::Context<'_>|
+                                    {
+                                        let mut _0 = unsafe {
+                                            __futures_crate::Pin::new_unchecked(&mut _0)
+                                        };
+                                        if __futures_crate::future::FusedFuture::is_terminated(
+                                            &_0,
+                                        ) {
+                                            __futures_crate::None
+                                        } else {
+                                            __futures_crate::Some(
+                                                __futures_crate::future::FutureExt::poll_unpin(
+                                                        &mut _0,
+                                                        __cx,
+                                                    )
+                                                    .map(__PrivResult::_0),
+                                            )
+                                        }
+                                    };
+                                    let _0: &mut dyn FnMut(
+                                        &mut __futures_crate::task::Context<'_>,
+                                    ) -> __futures_crate::Option<
+                                            __futures_crate::task::Poll<_>,
+                                        > = &mut _0;
+                                    let mut _1 = |
+                                        __cx: &mut __futures_crate::task::Context<'_>|
+                                    {
+                                        let mut _1 = unsafe {
+                                            __futures_crate::Pin::new_unchecked(&mut _1)
+                                        };
+                                        if __futures_crate::future::FusedFuture::is_terminated(
+                                            &_1,
+                                        ) {
+                                            __futures_crate::None
+                                        } else {
+                                            __futures_crate::Some(
+                                                __futures_crate::future::FutureExt::poll_unpin(
+                                                        &mut _1,
+                                                        __cx,
+                                                    )
+                                                    .map(__PrivResult::_1),
+                                            )
+                                        }
+                                    };
+                                    let _1: &mut dyn FnMut(
+                                        &mut __futures_crate::task::Context<'_>,
+                                    ) -> __futures_crate::Option<
+                                            __futures_crate::task::Poll<_>,
+                                        > = &mut _1;
+                                    let mut _2 = |
+                                        __cx: &mut __futures_crate::task::Context<'_>|
+                                    {
+                                        let mut _2 = unsafe {
+                                            __futures_crate::Pin::new_unchecked(&mut _2)
+                                        };
+                                        if __futures_crate::future::FusedFuture::is_terminated(
+                                            &_2,
+                                        ) {
+                                            __futures_crate::None
+                                        } else {
+                                            __futures_crate::Some(
+                                                __futures_crate::future::FutureExt::poll_unpin(
+                                                        &mut _2,
+                                                        __cx,
+                                                    )
+                                                    .map(__PrivResult::_2),
+                                            )
+                                        }
+                                    };
+                                    let _2: &mut dyn FnMut(
+                                        &mut __futures_crate::task::Context<'_>,
+                                    ) -> __futures_crate::Option<
+                                            __futures_crate::task::Poll<_>,
+                                        > = &mut _2;
+                                    let mut __select_arr = [_0, _1, _2];
+                                    for poller in &mut __select_arr {
+                                        let poller: &mut &mut dyn FnMut(
+                                            &mut __futures_crate::task::Context<'_>,
+                                        ) -> __futures_crate::Option<
+                                                __futures_crate::task::Poll<_>,
+                                            > = poller;
+                                        match poller(__cx) {
+                                            __futures_crate::Some(
+                                                x @ __futures_crate::task::Poll::Ready(_),
+                                            ) => return x,
+                                            __futures_crate::Some(
+                                                __futures_crate::task::Poll::Pending,
+                                            ) => {
+                                                __any_polled = true;
+                                            }
+                                            __futures_crate::None => {}
+                                        }
+                                    }
+                                    if !__any_polled {
+                                        {
+                                            ::std::rt::begin_panic(
+                                                "all futures in select! were completed, \
+                    but no `complete =>` handler was provided",
+                                            );
+                                        }
+                                    } else {
+                                        __futures_crate::task::Poll::Pending
+                                    }
+                                };
+                                __futures_crate::future::poll_fn(__poll_fn).await
+                            };
+                            match __select_result {
+                                __PrivResult::_0(_) => {
+                                    __RmkSelectEventReversedPollingSensor::Timer
+                                }
+                                __PrivResult::_1(event) => {
+                                    __RmkSelectEventReversedPollingSensor::Input(event)
+                                }
+                                __PrivResult::_2(proc_event) => {
+                                    __RmkSelectEventReversedPollingSensor::Processor(proc_event)
+                                }
+                            }
+                        }
+                    }
+                };
+                match select_result {
+                    __RmkSelectEventReversedPollingSensor::Input(event) => {
+                        publish_event_async(event).await;
+                    }
+                    __RmkSelectEventReversedPollingSensor::Processor(event) => {
+                        <Self as ::rmk::processor::Processor>::process(self, event)
+                            .await;
+                    }
+                    __RmkSelectEventReversedPollingSensor::Timer => {
+                        <Self as ::rmk::processor::PollingProcessor>::update(self).await;
+                    }
+                }
+            }
+        }
+    }
+}

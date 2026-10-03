@@ -127,6 +127,7 @@ pub fn generate_event_match_arms(
 /// Generate event enum, subscriber, and dispatch body for a subscriber-based macro.
 ///
 /// This is the unified generator used by the `#[processor]` macro.
+/// Without subscriptions, uses `Infallible` and emits no subscriber or event enum.
 /// For single-event subscriptions, no enum is generated and the event type is used directly.
 /// For multiple events, generates an aggregated enum, subscriber struct, and match-based dispatch.
 ///
@@ -145,7 +146,14 @@ pub fn generate_event_enum_and_dispatch(
     subscribe_trait_path: TokenStream,
     subscriber_method: TokenStream,
 ) -> (TokenStream, TokenStream, TokenStream, TokenStream) {
-    if event_types.len() == 1 {
+    if event_types.is_empty() {
+        (
+            quote! { ::core::convert::Infallible },
+            quote! {},
+            quote! {},
+            quote! { match event {} },
+        )
+    } else if event_types.len() == 1 {
         // Single event: use the event type directly, no enum needed
         let event_type = &event_types[0];
         let method_name = event_type_to_handler_method_name(event_type);

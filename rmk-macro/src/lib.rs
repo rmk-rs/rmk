@@ -72,9 +72,8 @@ pub fn rmk_peripheral(attr: TokenStream, item: TokenStream) -> TokenStream {
     parse_split_peripheral_mod(peripheral_id, attr, item_mod).into()
 }
 
-/// Marker attribute for coordinating Runnable generation between macros.
-/// Do not use directly.
-#[doc(hidden)]
+/// Suppress Runnable generation when another macro or a manual implementation provides it.
+/// Place this marker below `#[processor]` or `#[input_device]` so the macro can see it.
 #[proc_macro_attribute]
 pub fn runnable_generated(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item // Pass through unchanged
@@ -169,12 +168,18 @@ pub fn event(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 /// Unified macro for defining event processors.
 ///
-/// Generates `Processor` and optional `PollingProcessor` implementations.
+/// Generates `Processor`, `Runnable`, and the requested scheduling traits.
 ///
 /// # Parameters
 ///
-/// - `subscribe`: Array of event types to subscribe to (required)
-/// - `poll_interval`: Optional polling interval in milliseconds
+/// - `subscribe`: Optional array of event types; omission and `[]` both mean no subscriptions
+/// - `poll_interval`: Optional positive polling interval in milliseconds
+/// - `deadline`: Generate deadline scheduling from `deadline()` and `on_deadline()` methods
+///
+/// Polling and deadlines can be combined. Register the type with `#[register_processor]`
+/// in a keyboard module, or pass an instance to `run_all!` in a Rust project.
+/// At least one event or timer source is required unless `#[runnable_generated]`
+/// is present and the user provides `Runnable`.
 ///
 /// # Examples
 ///

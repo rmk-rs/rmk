@@ -5,6 +5,7 @@
 //! - Multiple event subscription
 //! - Polling processor with poll_interval
 //! - Multiple #[processor] attributes (merged subscriptions)
+//! - Deadline processor (`deadline`)
 use rmk_macro::processor;
 pub struct KeyEvent {
     pub row: u8,
@@ -732,6 +733,322 @@ mod polling_multi {
         async fn run(&mut self) -> ! {
             use ::rmk::processor::PollingProcessor;
             self.polling_loop().await
+        }
+    }
+}
+/// Deadline processor: the generated `Runnable` drives `deadline_loop()`
+mod deadline {
+    use super::{KeyEvent, processor};
+    pub struct Blinker {
+        pub armed: bool,
+    }
+    impl ::rmk::processor::Processor for Blinker {
+        type Event = KeyEvent;
+        fn subscriber() -> impl ::rmk::event::EventSubscriber<Event = Self::Event> {
+            <KeyEvent as ::rmk::event::SubscribableEvent>::subscriber()
+        }
+        async fn process(&mut self, event: Self::Event) {
+            self.on_key_event(event).await
+        }
+    }
+    impl ::rmk::processor::DeadlineProcessor for Blinker {
+        fn next_deadline(&self) -> Option<::embassy_time::Instant> {
+            Self::deadline(self)
+        }
+        async fn handle_deadline(&mut self) {
+            Self::on_deadline(self).await;
+        }
+    }
+    impl ::rmk::core_traits::Runnable for Blinker {
+        async fn run(&mut self) -> ! {
+            use ::rmk::processor::DeadlineProcessor;
+            self.deadline_loop().await
+        }
+    }
+}
+/// Independent timing sources can be declared on sibling attributes.
+mod polling_deadline {
+    use super::{ConfigEvent, KeyEvent, processor};
+    pub struct StatusDisplay;
+    pub enum StatusDisplayProcessorEventEnum {
+        Key(KeyEvent),
+        Config(ConfigEvent),
+    }
+    #[automatically_derived]
+    impl ::core::clone::Clone for StatusDisplayProcessorEventEnum {
+        #[inline]
+        fn clone(&self) -> StatusDisplayProcessorEventEnum {
+            match self {
+                StatusDisplayProcessorEventEnum::Key(__self_0) => {
+                    StatusDisplayProcessorEventEnum::Key(
+                        ::core::clone::Clone::clone(__self_0),
+                    )
+                }
+                StatusDisplayProcessorEventEnum::Config(__self_0) => {
+                    StatusDisplayProcessorEventEnum::Config(
+                        ::core::clone::Clone::clone(__self_0),
+                    )
+                }
+            }
+        }
+    }
+    /// Event subscriber for aggregated events
+    pub struct StatusDisplayProcessorEventSubscriber {
+        sub0: <KeyEvent as ::rmk::event::SubscribableEvent>::Subscriber,
+        sub1: <ConfigEvent as ::rmk::event::SubscribableEvent>::Subscriber,
+    }
+    impl StatusDisplayProcessorEventSubscriber {
+        /// Create a new event subscriber
+        pub fn new() -> Self {
+            Self {
+                sub0: <KeyEvent as ::rmk::event::SubscribableEvent>::subscriber(),
+                sub1: <ConfigEvent as ::rmk::event::SubscribableEvent>::subscriber(),
+            }
+        }
+    }
+    impl ::rmk::event::EventSubscriber for StatusDisplayProcessorEventSubscriber {
+        type Event = StatusDisplayProcessorEventEnum;
+        async fn next_event(&mut self) -> Self::Event {
+            use ::rmk::event::EventSubscriber;
+            use ::rmk::futures::FutureExt;
+            {
+                use ::futures_util::__private as __futures_crate;
+                {
+                    enum __PrivResult<_0, _1> {
+                        _0(_0),
+                        _1(_1),
+                    }
+                    let __select_result = {
+                        let mut _0 = self.sub0.next_event().fuse();
+                        let mut _1 = self.sub1.next_event().fuse();
+                        let mut __poll_fn = |
+                            __cx: &mut __futures_crate::task::Context<'_>|
+                        {
+                            let mut __any_polled = false;
+                            let mut _0 = |__cx: &mut __futures_crate::task::Context<'_>| {
+                                let mut _0 = unsafe {
+                                    __futures_crate::Pin::new_unchecked(&mut _0)
+                                };
+                                if __futures_crate::future::FusedFuture::is_terminated(
+                                    &_0,
+                                ) {
+                                    __futures_crate::None
+                                } else {
+                                    __futures_crate::Some(
+                                        __futures_crate::future::FutureExt::poll_unpin(
+                                                &mut _0,
+                                                __cx,
+                                            )
+                                            .map(__PrivResult::_0),
+                                    )
+                                }
+                            };
+                            let _0: &mut dyn FnMut(
+                                &mut __futures_crate::task::Context<'_>,
+                            ) -> __futures_crate::Option<
+                                    __futures_crate::task::Poll<_>,
+                                > = &mut _0;
+                            let mut _1 = |__cx: &mut __futures_crate::task::Context<'_>| {
+                                let mut _1 = unsafe {
+                                    __futures_crate::Pin::new_unchecked(&mut _1)
+                                };
+                                if __futures_crate::future::FusedFuture::is_terminated(
+                                    &_1,
+                                ) {
+                                    __futures_crate::None
+                                } else {
+                                    __futures_crate::Some(
+                                        __futures_crate::future::FutureExt::poll_unpin(
+                                                &mut _1,
+                                                __cx,
+                                            )
+                                            .map(__PrivResult::_1),
+                                    )
+                                }
+                            };
+                            let _1: &mut dyn FnMut(
+                                &mut __futures_crate::task::Context<'_>,
+                            ) -> __futures_crate::Option<
+                                    __futures_crate::task::Poll<_>,
+                                > = &mut _1;
+                            let mut __select_arr = [_0, _1];
+                            for poller in &mut __select_arr {
+                                let poller: &mut &mut dyn FnMut(
+                                    &mut __futures_crate::task::Context<'_>,
+                                ) -> __futures_crate::Option<
+                                        __futures_crate::task::Poll<_>,
+                                    > = poller;
+                                match poller(__cx) {
+                                    __futures_crate::Some(
+                                        x @ __futures_crate::task::Poll::Ready(_),
+                                    ) => return x,
+                                    __futures_crate::Some(
+                                        __futures_crate::task::Poll::Pending,
+                                    ) => {
+                                        __any_polled = true;
+                                    }
+                                    __futures_crate::None => {}
+                                }
+                            }
+                            if !__any_polled {
+                                {
+                                    ::std::rt::begin_panic(
+                                        "all futures in select! were completed, \
+                    but no `complete =>` handler was provided",
+                                    );
+                                }
+                            } else {
+                                __futures_crate::task::Poll::Pending
+                            }
+                        };
+                        __futures_crate::future::poll_fn(__poll_fn).await
+                    };
+                    match __select_result {
+                        __PrivResult::_0(event) => {
+                            StatusDisplayProcessorEventEnum::Key(event)
+                        }
+                        __PrivResult::_1(event) => {
+                            StatusDisplayProcessorEventEnum::Config(event)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    impl ::rmk::event::SubscribableEvent for StatusDisplayProcessorEventEnum {
+        type Subscriber = StatusDisplayProcessorEventSubscriber;
+        fn subscriber() -> Self::Subscriber {
+            StatusDisplayProcessorEventSubscriber::new()
+        }
+    }
+    impl ::rmk::processor::Processor for StatusDisplay {
+        type Event = StatusDisplayProcessorEventEnum;
+        fn subscriber() -> impl ::rmk::event::EventSubscriber<Event = Self::Event> {
+            <StatusDisplayProcessorEventEnum as ::rmk::event::SubscribableEvent>::subscriber()
+        }
+        async fn process(&mut self, event: Self::Event) {
+            match event {
+                StatusDisplayProcessorEventEnum::Key(event) => {
+                    self.on_key_event(event).await
+                }
+                StatusDisplayProcessorEventEnum::Config(event) => {
+                    self.on_config_event(event).await
+                }
+            }
+        }
+    }
+    impl ::rmk::processor::PollingProcessor for StatusDisplay {
+        fn interval(&self) -> ::embassy_time::Duration {
+            ::embassy_time::Duration::from_millis(100u64)
+        }
+        async fn update(&mut self) {
+            self.poll().await;
+        }
+    }
+    impl ::rmk::processor::DeadlineProcessor for StatusDisplay {
+        fn next_deadline(&self) -> Option<::embassy_time::Instant> {
+            Self::deadline(self)
+        }
+        async fn handle_deadline(&mut self) {
+            Self::on_deadline(self).await;
+        }
+    }
+    impl ::rmk::core_traits::Runnable for StatusDisplay {
+        async fn run(&mut self) -> ! {
+            ::rmk::processor::DeadlineProcessor::polling_deadline_loop(self).await
+        }
+    }
+}
+mod timer_only {
+    use super::processor;
+    pub struct Polling;
+    impl ::rmk::processor::Processor for Polling {
+        type Event = ::core::convert::Infallible;
+        fn subscriber() -> impl ::rmk::event::EventSubscriber<Event = Self::Event> {
+            ::core::future::pending::<Self::Event>()
+        }
+        async fn process(&mut self, event: Self::Event) {
+            match event {}
+        }
+    }
+    impl ::rmk::processor::PollingProcessor for Polling {
+        fn interval(&self) -> ::embassy_time::Duration {
+            ::embassy_time::Duration::from_millis(100u64)
+        }
+        async fn update(&mut self) {
+            self.poll().await;
+        }
+    }
+    impl ::rmk::core_traits::Runnable for Polling {
+        async fn run(&mut self) -> ! {
+            use ::rmk::processor::PollingProcessor;
+            self.polling_loop().await
+        }
+    }
+    pub struct Deadline;
+    impl ::rmk::processor::Processor for Deadline {
+        type Event = ::core::convert::Infallible;
+        fn subscriber() -> impl ::rmk::event::EventSubscriber<Event = Self::Event> {
+            ::core::future::pending::<Self::Event>()
+        }
+        async fn process(&mut self, event: Self::Event) {
+            match event {}
+        }
+    }
+    impl ::rmk::processor::DeadlineProcessor for Deadline {
+        fn next_deadline(&self) -> Option<::embassy_time::Instant> {
+            Self::deadline(self)
+        }
+        async fn handle_deadline(&mut self) {
+            Self::on_deadline(self).await;
+        }
+    }
+    impl ::rmk::core_traits::Runnable for Deadline {
+        async fn run(&mut self) -> ! {
+            use ::rmk::processor::DeadlineProcessor;
+            self.deadline_loop().await
+        }
+    }
+    pub struct Both;
+    impl ::rmk::processor::Processor for Both {
+        type Event = ::core::convert::Infallible;
+        fn subscriber() -> impl ::rmk::event::EventSubscriber<Event = Self::Event> {
+            ::core::future::pending::<Self::Event>()
+        }
+        async fn process(&mut self, event: Self::Event) {
+            match event {}
+        }
+    }
+    impl ::rmk::processor::PollingProcessor for Both {
+        fn interval(&self) -> ::embassy_time::Duration {
+            ::embassy_time::Duration::from_millis(100u64)
+        }
+        async fn update(&mut self) {
+            self.poll().await;
+        }
+    }
+    impl ::rmk::processor::DeadlineProcessor for Both {
+        fn next_deadline(&self) -> Option<::embassy_time::Instant> {
+            Self::deadline(self)
+        }
+        async fn handle_deadline(&mut self) {
+            Self::on_deadline(self).await;
+        }
+    }
+    impl ::rmk::core_traits::Runnable for Both {
+        async fn run(&mut self) -> ! {
+            ::rmk::processor::DeadlineProcessor::polling_deadline_loop(self).await
+        }
+    }
+    #[::rmk::macros::runnable_generated]
+    pub struct Custom;
+    impl ::rmk::processor::Processor for Custom {
+        type Event = ::core::convert::Infallible;
+        fn subscriber() -> impl ::rmk::event::EventSubscriber<Event = Self::Event> {
+            ::core::future::pending::<Self::Event>()
+        }
+        async fn process(&mut self, event: Self::Event) {
+            match event {}
         }
     }
 }
