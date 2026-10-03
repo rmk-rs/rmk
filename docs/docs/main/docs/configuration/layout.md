@@ -277,9 +277,9 @@ The `layer.keys` string follows several rules:
    6. `OSL(n)` — one-shot layer `n`, i.e. `SK(MO(n))`.
    7. `OSM(modifier)` — one-shot modifier, i.e. `SK(modifier)`. The modifier chains like `WM`.
    8. `SK(action)` / `SK(action, profile)` — sticky key: `action`'s release is postponed until the next input. See [Sticky Key](behavior#sticky-key).
-   8. `TT(n)` — activate layer `n`, or tap-toggle it.
-   9. `TG(n)` — toggle layer `n`.
-   10. `TO(n)` — activate layer `n` and deactivate all other layers.
+   9. `TT(n)` — activate layer `n`, or tap-toggle it.
+   10. `TG(n)` — toggle layer `n`.
+   11. `TO(n)` — activate layer `n` and deactivate all other layers.
 
    These match QMK's definitions; see the [QMK layer docs](https://docs.qmk.fm/#/feature_layers). If you need another action, please [file an issue](https://github.com/rmk-rs/rmk/issues/new).
 

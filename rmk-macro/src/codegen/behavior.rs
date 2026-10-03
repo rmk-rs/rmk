@@ -10,8 +10,8 @@ use rmk_config::resolved::behavior::{
 };
 
 use super::action_parser::{
-    SetterTable, expand_profile, expand_profile_name, get_key_with_alias, parse_action, parse_key,
-    parse_name_list, sorted_profile_names,
+    ProfileNames, SetterTable, expand_profile, expand_profile_name, get_key_with_alias,
+    parse_action, parse_key, parse_name_list, sorted_profile_names,
 };
 
 fn expand_tri_layer(tri_layer: &Option<[u8; 3]>) -> proc_macro2::TokenStream {
@@ -26,35 +26,14 @@ fn expand_tri_layer(tri_layer: &Option<[u8; 3]>) -> proc_macro2::TokenStream {
     }
 }
 
-fn expand_sticky_profile(
-    p: &StickyProfile,
-    fallback: Option<&StickyProfile>,
-) -> proc_macro2::TokenStream {
-    let timeout_ms = p
-        .timeout_ms
-        .or_else(|| fallback.and_then(|f| f.timeout_ms))
-        .unwrap_or(1000) as u16;
-    let activate_on_press = p
-        .activate_on_press
-        .or_else(|| fallback.and_then(|f| f.activate_on_press))
-        .unwrap_or(false);
-    let release_on_next_press = p
-        .release_on_next_press
-        .or_else(|| fallback.and_then(|f| f.release_on_next_press))
-        .unwrap_or(false);
-    let layer = p
-        .release_on_layer
-        .or_else(|| fallback.and_then(|f| f.release_on_layer))
-        .unwrap_or(LayerRelease::None);
-    let on_enter = layer.on_enter();
-    let on_exit = layer.on_exit();
-
-    let ignore = p
-        .ignore
-        .clone()
-        .or_else(|| fallback.and_then(|f| f.ignore.clone()));
-    let ignore_tokens = ignore.unwrap_or_default().into_iter().map(|k| {
-        let ident = get_key_with_alias(k);
+fn expand_sticky_profile(p: &StickyProfile) -> proc_macro2::TokenStream {
+    let timeout_ms = p.timeout_ms;
+    let activate_on_press = p.activate_on_press;
+    let release_on_next_press = p.release_on_next_press;
+    let on_enter = matches!(p.release_on_layer, LayerRelease::Enter | LayerRelease::Both);
+    let on_exit = matches!(p.release_on_layer, LayerRelease::Exit | LayerRelease::Both);
+    let ignore_tokens = p.ignore.iter().map(|k| {
+        let ident = get_key_with_alias(k.clone());
         quote! { ::rmk::types::keycode::HidKeyCode::#ident }
     });
 
@@ -71,12 +50,22 @@ fn expand_sticky_profile(
     }
 }
 
-/// The interned order of the named sticky profiles.
-pub(crate) fn sticky_profile_names(sticky: &Option<StickyKey>) -> Vec<String> {
-    sticky
+/// The named profile tables in the order they are interned into the runtime
+/// tables, so a name in the keymap resolves to the same index the table uses.
+pub(crate) fn profile_names(behavior: &Behavior) -> ProfileNames {
+    let morse = behavior
+        .morse
         .as_ref()
-        .map(|s| s.profiles.iter().map(|(name, _)| name.clone()).collect())
-        .unwrap_or_default()
+        .map(|m| m.profiles.clone())
+        .filter(|p| !p.is_empty());
+    ProfileNames {
+        morse: sorted_profile_names(&morse),
+        sticky: behavior
+            .sticky_key
+            .as_ref()
+            .map(|s| s.profiles.iter().map(|(name, _)| name.clone()).collect())
+            .unwrap_or_default(),
+    }
 }
 
 fn expand_sticky_key(sticky: &Option<StickyKey>) -> proc_macro2::TokenStream {
@@ -84,31 +73,26 @@ fn expand_sticky_key(sticky: &Option<StickyKey>) -> proc_macro2::TokenStream {
         return quote! { ::rmk::config::StickyKeyConfig::default() };
     };
 
-    let default_profile = expand_sticky_profile(&config.default, None);
+    let default_profile = expand_sticky_profile(&config.default);
     // Named profiles are already sorted by name in the resolved config, which
-    // is the same order `sticky_profile_index` uses when it emits per-key
-    // indices. The pushes can't overflow: the count is validated in `behavior()`.
+    // is the same order `sticky_profile` uses when it emits per-key
+    // indices. The capacity is validated in `behavior()`.
     let profile_tokens = config
         .profiles
         .iter()
-        .map(|(_, p)| expand_sticky_profile(p, Some(&config.default)));
+        .map(|(_, p)| expand_sticky_profile(p));
 
     quote! {
         ::rmk::config::StickyKeyConfig {
             default_profile: #default_profile,
-            profiles: {
-                let mut v = ::rmk::heapless::Vec::new();
-                #( let _ = v.push(#profile_tokens); )*
-                v
-            },
+            profiles: ::rmk::heapless::Vec::from_iter([#(#profile_tokens),*]),
         }
     }
 }
 
 fn expand_morse_action_pair(
     action_pair: &MorseActionPair,
-    profiles: &Option<HashMap<String, MorseProfile>>,
-    sticky: &[String],
+    names: &ProfileNames,
 ) -> proc_macro2::TokenStream {
     let mut pattern = 0b1u16;
     for ch in action_pair.pattern.chars() {
@@ -121,19 +105,18 @@ fn expand_morse_action_pair(
             _ => {}
         }
     }
-    let action = parse_key(action_pair.action.to_owned(), profiles, sticky);
+    let action = parse_key(action_pair.action.to_owned(), names);
     quote! { (rmk::types::morse::MorsePattern::from_u16(#pattern), #action.to_action()) }
 }
 
 fn expand_morse_actions(
     actions: &[MorseActionPair],
-    profiles: &Option<HashMap<String, MorseProfile>>,
-    sticky: &[String],
+    names: &ProfileNames,
 ) -> proc_macro2::TokenStream {
     if !actions.is_empty() {
         let action_pair_def = actions
             .iter()
-            .map(|action_pair| expand_morse_action_pair(action_pair, profiles, sticky));
+            .map(|action_pair| expand_morse_action_pair(action_pair, names));
         quote! {
             actions: ::rmk::heapless::LinearMap::from_iter([#(#action_pair_def),*]),
         }
@@ -142,7 +125,7 @@ fn expand_morse_actions(
     }
 }
 
-fn expand_morse(morse: &Option<Morse>, sticky: &[String]) -> proc_macro2::TokenStream {
+fn expand_morse(morse: &Option<Morse>, names: &ProfileNames) -> proc_macro2::TokenStream {
     if let Some(config) = morse {
         let enable_flow_tap = config.enable_flow_tap;
         let enable_flow_tap_token = quote! { enable_flow_tap: #enable_flow_tap, };
@@ -158,19 +141,18 @@ fn expand_morse(morse: &Option<Morse>, sticky: &[String]) -> proc_macro2::TokenS
         } else {
             Some(config.profiles.clone())
         };
-        let morses = expand_morses(&config.morses, &profiles_ref, sticky);
+        let morses = expand_morses(&config.morses, &profiles_ref, names);
 
-        // Interned morse profile table, in the same sorted-name order used by
-        // `morse_profile` when it emits per-key indices. The pushes can't overflow:
-        // the profile count is validated against the capacity in `behavior()`.
-        let profile_names = sorted_profile_names(&profiles_ref);
-        let profiles_token = if profile_names.is_empty() {
+        // Interned morse profile table, in the same sorted-name order
+        // `morse_profile` uses when it emits per-key indices. The pushes can't
+        // overflow: the count is validated against the capacity in `behavior()`.
+        let profiles_token = if names.morse.is_empty() {
             quote! {}
         } else {
-            let profile_tokens = profile_names.into_iter().map(|name| {
+            let profile_tokens = names.morse.iter().map(|name| {
                 let profile = profiles_ref
                     .as_ref()
-                    .and_then(|m| m.get(&name))
+                    .and_then(|m| m.get(name))
                     .expect("name from same map");
                 expand_profile(profile)
             });
@@ -198,11 +180,7 @@ fn expand_morse(morse: &Option<Morse>, sticky: &[String]) -> proc_macro2::TokenS
     }
 }
 
-fn expand_combos(
-    combos: &Option<Combos>,
-    profiles: &Option<HashMap<String, MorseProfile>>,
-    sticky: &[String],
-) -> proc_macro2::TokenStream {
+fn expand_combos(combos: &Option<Combos>, names: &ProfileNames) -> proc_macro2::TokenStream {
     let default = quote! { ::core::default::Default::default() };
     match combos {
         Some(combos) => {
@@ -229,8 +207,8 @@ fn expand_combos(
                 }
             } else {
                 let combos_def = combos.combos.iter().map(|combo| {
-                    let actions = combo.actions.iter().map(|a| parse_key(a.to_owned(), profiles, sticky));
-                    let output = parse_key(combo.output.to_owned(), profiles, sticky);
+                    let actions = combo.actions.iter().map(|a| parse_key(a.to_owned(), names));
+                    let output = parse_key(combo.output.to_owned(), names);
                     let layer = match combo.layer {
                         Some(layer) => quote! { ::core::option::Option::Some(#layer) },
                         None => quote! { ::core::option::Option::None },
@@ -311,7 +289,7 @@ fn expand_macros(macros: &Option<Macros>) -> proc_macro2::TokenStream {
 fn expand_morses(
     morses: &[MorseKey],
     profiles: &Option<HashMap<String, MorseProfile>>,
-    sticky: &[String],
+    names: &ProfileNames,
 ) -> proc_macro2::TokenStream {
     if morses.is_empty() {
         return quote! {};
@@ -329,7 +307,7 @@ fn expand_morses(
                 panic!("\n❌ keyboard.toml: `morse_actions` cannot be used together with `tap_actions`, `hold_actions`, `tap`, `hold`, `hold_after_tap`, or `double_tap`.");
             }
 
-            let actions_def = expand_morse_actions(morse_actions, profiles, sticky);
+            let actions_def = expand_morse_actions(morse_actions, names);
 
             quote! {
                 ::rmk::types::morse::Morse {
@@ -348,7 +326,7 @@ fn expand_morses(
             let tap_actions_def = match &morse.tap_actions {
                 Some(tap_actions) => {
                     let actions = tap_actions.iter().map(|action| {
-                        let parsed_action = parse_key(action.clone(), profiles, sticky);
+                        let parsed_action = parse_key(action.clone(), names);
                         quote! { #parsed_action }
                     });
                     quote! { ::rmk::heapless::Vec::from_iter([#(#actions.to_action()),*]) }
@@ -359,7 +337,7 @@ fn expand_morses(
             let hold_actions_def = match &morse.hold_actions {
                 Some(hold_actions) => {
                     let actions = hold_actions.iter().map(|action| {
-                        let parsed_action = parse_key(action.clone(), profiles, sticky);
+                        let parsed_action = parse_key(action.clone(), names);
                         quote! { #parsed_action }
                     });
                     quote! { ::rmk::heapless::Vec::from_iter([#(#actions.to_action()),*]) }
@@ -375,10 +353,10 @@ fn expand_morses(
                 )
             }
         } else {
-            let tap = parse_key(morse.tap.clone().unwrap_or_else(|| "No".to_string()), profiles, sticky);
-            let hold = parse_key(morse.hold.clone().unwrap_or_else(|| "No".to_string()), profiles, sticky);
-            let hold_after_tap = parse_key(morse.hold_after_tap.clone().unwrap_or_else(|| "No".to_string()), profiles, sticky);
-            let double_tap = parse_key(morse.double_tap.clone().unwrap_or_else(|| "No".to_string()), profiles, sticky);
+            let tap = parse_key(morse.tap.clone().unwrap_or_else(|| "No".to_string()), names);
+            let hold = parse_key(morse.hold.clone().unwrap_or_else(|| "No".to_string()), names);
+            let hold_after_tap = parse_key(morse.hold_after_tap.clone().unwrap_or_else(|| "No".to_string()), names);
+            let double_tap = parse_key(morse.double_tap.clone().unwrap_or_else(|| "No".to_string()), names);
 
             quote! {
                 ::rmk::types::morse::Morse::new_from_vial(
@@ -512,18 +490,14 @@ fn parse_state_combination(states_str: &str) -> StateBitsMacro {
     parse_name_list(states_str, "state", "fork state", STATES, |w| w)
 }
 
-fn expand_forks(
-    forks: &Option<Forks>,
-    profiles: &Option<HashMap<String, MorseProfile>>,
-    sticky: &[String],
-) -> proc_macro2::TokenStream {
+fn expand_forks(forks: &Option<Forks>, names: &ProfileNames) -> proc_macro2::TokenStream {
     let default = quote! { ::core::default::Default::default() };
     match forks {
         Some(forks) => {
             let forks_def = forks.forks.iter().map(|fork| {
-                let trigger = parse_key(fork.trigger.to_owned(), profiles, sticky);
-                let negative_output = parse_key(fork.negative_output.to_owned(), profiles, sticky);
-                let positive_output = parse_key(fork.positive_output.to_owned(), profiles, sticky);
+                let trigger = parse_key(fork.trigger.to_owned(), names);
+                let negative_output = parse_key(fork.negative_output.to_owned(), names);
+                let positive_output = parse_key(fork.positive_output.to_owned(), names);
                 let match_any  = fork.match_any.as_ref().map(|s| parse_state_combination(s)).unwrap_or_default();
                 let match_none = fork.match_none.as_ref().map(|s| parse_state_combination(s)).unwrap_or_default();
                 let kept = fork.kept_modifiers.as_ref().map(|s| parse_state_combination(s)).unwrap_or_default();
@@ -589,21 +563,14 @@ fn expand_auto_mouse_layer(auto_mouse_layer: &[AutoMouseLayer]) -> proc_macro2::
 }
 
 pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenStream {
-    let profiles = behavior
-        .morse
-        .as_ref()
-        .map(|m| m.profiles.clone())
-        .filter(|p| !p.is_empty());
-    // Sticky profile names in the same order they are interned into the table,
-    // so `SK(action, name)` in the keymap can resolve to an index.
-    let sticky = sticky_profile_names(&behavior.sticky_key);
+    let names = profile_names(behavior);
 
     let tri_layer = expand_tri_layer(&behavior.tri_layer);
     let sticky_key = expand_sticky_key(&behavior.sticky_key);
-    let combos = expand_combos(&behavior.combos, &profiles, &sticky);
+    let combos = expand_combos(&behavior.combos, &names);
     let macros = expand_macros(&behavior.macros);
-    let forks = expand_forks(&behavior.forks, &profiles, &sticky);
-    let morse = expand_morse(&behavior.morse, &sticky);
+    let forks = expand_forks(&behavior.forks, &names);
+    let morse = expand_morse(&behavior.morse, &names);
     let auto_mouse_layer = expand_auto_mouse_layer(&behavior.auto_mouse_layer);
 
     quote! {

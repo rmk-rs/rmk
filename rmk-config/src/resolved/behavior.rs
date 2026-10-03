@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use serde::Deserialize;
+
 /// Resolved behavioral configuration.
 pub struct Behavior {
     pub tri_layer: Option<[u8; 3]>,
@@ -37,45 +39,28 @@ pub struct StickyKey {
     pub profiles: Vec<(String, StickyProfile)>,
 }
 
-/// One sticky profile. `None` means "inherit the default profile".
-#[derive(Clone, Debug, Default)]
+/// Default sticky timeout, shared with the generated firmware constants.
+pub const DEFAULT_STICKY_TIMEOUT_MS: u16 = 1000;
+
+/// One sticky profile with inheritance and defaults fully resolved.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StickyProfile {
-    pub timeout_ms: Option<u64>,
-    pub ignore: Option<Vec<String>>,
-    pub activate_on_press: Option<bool>,
-    pub release_on_next_press: Option<bool>,
-    pub release_on_layer: Option<LayerRelease>,
+    pub timeout_ms: u16,
+    pub ignore: Vec<String>,
+    pub activate_on_press: bool,
+    pub release_on_next_press: bool,
+    pub release_on_layer: LayerRelease,
 }
 
 /// Which layer transitions release a sticky key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
 pub enum LayerRelease {
+    #[default]
     None,
     Enter,
     Exit,
     Both,
-}
-
-impl LayerRelease {
-    fn parse(s: &str) -> Result<Self, String> {
-        match s {
-            "none" => Ok(Self::None),
-            "enter" => Ok(Self::Enter),
-            "exit" => Ok(Self::Exit),
-            "both" => Ok(Self::Both),
-            other => Err(format!(
-                "behavior.sticky_key: release_on_layer must be none, enter, exit or both, got `{other}`"
-            )),
-        }
-    }
-
-    pub fn on_enter(self) -> bool {
-        matches!(self, Self::Enter | Self::Both)
-    }
-
-    pub fn on_exit(self) -> bool {
-        matches!(self, Self::Exit | Self::Both)
-    }
 }
 
 pub struct Combos {
@@ -168,16 +153,23 @@ impl crate::KeyboardTomlConfig {
 
         let sticky_key = match toml_behavior.sticky_key {
             Some(s) => {
+                let default = StickyProfile {
+                    timeout_ms: s.timeout.as_ref().map_or(DEFAULT_STICKY_TIMEOUT_MS, |t| t.0 as u16),
+                    ignore: s.ignore.clone().unwrap_or_default(),
+                    activate_on_press: s.activate_on_press.unwrap_or(false),
+                    release_on_next_press: s.release_on_next_press.unwrap_or(false),
+                    release_on_layer: s.release_on_layer.unwrap_or_default(),
+                };
                 let mut profiles: Vec<(String, StickyProfile)> = Vec::new();
                 for (name, p) in s.profiles.iter().flatten() {
                     profiles.push((
                         name.clone(),
                         StickyProfile {
-                            timeout_ms: p.timeout.as_ref().map(|t| t.0),
-                            ignore: p.ignore.clone(),
-                            activate_on_press: p.activate_on_press,
-                            release_on_next_press: p.release_on_next_press,
-                            release_on_layer: p.release_on_layer.as_deref().map(LayerRelease::parse).transpose()?,
+                            timeout_ms: p.timeout.as_ref().map_or(default.timeout_ms, |t| t.0 as u16),
+                            ignore: p.ignore.clone().unwrap_or_else(|| default.ignore.clone()),
+                            activate_on_press: p.activate_on_press.unwrap_or(default.activate_on_press),
+                            release_on_next_press: p.release_on_next_press.unwrap_or(default.release_on_next_press),
+                            release_on_layer: p.release_on_layer.unwrap_or(default.release_on_layer),
                         },
                     ));
                 }
@@ -193,16 +185,7 @@ impl crate::KeyboardTomlConfig {
                     ));
                 }
 
-                Some(StickyKey {
-                    default: StickyProfile {
-                        timeout_ms: s.timeout.as_ref().map(|t| t.0),
-                        ignore: s.ignore.clone(),
-                        activate_on_press: s.activate_on_press,
-                        release_on_next_press: s.release_on_next_press,
-                        release_on_layer: s.release_on_layer.as_deref().map(LayerRelease::parse).transpose()?,
-                    },
-                    profiles,
-                })
+                Some(StickyKey { default, profiles })
             }
             None => None,
         };

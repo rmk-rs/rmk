@@ -196,7 +196,7 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
         0x52A0..=0x52BF => {
             // One-shot modifier
             let m = ModifierCombination::from_packed_bits((via_keycode & 0x1F) as u8);
-            KeyAction::Sticky(Action::Modifier(m), u8::MAX)
+            KeyAction::Sticky(Action::Modifier(m), rmk_types::sticky::STICKY_PROFILE_DEFAULT)
         }
         0x52C0..=0x52DF => {
             // Layer tap toggle: tap toggles the layer, hold activates it momentarily
@@ -338,7 +338,7 @@ mod test {
         // OSL(3)
         let via_keycode = 0x5283;
         assert_eq!(
-            KeyAction::Sticky(Action::LayerOn(3), u8::MAX),
+            KeyAction::Sticky(Action::LayerOn(3), rmk_types::sticky::STICKY_PROFILE_LAYER),
             from_via_keycode(via_keycode)
         );
 
@@ -347,7 +347,7 @@ mod test {
         assert_eq!(
             KeyAction::Sticky(
                 Action::Modifier(ModifierCombination::new_from(true, false, false, false, true)),
-                u8::MAX
+                rmk_types::sticky::STICKY_PROFILE_DEFAULT
             ),
             from_via_keycode(via_keycode)
         );
@@ -682,13 +682,13 @@ mod test {
         assert_eq!(0x7C03, to_via_keycode(a));
 
         // OSL(3)
-        let a = KeyAction::Sticky(Action::LayerOn(3), u8::MAX);
+        let a = KeyAction::Sticky(Action::LayerOn(3), rmk_types::sticky::STICKY_PROFILE_LAYER);
         assert_eq!(0x5283, to_via_keycode(a));
 
         // OSM RCtrl
         let a = KeyAction::Sticky(
             Action::Modifier(ModifierCombination::new_from(true, false, false, false, true)),
-            u8::MAX,
+            rmk_types::sticky::STICKY_PROFILE_DEFAULT,
         );
         assert_eq!(0x52B1, to_via_keycode(a));
 

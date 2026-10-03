@@ -413,3 +413,15 @@ steps = [
   { release = [3, 0] },
 ]
 expect = [["LShift"], ["LShift", "LCtrl"], []]
+
+# The next key must use the base layer even before the first layer-1 key releases.
+[[test]]
+name = "osl_rollover_restores_layer_on_first_press"
+steps = [
+  { tap = { pos = [0, 1], duration = 10 } },
+  { press = [0, 2] },
+  { press = [0, 5] },
+  { release = [0, 5] },
+  { release = [0, 2] },
+]
+expect = [["C"], ["LGui", "C", "B"], ["C"], []]

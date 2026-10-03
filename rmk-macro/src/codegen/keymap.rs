@@ -1,23 +1,14 @@
 //! Initialize default keymap from config
-use std::collections::HashMap;
-
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
-use rmk_config::resolved::behavior::MorseProfile;
 use rmk_config::resolved::{Behavior, Keymap};
 
-use super::action_parser::parse_key;
+use super::action_parser::{ProfileNames, parse_key};
 
 /// Read the default keymap setting in `keyboard.toml` and add as a `get_default_keymap` function
 /// Also add `get_default_encoder_map`
 pub(crate) fn expand_default_keymap(keymap: &Keymap, behavior: &Behavior) -> TokenStream2 {
-    let profiles: Option<HashMap<String, MorseProfile>> = behavior
-        .morse
-        .as_ref()
-        .map(|m| m.profiles.clone())
-        .filter(|p| !p.is_empty());
-
-    let sticky = super::behavior::sticky_profile_names(&behavior.sticky_key);
+    let names = super::behavior::profile_names(behavior);
 
     let num_encoder = keymap.num_encoder;
 
@@ -25,15 +16,14 @@ pub(crate) fn expand_default_keymap(keymap: &Keymap, behavior: &Behavior) -> Tok
     let mut encoder_map = vec![];
 
     for layer in &keymap.keymap {
-        layers.push(expand_layer(layer.clone(), &profiles, &sticky));
+        layers.push(expand_layer(layer.clone(), &names));
     }
 
     for encoder_layer in &keymap.encoder_map {
         encoder_map.push(expand_encoder_layer(
             encoder_layer.clone(),
             num_encoder,
-            &profiles,
-            &sticky,
+            &names,
         ));
     }
     encoder_map.resize(
@@ -53,27 +43,19 @@ pub(crate) fn expand_default_keymap(keymap: &Keymap, behavior: &Behavior) -> Tok
 }
 
 /// Expand a layer for keymap
-pub(crate) fn expand_layer(
-    layer: Vec<Vec<String>>,
-    profiles: &Option<HashMap<String, MorseProfile>>,
-    sticky: &[String],
-) -> TokenStream2 {
+pub(crate) fn expand_layer(layer: Vec<Vec<String>>, names: &ProfileNames) -> TokenStream2 {
     let mut rows = vec![];
     for row in layer {
-        rows.push(expand_row(row, profiles, sticky));
+        rows.push(expand_row(row, names));
     }
     quote! { [#(#rows), *] }
 }
 
 /// Expand a row for keymap
-fn expand_row(
-    row: Vec<String>,
-    profiles: &Option<HashMap<String, MorseProfile>>,
-    sticky: &[String],
-) -> TokenStream2 {
+fn expand_row(row: Vec<String>, names: &ProfileNames) -> TokenStream2 {
     let mut keys = vec![];
     for key in row {
-        keys.push(parse_key(key, profiles, sticky));
+        keys.push(parse_key(key, names));
     }
     quote! { [#(#keys), *] }
 }
@@ -82,14 +64,13 @@ fn expand_row(
 pub(crate) fn expand_encoder_layer(
     encoder_layer: Vec<[String; 2]>,
     num_encoder: usize,
-    profiles: &Option<HashMap<String, MorseProfile>>,
-    sticky: &[String],
+    names: &ProfileNames,
 ) -> TokenStream2 {
     let mut encoders = vec![];
 
     for encoder in encoder_layer {
-        let cw_action = parse_key(encoder[0].clone(), profiles, sticky);
-        let ccw_action = parse_key(encoder[1].clone(), profiles, sticky);
+        let cw_action = parse_key(encoder[0].clone(), names);
+        let ccw_action = parse_key(encoder[1].clone(), names);
         encoders.push(quote! { ::rmk::encoder!(#cw_action, #ccw_action) });
     }
 

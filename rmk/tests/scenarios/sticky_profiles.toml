@@ -7,15 +7,16 @@
 #   (1,0) SK(MO(1))          (1,1) SK(WM(Tab, LAlt), alttab)
 #   (1,2) MouseBtn1          (1,3) OSM(LCtrl)    (1,4) OSM(LCtrl | LShift)
 #   (1,5) MACRO(0), which taps A   (1,6) SK(LCtrl, alttab), an eager sticky Ctrl
-#   (0,6) a plain LCtrl
+#   (0,6) a plain LCtrl; (0,7) LAlt; (1,7) OSL(1)
+#   (0,8) AudioVolUp; (1,8) SystemSleep; (0,9) TG(1); (1,9) TO(0)
 # Layer 1 maps (0,2) to C.
 
 [layout]
 rows = 2
-cols = 7
+cols = 10
 map = """
-(0,0)  (0,1)  (0,2)  (0,3)  (0,4)  (0,5)  (0,6)
-(1,0)  (1,1)  (1,2)  (1,3)  (1,4)  (1,5)  (1,6)
+(0,0)  (0,1)  (0,2)  (0,3)  (0,4)  (0,5)  (0,6)  (0,7)  (0,8)  (0,9)
+(1,0)  (1,1)  (1,2)  (1,3)  (1,4)  (1,5)  (1,6)  (1,7)  (1,8)  (1,9)
 """
 
 [behavior.macro]
@@ -34,14 +35,14 @@ release_on_layer = "exit"
 
 [[keymap.layer]]
 keys = """
-SK(LAlt, alttab)  Tab                            A           MO(1)       SK(A)                  SK(LShift, layerexit)  LCtrl
-SK(MO(1))         SK(WM(Tab, LAlt), alttab)      MouseBtn1   OSM(LCtrl)  OSM(LCtrl | LShift)    MACRO(0)               SK(LCtrl, alttab)
+SK(LAlt, alttab)  Tab                            A           MO(1)       SK(A)                  SK(LShift, layerexit)  LCtrl  LAlt  AudioVolUp  TG(1)
+SK(MO(1))         SK(WM(Tab, LAlt), alttab)      MouseBtn1   OSM(LCtrl)  OSM(LCtrl | LShift)    MACRO(0)               SK(LCtrl, alttab)  OSL(1)  SystemSleep  TO(0)
 """
 
 [[keymap.layer]]
 keys = """
-No  No  C   _   No  No  No
-No  No  No  No  No  No  No
+No  No  C   _   No  No  No  _   _  _
+_   No  No  No  No  No  No  No  _  _
 """
 
 # Alt+Tab: the sticky Alt is pressed once, then every Tab hits the ignore list
@@ -282,3 +283,217 @@ expect = [
   ["LCtrl", "LShift"],
   [],
 ]
+
+# Releasing sticky Alt must not release the physical Alt at another position.
+[[test]]
+name = "sticky_wm_release_keeps_physical_modifier"
+steps = [
+  { press = [0, 7] },
+  { tap = { pos = [1, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [0, 7] },
+]
+expect = [["LAlt"], ["LAlt", "Tab"], ["LAlt", "Tab", "A"], ["LAlt"], []]
+
+[[test]]
+name = "sticky_wm_timeout_releases_key_and_modifier"
+behavior.sticky_key.profiles.alttab.timeout = "100ms"
+steps = [
+  { tap = { pos = [1, 1], duration = 10 } },
+  { delay = 150 },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["LAlt", "Tab"], [], ["A"], []]
+
+# Sticky WM modifiers participate in fork matching and suppression like held modifiers.
+[[test]]
+name = "sticky_wm_modifier_is_suppressed_by_fork"
+behavior.fork = { forks = [{ trigger = "A", negative_output = "A", positive_output = "B", match_any = "LAlt" }] }
+steps = [
+  { tap = { pos = [1, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["LAlt", "Tab"], ["Tab", "B"], []]
+
+# Consuming a sticky layer must preserve a layer already held by a physical key.
+[[test]]
+name = "sticky_layer_release_keeps_preexisting_layer"
+steps = [
+  { press = [0, 3] },
+  { tap = { pos = [1, 0], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [0, 3] },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["C"], [], ["C"], [], ["A"], []]
+
+# OSL's layer transition must release an armed sticky configured for layer entry.
+[[test]]
+name = "osl_enter_releases_sticky_modifier"
+behavior.sticky_key.profiles.layerexit.release_on_layer = "enter"
+steps = [
+  { tap = { pos = [0, 5], duration = 10 } },
+  { tap = { pos = [1, 7], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["C"], []]
+
+
+# Media/system reports clear their scratch buffer after sending; they still count as input.
+[[test]]
+name = "media_consumes_sticky_modifier"
+steps = [
+  { tap = { pos = [1, 3], duration = 10 } },
+  { tap = { pos = [0, 8], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [{ consumer = ["AudioVolUp"] }, { consumer = [] }, ["A"], []]
+
+[[test]]
+name = "system_key_consumes_sticky_modifier"
+steps = [
+  { tap = { pos = [1, 3], duration = 10 } },
+  { tap = { pos = [1, 8], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [{ system = ["SystemSleep"] }, { system = [] }, ["A"], []]
+
+# Catch-up reports must release sticky keycodes as well as modifiers.
+[[test]]
+name = "media_releases_visible_sticky_keycode"
+behavior.sticky_key.activate_on_press = true
+steps = [
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [0, 8], duration = 10 } },
+]
+expect = [["A"], { consumer = ["AudioVolUp"] }, [], { consumer = [] }]
+
+[[test]]
+name = "quick_release_reports_sticky_keycode_up"
+behavior.sticky_key = { activate_on_press = true, release_on_next_press = true }
+steps = [
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+]
+expect = [["A"], ["A", "Tab"], ["Tab"], []]
+
+# A later physical holder must survive consumption of the earlier sticky holder.
+[[test]]
+name = "sticky_layer_keeps_later_physical_holder"
+steps = [
+  { tap = { pos = [1, 0], duration = 10 } },
+  { press = [0, 3] },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [0, 3] },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["C"], [], ["C"], [], ["A"], []]
+
+[[test]]
+name = "sticky_layer_timeout_keeps_later_physical_holder"
+behavior.sticky_key.timeout = "100ms"
+steps = [
+  { tap = { pos = [1, 0], duration = 10 } },
+  { press = [0, 3] },
+  { delay = 150 },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [0, 3] },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["C"], [], ["A"], []]
+
+# Lazy keyboard reporting must not hide layer transitions from other sticky keys.
+[[test]]
+name = "sk_layer_enter_releases_sticky_modifier"
+behavior.sticky_key.profiles.layerexit.release_on_layer = "enter"
+steps = [
+  { tap = { pos = [0, 5], duration = 10 } },
+  { tap = { pos = [1, 0], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["C"], []]
+
+# A momentary hold does not own a previously toggled layer.
+[[test]]
+name = "sticky_layer_release_preserves_toggle"
+steps = [
+  { tap = { pos = [0, 9], duration = 10 } },
+  { tap = { pos = [1, 0], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 9], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["C"], [], ["C"], [], ["A"], []]
+
+# Explicit TO/TG cancellation revokes existing holds; their late releases cannot undo a new toggle.
+[[test]]
+name = "to_cancels_hold_without_late_release_clearing_new_toggle"
+steps = [
+  { press = [0, 3] },
+  { tap = { pos = [1, 9], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 9], duration = 10 } },
+  { release = [0, 3] },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 9], duration = 10 } },
+]
+expect = [["A"], [], ["C"], []]
+
+[[test]]
+name = "toggle_off_cancels_momentary_hold"
+steps = [
+  { press = [0, 3] },
+  { tap = { pos = [0, 9], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [0, 3] },
+]
+expect = [["A"], []]
+
+[[test]]
+name = "media_reports_eager_sticky_modifier_release"
+steps = [
+  { tap = { pos = [1, 6], duration = 10 } },
+  { tap = { pos = [0, 8], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["LCtrl"], { consumer = ["AudioVolUp"] }, [], { consumer = [] }, ["A"], []]
+
+# A repeated press from the same macro source must not require two releases.
+[[test]]
+name = "macro_repeated_layer_press_is_idempotent"
+behavior.macro = { macros = [{ operations = [
+  { operation = "down", keycode = "MO(1)" },
+  { operation = "down", keycode = "MO(1)" },
+  { operation = "up", keycode = "MO(1)" },
+] }] }
+steps = [
+  { tap = { pos = [1, 5], duration = 10 } },
+  { delay = 50 },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["A"], []]
+
+# Input identity survives a duplicate HID usage; the macro's Tab still hits ignore.
+[[test]]
+name = "macro_tab_respects_sticky_ignore_when_tab_already_held"
+behavior.macro = { macros = [{ operations = [{ operation = "tap", keycode = "Tab" }] }] }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { press = [0, 1] },
+  { tap = { pos = [1, 5], duration = 10 } },
+  { release = [0, 1] },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["LAlt"], ["LAlt", "Tab"], ["LAlt", "Tab"], ["LAlt", "Tab"], ["LAlt"], ["LAlt", "A"], []]
+
+# The consumer is another input source even when it produces the same action.
+[[test]]
+name = "same_keycode_from_another_source_consumes_sticky"
+steps = [
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["A"], []]
