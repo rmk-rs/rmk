@@ -33,6 +33,9 @@ pub struct StickyFlags {
     __: u8,
 }
 
+/// Timeout a sticky key falls back to when nothing configures one.
+pub const DEFAULT_STICKY_TIMEOUT_MS: u16 = crate::constants::DEFAULT_STICKY_TIMEOUT_MS;
+
 /// One sticky key profile, referenced by index from [`crate::action::KeyAction::Sticky`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -48,15 +51,16 @@ pub struct StickyProfile {
 impl Default for StickyProfile {
     fn default() -> Self {
         Self {
-            timeout_ms: 1000,
+            timeout_ms: DEFAULT_STICKY_TIMEOUT_MS,
             ignore: Vec::new(),
             flags: StickyFlags::new(),
         }
     }
 }
 
-/// Profile index reserved for `OSL`. It resolves to the default profile with
-/// `release_on_next_press` forced on: a layer has to be restored on the next
-/// key's press, otherwise the key after that one may still resolve on it.
-/// ZMK splits `sk` and `sl` the same way.
+/// Profile index meaning "no named profile". The table never covers it, so it
+/// resolves to the configured default profile.
+pub const STICKY_PROFILE_DEFAULT: u8 = u8::MAX;
+
+/// Profile index reserved for `OSL`, resolving to the default sticky profile.
 pub const STICKY_PROFILE_LAYER: u8 = u8::MAX - 1;
