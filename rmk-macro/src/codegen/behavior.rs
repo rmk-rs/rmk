@@ -5,13 +5,13 @@ use std::collections::HashMap;
 use quote::{format_ident, quote};
 use rmk_config::resolved::Behavior;
 use rmk_config::resolved::behavior::{
-    AutoMouseLayer, Combos, Forks, LayerRelease, MacroOperation, Macros, Morse, MorseActionPair,
-    MorseKey, MorseProfile, StickyKey, StickyProfile,
+    AutoMouseLayer, Combos, Forks, MacroOperation, Macros, Morse, MorseActionPair, MorseKey,
+    MorseProfile, StickyKey, StickyProfile, StickyReleaseCondition,
 };
 
 use super::action_parser::{
     ProfileNames, SetterTable, expand_profile, expand_profile_name, get_key_with_alias,
-    parse_action, parse_key, parse_name_list, sorted_profile_names,
+    parse_action, parse_key, parse_name_list,
 };
 
 fn expand_tri_layer(tri_layer: &Option<[u8; 3]>) -> proc_macro2::TokenStream {
@@ -27,25 +27,31 @@ fn expand_tri_layer(tri_layer: &Option<[u8; 3]>) -> proc_macro2::TokenStream {
 }
 
 fn expand_sticky_profile(p: &StickyProfile) -> proc_macro2::TokenStream {
-    let timeout_ms = p.timeout_ms;
-    let activate_on_press = p.activate_on_press;
-    let release_on_next_press = p.release_on_next_press;
-    let on_enter = matches!(p.release_on_layer, LayerRelease::Enter | LayerRelease::Both);
-    let on_exit = matches!(p.release_on_layer, LayerRelease::Exit | LayerRelease::Both);
+    let wait_timeout_ms = p.wait_timeout_ms;
+    let hold_timeout_ms = p.hold_timeout_ms;
+    let release_on = p.release_on.iter().map(|condition| {
+        let setter = format_ident!(
+            "{}",
+            match condition {
+                StickyReleaseCondition::BeforeNextPress => "with_before_next_press",
+                StickyReleaseCondition::AfterNextPress => "with_after_next_press",
+                StickyReleaseCondition::AfterNextRelease => "with_after_next_release",
+                StickyReleaseCondition::LayerEnter => "with_layer_enter",
+                StickyReleaseCondition::LayerExit => "with_layer_exit",
+            }
+        );
+        quote! { .#setter(true) }
+    });
     let ignore_tokens = p.ignore.iter().map(|k| {
         let ident = get_key_with_alias(k.clone());
-        quote! { ::rmk::types::keycode::HidKeyCode::#ident }
+        quote! { ::rmk::types::keycode::KeyCode::Hid(::rmk::types::keycode::HidKeyCode::#ident) }
     });
-
     quote! {
         ::rmk::types::sticky::StickyProfile {
-            timeout_ms: #timeout_ms,
+            wait_timeout_ms: #wait_timeout_ms,
+            hold_timeout_ms: #hold_timeout_ms,
             ignore: ::rmk::heapless::Vec::from_iter([#(#ignore_tokens),*]),
-            flags: ::rmk::types::sticky::StickyFlags::new()
-                .with_activate_on_press(#activate_on_press)
-                .with_release_on_next_press(#release_on_next_press)
-                .with_release_on_layer_enter(#on_enter)
-                .with_release_on_layer_exit(#on_exit),
+            release_on: ::rmk::types::sticky::StickyReleaseConditions::new() #(#release_on)*,
         }
     }
 }
@@ -53,13 +59,15 @@ fn expand_sticky_profile(p: &StickyProfile) -> proc_macro2::TokenStream {
 /// The named profile tables in the order they are interned into the runtime
 /// tables, so a name in the keymap resolves to the same index the table uses.
 pub(crate) fn profile_names(behavior: &Behavior) -> ProfileNames {
-    let morse = behavior
+    let mut morse: Vec<_> = behavior
         .morse
-        .as_ref()
-        .map(|m| m.profiles.clone())
-        .filter(|p| !p.is_empty());
+        .iter()
+        .flat_map(|m| m.profiles.keys())
+        .cloned()
+        .collect();
+    morse.sort();
     ProfileNames {
-        morse: sorted_profile_names(&morse),
+        morse,
         sticky: behavior
             .sticky_key
             .as_ref()
@@ -74,9 +82,7 @@ fn expand_sticky_key(sticky: &Option<StickyKey>) -> proc_macro2::TokenStream {
     };
 
     let default_profile = expand_sticky_profile(&config.default);
-    // Named profiles are already sorted by name in the resolved config, which
-    // is the same order `sticky_profile` uses when it emits per-key
-    // indices. The capacity is validated in `behavior()`.
+    // Profile order must match `profile_index`.
     let profile_tokens = config
         .profiles
         .iter()
@@ -144,7 +150,7 @@ fn expand_morse(morse: &Option<Morse>, names: &ProfileNames) -> proc_macro2::Tok
         let morses = expand_morses(&config.morses, &profiles_ref, names);
 
         // Interned morse profile table, in the same sorted-name order
-        // `morse_profile` uses when it emits per-key indices. The pushes can't
+        // `profile_index` uses when it emits per-key indices. The pushes can't
         // overflow: the count is validated against the capacity in `behavior()`.
         let profiles_token = if names.morse.is_empty() {
             quote! {}

@@ -13,6 +13,7 @@
 //! - [`fork`] — `Fork`, `StateBits`: key-override configuration
 //! - [`morse`] — `Morse`, `MorsePattern`, `MorseProfile`, `MorseMode`: tap-dance/tap-hold
 //! - [`keyboard_macros`] — `MacroOp`, `Macro`: keyboard macro steps
+//! - [`sticky`] — `StickyProfile`, `StickyReleaseConditions`: sticky key configuration
 //!
 //! ### Hardware state
 //! - [`modifier`] — `ModifierCombination` bitfield
@@ -24,7 +25,7 @@
 //!
 //! ### Protocol
 //! - [`protocol::vial`] — Vial/Via protocol types
-//! - [`protocol::rynk`] — RMK native protocol ICD (feature-gated: `rynk`)
+//! - `protocol::rynk` — RMK native protocol ICD (feature-gated: `rynk`)
 //!
 //! ### Build-time
 //! - [`constants`] — Generated from `keyboard.toml` by `build.rs`

@@ -320,7 +320,7 @@ impl From<&config::BehaviorConfig> for BehaviorConfig {
             prior_idle_time: behavior.morse.prior_idle_time.as_millis() as u16,
             morse_default_profile: behavior.morse.default_profile,
             combo_timeout: behavior.combo.timeout.as_millis() as u16,
-            one_shot_timeout: behavior.sticky_key.default_profile.timeout_ms,
+            one_shot_timeout: behavior.sticky_key.default_profile.wait_timeout_ms,
             tap_interval: behavior.tap.tap_interval,
             tap_capslock_interval: behavior.tap.tap_capslock_interval,
         }

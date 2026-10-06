@@ -27,12 +27,8 @@ pub enum KeyAction {
     TapHold(Action, Action, u8),
     /// Morse action, references a morse configuration by index.
     Morse(u8),
-    /// Sticky action: the wrapped action keeps its effect until the next input
-    /// instead of releasing when the key comes up. The `u8` indexes the sticky
-    /// profile table; an index with no entry falls back to the default profile.
-    ///
-    /// `OSM(mod)` is `Sticky(Action::Modifier(mod), _)` and `OSL(n)` is
-    /// `Sticky(Action::LayerOn(n), _)`.
+    /// Hold an action using the indexed [`crate::sticky::StickyProfile`].
+    /// An unconfigured index selects the default profile.
     Sticky(Action, u8),
 }
 
