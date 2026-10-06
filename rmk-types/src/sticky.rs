@@ -1,66 +1,63 @@
-//! Sticky key configuration.
-//!
-//! A sticky key postpones the release of the action it wraps until the next
-//! input, so a tap of `SK(LShift)` shifts the key that follows it. This module
-//! holds the per-key configuration; the state machine lives in the `rmk` crate.
+//! Sticky key profiles, shared by `SK`, `OSM` and `OSL`.
 
 use bitfield_struct::bitfield;
 use heapless::Vec;
 
 use crate::constants::STICKY_IGNORE_MAX;
-use crate::keycode::HidKeyCode;
+use crate::keycode::KeyCode;
 
-/// When the host gets to see the effect, and which layer transitions release it.
+/// Release conditions after source release; the first match wins.
+/// Waiting timeout, cancellation and hold behavior apply separately.
 #[bitfield(u8, order = Lsb)]
 #[derive(PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct StickyFlags {
-    /// Send the effect to the host as soon as the sticky key is pressed, rather
-    /// than holding it back until the next input.
+pub struct StickyReleaseConditions {
+    /// End before the next nonignored input action executes.
     #[bits(1)]
-    pub activate_on_press: bool,
-    /// Release on the next input's press edge instead of letting the effect
-    /// disappear with that key's own release report.
+    pub before_next_press: bool,
+    /// End after that press executes, while the consuming key is still held.
     #[bits(1)]
-    pub release_on_next_press: bool,
-    /// Release when a layer is activated.
+    pub after_next_press: bool,
+    /// End when the consuming input releases; unrelated releases do not end it.
     #[bits(1)]
-    pub release_on_layer_enter: bool,
-    /// Release when a layer is deactivated.
+    pub after_next_release: bool,
+    /// End when a layer becomes active, including through a default-layer change.
     #[bits(1)]
-    pub release_on_layer_exit: bool,
-    #[bits(4)]
+    pub layer_enter: bool,
+    /// End when a layer becomes inactive, including through a default-layer change.
+    #[bits(1)]
+    pub layer_exit: bool,
+    #[bits(3)]
     __: u8,
 }
 
-/// Timeout a sticky key falls back to when nothing configures one.
-pub const DEFAULT_STICKY_TIMEOUT_MS: u16 = crate::constants::DEFAULT_STICKY_TIMEOUT_MS;
-
-/// One sticky key profile, referenced by index from [`crate::action::KeyAction::Sticky`].
+/// One profile referenced by [`crate::action::KeyAction::Sticky`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct StickyProfile {
-    /// How long the effect survives after the key comes up. 0 means no timeout.
-    pub timeout_ms: u16,
-    /// Keycodes that don't count as "the next input". Hitting one of these also
-    /// refills the timeout, which is what makes Alt+Tab style cycling work.
-    pub ignore: Vec<HidKeyCode, STICKY_IGNORE_MAX>,
-    pub flags: StickyFlags,
+    /// Input/layer release conditions. An empty set disables these conditions.
+    pub release_on: StickyReleaseConditions,
+    /// Inputs excluded from consumption and hold detection; presses restart the waiting timer.
+    /// A combined action is ignored only if every key/modifier is listed.
+    pub ignore: Vec<KeyCode, STICKY_IGNORE_MAX>,
+    /// Milliseconds to wait after source release; zero disables expiry.
+    /// Stops when `after_next_release` claims an input.
+    pub wait_timeout_ms: u16,
+    /// Hold duration in milliseconds that makes source release end the action.
+    /// Zero disables this duration check; using a nonignored input still ends it on source release.
+    pub hold_timeout_ms: u16,
 }
 
 impl Default for StickyProfile {
     fn default() -> Self {
         Self {
-            timeout_ms: DEFAULT_STICKY_TIMEOUT_MS,
+            release_on: StickyReleaseConditions::new().with_after_next_release(true),
             ignore: Vec::new(),
-            flags: StickyFlags::new(),
+            wait_timeout_ms: crate::constants::DEFAULT_STICKY_WAIT_TIMEOUT_MS,
+            hold_timeout_ms: crate::constants::DEFAULT_STICKY_HOLD_TIMEOUT_MS,
         }
     }
 }
 
-/// Profile index meaning "no named profile". The table never covers it, so it
-/// resolves to the configured default profile.
+/// Default profile shared by `SK`, `OSM` and `OSL`.
 pub const STICKY_PROFILE_DEFAULT: u8 = u8::MAX;
-
-/// Profile index reserved for `OSL`, resolving to the default sticky profile.
-pub const STICKY_PROFILE_LAYER: u8 = u8::MAX - 1;

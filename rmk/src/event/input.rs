@@ -88,6 +88,8 @@ pub enum KeyboardEventSource {
     Virtual(u8),
     /// A direct keycode, independent of the active layer.
     KeyCode(HidKeyCode),
+    /// An action held by the sticky state at this slot.
+    Sticky(u8),
 }
 
 impl KeyboardEventSource {

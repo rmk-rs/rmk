@@ -6,7 +6,8 @@ use rmk::types::action::{Action, EncoderAction, KeyAction};
 use rmk::types::constants::{MACRO_MAX_NUM, MACRO_SPACE_SIZE};
 use rmk::types::keyboard_macros::MacroOp;
 use rmk::types::keycode::{HidKeyCode, KeyCode};
-use rmk::{k, macros, text};
+use rmk::types::modifier::ModifierCombination;
+use rmk::{k, macros, osl, osm, sk, text};
 use rmk_types::protocol::vial::{
     SettingKey, VIA_PROTOCOL_VERSION, VIAL_EP_SIZE as REPORT, ViaCommand, VialCommand, VialDynamic,
 };
@@ -49,6 +50,15 @@ impl SimKeyboard {
         self.echo(request)
     }
 
+    fn expect_behavior(&mut self, setting: SettingKey, value: u16) {
+        let mut request = vial(VialCommand::GetBehaviorSetting);
+        request[2..4].copy_from_slice(&(setting as u16).to_le_bytes());
+        let mut reply = [0xFF; REPORT];
+        reply[0] = 0;
+        reply[1..3].copy_from_slice(&value.to_le_bytes());
+        self.host_exchange(request, reply);
+    }
+
     fn set_combo<const N: usize>(&mut self, index: u8, actions: [KeyAction; N], output: KeyAction) {
         let mut request = dynamic(VialDynamic::DynamicVialComboSet, index);
         const MAX: usize = rmk::test_support::COMBO_MAX_LENGTH;
@@ -88,6 +98,50 @@ fn keymap_write_changes_the_key() {
             .expect_keys([])
             .run()
             .await;
+    });
+}
+
+#[test]
+fn one_shot_timeout_reads_and_updates_default_sticky_profile() {
+    test_block_on(async {
+        for (sticky, modifiers, consumed) in [
+            (osm!(ModifierCombination::LCTRL), 1, HidKeyCode::A),
+            (sk!(Action::Key(KeyCode::Hid(HidKeyCode::LCtrl))), 1, HidKeyCode::A),
+            (osl!(1), 0, HidKeyCode::B),
+        ] {
+            let mut behavior = BehaviorConfig::default();
+            behavior.sticky_key.default_profile.wait_timeout_ms = 230;
+            let mut keyboard = SimKeyboard::builder([[[sticky, k!(A)]], [[KeyAction::Transparent, k!(B)]]])
+                .behavior_config(behavior)
+                .build()
+                .await;
+            keyboard.expect_behavior(SettingKey::OneShotTimeout, 230);
+            keyboard.set_behavior(SettingKey::OneShotTimeout, 80);
+            keyboard.expect_behavior(SettingKey::OneShotTimeout, 80);
+            keyboard.tap(0, 0, 10);
+            if modifiers != 0 {
+                keyboard.expect_keys_with_mods(modifiers, []);
+            }
+            keyboard.delay(120);
+            if modifiers != 0 {
+                keyboard.expect_keys([]);
+            }
+            keyboard.tap(0, 1, 10).expect_keys([HidKeyCode::A]).expect_keys([]);
+            keyboard.set_behavior(SettingKey::OneShotTimeout, 0);
+            keyboard.expect_behavior(SettingKey::OneShotTimeout, 0);
+            keyboard.tap(0, 0, 10);
+            if modifiers != 0 {
+                keyboard.expect_keys_with_mods(modifiers, []);
+            }
+            keyboard
+                .delay(1500)
+                .tap(0, 1, 10)
+                .expect_keys_with_mods(modifiers, [consumed]);
+            if modifiers != 0 {
+                keyboard.expect_keys_with_mods(modifiers, []);
+            }
+            keyboard.expect_keys([]).run().await;
+        }
     });
 }
 
@@ -431,19 +485,27 @@ fn behavior_write_survives_restart() {
     test_block_on(async {
         let flash = crate::simulator::Flash::new();
         {
-            let mut keyboard = SimKeyboard::builder([[[k!(A), k!(B)]]])
+            let mut keyboard = SimKeyboard::builder([[[k!(A), k!(B), osm!(ModifierCombination::LSHIFT)]]])
                 .build_with_flash(flash.clone())
                 .await;
             keyboard.set_behavior(SettingKey::ComboTimeout, 80);
+            keyboard.set_behavior(SettingKey::OneShotTimeout, 80);
             keyboard.set_combo(0, [k!(A), k!(B)], k!(C));
             keyboard.run().await;
         }
-        let mut keyboard = SimKeyboard::builder([[[k!(A), k!(B)]]]).build_with_flash(flash).await;
+        let mut keyboard = SimKeyboard::builder([[[k!(A), k!(B), osm!(ModifierCombination::LSHIFT)]]])
+            .build_with_flash(flash)
+            .await;
+        keyboard.expect_behavior(SettingKey::OneShotTimeout, 80);
         keyboard
             .press(0, 0)
             .expect_no_report(60)
             .expect_keys([HidKeyCode::A])
             .release(0, 0)
+            .expect_keys([])
+            .tap(0, 2, 10)
+            .expect_keys_with_mods(ModifierCombination::LSHIFT.into_bits(), [])
+            .delay(120)
             .expect_keys([])
             .run()
             .await;

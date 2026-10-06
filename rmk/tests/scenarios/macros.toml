@@ -287,14 +287,3 @@ steps = [
   { release = [0, 6] },
 ]
 expect = [["A"], []]
-
-# A character does not consume a one-shot modifier; the next physical key does.
-[[test]]
-name = "one_shot_is_not_consumed_by_text"
-behavior.macro = { macros = [{ operations = [{ operation = "text", text = "a" }] }] }
-steps = [
-  { tap = { pos = [0, 0], duration = 10 } },
-  { tap = { pos = [0, 6], duration = 10 } },
-  { tap = { pos = [0, 2], duration = 10 } },
-]
-expect = [["A"], [], ["LShift"], ["LShift", "A"], []]

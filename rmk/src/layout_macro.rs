@@ -307,82 +307,72 @@ macro_rules! thp {
     };
 }
 
-/// Create a one-shot layer action.
-///
-/// This macro creates a key that activates a layer for the next keypress only.
-/// After the next key is pressed, the layer automatically deactivates.
-///
-/// # Parameters
-/// - `$x`: Layer number (0-255)
+/// Sticky layer, following [`crate::sk!`] release rules.
+/// The optional second argument selects a profile index; omit it for the default.
 ///
 /// # Example
-/// ```ignore
-/// osl!(1)  // Next key will be from layer 1, then return to current layer
-/// osl!(2)  // Next key will be from layer 2, then return to current layer
+/// ```
+/// use rmk::osl;
+///
+/// let default_layer_key = osl!(1);
+/// let custom_layer_key = osl!(1, 0); // First configured sticky profile.
 /// ```
 #[macro_export]
 macro_rules! osl {
+    ($x:literal, $p:expr) => {
+        $crate::sk!($crate::types::action::Action::LayerOn($x), $p)
+    };
     ($x: literal) => {
-        $crate::types::action::KeyAction::Sticky(
-            $crate::types::action::Action::LayerOn($x),
-            $crate::types::sticky::STICKY_PROFILE_LAYER,
-        )
+        $crate::sk!($crate::types::action::Action::LayerOn($x))
     };
 }
 
-/// Create a one-shot modifier action.
-///
-/// This macro creates a key that applies modifiers for the next keypress only.
-/// They automatically deactivate if:
-/// - other key that sends keyboard report is pressed,
-/// - timeout has passed before next key is triggered.
-///
-/// # Parameters
-/// - `$m`: `ModifierCombination` to apply for the next keypress
+/// Sticky modifiers, following [`crate::sk!`] release rules.
+/// The optional second argument selects a profile index; omit it for the default.
 ///
 /// # Example
-/// ```ignore
-/// // Next key will be shifted
-/// osm!(ModifierCombination::LSHIFT)
-/// // Next key will have both Shift and Ctrl applied
-/// osm!(ModifierCombination::LSHIFT | ModifierCombination::LCTRL)
+/// ```
+/// use rmk::osm;
+/// use rmk::types::modifier::ModifierCombination;
+///
+/// let shift = osm!(ModifierCombination::LSHIFT);
+/// let ctrl_shift = osm!(ModifierCombination::LCTRL | ModifierCombination::LSHIFT);
+/// let custom_alt = osm!(ModifierCombination::LALT, 0);
 /// ```
 #[macro_export]
 macro_rules! osm {
+    ($m:expr, $p:expr) => {
+        $crate::sk!($crate::types::action::Action::Modifier($m), $p)
+    };
     ($m: expr) => {
-        $crate::types::action::KeyAction::Sticky(
-            $crate::types::action::Action::Modifier($m),
-            $crate::types::sticky::STICKY_PROFILE_DEFAULT,
-        )
+        $crate::sk!($crate::types::action::Action::Modifier($m))
     };
 }
 
-/// Create a sticky key: the wrapped action's release is postponed until the
-/// next input instead of following the finger.
+/// Sticky action; activates on press. The optional second argument selects a profile index.
 ///
-/// `osm!` and `osl!` are this macro with the modifier and layer actions filled
-/// in. Use [`skp!`] to point at a named profile.
+/// By default, a short tap waits up to one second for input, then expires if unused.
+/// Consuming input stops the timer and keeps the action active until that input releases.
+/// Tap again to cancel.
+/// See [`crate::types::sticky::StickyProfile`] for hold settings.
 ///
 /// # Example
-/// ```ignore
-/// sk!(Action::Modifier(ModifierCombination::LSHIFT))  // same as osm!
-/// sk!(Action::Key(KeyCode::Hid(HidKeyCode::A)))       // A stays down until the next key
+/// ```
+/// use rmk::sk;
+/// use rmk::types::action::Action;
+/// use rmk::types::keycode::{HidKeyCode, KeyCode};
+/// use rmk::types::modifier::ModifierCombination;
+///
+/// let sticky_a = sk!(Action::Key(KeyCode::Hid(HidKeyCode::A)));
+/// let custom_alt = sk!(Action::Modifier(ModifierCombination::LALT), 0);
 /// ```
 #[macro_export]
 macro_rules! sk {
-    ($a: expr) => {
-        $crate::types::action::KeyAction::Sticky($a, $crate::types::sticky::STICKY_PROFILE_DEFAULT)
-    };
-}
-
-/// Create a sticky key using the sticky profile at `$p`.
-///
-/// Profiles are interned from `[behavior.sticky_key.profiles]` in name order;
-/// `keyboard.toml` users write `SK(action, name)` and never see the index.
-#[macro_export]
-macro_rules! skp {
     ($a: expr, $p: expr) => {
         $crate::types::action::KeyAction::Sticky($a, $p)
+    };
+    ($a: expr) => {
+        $crate::sk!($a, $crate::types::sticky::STICKY_PROFILE_DEFAULT)
     };
 }
 

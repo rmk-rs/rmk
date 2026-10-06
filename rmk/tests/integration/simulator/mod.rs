@@ -630,6 +630,7 @@ fn input(pos: KeyboardEventSource) -> String {
         KeyboardEventSource::Macro => "macro".to_string(),
         KeyboardEventSource::Virtual(id) => format!("virtual {id}"),
         KeyboardEventSource::KeyCode(keycode) => format!("keycode {keycode:?}"),
+        KeyboardEventSource::Sticky(idx) => format!("sticky {idx}"),
     }
 }
 
