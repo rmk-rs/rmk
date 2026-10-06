@@ -56,7 +56,7 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                     behavior.morse.prior_idle_time = Duration::from_millis(c.prior_idle_time as u64);
                     behavior.morse.default_profile = c.morse_default_profile;
                     behavior.combo.timeout = Duration::from_millis(c.combo_timeout as u64);
-                    behavior.sticky_key.default_profile.timeout_ms = c.one_shot_timeout;
+                    behavior.sticky_key.default_profile.wait_timeout_ms = c.one_shot_timeout;
                     behavior.tap.tap_interval = c.tap_interval;
                     behavior.tap.tap_capslock_interval = c.tap_capslock_interval;
                 }

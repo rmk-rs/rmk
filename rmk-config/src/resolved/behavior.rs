@@ -39,28 +39,26 @@ pub struct StickyKey {
     pub profiles: Vec<(String, StickyProfile)>,
 }
 
-/// Default sticky timeout, shared with the generated firmware constants.
-pub const DEFAULT_STICKY_TIMEOUT_MS: u16 = 1000;
+pub const DEFAULT_STICKY_WAIT_TIMEOUT_MS: u16 = 1000;
+pub const DEFAULT_STICKY_HOLD_TIMEOUT_MS: u16 = 250;
 
-/// One sticky profile with inheritance and defaults fully resolved.
+/// A profile after field-wise inheritance and capacity validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StickyProfile {
-    pub timeout_ms: u16,
+    pub release_on: Vec<StickyReleaseCondition>,
     pub ignore: Vec<String>,
-    pub activate_on_press: bool,
-    pub release_on_next_press: bool,
-    pub release_on_layer: LayerRelease,
+    pub wait_timeout_ms: u16,
+    pub hold_timeout_ms: u16,
 }
 
-/// Which layer transitions release a sticky key.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum LayerRelease {
-    #[default]
-    None,
-    Enter,
-    Exit,
-    Both,
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StickyReleaseCondition {
+    BeforeNextPress,
+    AfterNextPress,
+    AfterNextRelease,
+    LayerEnter,
+    LayerExit,
 }
 
 pub struct Combos {
@@ -145,49 +143,102 @@ pub struct MorseActionPair {
 }
 
 impl crate::KeyboardTomlConfig {
+    /// Share inferred capacities between constant generation and profile validation.
+    pub(crate) fn sticky_capacities(&self) -> Result<(usize, usize), String> {
+        let sticky = self.behavior.as_ref().and_then(|b| b.sticky_key.as_ref());
+        let profiles = sticky.and_then(|s| s.profiles.as_ref());
+        let profile_max = self
+            .rmk
+            .sticky_profile_max_num
+            .unwrap_or_else(|| profiles.map_or(0, |p| p.len()).max(8));
+        // Index 255 selects the default profile for SK, OSM and OSL.
+        if profile_max > 255 {
+            return Err(format!("sticky_profile_max_num must be at most 255, got {profile_max}"));
+        }
+        let default_ignore = sticky.and_then(|s| s.ignore.as_ref()).map_or(0, Vec::len);
+        let ignore_max = self.rmk.sticky_ignore_max.unwrap_or_else(|| {
+            profiles
+                .into_iter()
+                .flat_map(|p| p.values())
+                .filter_map(|p| p.ignore.as_ref())
+                .map(Vec::len)
+                .max()
+                .unwrap_or(0)
+                .max(default_ignore)
+                .max(4)
+        });
+        Ok((profile_max, ignore_max))
+    }
+
     /// Resolve behavioral configuration from TOML config.
     pub fn behavior(&self) -> Result<Behavior, String> {
         let toml_behavior = self.get_behavior_config()?;
+        let (sticky_profile_max_num, sticky_ignore_max) = self.sticky_capacities()?;
 
         let tri_layer = toml_behavior.tri_layer.map(|t| [t.upper, t.lower, t.adjust]);
 
-        let sticky_key = match toml_behavior.sticky_key {
-            Some(s) => {
-                let default = StickyProfile {
-                    timeout_ms: s.timeout.as_ref().map_or(DEFAULT_STICKY_TIMEOUT_MS, |t| t.0 as u16),
-                    ignore: s.ignore.clone().unwrap_or_default(),
-                    activate_on_press: s.activate_on_press.unwrap_or(false),
-                    release_on_next_press: s.release_on_next_press.unwrap_or(false),
-                    release_on_layer: s.release_on_layer.unwrap_or_default(),
+        let sticky_key = if let Some(config) = toml_behavior.sticky_key {
+            let duration = |value: Option<&crate::DurationMillis>, fallback, path: &str| {
+                value.map_or(Ok(fallback), |v| {
+                    u16::try_from(v.0).map_err(|_| format!("{path} must be between 0ms and 65535ms"))
+                })
+            };
+            let resolve = |overrides: &crate::StickyProfileConfig, path: &str| -> Result<StickyProfile, String> {
+                let profile = StickyProfile {
+                    release_on: overrides
+                        .release_on
+                        .as_ref()
+                        .or(config.release_on.as_ref())
+                        .cloned()
+                        .unwrap_or_else(|| vec![StickyReleaseCondition::AfterNextRelease]),
+                    ignore: overrides
+                        .ignore
+                        .as_ref()
+                        .or(config.ignore.as_ref())
+                        .cloned()
+                        .unwrap_or_default(),
+                    wait_timeout_ms: duration(
+                        overrides.wait_timeout.as_ref().or(config.wait_timeout.as_ref()),
+                        DEFAULT_STICKY_WAIT_TIMEOUT_MS,
+                        &format!("{path}.wait_timeout"),
+                    )?,
+                    hold_timeout_ms: duration(
+                        overrides.hold_timeout.as_ref().or(config.hold_timeout.as_ref()),
+                        DEFAULT_STICKY_HOLD_TIMEOUT_MS,
+                        &format!("{path}.hold_timeout"),
+                    )?,
                 };
-                let mut profiles: Vec<(String, StickyProfile)> = Vec::new();
-                for (name, p) in s.profiles.iter().flatten() {
-                    profiles.push((
-                        name.clone(),
-                        StickyProfile {
-                            timeout_ms: p.timeout.as_ref().map_or(default.timeout_ms, |t| t.0 as u16),
-                            ignore: p.ignore.clone().unwrap_or_else(|| default.ignore.clone()),
-                            activate_on_press: p.activate_on_press.unwrap_or(default.activate_on_press),
-                            release_on_next_press: p.release_on_next_press.unwrap_or(default.release_on_next_press),
-                            release_on_layer: p.release_on_layer.unwrap_or(default.release_on_layer),
-                        },
-                    ));
-                }
-                // Sorted so that a profile keeps the same index no matter how the
-                // TOML map was iterated.
-                profiles.sort_by(|a, b| a.0.cmp(&b.0));
-
-                if profiles.len() > self.rmk.sticky_profile_max_num {
+                if profile.ignore.len() > sticky_ignore_max {
                     return Err(format!(
-                        "behavior.sticky_key.profiles defines {} profiles, but `[rmk] sticky_profile_max_num` is {}. Raise it in keyboard.toml",
-                        profiles.len(),
-                        self.rmk.sticky_profile_max_num
+                        "{path}.ignore has {} entries, but [rmk] sticky_ignore_max is {}",
+                        profile.ignore.len(),
+                        sticky_ignore_max
                     ));
                 }
-
-                Some(StickyKey { default, profiles })
+                Ok(profile)
+            };
+            let default = resolve(&crate::StickyProfileConfig::default(), "behavior.sticky_key")?;
+            let mut profiles = config
+                .profiles
+                .iter()
+                .flatten()
+                .map(|(name, profile)| {
+                    resolve(profile, &format!("behavior.sticky_key.profiles.{name}"))
+                        .map(|profile| (name.clone(), profile))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            // Profile indices must not depend on hash-map iteration order.
+            profiles.sort_by(|a, b| a.0.cmp(&b.0));
+            if profiles.len() > sticky_profile_max_num {
+                return Err(format!(
+                    "behavior.sticky_key.profiles defines {} profiles, but `[rmk] sticky_profile_max_num` is {}. Raise it in keyboard.toml",
+                    profiles.len(),
+                    sticky_profile_max_num
+                ));
             }
-            None => None,
+            Some(StickyKey { default, profiles })
+        } else {
+            None
         };
 
         let combos = toml_behavior.combo.map(|c| Combos {

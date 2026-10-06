@@ -5,7 +5,7 @@ The `[behavior]` section contains configuration for how different keyboard actio
 ```toml
 [behavior]
 tri_layer = { upper = 1, lower = 2, adjust = 3 }
-sticky_key = { timeout = "1s" }
+sticky_key = { wait_timeout = "1s" }
 ```
 
 ::: note Rust API only
@@ -29,75 +29,129 @@ In this example, when both layers 1 (`upper`) and 2 (`lower`) are active, layer 
 
 ## Sticky Key
 
-A sticky key postpones the release of the action it wraps until the next input,
-so tapping `SK(LShift)` shifts the key that follows. `OSM(mod)` and `OSL(n)` are
-sticky keys too: they are `SK(mod)` and `SK(MO(n))` with the modifier and layer
-actions filled in, running on the same state machine.
+Sticky actions start on press and can remain active after a short tap. By default, they wait up to
+one second for a nonignored input. If none arrives, they expire; otherwise, the waiting timer stops
+and the action stays active until that input releases. Other keys pressed during the hold also
+receive the effect.
 
-A sticky key ends for one of five reasons:
+| Binding                | Action held    |
+| ---------------------- | -------------- |
+| `OSM(LCtrl \| LShift)` | Ctrl and Shift |
+| `OSL(1)`               | Layer 1        |
+| `SK(A)`                | A              |
 
-| Trigger | Setting | Default |
-| --- | --- | --- |
-| The next input | `ignore` lists the keycodes that don't count | always on |
-| Timeout | `timeout` | `1s` |
-| Pressing the same sticky key again | fixed behavior | on |
-| A layer transition | `release_on_layer` | off |
-| Holding it past the morse hold threshold, then letting go | fixed behavior | on |
+`OSM(modifiers)` is shorthand for `SK(MOD(modifiers))`; `OSL(layer)` is `SK(MO(layer))`. All three
+accept an optional profile name, such as `OSM(LAlt, alt_tab)`.
 
-"The next input" means a key that actually sends something to the host: a
-keycode, a media or system usage, a mouse button. Modifiers, `MO`, and other
-sticky keys send nothing, so they never end a sticky key, which is what lets
-`OSM` and `OSL` stack.
+### Keep Alt held while cycling windows
+
+Bind `OSM(LAlt, alt_tab)` and add:
 
 ```toml
-[behavior.sticky_key]
-timeout = "1s"                # no next input for this long, and it ends
-ignore = []                   # these keycodes don't count as the next input
-activate_on_press = false     # send the effect to the host on press
-release_on_next_press = false # end it on the next key's press, not its release
-release_on_layer = "none"     # none / enter / exit / both
+[behavior.sticky_key.profiles.alt_tab]
+release_on = ["before_next_press"]
+ignore = ["Tab", "LShift", "RShift"]
+wait_timeout = "0ms"
 ```
 
-`activate_on_press` off means the host sees nothing until the next key, so a
-sticky key that is never used stays invisible. Turn it on for chords with a
-mouse, where the host has to see the modifier before the click.
+Tap Alt, then use Tab or Shift+Tab to cycle windows. Alt stays held until another nonignored key
+press, which releases Alt before executing that key. Tap the sticky key again to cancel.
 
-`release_on_next_press` off means the effect disappears with the next key's own
-release report. Turn it on to have the host see it end the moment that key goes
-down. Sticky layers deactivate as soon as the next input is resolved, regardless
-of this report setting, so later keys use the original layer. `OSL(n)` and
-`SK(MO(n))` follow the same layer behavior.
+### Keep a navigation layer active until a key releases
 
-Momentary layer keys share the layer: releasing one `MO`, `OSL` or `SK(MO(...))`
-leaves it active while another source still holds it. Explicit `TG` and `TO`
-layer switches still take effect immediately.
-
-### Profiles
-
-`[behavior.sticky_key.profiles]` defines named profiles that a key can pick with
-`SK(action, name)`. A field left out of a profile falls back to the default
-profile above.
+Bind `OSL(1, navigation)` with:
 
 ```toml
-[behavior.sticky_key.profiles.alttab]
-timeout = "5s"
-activate_on_press = true
-ignore = ["Tab"]
+[behavior.sticky_key.profiles.navigation]
+release_on = ["after_next_release", "layer_exit"]
 ```
 
-With `SK(LAlt, alttab)` on one key and `Tab` on another, tapping the first key
-and then hitting Tab repeatedly cycles windows: Tab is on the ignore list, so it
-neither ends the sticky Alt nor lets the timeout run out. Any other key ends it.
+Tap the sticky layer key, then press an arrow key before the waiting timeout expires. The layer
+remains active until that key releases or another action deactivates it.
 
-Add the arrow keys to `ignore` if you also pick windows with them:
+### Configure defaults and profiles
 
-```toml
-ignore = ["Tab", "Left", "Right"]
+Set defaults in `[behavior.sticky_key]`. Named profiles under `[behavior.sticky_key.profiles]`
+inherit omitted fields; supplied arrays replace inherited arrays.
+
+| Setting        | Default                  | Meaning                                                                                               |
+| -------------- | ------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `release_on`   | `["after_next_release"]` | Input and layer release conditions below.                                                             |
+| `ignore`       | `[]`                     | Inputs that do not consume a sticky. Ignored presses restart its waiting timer.                       |
+| `wait_timeout` | `"1s"`                   | Wait for a consuming input after source release. `"0ms"` disables expiry.                             |
+| `hold_timeout` | `"250ms"`                | Holding the source this long ends the sticky on source release. `"0ms"` disables this duration check. |
+
+Durations accept `0ms` to `65535ms`, using integer milliseconds or seconds. Sticky timing is
+independent of Morse.
+
+| `release_on` entry   | Release when…                                                  |
+| -------------------- | -------------------------------------------------------------- |
+| `before_next_press`  | Before the next nonignored action executes.                    |
+| `after_next_press`   | Immediately after that press executes.                         |
+| `after_next_release` | The consuming input releases; unrelated releases do not count. |
+| `layer_enter`        | A layer becomes active.                                        |
+| `layer_exit`         | A layer becomes inactive.                                      |
+
+Any combination is allowed; the first matching condition wins, regardless of list order. Layer
+conditions include default-layer and host changes. `release_on = []` disables these conditions;
+waiting timeout, cancellation and source-hold behavior still apply.
+
+A sticky layer selects the next action before `before_next_press` deactivates it.
+
+### Understand which inputs end a sticky
+
+Keyboard keys, modifiers, media/system keys and RMK mouse buttons consume stickies unless ignored.
+Mouse motion, scrolling and layer-only actions do not. Buttons on a separate mouse cannot consume a
+sticky unless their events pass through RMK.
+
+For `MOD`, `WM` and `LM`, every emitted key/modifier must be ignored to exclude the action. For
+example, ignoring `WM(Tab, LShift)` requires both `Tab` and `LShift`; modifiers held by other keys
+do not count. `ignore` does not suppress layer-change conditions.
+
+While the source key is held, its action stays active. Using a nonignored input during that hold
+makes source release end the sticky, even with `hold_timeout = "0ms"`. After source release, tap the
+sticky again to cancel. Other holders of the same keyboard key, modifier or layer stay active.
+
+Combo, tap-hold and macro outputs follow these rules. Buffered combo/tap-hold input can delay
+expiry; text macros keep their own character modifiers.
+
+### Configure a profile in Rust
+
+Add profiles to `BehaviorConfig::sticky_key.profiles` and select them by vector index:
+
+```rust
+use rmk::config::BehaviorConfig;
+use rmk::types::keycode::{HidKeyCode, KeyCode};
+use rmk::types::modifier::ModifierCombination;
+use rmk::types::sticky::{StickyProfile, StickyReleaseConditions};
+
+let mut behavior = BehaviorConfig::default();
+behavior.sticky_key.profiles.push(StickyProfile {
+    release_on: StickyReleaseConditions::new().with_before_next_press(true),
+    ignore: rmk::heapless::Vec::from_slice(&[
+        KeyCode::Hid(HidKeyCode::Tab),
+        KeyCode::Hid(HidKeyCode::LShift),
+        KeyCode::Hid(HidKeyCode::RShift),
+    ]).expect("ignore list fits"),
+    wait_timeout_ms: 0,
+    ..StickyProfile::default()
+}).expect("profile table has room");
+let alt_tab = rmk::osm!(ModifierCombination::LALT, 0);
 ```
 
-The number of named profiles is capped by `[rmk].sticky_profile_max_num`
-(default 4), the ignore list by `[rmk].sticky_ignore_max` (default 4), and the
-number of sticky keys active at once by `[rmk].sticky_max_active` (default 4).
+Use `alt_tab` in your keymap and pass `behavior` to its setup. `osl!(layer, index)` and
+`sk!(action, index)` also select a profile; `osm!(modifiers)`, `osl!(layer)` and `sk!(action)` use
+the default.
+
+### Capacity and host configuration
+
+See [Sticky Key capacity](./rmk_config#sticky-key-capacity) for automatic sizing and explicit
+limits.
+
+Vial's **One Shot Timeout** and Rynk's one-shot timeout read and write the default `wait_timeout` in
+milliseconds, affecting subsequent default-profile activations. With storage enabled, saved host
+values override firmware defaults after restart. Named profiles keep their configured values; Vial
+keycodes represent only default OSM/OSL bindings.
 
 ## Combo
 

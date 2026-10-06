@@ -310,14 +310,13 @@ pub(crate) struct RmkConstantsConfig {
     #[serde(deserialize_with = "check_morse_profile_max_num")]
     pub morse_profile_max_num: usize,
     /// Capacity of the sticky profile table (named profiles in `[behavior.sticky_key.profiles]`)
-    #[serde_inline_default(4)]
-    #[serde(deserialize_with = "check_sticky_profile_max_num")]
-    pub sticky_profile_max_num: usize,
+    #[serde(default)]
+    pub sticky_profile_max_num: Option<usize>,
     /// Maximum number of keycodes in one sticky profile's `ignore` list
-    #[serde_inline_default(4)]
-    pub sticky_ignore_max: usize,
+    #[serde(default)]
+    pub sticky_ignore_max: Option<usize>,
     /// Maximum number of sticky keys that can be active at the same time
-    #[serde_inline_default(4)]
+    #[serde_inline_default(8)]
     pub sticky_max_active: usize,
     /// Maximum number of patterns a morse key can handle
     #[serde_inline_default(8)]
@@ -432,19 +431,6 @@ where
     Ok(value)
 }
 
-/// Same reasoning as `check_morse_profile_max_num`: `KeyAction::Sticky` holds a
-/// `u8` profile index and an index with no table entry means "use the default".
-fn check_sticky_profile_max_num<'de, D>(deserializer: D) -> Result<usize, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    let value = Deserialize::deserialize(deserializer)?;
-    if value > 255 {
-        panic!("❌ Parse `keyboard.toml` error: sticky_profile_max_num must be between 0 and 255, got {value}");
-    }
-    Ok(value)
-}
-
 fn check_max_patterns_per_key<'de, D>(deserializer: D) -> Result<usize, D::Error>
 where
     D: de::Deserializer<'de>,
@@ -483,9 +469,9 @@ impl Default for RmkConstantsConfig {
             fork_max_num: 8,
             morse_max_num: 8,
             morse_profile_max_num: 16,
-            sticky_profile_max_num: 4,
-            sticky_ignore_max: 4,
-            sticky_max_active: 4,
+            sticky_profile_max_num: None,
+            sticky_ignore_max: None,
+            sticky_max_active: 8,
             max_patterns_per_key: 8,
             macro_max_num: 32,
             macro_space_size: 256,
@@ -954,32 +940,24 @@ pub(crate) struct TriLayerConfig {
     pub adjust: u8,
 }
 
-/// Configurations for sticky keys, the default profile plus the named ones.
-///
-/// A sticky key postpones the release of the action it wraps until the next
-/// input. This table configures what counts as "the next input" and when the
-/// host gets to see the effect; `OSM`/`OSL` are sticky keys too.
+/// Sticky defaults and named profiles. Named fields inherit independently.
 #[derive(Clone, Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StickyKeyConfig {
-    pub timeout: Option<DurationMillis>,
+    pub release_on: Option<Vec<crate::resolved::behavior::StickyReleaseCondition>>,
     pub ignore: Option<Vec<String>>,
-    pub activate_on_press: Option<bool>,
-    pub release_on_next_press: Option<bool>,
-    pub release_on_layer: Option<crate::resolved::behavior::LayerRelease>,
-    /// Named profiles, referenced from the keymap as `SK(action, name)`
+    pub wait_timeout: Option<DurationMillis>,
+    pub hold_timeout: Option<DurationMillis>,
     pub profiles: Option<HashMap<String, StickyProfileConfig>>,
 }
 
-/// A named sticky profile; every field falls back to the default profile.
 #[derive(Clone, Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StickyProfileConfig {
-    pub timeout: Option<DurationMillis>,
+    pub release_on: Option<Vec<crate::resolved::behavior::StickyReleaseCondition>>,
     pub ignore: Option<Vec<String>>,
-    pub activate_on_press: Option<bool>,
-    pub release_on_next_press: Option<bool>,
-    pub release_on_layer: Option<crate::resolved::behavior::LayerRelease>,
+    pub wait_timeout: Option<DurationMillis>,
+    pub hold_timeout: Option<DurationMillis>,
 }
 
 /// Configurations for combos
@@ -1239,7 +1217,9 @@ fn parse_duration_millis<'de, D: de::Deserializer<'de>>(deserializer: D) -> Resu
     })?;
 
     match unit {
-        "s" => Ok(num * 1000),
+        "s" => num
+            .checked_mul(1000)
+            .ok_or_else(|| de::Error::custom("duration exceeds u64 milliseconds")),
         "ms" => Ok(num),
         other => Err(de::Error::custom(format!(
             "Invalid duration unit \"{other}\": unit part must be either \"s\" or \"ms\""

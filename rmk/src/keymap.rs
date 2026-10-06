@@ -1,10 +1,10 @@
-use core::cell::RefCell;
+use core::cell::{Ref, RefCell};
 
 use embassy_time::Duration;
 use rmk_types::action::{EncoderAction, KeyAction};
 use rmk_types::fork::Fork;
 use rmk_types::morse::{Morse, MorseProfile};
-use rmk_types::sticky::{STICKY_PROFILE_LAYER, StickyFlags, StickyProfile};
+use rmk_types::sticky::StickyProfile;
 #[cfg(all(feature = "storage", feature = "host"))]
 use {
     crate::{boot::reboot_keyboard, storage::Storage},
@@ -110,6 +110,7 @@ struct KeyMapInner<'a> {
     encoders: Option<&'a mut [EncoderAction]>,
     /// Explicit layer state (toggles and direct activation).
     layer_state: &'a mut [bool],
+    layer_changes: (bool, bool),
     /// Momentary layer holders, identified by the same sources as keyboard keys.
     held_layers: heapless::Vec<(KeyboardEventPos, u8), HOLD_BUFFER_SIZE>,
     /// Layer cache for keys: row * col
@@ -169,14 +170,7 @@ impl KeyMapInner<'_> {
             );
             return;
         }
-        let before = self.get_activated_layer();
         self.behavior.default_layer = layer_num;
-        let after = self.get_activated_layer();
-        // With no layer key held, the activated layer follows the default; a
-        // held layer masks the change and observers see nothing.
-        if before != after {
-            publish_event(LayerChangeEvent::new(after));
-        }
     }
 
     fn get_action_at(&self, pos: KeyboardEventPos, layer_num: usize) -> KeyAction {
@@ -206,7 +200,10 @@ impl KeyMapInner<'_> {
                 }
                 KeyAction::No
             }
-            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => KeyAction::No,
+            KeyboardEventPos::Combo(_)
+            | KeyboardEventPos::Macro
+            | KeyboardEventPos::Virtual(_)
+            | KeyboardEventPos::Sticky(_) => KeyAction::No,
         }
     }
 
@@ -234,7 +231,10 @@ impl KeyMapInner<'_> {
                     }
                 }
             }
-            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {}
+            KeyboardEventPos::Combo(_)
+            | KeyboardEventPos::Macro
+            | KeyboardEventPos::Virtual(_)
+            | KeyboardEventPos::Sticky(_) => {}
         }
     }
 
@@ -261,18 +261,6 @@ impl KeyMapInner<'_> {
         // Keep release on the same transparent default-layer action as press.
         self.save_layer_cache(event.pos, self.behavior.default_layer);
         KeyAction::No
-    }
-
-    /// Active layers as a bitmask, for spotting a layer transition by comparing
-    /// it across an action's dispatch. Layers past 32 are left out rather than
-    /// folded onto bit 31, which would read as a transition of layer 31.
-    pub(crate) fn layer_bits(&self) -> u32 {
-        self.layer_state
-            .iter()
-            .take(32)
-            .enumerate()
-            .filter(|(i, _)| self.is_layer_active(*i))
-            .fold(0u32, |acc, (i, _)| acc | (1 << i))
     }
 
     fn get_activated_layer(&self) -> u8 {
@@ -306,9 +294,10 @@ impl KeyMapInner<'_> {
                 }
                 self.behavior.default_layer
             }
-            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {
-                self.behavior.default_layer
-            }
+            KeyboardEventPos::Combo(_)
+            | KeyboardEventPos::Macro
+            | KeyboardEventPos::Virtual(_)
+            | KeyboardEventPos::Sticky(_) => self.behavior.default_layer,
         }
     }
 
@@ -328,15 +317,16 @@ impl KeyMapInner<'_> {
                     }
                 }
             }
-            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {}
+            KeyboardEventPos::Combo(_)
+            | KeyboardEventPos::Macro
+            | KeyboardEventPos::Virtual(_)
+            | KeyboardEventPos::Sticky(_) => {}
         }
     }
 
     fn update_fn_layer_state(&mut self) {
         if self.num_layer > 3 {
             self.layer_state[3] = self.is_layer_active(1) && self.is_layer_active(2);
-            let layer = self.get_activated_layer();
-            publish_event(LayerChangeEvent::new(layer));
         }
     }
 
@@ -345,24 +335,10 @@ impl KeyMapInner<'_> {
             self.layer_state[tri_layer[2] as usize] =
                 self.is_layer_active(tri_layer[0] as usize) && self.is_layer_active(tri_layer[1] as usize);
         }
-        let layer = self.get_activated_layer();
-        publish_event(LayerChangeEvent::new(layer));
     }
 
     fn is_layer_active(&self, layer: usize) -> bool {
         self.layer_state[layer] || self.held_layers.iter().any(|(_, held)| *held as usize == layer)
-    }
-
-    fn hold_layer(&mut self, layer: u8, event: KeyboardEvent) {
-        if layer as usize >= self.num_layer {
-            warn!("Not a valid layer {}", layer);
-            return;
-        }
-        self.held_layers.retain(|holder| *holder != (event.pos, layer));
-        if event.pressed && self.held_layers.push((event.pos, layer)).is_err() {
-            warn!("Layer holder table full, dropped layer {}", layer);
-        }
-        self.update_tri_layer();
     }
 
     fn activate_layer(&mut self, layer_num: u8) {
@@ -441,6 +417,7 @@ impl<'a> KeyMap<'a> {
                 layers,
                 encoders,
                 layer_state,
+                layer_changes: (false, false),
                 held_layers: heapless::Vec::new(),
                 layer_cache,
                 encoder_layer_cache,
@@ -527,19 +504,29 @@ impl<'a> KeyMap<'a> {
     }
 
     pub(crate) fn hold_layer(&self, layer: u8, event: KeyboardEvent) {
-        self.inner.borrow_mut().hold_layer(layer, event);
+        self.change_layers(|inner| {
+            if layer as usize >= inner.num_layer {
+                warn!("Not a valid layer {}", layer);
+                return;
+            }
+            inner.held_layers.retain(|holder| *holder != (event.pos, layer));
+            if event.pressed && inner.held_layers.push((event.pos, layer)).is_err() {
+                warn!("Layer holder table full, dropped layer {}", layer);
+            }
+            inner.update_tri_layer();
+        });
     }
 
     pub(crate) fn activate_layer(&self, layer_num: u8) {
-        self.inner.borrow_mut().activate_layer(layer_num);
+        self.change_layers(|inner| inner.activate_layer(layer_num));
     }
 
     pub(crate) fn deactivate_layer(&self, layer_num: u8) {
-        self.inner.borrow_mut().deactivate_layer(layer_num);
+        self.change_layers(|inner| inner.deactivate_layer(layer_num));
     }
 
     pub(crate) fn toggle_layer(&self, layer_num: u8) {
-        self.inner.borrow_mut().toggle_layer(layer_num);
+        self.change_layers(|inner| inner.toggle_layer(layer_num));
     }
 
     /// Activate `layer_num` only if it is currently inactive.
@@ -549,28 +536,57 @@ impl<'a> KeyMap<'a> {
     /// "check then activate" sequence into a single borrow so callers can't
     /// accidentally race against other layer mutations.
     pub(crate) fn activate_layer_if_inactive(&self, layer_num: u8) -> bool {
-        let mut inner = self.inner.borrow_mut();
-        let idx = layer_num as usize;
-        if idx >= inner.num_layer || inner.is_layer_active(idx) {
-            return false;
-        }
-        inner.layer_state[idx] = true;
-        inner.update_tri_layer();
-        true
+        self.change_layers(|inner| {
+            let idx = layer_num as usize;
+            if idx >= inner.num_layer || inner.is_layer_active(idx) {
+                return false;
+            }
+            inner.layer_state[idx] = true;
+            inner.update_tri_layer();
+            true
+        })
     }
 
-    /// Symmetric counterpart to [`Self::activate_layer_if_inactive`]: only
-    /// deactivates when the layer is currently active. Skips the
-    /// `update_tri_layer` call (which would publish a `LayerChangeEvent`) when
-    /// the layer is already inactive, avoiding a redundant event publish.
     pub(crate) fn deactivate_layer_if_active(&self, layer_num: u8) {
+        self.change_layers(|inner| {
+            let idx = layer_num as usize;
+            if idx >= inner.num_layer || !inner.is_layer_active(idx) {
+                return;
+            }
+            inner.layer_state[idx] = false;
+            inner.update_tri_layer();
+        });
+    }
+
+    /// Record membership changes, including default layers hidden below a held layer.
+    /// Accumulation preserves an enter followed by an exit before Keyboard wakes.
+    fn change_layers<R>(&self, change: impl FnOnce(&mut KeyMapInner<'_>) -> R) -> R {
         let mut inner = self.inner.borrow_mut();
-        let idx = layer_num as usize;
-        if idx >= inner.num_layer || !inner.is_layer_active(idx) {
-            return;
+        let mut before = [0u32; 8];
+        for layer in 0..inner.num_layer.min(256) {
+            if inner.is_layer_active(layer) || layer == inner.behavior.default_layer as usize {
+                before[layer / 32] |= 1 << (layer % 32);
+            }
         }
-        inner.layer_state[idx] = false;
-        inner.update_tri_layer();
+        let result = change(&mut inner);
+        let mut entered = false;
+        let mut exited = false;
+        for layer in 0..inner.num_layer.min(256) {
+            let was_active = before[layer / 32] & (1 << (layer % 32)) != 0;
+            let active = inner.is_layer_active(layer) || layer == inner.behavior.default_layer as usize;
+            entered |= active && !was_active;
+            exited |= was_active && !active;
+        }
+        if entered || exited {
+            inner.layer_changes.0 |= entered;
+            inner.layer_changes.1 |= exited;
+            publish_event(LayerChangeEvent::new(inner.get_activated_layer()));
+        }
+        result
+    }
+
+    pub(crate) fn take_layer_changes(&self) -> (bool, bool) {
+        core::mem::take(&mut self.inner.borrow_mut().layer_changes)
     }
 
     pub(crate) fn auto_mouse_layer_configs(
@@ -597,16 +613,12 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow().get_activated_layer()
     }
 
-    pub(crate) fn layer_bits(&self) -> u32 {
-        self.inner.borrow().layer_bits()
-    }
-
     pub(crate) fn get_default_layer(&self) -> u8 {
         self.inner.borrow().get_default_layer()
     }
 
     pub(crate) fn set_default_layer(&self, layer_num: u8) {
-        self.inner.borrow_mut().set_default_layer(layer_num);
+        self.change_layers(|inner| inner.set_default_layer(layer_num));
     }
 
     pub(crate) fn layout_option(&self) -> u32 {
@@ -625,7 +637,7 @@ impl<'a> KeyMap<'a> {
     }
 
     pub(crate) fn update_fn_layer_state(&self) {
-        self.inner.borrow_mut().update_fn_layer_state();
+        self.change_layers(|inner| inner.update_fn_layer_state());
     }
 
     pub(crate) fn get_keymap_config(&self) -> (usize, usize, usize) {
@@ -650,10 +662,9 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow().behavior.combo.prior_idle_time
     }
 
-    /// The default sticky profile's timeout. Vial and Rynk still call this the
-    /// one-shot timeout, which is what `OSM`/`OSL` map onto.
+    /// Vial/Rynk alias for the default Sticky waiting timeout.
     pub(crate) fn one_shot_timeout(&self) -> Duration {
-        Duration::from_millis(self.inner.borrow().behavior.sticky_key.default_profile.timeout_ms as u64)
+        Duration::from_millis(self.inner.borrow().behavior.sticky_key.default_profile.wait_timeout_ms as u64)
     }
 
     pub(crate) fn tap_interval(&self) -> u16 {
@@ -672,30 +683,11 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow().behavior.morse.prior_idle_time
     }
 
-    /// Resolve a sticky profile by its table index: the entry if present,
-    /// otherwise the configured default profile. Clones the `ignore` list, so
-    /// prefer [`Self::sticky_flags`] / [`Self::sticky_timeout`] when one field
-    /// is enough.
-    pub(crate) fn sticky_profile(&self, idx: u8) -> StickyProfile {
-        let inner = self.inner.borrow();
-        Self::resolve_sticky(&inner, idx).clone()
-    }
-
-    pub(crate) fn sticky_flags(&self, idx: u8) -> StickyFlags {
-        let inner = self.inner.borrow();
-        Self::resolve_sticky(&inner, idx).flags
-    }
-
-    pub(crate) fn sticky_timeout(&self, idx: u8) -> u16 {
-        Self::resolve_sticky(&self.inner.borrow(), idx).timeout_ms
-    }
-
-    fn resolve_sticky<'k>(inner: &'k KeyMapInner<'_>, idx: u8) -> &'k StickyProfile {
-        let config = &inner.behavior.sticky_key;
-        if idx == STICKY_PROFILE_LAYER {
-            return &config.default_profile;
-        }
-        config.profiles.get(idx as usize).unwrap_or(&config.default_profile)
+    pub(crate) fn sticky_profile(&self, idx: u8) -> Ref<'_, StickyProfile> {
+        Ref::map(self.inner.borrow(), |inner| {
+            let config = &inner.behavior.sticky_key;
+            config.profiles.get(idx as usize).unwrap_or(&config.default_profile)
+        })
     }
 
     pub(crate) fn morse_default_profile(&self) -> MorseProfile {
@@ -733,7 +725,12 @@ impl<'a> KeyMap<'a> {
     }
 
     pub(crate) fn set_one_shot_timeout(&self, timeout: Duration) {
-        self.inner.borrow_mut().behavior.sticky_key.default_profile.timeout_ms = timeout.as_millis() as u16;
+        self.inner
+            .borrow_mut()
+            .behavior
+            .sticky_key
+            .default_profile
+            .wait_timeout_ms = timeout.as_millis() as u16;
     }
 
     pub(crate) fn set_tap_interval(&self, interval: u16) {
@@ -963,6 +960,30 @@ mod test {
         assert!(!(self_activated && !keymap.is_layer_active(2)));
         keymap.deactivate_layer_if_active(2);
         assert!(self_activated && !keymap.is_layer_active(2));
+    }
+
+    #[test]
+    fn layer_changes_keep_hidden_default_and_transient_transitions() {
+        use rmk_types::action::KeyAction;
+
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::keymap::{KeyMap, KeymapData};
+        let mut data = KeymapData::<1, 1, 40>::new([[[KeyAction::No]]; 40]);
+        let mut behavior = BehaviorConfig::default();
+        let positional = PositionalConfig::<1, 1>::default();
+        let keymap = KeyMap::build(&mut data, &mut behavior, &positional);
+        keymap.activate_layer(39);
+        assert_eq!(keymap.take_layer_changes(), (true, false));
+        keymap.set_default_layer(1);
+        assert_eq!(keymap.active_layer(), 39);
+        assert_eq!(keymap.take_layer_changes(), (true, true));
+        keymap.activate_layer(33);
+        keymap.deactivate_layer(33);
+        assert_eq!(keymap.take_layer_changes(), (true, true));
+        assert_eq!(keymap.take_layer_changes(), (false, false));
+        keymap.activate_layer(39);
+        keymap.set_default_layer(1);
+        assert_eq!(keymap.take_layer_changes(), (false, false));
     }
 
     #[test]

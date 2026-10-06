@@ -4,7 +4,7 @@
 //!
 //! - [`vial`] — Legacy Vial/Via protocol for compatibility with the Vial GUI.
 //!   Always available.
-//! - [`rynk`] — RMK native protocol. Carries `KeyAction`, `Combo`, `Morse`,
+//! - `rynk` — RMK native protocol. Carries `KeyAction`, `Combo`, `Morse`,
 //!   `Fork`, `EncoderAction`, `BatteryStatus`, `BleStatus` on the wire over
 //!   a 3-byte fixed header + postcard payload, COBS-framed. Enabled by the `rynk` feature.
 //!

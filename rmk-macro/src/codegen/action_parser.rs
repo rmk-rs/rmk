@@ -421,7 +421,7 @@ pub(crate) fn parse_key(key: String, names: &ProfileNames) -> TokenStream2 {
         }
         let tap = parse_action(&keys[0]);
         let modifiers = parse_modifiers(&keys[1]);
-        let profile = morse_profile(keys.get(2), &names.morse);
+        let profile = profile_index(keys.get(2), &names.morse, "behavior.morse.profiles");
         quote! {
             ::rmk::types::action::KeyAction::TapHold(#tap, ::rmk::types::action::Action::Modifier(#modifiers), #profile)
         }
@@ -432,7 +432,7 @@ pub(crate) fn parse_key(key: String, names: &ProfileNames) -> TokenStream2 {
         }
         let tap = parse_action(&keys[0]);
         let hold = parse_action(&keys[1]);
-        let profile = morse_profile(keys.get(2), &names.morse);
+        let profile = profile_index(keys.get(2), &names.morse, "behavior.morse.profiles");
         quote! { ::rmk::types::action::KeyAction::TapHold(#tap, #hold, #profile) }
     } else if lower.starts_with("lt(") {
         let keys = split_top_level(strip_call(&key));
@@ -441,37 +441,29 @@ pub(crate) fn parse_key(key: String, names: &ProfileNames) -> TokenStream2 {
         }
         let layer = parse_numeric_arg(&keys[0], "layer");
         let tap = parse_action(&keys[1]);
-        let profile = morse_profile(keys.get(2), &names.morse);
+        let profile = profile_index(keys.get(2), &names.morse, "behavior.morse.profiles");
         quote! {
             ::rmk::types::action::KeyAction::TapHold(#tap, ::rmk::types::action::Action::LayerOn(#layer), #profile)
         }
     } else if lower.starts_with("tt(") {
         let layer = parse_layer(&key);
         quote! { ::rmk::tt!(#layer) }
-    } else if lower.starts_with("sk(") {
+    } else if lower.starts_with("sk(") || lower.starts_with("osm(") || lower.starts_with("osl(") {
         let keys = split_top_level(strip_call(&key));
         if keys.is_empty() || keys.len() > 2 {
-            panic!("\n\u{274c} keyboard.toml: SK(action) or SK(action, profile) invalid");
+            panic!("keyboard.toml: SK, OSM and OSL take one argument and an optional profile");
         }
-        let action = parse_action(&keys[0]);
-        let profile = sticky_profile(keys.get(1), &names.sticky);
+        let action = if lower.starts_with("osl(") {
+            let layer = parse_numeric_arg(&keys[0], "layer");
+            quote! { ::rmk::types::action::Action::LayerOn(#layer) }
+        } else if lower.starts_with("osm(") {
+            let modifiers = parse_modifiers(&keys[0]);
+            quote! { ::rmk::types::action::Action::Modifier(#modifiers) }
+        } else {
+            parse_action(&keys[0])
+        };
+        let profile = profile_index(keys.get(1), &names.sticky, "behavior.sticky_key.profiles");
         quote! { ::rmk::types::action::KeyAction::Sticky(#action, #profile) }
-    } else if lower.starts_with("osm(") {
-        let modifiers = parse_modifiers(strip_call(&key));
-        quote! {
-            ::rmk::types::action::KeyAction::Sticky(
-                ::rmk::types::action::Action::Modifier(#modifiers),
-                ::rmk::types::sticky::STICKY_PROFILE_DEFAULT,
-            )
-        }
-    } else if lower.starts_with("osl(") {
-        let layer = parse_layer(&key);
-        quote! {
-            ::rmk::types::action::KeyAction::Sticky(
-                ::rmk::types::action::Action::LayerOn(#layer),
-                ::rmk::types::sticky::STICKY_PROFILE_LAYER,
-            )
-        }
     } else if lower.starts_with("td(") || lower.starts_with("morse(") {
         let index = parse_numeric_arg(strip_call(&key), "morse");
         quote! { ::rmk::types::action::KeyAction::Morse(#index) }
@@ -489,54 +481,18 @@ pub(crate) struct ProfileNames {
     pub(crate) sticky: Vec<String>,
 }
 
-/// Expand `SK`'s optional trailing profile name into its sticky profile table
-/// index. Omitted means `STICKY_PROFILE_DEFAULT`, an index the table never
-/// covers, which resolves to the default profile at runtime.
-fn sticky_profile(profile_name: Option<&String>, sticky: &[String]) -> TokenStream2 {
-    let Some(name) = profile_name else {
-        return quote! { ::rmk::types::sticky::STICKY_PROFILE_DEFAULT };
-    };
-    let idx = match sticky.iter().position(|n| n == name) {
-        Some(pos) => pos as u8,
-        None => panic_unknown_profile(
-            name,
-            sticky.iter().map(String::as_str),
-            "behavior.sticky_key.profiles",
-        ),
-    };
-    quote! { #idx }
-}
-
-/// Named profiles sorted by name, giving each a stable index into the runtime
-/// morse profile table: a name at sorted position `i` is table index `i`.
-pub(crate) fn sorted_profile_names(
-    profiles: &Option<HashMap<String, MorseProfile>>,
-) -> Vec<String> {
-    match profiles {
-        Some(p) => {
-            let mut names: Vec<String> = p.keys().cloned().collect();
-            names.sort();
-            names
-        }
-        None => Vec::new(),
-    }
-}
-
-/// Expand the optional trailing profile argument of a tap-hold action into its
-/// morse profile table index. When omitted, emit `u8::MAX`: an index with no
-/// table entry falls back to the default profile at runtime (the table
-/// capacity is validated to be ≤ 255, so `u8::MAX` is always vacant).
-fn morse_profile(profile_name: Option<&String>, morse: &[String]) -> TokenStream2 {
+/// Resolve a named profile. Both tables reserve `u8::MAX` for the configured default.
+fn profile_index(
+    profile_name: Option<&String>,
+    profiles: &[String],
+    section: &str,
+) -> TokenStream2 {
     let Some(name) = profile_name else {
         return quote! { ::core::primitive::u8::MAX };
     };
-    let idx = match morse.iter().position(|n| n == name) {
+    let idx = match profiles.iter().position(|n| n == name) {
         Some(pos) => pos as u8,
-        None => panic_unknown_profile(
-            name,
-            morse.iter().map(String::as_str),
-            "behavior.morse.profiles",
-        ),
+        None => panic_unknown_profile(name, profiles.iter().map(String::as_str), section),
     };
     quote! { #idx }
 }

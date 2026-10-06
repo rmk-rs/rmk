@@ -140,8 +140,8 @@ MouseWheelLeft   MouseDown  MouseWheelRight  MouseWheelDown
 # Tri Layer configuration
 tri_layer = { upper = 1, lower = 2, adjust = 3 }
 
-# Sticky key configuration, which OSM/OSL run on too
-sticky_key = { timeout = "1s", ignore = [], activate_on_press = false, release_on_next_press = false, release_on_layer = "none" }
+# Sticky Key defaults for SK, OSM and OSL
+sticky_key = { release_on = ["after_next_release"], ignore = [], wait_timeout = "1s", hold_timeout = "250ms" }
 
 [behavior.morse]
 # default profile for morse, tap dance and tap-hold keys:

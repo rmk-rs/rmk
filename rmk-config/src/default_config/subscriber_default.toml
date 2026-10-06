@@ -154,3 +154,8 @@ events = [
     # dfu/mod.rs: DfuLock subscribes to DfuCmdEvent for UnlockRequest
     { name = "dfu_cmd" },
 ]
+
+# Keyboard observes cross-task layer changes for sticky release conditions.
+[[subscriber]]
+features = []
+events = [{ name = "layer_change" }]
