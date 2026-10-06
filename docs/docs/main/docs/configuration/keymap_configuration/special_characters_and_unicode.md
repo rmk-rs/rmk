@@ -28,4 +28,4 @@ If you are using Windows, follow [this description](https://altcodeunicode.com/h
 
 MacOS has a key layout called `Unicode Hex Input`, which is similar to en-US, but allows entering unicode alt sequences by holding alt pressed and entering the unicode number.
 
-In rmk you can define the input sequence for printing a unicode symbol using [Macro Sequences](./keyboard_macros.md).
+In rmk you can define the input sequence for printing a unicode symbol using [keyboard macros](./keyboard_macros.md).

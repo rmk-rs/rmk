@@ -94,6 +94,46 @@ fn payload<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> T {
     serde_json::from_str(json).unwrap_or_else(|e| panic!("rynk {what} payload `{json}`: {e}"))
 }
 
+/// A macro write lands in flash and outlives the keyboard; a write the flash
+/// refuses is reported, and the slot stays as it was.
+#[cfg(feature = "storage")]
+#[test]
+fn macro_write_survives_restart_and_reports_a_storage_fault() {
+    const TAP_C: &str = r#"[{"Tap":{"Key":{"Hid":"C"}}}]"#;
+    const SET_0: &str = r#"{"index":0,"macro_ops":[{"Tap":{"Key":{"Hid":"C"}}}]}"#;
+    const SET_1: &str = r#"{"index":1,"macro_ops":[{"Char":97}]}"#;
+
+    test_block_on(async {
+        let flash = crate::simulator::Flash::new();
+        {
+            let mut keyboard = SimKeyboard::builder([[[rmk::macros!(0), rmk::macros!(1)]]])
+                .build_with_flash(flash.clone())
+                .await;
+            keyboard
+                .rynk::<command::SetMacro>(SET_0, RynkReply::Ok("null"))
+                .run()
+                .await;
+            flash.fail_writes(true);
+            keyboard
+                .rynk::<command::SetMacro>(SET_1, RynkReply::Err(RynkError::StorageFault))
+                .run()
+                .await;
+            flash.fail_writes(false);
+        }
+        let mut keyboard = SimKeyboard::builder([[[rmk::macros!(0), rmk::macros!(1)]]])
+            .build_with_flash(flash)
+            .await;
+        keyboard
+            .rynk::<command::GetMacro>("0", RynkReply::Ok(TAP_C))
+            .rynk::<command::GetMacro>("1", RynkReply::Ok("[]"))
+            .tap(0, 0, 10)
+            .expect_keys([HidKeyCode::C])
+            .expect_keys([])
+            .run()
+            .await;
+    });
+}
+
 /// The write must land in storage, not just the live keymap: a keyboard built
 /// over the same flash afterwards has only what was persisted.
 #[cfg(feature = "storage")]
@@ -102,12 +142,11 @@ fn keymap_write_survives_restart() {
     const SET_KEY_B: &str = r#"{"position":{"layer":0,"row":0,"col":0},"action":{"Single":{"Key":{"Hid":"B"}}}}"#;
 
     test_block_on(async {
-        let flash = crate::simulator::flash::InMemoryFlash::new();
+        let flash = crate::simulator::Flash::new();
         {
             let mut keyboard = SimKeyboard::builder([[[k!(A)]]]).build_with_flash(flash.clone()).await;
             keyboard
                 .rynk::<command::SetKeyAction>(SET_KEY_B, RynkReply::Ok("null"))
-                .wait_storage()
                 .run()
                 .await;
         }
@@ -115,6 +154,38 @@ fn keymap_write_survives_restart() {
         keyboard
             .tap(0, 0, 10)
             .expect_keys([HidKeyCode::B])
+            .expect_keys([])
+            .run()
+            .await;
+    });
+}
+
+/// A rejected write is reported, not hidden: the handler answers `StorageFault`
+/// after the live keymap already holds the new binding, and a keyboard built
+/// over the same flash afterwards still has the old one.
+#[cfg(feature = "storage")]
+#[test]
+fn set_key_on_failing_flash_replies_storage_fault() {
+    const SET_KEY_B: &str = r#"{"position":{"layer":0,"row":0,"col":0},"action":{"Single":{"Key":{"Hid":"B"}}}}"#;
+
+    test_block_on(async {
+        let flash = crate::simulator::Flash::new();
+        {
+            let mut keyboard = SimKeyboard::builder([[[k!(A)]]]).build_with_flash(flash.clone()).await;
+            flash.fail_writes(true);
+            keyboard
+                .rynk::<command::SetKeyAction>(SET_KEY_B, RynkReply::Err(RynkError::StorageFault))
+                .tap(0, 0, 10)
+                .expect_keys([HidKeyCode::B])
+                .expect_keys([])
+                .run()
+                .await;
+            flash.fail_writes(false);
+        }
+        let mut keyboard = SimKeyboard::builder([[[k!(A)]]]).build_with_flash(flash).await;
+        keyboard
+            .tap(0, 0, 10)
+            .expect_keys([HidKeyCode::A])
             .expect_keys([])
             .run()
             .await;

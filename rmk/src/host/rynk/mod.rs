@@ -46,6 +46,24 @@ impl<'a> RynkService<'a> {
         }
     }
 
+    /// Whether `cmd` needs a storage write to persist its effect.
+    fn needs_storage_write(cmd: Cmd) -> bool {
+        matches!(
+            cmd,
+            Cmd::SetKeyAction
+                | Cmd::SetDefaultLayer
+                | Cmd::SetEncoderAction
+                | Cmd::SetMacro
+                | Cmd::SetCombo
+                | Cmd::SetMorse
+                | Cmd::SetFork
+                | Cmd::SetBehaviorConfig
+                | Cmd::SetKeymapBulk
+                | Cmd::SetComboBulk
+                | Cmd::SetMorseBulk
+        )
+    }
+
     /// Whether `cmd` needs an unlocked device.
     fn requires_unlock(&self, cmd: Cmd) -> bool {
         match cmd {
@@ -53,18 +71,7 @@ impl<'a> RynkService<'a> {
             // Deleting a bond opens a re-pair hijack window; BLE-only command.
             #[cfg(feature = "_ble")]
             Cmd::ClearBleProfile => true,
-            Cmd::SetKeyAction
-            | Cmd::SetDefaultLayer
-            | Cmd::SetEncoderAction
-            | Cmd::SetMacro
-            | Cmd::SetCombo
-            | Cmd::SetMorse
-            | Cmd::SetFork
-            | Cmd::SetBehaviorConfig
-            | Cmd::SetKeymapBulk
-            | Cmd::SetComboBulk
-            | Cmd::SetMorseBulk => self.lock_config.write_requires_unlock,
-            _ => false,
+            _ => Self::needs_storage_write(cmd) && self.lock_config.write_requires_unlock,
         }
     }
 

@@ -193,8 +193,8 @@ impl<SPI: SpiBus, CS: OutputPin, MOTION: InputPin + Wait> Pmw3610<SPI, CS, MOTIO
         }
     }
 
-    /// Set force awake mode
-    async fn set_force_awake(&mut self, enable: bool) -> Result<(), PointingDriverError> {
+    /// Write the FMODE bits of the performance register.
+    async fn write_force_awake(&mut self, enable: bool) -> Result<(), PointingDriverError> {
         let mut val = self.read_reg(PMW3610_PERFORMANCE).await?;
         val &= !PERFORMANCE_FMODE_MASK;
         if enable {
@@ -338,7 +338,7 @@ impl<SPI: SpiBus, CS: OutputPin, MOTION: InputPin + Wait> Pmw3610<SPI, CS, MOTIO
                 .map_err(|_| Pmw3610Error::Spi)?;
         }
 
-        self.set_force_awake(self.config.force_awake)
+        self.write_force_awake(self.config.force_awake)
             .await
             .map_err(|_| Pmw3610Error::Spi)?;
 
@@ -416,6 +416,19 @@ where
         }
 
         Ok(MotionData { dx, dy })
+    }
+
+    /// Release the awake hold while the keyboard sleeps, restore it on wake.
+    /// Without `force_awake` the sensor manages its own power and this is a no-op.
+    async fn set_low_power(&mut self, enabled: bool) -> Result<(), PointingDriverError> {
+        if !self.config.force_awake {
+            return Ok(());
+        }
+        debug!(
+            "PMW3610: {} force awake",
+            if enabled { "releasing" } else { "restoring" }
+        );
+        self.write_force_awake(!enabled).await
     }
 
     /// Check if motion is pending (motion GPIO is active low)

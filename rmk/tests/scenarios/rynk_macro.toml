@@ -1,36 +1,101 @@
-# Macro buffer endpoints. A read always returns a whole `MACRO_DATA_SIZE` chunk
-# zero-filled past the end, so length is never an end-of-macro signal.
+# Macro endpoints. A macro travels whole, as its op list, addressed by slot.
 features = ["rynk"]
 
 [layout]
 rows = 1
-cols = 1
+cols = 2
 map = """
-(0,0)
+(0,0)  (0,1)
 """
 
 [[keymap.layer]]
-keys = "MACRO(0)"
+keys = "MACRO(0)  MACRO(1)"
 
+# Slot 0 has a compiled-in default; slot 1 is empty.
+[[behavior.macro.macros]]
+operations = [
+  { operation = "tap", keycode = "A" },
+  { operation = "tap", keycode = "B" },
+]
+
+[[test]]
+name = "default_macro_reads_back"
+steps = [
+  { rynk = { cmd = "GetMacro", payload = 0, reply = [{ Tap = { Key = { Hid = "A" } } }, { Tap = { Key = { Hid = "B" } } }] } },
+  { rynk = { cmd = "GetMacro", payload = 1, reply = [] } },
+]
+
+# A write replaces the default: shortened, cleared and restored, the key runs
+# what was last written.
 [[test]]
 name = "macro_write_changes_the_macro_key"
+features = ["storage"]
 steps = [
-  # 0x01 0x01 <kc> taps a key; 0x00 ends the macro.
-  { rynk = { cmd = "SetMacro", payload = { offset = 0, data = { data = [1, 1, 4, 0] } } } },
+  { rynk = { cmd = "SetMacro", payload = { index = 0, macro_ops = [{ Tap = { Key = { Hid = "C" } } }] } } },
+  { rynk = { cmd = "GetMacro", payload = 0, reply = [{ Tap = { Key = { Hid = "C" } } }] } },
+  { tap = { pos = [0, 0], duration = 10 } },
+  { rynk = { cmd = "SetMacro", payload = { index = 0, macro_ops = [] } } },
+  { tap = { pos = [0, 0], duration = 10 } },
+  { rynk = { cmd = "SetMacro", payload = { index = 0, macro_ops = [{ Tap = { Key = { Hid = "A" } } }, { Tap = { Key = { Hid = "B" } } }] } } },
   { tap = { pos = [0, 0], duration = 10 } },
 ]
-expect = [["A"], []]
+expect = [["C"], [], ["A"], [], ["B"], []]
 
+# Every op shape crosses the wire and comes back as written.
 [[test]]
-name = "macro_read_returns_a_zero_filled_chunk"
+name = "every_op_shape_round_trips"
+features = ["storage"]
 steps = [
-  { rynk = { cmd = "SetMacro", payload = { offset = 0, data = { data = [1, 1, 4, 0] } } } },
-  { rynk = { cmd = "GetMacro", payload = { offset = 0 }, reply = { data = [1, 1, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] } } },
+  { rynk = { cmd = "SetMacro", payload = { index = 1, macro_ops = [
+    { Press = { KeyWithModifier = ["A", { left_ctrl = true }] } },
+    { Release = { LayerOn = 1 } },
+    { Delay = 300 },
+    { Char = 97 },
+    "PauseForRelease",
+    { Tap = { Key = { Consumer = "VolumeIncrement" } } },
+  ] } } },
+  { rynk = { cmd = "GetMacro", payload = 1, reply = [
+    { Press = { KeyWithModifier = ["A", { left_ctrl = true }] } },
+    { Release = { LayerOn = 1 } },
+    { Delay = 300 },
+    { Char = 97 },
+    "PauseForRelease",
+    { Tap = { Key = { Consumer = "VolumeIncrement" } } },
+  ] } },
 ]
 
+# A slot outside `max_macros` is refused.
 [[test]]
-name = "macro_read_past_the_written_bytes_is_all_zero"
+name = "slots_outside_max_macros_are_refused"
 steps = [
-  { rynk = { cmd = "SetMacro", payload = { offset = 0, data = { data = [1, 1, 4, 0] } } } },
-  { rynk = { cmd = "GetMacro", payload = { offset = 64 }, reply = { data = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] } } },
+  { rynk = { cmd = "GetMacro", payload = 32, error = "Invalid" } },
+  { rynk = { cmd = "SetMacro", payload = { index = 32, macro_ops = [] }, error = "Invalid" } },
+  # The default still stands.
+  { tap = { pos = [0, 0], duration = 10 } },
 ]
+expect = [["A"], [], ["B"], []]
+
+# A macro of more bytes than the buffer holds never decodes. Spelled as bytes:
+# the harness could not build the oversized request from the request type either.
+[[test]]
+name = "a_macro_past_the_buffer_is_malformed"
+steps = [
+  # SetMacro (0x0202), seq 1: index 0, then 129 `Char(97)` ops, two bytes each.
+  { rynk_raw = [0x04, 0x02, 0x02, 0x01, 0xff, 0x81, 0x01, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x07, 0x04, 0x61, 0x04, 0x61, 0x04, 0x61, 0x00] },
+  { rynk_reply = [0x05, 0x02, 0x02, 0x01, 0x01, 0x01, 0x00] },
+]
+
+# A macro that decodes but does not fit beside the other slots is refused, and
+# the slots keep what they held.
+[[test]]
+name = "a_macro_that_does_not_fit_the_buffer_is_invalid"
+features = ["storage"]
+steps = [
+  { rynk = { cmd = "SetMacro", payload = { index = 1, macro_ops = [{ Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }] } } },
+  { rynk = { cmd = "SetMacro", payload = { index = 0, macro_ops = [{ Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }, { Char = 97 }] }, error = "Invalid" } },
+  { rynk = { cmd = "GetMacro", payload = 0, reply = [{ Tap = { Key = { Hid = "A" } } }, { Tap = { Key = { Hid = "B" } } }] } },
+  { rynk = { cmd = "SetMacro", payload = { index = 1, macro_ops = [] } } },
+  { rynk = { cmd = "SetMacro", payload = { index = 0, macro_ops = [{ Tap = { Key = { Hid = "A" } } }, { Tap = { Key = { Hid = "A" } } }] } } },
+  { tap = { pos = [0, 0], duration = 10 } },
+]
+expect = [["A"], [], ["A"], []]

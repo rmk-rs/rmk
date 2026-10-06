@@ -71,10 +71,23 @@ mod multi_event_polling {
     use super::{ConfigEvent, ModeEvent, SensorEvent, input_device, processor};
 
     #[input_device(publish = SensorEvent)]
-    #[processor(subscribe = [ConfigEvent, ModeEvent], poll_interval = 100)]
+    #[processor(subscribe = [ConfigEvent])]
+    #[processor(subscribe = [ModeEvent], poll_interval = 100)]
     pub struct MultiEventPollingSensorController {
         pub threshold: u16,
         pub mode: u8,
         pub counter: u32,
     }
+}
+
+mod polling_without_subscription {
+    use super::{SensorEvent, input_device, processor};
+
+    #[input_device(publish = SensorEvent)]
+    #[processor(poll_interval = 100)]
+    pub struct PollingSensor;
+
+    #[processor(subscribe = [], poll_interval = 100)]
+    #[input_device(publish = SensorEvent)]
+    pub struct ReversedPollingSensor;
 }

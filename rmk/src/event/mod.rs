@@ -14,6 +14,7 @@
 //! - `battery`: Battery events (ADC, charging, battery status)
 //! - `connection`: Connection events (USB/BLE, BLE status)
 //! - `split`: Split keyboard events (peripheral/central connection)
+//! - `dongle`: Dongle events (the dongle's link to its keyboard)
 
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_sync::pubsub::{Error as PubSubError, ImmediatePublisher, Publisher, Subscriber};
@@ -47,8 +48,10 @@ macro_rules! impl_payload_wrapper {
 mod action;
 mod battery;
 mod connection;
-#[cfg(feature = "dfu")]
+#[cfg(feature = "_dfu")]
 mod dfu;
+#[cfg(feature = "dongle")]
+mod dongle;
 mod input;
 #[cfg(feature = "split")]
 mod split;
@@ -57,8 +60,10 @@ mod state;
 pub use action::ActionEvent;
 pub use battery::{BatteryAdcEvent, BatteryStatusEvent, ChargingStateEvent};
 pub use connection::{ConnectionStatus, ConnectionStatusChangeEvent, ConnectionType};
-#[cfg(feature = "dfu")]
-pub use dfu::DfuStatusEvent;
+#[cfg(feature = "_dfu")]
+pub use dfu::{DfuCmdEvent, DfuStatusEvent};
+#[cfg(feature = "dongle")]
+pub use dongle::{DongleState, DongleStateEvent};
 pub use input::{
     Axis, AxisEvent, AxisValType, KeyPos, KeyboardEvent, KeyboardEventPos, ModifierEvent, PointingEvent,
     PointingProcessorEvent, PointingSetCpiEvent, RotaryEncoderPos,
@@ -85,6 +90,15 @@ pub trait AsyncEventPublisher {
 pub trait EventSubscriber {
     type Event;
     async fn next_event(&mut self) -> Self::Event;
+}
+
+// Timer-only processors keep the same run loops without allocating a channel or subscriber slot.
+impl EventSubscriber for core::future::Pending<core::convert::Infallible> {
+    type Event = core::convert::Infallible;
+
+    async fn next_event(&mut self) -> Self::Event {
+        self.await
+    }
 }
 
 /// Trait for events that can be published.

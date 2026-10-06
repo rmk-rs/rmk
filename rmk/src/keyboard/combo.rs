@@ -117,18 +117,23 @@ impl Combo {
         self.config.output
     }
 
-    // Check if the combo is dispatched into key event
+    /// Fully pressed but not fired yet.
+    pub(crate) fn is_pending(&self) -> bool {
+        self.is_all_pressed() && !self.is_triggered()
+    }
+
+    /// Check if the combo is dispatched into key event
     pub(crate) fn is_triggered(&self) -> bool {
         self.is_triggered
     }
 
-    // Check if all keys of this combo are pressed, but it does not mean the combo key event is sent
+    /// Check if all keys of this combo are pressed, but it does not mean the combo key event is sent
     pub(crate) fn is_all_pressed(&self) -> bool {
         let cnt = self.config.size();
         cnt > 0 && self.keys_pressed() == cnt as u32
     }
 
-    // The size of the current combo
+    /// The size of the current combo
     pub(crate) fn size(&self) -> usize {
         self.config.size()
     }

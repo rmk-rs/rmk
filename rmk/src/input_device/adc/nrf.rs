@@ -120,7 +120,7 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                         self.event_state += 1;
                         continue;
                     } else {
-                        for i in 0..core::cmp::min(sz, 2) {
+                        for i in 0..sz {
                             e[i as usize].value = (buf[self.channel_state as usize] + i16::MIN / 2).saturating_mul(2);
                             self.channel_state += 1;
                         }

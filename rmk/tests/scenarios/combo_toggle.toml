@@ -1,0 +1,48 @@
+[layout]
+rows = 1
+cols = 3
+map = "(0,0) (0,1) (0,2)"
+
+[[keymap.layer]]
+keys = "A B ComboToggle"
+
+[behavior.combo]
+timeout = "100ms"
+combos = [{ actions = ["A", "B"], output = "C" }]
+
+# A tap used to toggle on both edges, leaving combos enabled after release.
+[[test]]
+name = "tap_disables_combos_until_next_tap"
+steps = [
+  { press = [0, 0] },
+  { press = [0, 1] },
+  { release = [0, 0] },
+  { release = [0, 1] },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { press = [0, 0] },
+  { press = [0, 1] },
+  { release = [0, 0] },
+  { release = [0, 1] },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { press = [0, 0] },
+  { press = [0, 1] },
+  { release = [0, 0] },
+  { release = [0, 1] },
+]
+expect = [["C"], [], ["A"], ["A", "B"], ["B"], [], ["C"], []]
+
+[[test]]
+name = "press_toggles_before_release"
+steps = [
+  { press = [0, 2] },
+  { press = [0, 0] },
+  { press = [0, 1] },
+  { release = [0, 0] },
+  { release = [0, 1] },
+  { release = [0, 2] },
+  { press = [0, 0] },
+  { press = [0, 1] },
+  { release = [0, 0] },
+  { release = [0, 1] },
+]
+expect = [["A"], ["A", "B"], ["B"], [], ["A"], ["A", "B"], ["B"], []]

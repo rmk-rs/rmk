@@ -74,8 +74,20 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                 }
             } else if chip.chip == "nrf52833" {
                 let reg1_enabled = chip_cfg.dcdc_reg1.unwrap_or(true);
+                // No DC/DC switch for REG0 on this part, but its output voltage is the same
+                // UICR.REGOUT0 setting as on the nRF52840. Left untouched unless configured.
+                let reg0_voltage = match chip_cfg.dcdc_reg0_voltage {
+                    Some(DcdcReg0Voltage::V1_8) => quote! {
+                        config.dcdc.reg0_voltage = Some(::embassy_nrf::config::Reg0Voltage::_1V8);
+                    },
+                    Some(DcdcReg0Voltage::V3_3) => quote! {
+                        config.dcdc.reg0_voltage = Some(::embassy_nrf::config::Reg0Voltage::_3V3);
+                    },
+                    None => quote! {},
+                };
                 quote! {
                     config.dcdc.reg1 = #reg1_enabled;
+                    #reg0_voltage
                     ::defmt::info!("DCDC config: reg1={}", #reg1_enabled);
                 }
             } else {
@@ -299,5 +311,62 @@ fn get_ble_addr(hardware: &Hardware, peripheral_id: Option<usize>) -> TokenStrea
                 #(#addr),*
             ]
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::quote;
+    use rmk_config::KeyboardTomlConfig;
+
+    use super::chip_init_default;
+
+    /// The chip init generated for an nRF52833 keyboard whose `[chip.nrf52833]` holds `chip_section`.
+    fn nrf52833_chip_init(name: &str, chip_section: &str) -> String {
+        let path =
+            std::env::temp_dir().join(format!("rmk-macro-{name}-{}.toml", std::process::id()));
+        let toml = format!(
+            r#"
+[keyboard]
+name = "REG0 test"
+vendor_id = 0x4c4b
+product_id = 0x4643
+chip = "nrf52833"
+
+[matrix]
+row_pins = ["P0_02"]
+col_pins = ["P0_03"]
+
+[layout]
+rows = 1
+cols = 1
+
+[chip.nrf52833]
+{chip_section}
+"#
+        );
+        std::fs::write(&path, toml).unwrap();
+        let hardware = KeyboardTomlConfig::new_from_toml_path(&path).hardware();
+        std::fs::remove_file(&path).ok();
+        chip_init_default(&hardware.unwrap_or_else(|e| panic!("{e}")), None).to_string()
+    }
+
+    #[test]
+    fn nrf52833_writes_the_configured_reg0_voltage() {
+        let tokens = nrf52833_chip_init("reg0-3v3", r#"dcdc_reg0_voltage = "3V3""#);
+        let expected =
+            quote! { config.dcdc.reg0_voltage = Some(::embassy_nrf::config::Reg0Voltage::_3V3); };
+        assert!(tokens.contains(&expected.to_string()), "{tokens}");
+
+        let tokens = nrf52833_chip_init("reg0-1v8", r#"dcdc_reg0_voltage = "1V8""#);
+        let expected =
+            quote! { config.dcdc.reg0_voltage = Some(::embassy_nrf::config::Reg0Voltage::_1V8); };
+        assert!(tokens.contains(&expected.to_string()), "{tokens}");
+    }
+
+    #[test]
+    fn nrf52833_leaves_reg0_alone_unless_configured() {
+        let tokens = nrf52833_chip_init("reg0-unset", "dcdc_reg1 = true");
+        assert!(!tokens.contains("reg0_voltage"), "{tokens}");
     }
 }

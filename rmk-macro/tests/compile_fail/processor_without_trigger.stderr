@@ -1,0 +1,5 @@
+error: #[processor] needs a non-empty `subscribe`, `poll_interval`, or `deadline` to generate Runnable; use #[rmk::macros::runnable_generated] when implementing Runnable yourself
+ --> tests/compile_fail/processor_without_trigger.rs:4:8
+  |
+4 | struct Bare;
+  |        ^^^^

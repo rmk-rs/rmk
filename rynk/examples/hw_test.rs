@@ -23,7 +23,7 @@ use log::{error, info, warn};
 use rynk::rmk_types::action::EncoderAction;
 use rynk::rmk_types::combo::Combo;
 use rynk::rmk_types::morse::MorseProfile;
-use rynk::rmk_types::protocol::rynk::{MacroData, StorageResetMode};
+use rynk::rmk_types::protocol::rynk::StorageResetMode;
 use rynk::{Client, RynkDevice, RynkHostError};
 use rynk_ble::BleDevice;
 use rynk_usb::UsbDevice;
@@ -254,22 +254,15 @@ async fn run_all(client: &Client, over_ble: bool) -> Result<(), Box<dyn std::err
     }
 
     info!("── macros ──");
-    if caps.macro_space_size == 0 {
-        info!("  (no macro storage — exercising dispatch at offset 0)");
+    // Macro: write slot 0 back as read, so nothing changes on the device.
+    match client.read_macro(0).await {
+        Ok(ops) if caps.macros_writable => {
+            info!("  ✓ {:<22} {ops:?}", "read_macro 0");
+            ack(&mut fails, "write_macro 0 (restore)", client.write_macro(0, &ops).await);
+        }
+        Ok(ops) => info!("  ✓ {:<22} {ops:?} (read-only)", "read_macro 0"),
+        other => report(&mut fails, "read_macro 0", other),
     }
-    report(&mut fails, "get_macro 0", client.get_macro(0).await);
-    ack(
-        &mut fails,
-        "set_macro 0",
-        client
-            .set_macro(
-                0,
-                MacroData {
-                    data: Default::default(),
-                },
-            )
-            .await,
-    );
 
     info!("── combos ──");
     // Combo: set a different valid combo, verify, restore.

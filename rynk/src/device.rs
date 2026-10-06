@@ -56,9 +56,17 @@ pub trait RynkDevice: Sized {
     }
 }
 
+/// Whether a host speaking `host` can talk to firmware speaking `firmware`.
+///
+/// From 1.0 a major is a compatibility line and newer minors only add commands.
+/// Before 1.0 any minor may reshape messages, so 0.x must match exactly.
+pub(crate) fn compatible(firmware: ProtocolVersion, host: ProtocolVersion) -> bool {
+    firmware.major == host.major && (host.major != 0 || firmware.minor == host.minor)
+}
+
 /// Negotiate the version, then fetch device capabilities.
 ///
-/// Rejects only major-version mismatches; same-major minors connect.
+/// Rejects versions [`compatible`] refuses; a newer same-major minor connects.
 async fn handshake(client: &Client) -> Result<DeviceCapabilities, RynkHostError> {
     // Both requests ride one round trip; the version gate still runs
     // before the capabilities are released.
@@ -69,12 +77,12 @@ async fn handshake(client: &Client) -> Result<DeviceCapabilities, RynkHostError>
     .await;
     let version = version?;
     let supported = ProtocolVersion::CURRENT;
-    if version.major != supported.major {
+    if !compatible(version, supported) {
         return Err(RynkHostError::VersionMismatch {
             firmware_major: version.major,
             firmware_minor: version.minor,
             host_major: supported.major,
-            host_max_minor: supported.minor,
+            host_minor: supported.minor,
         });
     }
     if version.minor > supported.minor {

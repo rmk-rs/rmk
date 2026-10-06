@@ -22,6 +22,7 @@ use crate::ble::{BleState, BleStatus};
 use crate::combo::Combo;
 use crate::connection::{ConnectionStatus, ConnectionType, UsbState};
 use crate::fork::{Fork, StateBits};
+use crate::keyboard_macros::{Macro, MacroOp};
 use crate::keycode::{ConsumerKey, HidKeyCode, KeyCode, SpecialKey, SystemControlKey};
 use crate::led_indicator::LedIndicator;
 use crate::modifier::ModifierCombination;
@@ -213,7 +214,7 @@ struct Exemplars {
     combo: Combo,
     fork: Fork,
     morse: Morse,
-    macro_data: MacroData,
+    macro_ops: Macro,
     encoder: EncoderAction,
     battery: BatteryStatus,
     layout: LayoutChunk,
@@ -232,20 +233,21 @@ fn exemplars() -> Exemplars {
         num_encoders: 4,
         max_combos: 5,
         max_combo_keys: 6,
-        macro_space_size: 7,
-        max_morse: 8,
-        max_patterns_per_key: 9,
-        max_forks: 10,
+        max_macros: 7,
+        macro_space_size: 8,
+        macros_writable: true,
+        max_morse: 9,
+        max_patterns_per_key: 10,
+        max_forks: 11,
         storage_enabled: true,
         lighting_enabled: false,
         is_split: true,
-        num_split_peripherals: 11,
+        num_split_peripherals: 12,
         ble_enabled: false,
-        num_ble_profiles: 12,
-        max_payload_size: 13,
-        max_bulk_keys: 14,
-        max_bulk_items: 15,
-        macro_chunk_size: 16,
+        num_ble_profiles: 13,
+        max_payload_size: 14,
+        max_bulk_keys: 15,
+        max_bulk_items: 16,
         bulk_transfer_supported: true,
     };
     // Ascending version/id values; distinct strings so a field swap shows.
@@ -277,6 +279,7 @@ fn exemplars() -> Exemplars {
         ble: BleStatus {
             profile: 1,
             state: BleState::Advertising,
+            bonded: true,
         },
         preferred: ConnectionType::Ble,
     };
@@ -309,9 +312,14 @@ fn exemplars() -> Exemplars {
         profile: MorseProfile::const_default(),
         actions: morse_actions,
     };
-    let mut macro_bytes = heapless::Vec::new();
-    macro_bytes.extend_from_slice(&[0x01, 0x02, 0x03]).unwrap();
-    let macro_data = MacroData { data: macro_bytes };
+    // One op of each shape, so a variant renumber or a field swap shows.
+    let macro_ops = Macro::from_slice(&[
+        MacroOp::Tap(Action::Key(KeyCode::Hid(HidKeyCode::A))),
+        MacroOp::Delay(300),
+        MacroOp::Char(b'a'),
+        MacroOp::PauseForRelease,
+    ])
+    .unwrap();
     let encoder = EncoderAction::new(KeyAction::Morse(3), KeyAction::No);
     // A page shorter than the chunk size, with a `total_len` that outgrows it and
     // takes two varint bytes, so swapping the two fields flips the bytes.
@@ -332,7 +340,7 @@ fn exemplars() -> Exemplars {
         combo,
         fork,
         morse,
-        macro_data,
+        macro_ops,
         encoder,
         battery: BatteryStatus::Available {
             charge_state: ChargeState::Discharging,
@@ -483,13 +491,32 @@ fn wire_values_locked() {
         ("Fork{Single(A),No,Morse(2)}", encode(&ex.fork)),
         ("StateBits{LCtrl,Caps,B1}", encode(&ex.state_bits)),
         ("Morse{TAP->Key(A)}", encode(&ex.morse)),
-        ("MacroData{[0x01,0x02,0x03]}", encode(&ex.macro_data)),
+        // --- MacroOp: every variant tag (positional) ---
+        (
+            "MacroOp::Tap(Key(A))",
+            encode(&MacroOp::Tap(Action::Key(KeyCode::Hid(HidKeyCode::A))))
+        ),
+        (
+            "MacroOp::Press(LayerOn(1))",
+            encode(&MacroOp::Press(Action::LayerOn(1)))
+        ),
+        (
+            "MacroOp::Release(Modifier(LCtrl))",
+            encode(&MacroOp::Release(Action::Modifier(ModifierCombination::LCTRL)))
+        ),
+        ("MacroOp::Delay(300)", encode(&MacroOp::Delay(300))),
+        ("MacroOp::Char(a)", encode(&MacroOp::Char(b'a'))),
+        ("MacroOp::PauseForRelease", encode(&MacroOp::PauseForRelease)),
+        ("Macro{[Tap(A),Delay(300),Char(a),Pause]}", encode(&ex.macro_ops)),
         // --- Status / system responses ---
         ("MatrixState{[0x05,0x00,0x20]}", encode(&ex.matrix)),
         ("DeviceCapabilities{1..16}", encode(&ex.capabilities)),
         ("DeviceInfo{1.2.3,4,5,RMK,..}", encode(&ex.device_info)),
         ("BehaviorConfig{50..120}", encode(&ex.behavior)),
-        ("ConnectionStatus{Configured,{1,Adv},Ble}", encode(&ex.connection)),
+        (
+            "ConnectionStatus{Configured,{1,Adv,bonded},Ble}",
+            encode(&ex.connection)
+        ),
         ("ProtocolVersion{1,0}", encode(&ProtocolVersion { major: 1, minor: 0 })),
         ("ProtocolVersion::CURRENT", encode(&ProtocolVersion::CURRENT)),
         ("LockStatus{true,false,2,[(1,2),(3,4)]}", encode(&lock_status),),
@@ -502,10 +529,11 @@ fn wire_values_locked() {
         ("BleState::Connected", encode(&BleState::Connected)),
         ("BleState::Inactive", encode(&BleState::Inactive)),
         (
-            "BleStatus{2,Connected}",
+            "BleStatus{2,Connected,bonded}",
             encode(&BleStatus {
                 profile: 2,
-                state: BleState::Connected
+                state: BleState::Connected,
+                bonded: true,
             })
         ),
         ("UsbState::Disabled", encode(&UsbState::Disabled)),
@@ -542,12 +570,11 @@ fn wire_values_locked() {
                 action: ex.encoder
             }),
         ),
-        ("GetMacroRequest{256}", encode(&GetMacroRequest { offset: 256 })),
         (
-            "SetMacroRequest{2,[0x01,0x02,0x03]}",
+            "SetMacroRequest{2,macro}",
             encode(&SetMacroRequest {
-                offset: 2,
-                data: ex.macro_data.clone()
+                index: 2,
+                macro_ops: ex.macro_ops.clone()
             }),
         ),
         (
@@ -772,22 +799,19 @@ fn wire_frames_locked() {
             encode_frame(Cmd::SetEncoderAction, SEQ, &Ok::<(), RynkError>(())),
         ),
         // Macro (0x02xx).
+        ("GetMacro request 2", encode_frame(Cmd::GetMacro, SEQ, &2u8)),
         (
-            "GetMacro request GetMacroRequest{256}",
-            encode_frame(Cmd::GetMacro, SEQ, &GetMacroRequest { offset: 256 }),
+            "GetMacro reply Ok(Macro{[Tap(A),Delay(300),Char(a),Pause]})",
+            encode_frame(Cmd::GetMacro, SEQ, &Ok::<Macro, RynkError>(ex.macro_ops.clone())),
         ),
         (
-            "GetMacro reply Ok(MacroData{[0x01,0x02,0x03]})",
-            encode_frame(Cmd::GetMacro, SEQ, &Ok::<MacroData, RynkError>(ex.macro_data.clone())),
-        ),
-        (
-            "SetMacro request SetMacroRequest{2,[0x01,0x02,0x03]}",
+            "SetMacro request SetMacroRequest{2,macro}",
             encode_frame(
                 Cmd::SetMacro,
                 SEQ,
                 &SetMacroRequest {
-                    offset: 2,
-                    data: ex.macro_data.clone()
+                    index: 2,
+                    macro_ops: ex.macro_ops.clone()
                 },
             ),
         ),
@@ -897,7 +921,7 @@ fn wire_frames_locked() {
             encode_frame(Cmd::GetConnectionStatus, SEQ, &())
         ),
         (
-            "GetConnectionStatus reply Ok(ConnectionStatus{Configured,{1,Adv},Ble})",
+            "GetConnectionStatus reply Ok(ConnectionStatus{Configured,{1,Adv,bonded},Ble})",
             encode_frame(
                 Cmd::GetConnectionStatus,
                 SEQ,
@@ -943,7 +967,7 @@ fn wire_frames_locked() {
         // Connection / status rows behind `_ble` and `split`.
         ("GetBleStatus request ()", encode_frame(Cmd::GetBleStatus, SEQ, &())),
         (
-            "GetBleStatus reply Ok(BleStatus{1,Advertising})",
+            "GetBleStatus reply Ok(BleStatus{1,Advertising,bonded})",
             encode_frame(Cmd::GetBleStatus, SEQ, &Ok::<BleStatus, RynkError>(ex.connection.ble)),
         ),
         (
@@ -989,7 +1013,7 @@ fn wire_frames_locked() {
         ("LayerChange topic 3", encode_frame(Cmd::LayerChange, 0, &3u8)),
         ("WpmUpdate topic 42", encode_frame(Cmd::WpmUpdate, 0, &42u16)),
         (
-            "ConnectionChange topic ConnectionStatus{Configured,{1,Adv},Ble}",
+            "ConnectionChange topic ConnectionStatus{Configured,{1,Adv,bonded},Ble}",
             encode_frame(Cmd::ConnectionChange, 0, &ex.connection)
         ),
         ("SleepState topic true", encode_frame(Cmd::SleepState, 0, &true)),
@@ -1052,7 +1076,7 @@ mod protocol_reference {
         ),
         (
             RynkError::StorageFault,
-            "Persistent storage failed on a write (flash erase/write error).",
+            "Persistent storage failed (flash read, write or erase error).",
         ),
         (RynkError::Internal, "Internal firmware fault."),
         (
@@ -1218,7 +1242,7 @@ mod protocol_reference {
              ## Sizing and bulk transfer\n\n\
              Each peer holds one frame in a buffer of `rynk_buffer_size` bytes (a `[rmk]` option, see [RMK config](../configuration/rmk_config#rynk-protocol-configuration)). The largest payload a frame can carry is what remains after COBS overhead, the delimiter, and the {header_size}-byte header; the firmware reports it as `DeviceCapabilities.max_payload_size`. Read the capabilities and size requests from them rather than assuming a fixed limit.\n\n\
              `DeviceCapabilities` also advertises `bulk_transfer_supported` and the paging strides `max_bulk_keys` (worst-case keys per `GetKeymapBulk` page) and `max_bulk_items` (worst-case entries per `GetComboBulk`/`GetMorseBulk` page). A bulk read names a start — for the keymap `(layer, row, col)`, read forward through the flat row-major, layer-major keymap; for combos and morses a slot index — and returns as many consecutive entries as fit in one payload, or fewer at the end. A host pages by advancing its start by the stride; a short page ends the read. A bulk write carries a start plus a list of entries and is packed by encoded size up to `max_payload_size`. A reply that does not fit beside other pipelined requests answers `Busy`; retry once they complete.\n\n\
-             `GetLayout` serves the compressed layout blob {ble_chunk} bytes per call: the request is a byte offset and `LayoutChunk` carries `total_len` plus that page's bytes. Macros move in `macro_chunk_size` pieces (`protocol_macro_chunk_size` in `[rmk]`) addressed by byte offset.\n\n\
+             `GetLayout` serves the compressed layout blob {ble_chunk} bytes per call: the request is a byte offset and `LayoutChunk` carries `total_len` plus that page's bytes. `GetMacro`/`SetMacro` move one whole macro per call, a `MacroOp` list indexed below `max_macros`; every macro shares one buffer of `macro_space_size` bytes, in the list's postcard encoding plus a length prefix per slot, so a write that no longer fits answers `Invalid`; `macros_writable` is false on a firmware without storage, whose `SetMacro` answers `Unimplemented`.\n\n\
              ## Errors\n\n\
              A request's response is postcard `Result<T, RynkError>`; the `Err` side is one of these variants.\n\n\
              {errors}\n\

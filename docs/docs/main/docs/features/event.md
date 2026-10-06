@@ -50,7 +50,7 @@ RMK provides built-in event types organized by category. All of them are exporte
 
 **Connection Events**:
 
-- `ConnectionStatusChangeEvent` - Full `ConnectionStatus` snapshot (USB lifecycle, BLE profile/state, preferred transport); fires on every transition
+- `ConnectionStatusChangeEvent` - Full `ConnectionStatus` snapshot (USB lifecycle, BLE profile/state/bond, preferred transport); fires on every transition.
 
 **Split Keyboard Events** (when split is enabled):
 
@@ -59,9 +59,14 @@ RMK provides built-in event types organized by category. All of them are exporte
 - `PeripheralBatteryEvent` - Peripheral battery status changed
 - `ClearPeerEvent` - BLE peer clearing event (BLE split builds only)
 
-**DFU Events** (when the `dfu` feature is enabled):
+**Dongle Events** (when the `dongle` feature is enabled):
+
+- `DongleStateEvent` - The dongle's link to its keyboard changed state (`DongleState`: searching, pairing, connected)
+
+**DFU Events** (when a DFU feature like `dfu_rp` or `dfu_nrf` is enabled):
 
 - `DfuStatusEvent` - DFU status changed (`DfuStatus`: idle, started, downloading, finished, error, lock waiting, unlocked)
+- `DfuCmdEvent` - DFU command forwarded from the USB DFU proxy to the async updater task. Internal use only — published by the USB ISR, consumed by `FlashDfuHandler` (central) and `PeripheralManager` (peripheral passthrough). The base subscriber count is 1 for the local flash handler. RMK automatically adds one slot per configured split peripheral when `dfu_split` is enabled and one slot for `DfuLock` when `dfu_lock` is enabled.
 
 ## Defining Custom Events
 
@@ -127,6 +132,8 @@ publish_event_async(MyCustomEvent(42)).await;
 ```
 
 `publish_event` never waits: on a full Channel the event is dropped, and on a full PubSub the oldest unread event is overwritten. Use `publish_event_async` when every event must be delivered.
+
+No event is retained: a subscriber sees nothing until the next publish. To start from the current value, subscribe first, then read the snapshot getter (e.g. `rmk::state::current_connection_status()`).
 
 ## Related Documentation
 

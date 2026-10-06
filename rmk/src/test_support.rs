@@ -11,7 +11,6 @@ use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use embassy_time::{Duration, MockDriver};
 
 pub const COMBO_MAX_LENGTH: usize = crate::COMBO_MAX_LENGTH;
-pub const MACRO_SPACE_SIZE: usize = crate::MACRO_SPACE_SIZE;
 
 #[cfg(feature = "vial")]
 pub fn to_via_keycode(action: rmk_types::action::KeyAction) -> u16 {
@@ -30,17 +29,16 @@ pub fn reset_connection_status() {
 
 #[cfg(feature = "storage")]
 pub fn clear_flash_channel() {
-    crate::channel::FLASH_CHANNEL.clear();
+    crate::storage::clear_flash_channel();
 }
 
-#[cfg(feature = "storage")]
-pub fn reset_flash_operation() {
-    crate::storage::FLASH_OPERATION_FINISHED.reset();
-}
-
-#[cfg(feature = "storage")]
-pub async fn flash_operation_finished() -> bool {
-    crate::storage::FLASH_OPERATION_FINISHED.wait().await
+/// Stand-in for the storage task when a simulation has no flash: every write
+/// lands, every read is absent, so nothing blocks on a never-serviced queue.
+pub async fn drain_flash_channel() {
+    #[cfg(feature = "storage")]
+    crate::storage::drain_flash_channel().await;
+    #[cfg(not(feature = "storage"))]
+    core::future::pending::<()>().await
 }
 
 const STEP: Duration = Duration::from_micros(100);
@@ -101,3 +99,119 @@ const VTABLE: RawWakerVTable = RawWakerVTable::new(
     |_| {},  // wake_by_ref
     |_| {},  // drop
 );
+
+/// Test-only stand-in for the BLE profile task: records the `Debug` form of every
+/// received action in `sink`, so a test can check what a profile-key gesture sent.
+pub async fn drain_ble_profile_channel(sink: &mut std::vec::Vec<std::string::String>) {
+    #[cfg(feature = "_ble")]
+    loop {
+        sink.push(std::format!(
+            "{:?}",
+            crate::channel::BLE_PROFILE_CHANNEL.receive().await
+        ));
+    }
+    #[cfg(not(feature = "_ble"))]
+    {
+        let _ = sink;
+        core::future::pending::<()>().await
+    }
+}
+
+/// An in-memory NOR flash part, `SIZE` bytes in `ERASE`-byte sectors written
+/// `WRITE` bytes at a time.
+///
+/// Cloning shares the same bytes, so a second build over a clone reads back what
+/// the first one persisted — the stand-in for a power cycle.
+#[cfg(feature = "storage")]
+#[derive(Clone)]
+pub struct InMemoryFlash<const SIZE: usize, const ERASE: usize, const WRITE: usize> {
+    data: std::rc::Rc<core::cell::RefCell<[u8; SIZE]>>,
+    fail_writes: std::rc::Rc<core::cell::Cell<bool>>,
+    writes: std::rc::Rc<core::cell::Cell<usize>>,
+}
+
+#[cfg(feature = "storage")]
+impl<const SIZE: usize, const ERASE: usize, const WRITE: usize> InMemoryFlash<SIZE, ERASE, WRITE> {
+    pub fn new() -> Self {
+        Self {
+            data: std::rc::Rc::new(core::cell::RefCell::new([0xFF; SIZE])),
+            fail_writes: std::rc::Rc::new(core::cell::Cell::new(false)),
+            writes: std::rc::Rc::new(core::cell::Cell::new(0)),
+        }
+    }
+
+    /// How many writes have landed, shared by every clone.
+    pub fn writes(&self) -> usize {
+        self.writes.get()
+    }
+
+    /// Reject every write while set, shared by every clone — the stand-in for a
+    /// flash that stops taking data.
+    pub fn fail_writes(&self, fail: bool) {
+        self.fail_writes.set(fail);
+    }
+}
+
+#[cfg(feature = "storage")]
+impl<const SIZE: usize, const ERASE: usize, const WRITE: usize> Default for InMemoryFlash<SIZE, ERASE, WRITE> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "storage")]
+impl<const SIZE: usize, const ERASE: usize, const WRITE: usize> embedded_storage::nor_flash::ErrorType
+    for InMemoryFlash<SIZE, ERASE, WRITE>
+{
+    type Error = embedded_storage::nor_flash::NorFlashErrorKind;
+}
+
+#[cfg(feature = "storage")]
+impl<const SIZE: usize, const ERASE: usize, const WRITE: usize> embedded_storage::nor_flash::ReadNorFlash
+    for InMemoryFlash<SIZE, ERASE, WRITE>
+{
+    const READ_SIZE: usize = 1;
+
+    fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
+        embedded_storage::nor_flash::check_read(self, offset, bytes.len())?;
+        let offset = offset as usize;
+        bytes.copy_from_slice(&self.data.borrow()[offset..offset + bytes.len()]);
+        Ok(())
+    }
+
+    fn capacity(&self) -> usize {
+        SIZE
+    }
+}
+
+#[cfg(feature = "storage")]
+impl<const SIZE: usize, const ERASE: usize, const WRITE: usize> embedded_storage::nor_flash::NorFlash
+    for InMemoryFlash<SIZE, ERASE, WRITE>
+{
+    const WRITE_SIZE: usize = WRITE;
+    const ERASE_SIZE: usize = ERASE;
+
+    fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
+        embedded_storage::nor_flash::check_erase(self, from, to)?;
+        self.data.borrow_mut()[from as usize..to as usize].fill(0xFF);
+        Ok(())
+    }
+
+    fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+        embedded_storage::nor_flash::check_write(self, offset, bytes.len())?;
+        if self.fail_writes.get() {
+            return Err(embedded_storage::nor_flash::NorFlashErrorKind::Other);
+        }
+        let mut data = self.data.borrow_mut();
+        let offset = offset as usize;
+        for (current, byte) in data[offset..offset + bytes.len()].iter_mut().zip(bytes) {
+            // Real NOR only clears bits; writing a 1 over a 0 needs an erase first.
+            if *current & *byte != *byte {
+                return Err(embedded_storage::nor_flash::NorFlashErrorKind::Other);
+            }
+            *current &= *byte;
+        }
+        self.writes.set(self.writes.get() + 1);
+        Ok(())
+    }
+}

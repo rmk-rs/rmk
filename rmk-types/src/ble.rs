@@ -1,7 +1,14 @@
-//! BLE status types.
+//! BLE status types and the limits an identity string has to clear.
 
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
+
+/// Longest name a legacy advertisement can carry: flags (3), the battery + HID service
+/// UUIDs (6) and the appearance (4) claim the rest of its 31 bytes.
+pub const BLE_ADV_NAME_MAX_LEN: usize = 16;
+
+/// Capacity of a Device Information Service string, in static RAM whatever it holds.
+pub const BLE_DIS_STRING_MAX_LEN: usize = 24;
 
 /// BLE state (what the BLE subsystem is currently doing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
@@ -17,7 +24,7 @@ pub enum BleState {
     Inactive,
 }
 
-/// Unified BLE status: which profile is active and what the BLE is doing.
+/// Unified BLE status: active profile, connection state, and whether that profile currently has bond information.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
@@ -25,6 +32,8 @@ pub enum BleState {
 pub struct BleStatus {
     pub profile: u8,
     pub state: BleState,
+    /// Whether the active BLE profile currently has bond information, independent of connection state.
+    pub bonded: bool,
 }
 
 impl Default for BleStatus {
@@ -32,6 +41,7 @@ impl Default for BleStatus {
         Self {
             profile: 0,
             state: BleState::Inactive,
+            bonded: false,
         }
     }
 }
@@ -47,6 +57,7 @@ mod tests {
             BleStatus {
                 profile: 0,
                 state: BleState::Inactive,
+                bonded: false,
             }
         );
     }
@@ -56,10 +67,12 @@ mod tests {
         let advertising = BleStatus {
             profile: 0,
             state: BleState::Advertising,
+            bonded: false,
         };
         let connected = BleStatus {
             profile: 2,
             state: BleState::Connected,
+            bonded: true,
         };
         let inactive = BleStatus::default();
 
@@ -70,6 +83,7 @@ mod tests {
             BleStatus {
                 profile: 0,
                 state: BleState::Inactive,
+                bonded: false,
             }
         );
     }

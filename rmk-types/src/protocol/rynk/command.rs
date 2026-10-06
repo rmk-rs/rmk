@@ -15,10 +15,10 @@ use serde::de::DeserializeOwned;
 use super::message::{RynkHeader, encode_frame};
 use super::{
     BehaviorConfig, DeviceCapabilities, DeviceInfo, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest,
-    GetKeymapBulkRequest, GetKeymapBulkResponse, GetMacroRequest, GetMorseBulkRequest, GetMorseBulkResponse,
-    KeyPosition, LayoutChunk, LockStatus, MacroData, MatrixState, ProtocolVersion, RynkError, SetComboBulkRequest,
-    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest,
-    SetMorseBulkRequest, SetMorseRequest, StorageResetMode,
+    GetKeymapBulkRequest, GetKeymapBulkResponse, GetMorseBulkRequest, GetMorseBulkResponse, KeyPosition, LayoutChunk,
+    LockStatus, MatrixState, ProtocolVersion, RynkError, SetComboBulkRequest, SetComboRequest, SetEncoderRequest,
+    SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest,
+    StorageResetMode,
 };
 use crate::action::{EncoderAction, KeyAction};
 #[cfg(feature = "_ble")]
@@ -28,6 +28,7 @@ use crate::ble::BleStatus;
 use crate::combo::Combo;
 use crate::connection::{ConnectionStatus, ConnectionType};
 use crate::fork::Fork;
+use crate::keyboard_macros::Macro;
 use crate::led_indicator::LedIndicator;
 use crate::morse::Morse;
 #[cfg(feature = "split")]
@@ -289,8 +290,8 @@ endpoints! {
     GetKeymapBulk = 0x0107: GetKeymapBulkRequest => GetKeymapBulkResponse;
     SetKeymapBulk = 0x0108: SetKeymapBulkRequest => ();
 
-    // Macro (0x02xx).
-    GetMacro = 0x0201: GetMacroRequest => MacroData;
+    // Macro (0x02xx). One whole macro per call, `u8` is the macro index.
+    GetMacro = 0x0201: u8 => Macro;
     SetMacro = 0x0202: SetMacroRequest => ();
 
     // Combo (0x03xx).
@@ -317,6 +318,7 @@ endpoints! {
     GetConnectionType = 0x0701: () => ConnectionType;
     /// Full `ConnectionStatus` snapshot.
     GetConnectionStatus = 0x0702: () => ConnectionStatus;
+    /// Active profile, BLE state, and whether that profile currently has bond information.
     #[cfg(feature = "_ble")]
     GetBleStatus = 0x0703: () => BleStatus;
     #[cfg(feature = "_ble")]

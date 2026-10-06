@@ -10,64 +10,6 @@ use crate::event_macros::config::InputDeviceConfig;
 use crate::event_macros::utils::deduplicate_type_generics;
 use crate::processor::ProcessorConfig;
 
-/// Build the loop body for select with optional match.
-fn build_select_loop_body(
-    select_arms: &[TokenStream],
-    match_arms: Option<&[TokenStream]>,
-) -> TokenStream {
-    let select_block = quote! {
-        ::rmk::futures::select_biased! {
-            #(#select_arms),*
-        }
-    };
-
-    match match_arms {
-        Some(arms) => quote! {
-            let select_result = { #select_block };
-            match select_result {
-                #(#arms)*
-            }
-        },
-        None => select_block,
-    }
-}
-
-/// Build the polling loop body with ticker.
-fn build_polling_loop_body(
-    timer_arm: TokenStream,
-    select_arms: &[TokenStream],
-    match_arms: Option<&[TokenStream]>,
-) -> TokenStream {
-    let select_block = quote! {
-        ::rmk::futures::select_biased! {
-            #timer_arm,
-            #(#select_arms),*
-        }
-    };
-
-    let select_handling = match match_arms {
-        Some(arms) => quote! {
-            let select_result = { #select_block };
-            match select_result {
-                #(#arms)*
-            }
-        },
-        None => select_block,
-    };
-
-    quote! {
-        #select_handling
-    }
-}
-
-/// Check if a path matches any path in a list (by last segment ident).
-fn path_in_list(needle: &syn::Path, haystack: &[syn::Path]) -> bool {
-    let needle_ident = needle.segments.last().map(|s| &s.ident);
-    haystack
-        .iter()
-        .any(|p| p.segments.last().map(|s| &s.ident) == needle_ident)
-}
-
 /// Generate a unified `Runnable` impl for input_device and/or processor.
 ///
 /// Handles:
@@ -89,7 +31,12 @@ pub fn generate_runnable(
     // Check for self-deadlock: published event type must not be in subscribe list of the same struct
     if let (Some(input_cfg), Some(proc_cfg)) = (input_device_config, processor_config) {
         let publish_type = &input_cfg.event_type;
-        if path_in_list(publish_type, &proc_cfg.event_types) {
+        let publish_ident = publish_type.segments.last().map(|s| &s.ident);
+        if proc_cfg
+            .event_types
+            .iter()
+            .any(|path| path.segments.last().map(|s| &s.ident) == publish_ident)
+        {
             panic!(
                 "Self-deadlock detected on `{}`: cannot publish and subscribe the same event type `{}`. \
                 The task would block on publish_event_async() while the only consumer is in the same blocked task.",
@@ -97,6 +44,16 @@ pub fn generate_runnable(
                 quote! { #publish_type }
             );
         }
+    }
+
+    let has_polling = processor_config.is_some_and(|c| c.poll_interval_ms.is_some());
+    let has_deadline = processor_config.is_some_and(|c| c.deadline);
+    if has_deadline && input_device_config.is_some() {
+        return syn::Error::new_spanned(
+            struct_name,
+            "a `deadline` processor cannot also be an #[input_device]",
+        )
+        .to_compile_error();
     }
 
     let (impl_generics, _, _) = generics.split_for_impl();
@@ -113,83 +70,17 @@ pub fn generate_runnable(
         }
     };
 
-    // Collect select arms and subscriber definitions.
-    let mut sub_defs: Vec<TokenStream> = Vec::new();
-    let mut select_arms: Vec<TokenStream> = Vec::new();
-    let mut select_match_arms: Vec<TokenStream> = Vec::new();
-    let mut use_statements: Vec<TokenStream> = Vec::new();
-
-    let needs_split_select = input_device_config.is_some() && processor_config.is_some();
-    let select_enum_name =
-        needs_split_select.then(|| format_ident!("__RmkSelectEvent{}", struct_name));
-    let mut input_event_type: Option<syn::Path> = None;
-
-    // Handle input_device.
-    if let Some(device_config) = input_device_config {
-        input_event_type = Some(device_config.event_type.clone());
-        use_statements.push(quote! { use ::rmk::event::publish_event_async; });
-        use_statements.push(quote! { use ::rmk::input_device::InputDevice; });
-
-        if let Some(ref enum_name) = select_enum_name {
-            select_arms.push(quote! {
-                event = self.read_event().fuse() => #enum_name::Input(event)
-            });
-            select_match_arms.push(quote! {
-                #enum_name::Input(event) => {
-                    publish_event_async(event).await;
-                }
-            });
-        } else {
-            select_arms.push(quote! {
-                event = self.read_event().fuse() => {
-                    publish_event_async(event).await;
-                }
-            });
-        }
-    }
-
-    // Handle processor.
-    let has_polling = processor_config
-        .as_ref()
-        .map(|c| c.poll_interval_ms.is_some())
-        .unwrap_or(false);
-
-    if processor_config.is_some() {
-        use_statements.push(quote! { use ::rmk::event::SubscribableEvent; });
-        use_statements.push(quote! { use ::rmk::processor::Processor; });
-
-        // Use the Processor trait's subscriber method
-        // The processor macro has already generated the event enum and Processor trait impl
-        sub_defs.push(quote! {
-            let mut proc_sub = <Self as ::rmk::processor::Processor>::subscriber();
-        });
-
-        if let Some(ref enum_name) = select_enum_name {
-            select_arms.push(quote! {
-                proc_event = proc_sub.next_event().fuse() => #enum_name::Processor(proc_event)
-            });
-        } else {
-            select_arms.push(quote! {
-                proc_event = proc_sub.next_event().fuse() => {
-                    <Self as ::rmk::processor::Processor>::process(self, proc_event).await;
-                }
-            });
-        }
-
-        if let Some(ref enum_name) = select_enum_name {
-            select_match_arms.push(quote! {
-                #enum_name::Processor(event) => {
-                    <Self as ::rmk::processor::Processor>::process(self, event).await;
-                }
-            });
-        }
-    }
-
-    // === Standalone cases (early returns) ===
-
     // Standalone processor
     if input_device_config.is_none() && processor_config.is_some() {
-        return wrap_runnable(if has_polling {
+        return wrap_runnable(if has_deadline && has_polling {
+            quote! {
+                ::rmk::processor::DeadlineProcessor::polling_deadline_loop(self).await
+            }
+        } else if has_deadline {
+            quote! {
+                ::rmk::processor::DeadlineProcessor::deadline_loop(self).await
+            }
+        } else if has_polling {
             quote! {
                 use ::rmk::processor::PollingProcessor;
                 self.polling_loop().await
@@ -214,101 +105,57 @@ pub fn generate_runnable(
         });
     }
 
-    // === Combined cases ===
-
-    // Add common use statements
-    if !sub_defs.is_empty() {
-        use_statements.push(quote! { use ::rmk::event::EventSubscriber; });
-    }
-    use_statements.push(quote! { use ::rmk::futures::FutureExt; });
-
-    // Build select enum definition if needed
-    let select_enum_def = select_enum_name.as_ref().and_then(|enum_name| {
-        let input_type = input_event_type.as_ref()?;
-        // Determine the processor event type
-        // If processor has only one event type, use it directly (no enum generated)
-        // Otherwise, use the generated enum name {StructName}ProcessorEventEnum
-        let proc_type = if let Some(proc_cfg) = processor_config {
-            if proc_cfg.event_types.len() == 1 {
-                let event_type = &proc_cfg.event_types[0];
-                quote! { #event_type }
-            } else {
-                let proc_enum_name = format_ident!("{}ProcessorEventEnum", struct_name);
-                quote! { #proc_enum_name }
-            }
-        } else {
-            // This shouldn't happen in combined mode, but provide a fallback
-            quote! { () }
-        };
-
-        Some(if has_polling {
-            quote! {
-                enum #enum_name {
-                    Input(#input_type),
-                    Processor(#proc_type),
-                    Timer,
-                }
-            }
-        } else {
-            quote! {
-                enum #enum_name {
-                    Input(#input_type),
-                    Processor(#proc_type),
-                }
-            }
-        })
-    });
-
-    // Build loop body
-    let loop_body = if has_polling {
-        use_statements.push(quote! { use ::rmk::processor::PollingProcessor; });
-
-        let (timer_arm, match_arms) = if let Some(ref enum_name) = select_enum_name {
-            select_match_arms.push(quote! {
-                #enum_name::Timer => {
-                    <Self as ::rmk::processor::PollingProcessor>::update(self).await;
-                }
-            });
-            (
-                quote! { _ = ticker.next().fuse() => #enum_name::Timer },
-                Some(select_match_arms.as_slice()),
-            )
-        } else {
-            (
-                quote! {
-                    _ = ticker.next().fuse() => {
-                        <Self as ::rmk::processor::PollingProcessor>::update(self).await;
-                    }
-                },
-                None,
-            )
-        };
-
-        build_polling_loop_body(timer_arm, &select_arms, match_arms)
-    } else {
-        let match_arms = needs_split_select.then_some(select_match_arms.as_slice());
-        build_select_loop_body(&select_arms, match_arms)
+    let (Some(device_config), Some(processor_config)) = (input_device_config, processor_config)
+    else {
+        unreachable!("Runnable generation requires an input device or processor");
     };
-
-    // Build timer init if polling
-    let timer_init = processor_config.as_ref().and_then(|config| {
-        config.poll_interval_ms.map(|interval_ms| {
-            quote! {
-                let mut ticker = ::embassy_time::Ticker::every(
-                    ::embassy_time::Duration::from_millis(#interval_ms)
-                );
-            }
-        })
+    let enum_name = format_ident!("__RmkSelectEvent{}", struct_name);
+    let input_type = &device_config.event_type;
+    let proc_type = match processor_config.event_types.as_slice() {
+        [] => quote! { ::core::convert::Infallible },
+        [event_type] => quote! { #event_type },
+        _ => {
+            let proc_enum_name = format_ident!("{}ProcessorEventEnum", struct_name);
+            quote! { #proc_enum_name }
+        }
+    };
+    let mut select_arms = vec![
+        quote! { event = self.read_event().fuse() => #enum_name::Input(event) },
+        quote! { proc_event = proc_sub.next_event().fuse() => #enum_name::Processor(proc_event) },
+    ];
+    let mut match_arms = vec![
+        quote! { #enum_name::Input(event) => { publish_event_async(event).await; } },
+        quote! { #enum_name::Processor(event) => { <Self as ::rmk::processor::Processor>::process(self, event).await; } },
+    ];
+    let timer_variant = has_polling.then(|| quote! { Timer, });
+    let timer_init = processor_config.poll_interval_ms.map(|interval_ms| {
+        quote! {
+            let mut ticker = ::embassy_time::Ticker::every(
+                ::embassy_time::Duration::from_millis(#interval_ms)
+            );
+        }
     });
-
-    // Assemble final output
+    if has_polling {
+        select_arms.insert(0, quote! { _ = ticker.next().fuse() => #enum_name::Timer });
+        match_arms.push(quote! {
+            #enum_name::Timer => { <Self as ::rmk::processor::PollingProcessor>::update(self).await; }
+        });
+    }
     wrap_runnable(quote! {
-        #(#use_statements)*
-        #select_enum_def
-        #(#sub_defs)*
+        use ::rmk::event::publish_event_async;
+        use ::rmk::input_device::InputDevice;
+        use ::rmk::event::EventSubscriber;
+        use ::rmk::futures::FutureExt;
+        enum #enum_name {
+            Input(#input_type),
+            Processor(#proc_type),
+            #timer_variant
+        }
+        let mut proc_sub = <Self as ::rmk::processor::Processor>::subscriber();
         #timer_init
         loop {
-            #loop_body
+            let select_result = { ::rmk::futures::select_biased! { #(#select_arms),* } };
+            match select_result { #(#match_arms)* }
         }
     })
 }

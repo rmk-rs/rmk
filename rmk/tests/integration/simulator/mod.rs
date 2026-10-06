@@ -8,15 +8,17 @@
 //! Lives in the test crate, so it drives only rmk's public API (plus the
 //! `#[doc(hidden)]` `rmk::test_support` gate for a few internal signals).
 
+/// Geometry of the simulated flash part: 4 KiB in 1 KiB sectors, a sector
+/// holding every chunk of the macro buffer, written 4 bytes at a time.
 #[cfg(feature = "storage")]
-pub mod flash;
+pub type Flash = rmk::test_support::InMemoryFlash<4096, 1024, 4>;
 
 use core::future::Future;
 use core::pin::Pin;
 
 #[cfg(feature = "storage")]
 use embassy_embedded_hal::adapter::BlockingAsync;
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either, select, select4};
 use embassy_futures::yield_now;
 use embassy_time::{Duration, Timer};
 #[cfg(feature = "storage")]
@@ -134,6 +136,7 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             rmk_config: self.rmk_config,
             steps: Vec::new(),
             storage: None,
+            ble_profile_actions: Vec::new(),
         }
     }
 
@@ -159,6 +162,7 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             rmk_config: self.rmk_config,
             steps: Vec::new(),
             storage: Some(Box::pin(async move { storage.run().await })),
+            ble_profile_actions: Vec::new(),
         }
     }
 }
@@ -175,8 +179,6 @@ enum SimStep {
     /// future — so the harness needs no vocabulary of its own for event types.
     #[cfg(feature = "rynk")]
     Publish(Pin<Box<dyn Future<Output = ()>>>),
-    #[cfg(feature = "storage")]
-    WaitStorage,
     #[cfg(feature = "passkey_entry")]
     BeginPasskeyEntry,
     #[cfg(feature = "passkey_entry")]
@@ -196,6 +198,7 @@ pub struct SimKeyboard {
     rmk_config: RmkConfig<'static>,
     steps: Vec<SimStep>,
     storage: Option<Pin<Box<dyn Future<Output = ()>>>>,
+    ble_profile_actions: Vec<String>,
 }
 
 impl SimKeyboard {
@@ -314,12 +317,6 @@ impl SimKeyboard {
         self
     }
 
-    #[cfg(feature = "storage")]
-    pub fn wait_storage(&mut self) -> &mut Self {
-        self.steps.push(SimStep::WaitStorage);
-        self
-    }
-
     #[cfg(feature = "passkey_entry")]
     pub fn begin_passkey_entry(&mut self) -> &mut Self {
         self.steps.push(SimStep::BeginPasskeyEntry);
@@ -356,14 +353,17 @@ impl SimKeyboard {
             )
         });
 
-        // Nothing else drains `FLASH_CHANNEL`, so without a storage task the
+        // Nothing else drains the storage queue, so without a storage task the
         // keyboard would block on it once full.
         let flash = async {
             match storage {
                 Some(storage) => storage.await,
-                None => rmk::channel::drain_flash_channel_for_test().await,
+                None => rmk::test_support::drain_flash_channel().await,
             }
         };
+        // Same for the BLE profile task, but keep what it received so tests can check it.
+        let mut profile_actions = Vec::new();
+        let profiles = rmk::test_support::drain_ble_profile_channel(&mut profile_actions);
 
         // A host connection is just a byte stream: drive the production
         // `run_session` over an in-memory duplex, exactly as a USB/BLE transport
@@ -385,22 +385,23 @@ impl SimKeyboard {
         // None of these ever return; the timeline does, and dropping them is how
         // a run ends. One resolving first means a task died or, for the session,
         // that a framing guard rejected the stream.
-        let background = select(keyboard.run(), select(flash, session));
+        let background = select4(keyboard.run(), flash, profiles, session);
         match select(background, run_steps(steps, &to_device, &from_device)).await {
             Either::First(_) => panic!("a background task ended before the scripted steps finished"),
             Either::Second(()) => {}
         }
+        self.ble_profile_actions = profile_actions;
 
         assert!(
             self.keyboard.held_buffer.is_empty(),
             "leak after buffer cleanup, buffer contains {:?}",
             self.keyboard.held_buffer
         );
-        assert!(
-            self.keyboard.unprocessed_events.is_empty(),
-            "simulator ended with unprocessed keyboard events: {:?}",
-            self.keyboard.unprocessed_events
-        );
+    }
+
+    /// What the keyboard sent the BLE profile task during `run`, in `Debug` form.
+    pub fn ble_profile_actions(&self) -> &[String] {
+        &self.ble_profile_actions
     }
 }
 
@@ -458,8 +459,6 @@ async fn run_steps(steps: Vec<SimStep>, to_device: &Link, from_device: &Link) {
                 }
             }
             SimStep::HostSend(request) => {
-                #[cfg(feature = "storage")]
-                rmk::test_support::reset_flash_operation();
                 let blocked = format!(
                     "host request of {} bytes blocked for {TIMEOUT_SECS}s: {}",
                     request.len(),
@@ -506,12 +505,6 @@ async fn run_steps(steps: Vec<SimStep>, to_device: &Link, from_device: &Link) {
             }
             #[cfg(feature = "rynk")]
             SimStep::Publish(event) => event.await,
-            #[cfg(feature = "storage")]
-            SimStep::WaitStorage => {
-                let waiting = format!("no storage write within {TIMEOUT_SECS}s");
-                let written = with_timeout(rmk::test_support::flash_operation_finished(), &waiting).await;
-                assert!(written, "storage write failed");
-            }
             #[cfg(feature = "passkey_entry")]
             SimStep::BeginPasskeyEntry => rmk::ble::passkey::begin_passkey_entry_session(),
             #[cfg(feature = "passkey_entry")]
@@ -632,6 +625,9 @@ fn input(pos: KeyboardEventPos) -> String {
     match pos {
         KeyboardEventPos::Key(key) => format!("key [{}, {}]", key.row, key.col),
         KeyboardEventPos::RotaryEncoder(pos) => format!("encoder {} {:?}", pos.id, pos.direction),
+        KeyboardEventPos::Combo(idx) => format!("combo {idx}"),
+        KeyboardEventPos::Macro => "macro".to_string(),
+        KeyboardEventPos::Virtual(idx) => format!("virtual {idx}"),
     }
 }
 

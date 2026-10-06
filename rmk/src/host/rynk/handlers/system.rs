@@ -53,7 +53,9 @@ impl Handle<GetCapabilities> for RynkService<'_> {
             num_encoders: self.ctx.num_encoders() as u8,
             max_combos: constants::COMBO_MAX_NUM as u8,
             max_combo_keys: constants::COMBO_MAX_LENGTH as u8,
+            max_macros: constants::MACRO_MAX_NUM as u8,
             macro_space_size: constants::MACRO_SPACE_SIZE as u16,
+            macros_writable: cfg!(feature = "storage"),
             max_morse: constants::MORSE_MAX_NUM as u8,
             max_patterns_per_key: constants::MAX_PATTERNS_PER_KEY as u8,
             max_forks: constants::FORK_MAX_NUM as u8,
@@ -70,7 +72,6 @@ impl Handle<GetCapabilities> for RynkService<'_> {
 
             // Protocol limits
             max_payload_size: RYNK_MAX_PAYLOAD_SIZE as u16,
-            macro_chunk_size: constants::MACRO_DATA_SIZE as u16,
             max_bulk_keys: MAX_BULK_KEYS as u8,
             max_bulk_items: MAX_BULK_ITEMS as u8,
             bulk_transfer_supported: true,

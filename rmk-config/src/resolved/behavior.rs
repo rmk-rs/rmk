@@ -64,6 +64,7 @@ pub enum MacroOperation {
     Up { keycode: String },
     Delay { duration_ms: u64 },
     Text { text: String },
+    PauseForRelease,
 }
 
 pub struct Forks {
@@ -276,6 +277,7 @@ fn resolve_macro_operation(op: crate::MacroOperation) -> MacroOperation {
             duration_ms: duration.0,
         },
         crate::MacroOperation::Text { text } => MacroOperation::Text { text },
+        crate::MacroOperation::PauseForRelease => MacroOperation::PauseForRelease,
     }
 }
 

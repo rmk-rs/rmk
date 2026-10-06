@@ -1,9 +1,8 @@
 use rmk_macro::processor;
-use usbd_hid::descriptor::MouseReport;
 
 use crate::channel::send_hid_report;
 use crate::event::PointingEvent;
-use crate::hid::Report;
+use crate::hid::{MouseReport, Report};
 use crate::input_device::pointing::ALL_POINTING_DEVICES;
 use crate::keymap::KeyMap;
 
@@ -71,8 +70,8 @@ impl<'a, const N: usize> JoystickProcessor<'a, N> {
         let buttons = self.keymap.mouse_buttons();
         let mouse_report = MouseReport {
             buttons,
-            x: (report[0].clamp(i8::MIN as i16, i8::MAX as i16)) as i8,
-            y: (report[1].clamp(i8::MIN as i16, i8::MAX as i16)) as i8,
+            x: report[0],
+            y: report[1],
             wheel: 0,
             pan: 0,
         };

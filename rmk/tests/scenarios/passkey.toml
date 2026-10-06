@@ -39,3 +39,27 @@ steps = [
   { passkey = "end" },
 ]
 expect = [{ passkey = "cancelled" }]
+
+[[test]]
+name = "release_during_pairing_clears_a_preexisting_key"
+steps = [
+  { press = [0, 2] },
+  { passkey = "begin" },
+  { release = [0, 2] },
+  { passkey = "end" },
+  { tap = { pos = [2, 4], duration = 50 } },
+]
+expect = [["A"], ["B"], []]
+
+[[test]]
+name = "release_during_pairing_preserves_other_holders"
+steps = [
+  { press = [2, 6] },
+  { press = [0, 5] },
+  { passkey = "begin" },
+  { release = [0, 5] },
+  { passkey = "end" },
+  { tap = { pos = [0, 2], duration = 50 } },
+  { release = [2, 6] },
+]
+expect = [["D"], ["LGui", "D", "B"], ["D", "A"], ["D"], []]

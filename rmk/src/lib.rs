@@ -43,10 +43,19 @@ compile_error!(
      runs over the wired split transport. Disable `dfu_split` on BLE builds."
 );
 
+// The DFU features are layered: `dfu` is the base, and everything on top of
+// it needs a chip backend (`dfu_rp` or `dfu_nrf`) to provide the updater.
+#[cfg(all(feature = "_dfu", not(any(feature = "dfu_rp", feature = "dfu_nrf"))))]
+compile_error!("feature `_dfu` requires `dfu_rp` or `dfu_nrf`");
+#[cfg(all(feature = "dfu_split", not(feature = "_dfu")))]
+compile_error!("feature `dfu_split` requires the `_dfu` feature — enable `dfu_rp` or `dfu_nrf`");
+#[cfg(all(feature = "dfu_ext", not(feature = "_dfu")))]
+compile_error!("feature `dfu_ext` requires the `_dfu` feature — enable `dfu_rp` or `dfu_nrf`");
+#[cfg(all(feature = "dfu_lock", not(feature = "_dfu")))]
+compile_error!("feature `dfu_lock` requires the `_dfu` feature — enable `dfu_rp` or `dfu_nrf`");
+
 // Re-export self as ::rmk for macro-generated code to work both inside and outside the crate
 extern crate self as rmk;
-
-include!(concat!(env!("OUT_DIR"), "/constants.rs"));
 
 // TODO: re-export to `constants`?
 pub(crate) use rmk_types::constants::*;
@@ -56,7 +65,7 @@ pub(crate) mod fmt;
 
 pub use embassy_futures;
 #[cfg(not(any(cortex_m)))]
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex as RawMutex;
+pub use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex as RawMutex;
 #[cfg(cortex_m)]
 pub use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex as RawMutex;
 pub use embassy_time;
@@ -69,9 +78,9 @@ pub use keyboard::auto_mouse_layer::AutoMouseLayerRunner;
 use keymap::KeyMap;
 pub use keymap::KeymapData;
 pub use rmk_macro as macros;
+// Spells a macro's text as `MacroOp::Char`s: `text!("hi")`.
+pub use rmk_macro::text;
 pub use rmk_types as types;
-#[cfg(all(feature = "storage", feature = "host"))]
-use rmk_types::action::EncoderAction;
 #[cfg(feature = "_ble")]
 pub use trouble_host::prelude::*;
 #[cfg(feature = "storage")]
@@ -87,8 +96,10 @@ pub mod config;
 pub mod core_traits;
 #[cfg(feature = "dfu_split")]
 pub mod crc32;
+#[cfg(feature = "custom_message")]
+pub mod custom_message;
 pub mod debounce;
-#[cfg(feature = "dfu")]
+#[cfg(feature = "_dfu")]
 pub mod dfu;
 #[cfg(feature = "display")]
 pub mod display;
@@ -102,7 +113,6 @@ pub mod hid;
 pub mod host;
 pub mod input_device;
 pub mod keyboard;
-pub mod keyboard_macros;
 pub mod keymap;
 pub mod layout_macro;
 pub mod light;
@@ -154,25 +164,14 @@ pub async fn initialize_keymap_and_storage<
     behavior_config: &'a mut config::BehaviorConfig,
     positional_config: &'a PositionalConfig<ROW, COL>,
 ) -> (KeyMap<'a>, Storage<F, ROW, COL, NUM_LAYER, NUM_ENCODER>) {
+    // `mut` is only taken by the host build's keymap restore below.
+    #[cfg_attr(not(feature = "host"), allow(unused_mut))]
+    let mut storage = Storage::new(flash, storage_config).await;
+
     #[cfg(feature = "host")]
-    {
-        let mut storage = {
-            let encoder_opt: Option<&mut [[EncoderAction; NUM_ENCODER]; NUM_LAYER]> = if NUM_ENCODER > 0 {
-                Some(&mut data.encoder_map)
-            } else {
-                None
-            };
-            Storage::new(flash, &data.keymap, &encoder_opt, storage_config, behavior_config).await
-        };
-
-        let keymap = KeyMap::new_from_storage(data, Some(&mut storage), behavior_config, positional_config).await;
-        (keymap, storage)
-    }
-
+    let keymap = KeyMap::new_from_storage(data, Some(&mut storage), behavior_config, positional_config).await;
     #[cfg(not(feature = "host"))]
-    {
-        let storage = Storage::new(flash, storage_config, behavior_config).await;
-        let keymap = KeyMap::new(data, behavior_config, positional_config).await;
-        (keymap, storage)
-    }
+    let keymap = KeyMap::new(data, behavior_config, positional_config).await;
+
+    (keymap, storage)
 }

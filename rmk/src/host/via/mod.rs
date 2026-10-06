@@ -9,7 +9,7 @@ use crate::hid::ViaReport;
 use crate::host::context::KeyboardContext;
 use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
 use crate::keymap::KeyMap;
-use crate::{MACRO_SPACE_SIZE, boot};
+use crate::{MACRO_MAX_NUM, MACRO_SPACE_SIZE, boot};
 
 pub(crate) mod keycode_convert;
 mod vial;
@@ -90,7 +90,7 @@ impl<'a> VialService<'a> {
                     Ok(v) => match v {
                         ViaKeyboardInfo::LayoutOptions => {
                             let layout_option = BigEndian::read_u32(&report.output_data[2..6]);
-                            self.ctx.set_layout_options(layout_option).await;
+                            let _ = self.ctx.set_layout_options(layout_option).await;
                         }
                         ViaKeyboardInfo::DeviceIndication => {
                             let _device_indication = report.output_data[2];
@@ -120,7 +120,7 @@ impl<'a> VialService<'a> {
                     "Setting keycode: 0x{:02X} at ({},{}), layer {} as {:?}",
                     keycode, row, col, layer, action
                 );
-                self.ctx.set_action(layer, row, col, action).await;
+                let _ = self.ctx.set_action(layer, row, col, action).await;
             }
             ViaCommand::DynamicKeymapReset => {
                 warn!("Dynamic keymap reset -- not supported")
@@ -147,49 +147,63 @@ impl<'a> VialService<'a> {
                 boot::jump_to_bootloader();
             }
             ViaCommand::DynamicKeymapMacroGetCount => {
-                report.input_data[1] = 32;
-                warn!("Macro get count -- to be implemented")
+                report.input_data[1] = MACRO_MAX_NUM as u8;
             }
             ViaCommand::DynamicKeymapMacroGetBufferSize => {
-                report.input_data[1] = (MACRO_SPACE_SIZE as u16 >> 8) as u8;
-                report.input_data[2] = (MACRO_SPACE_SIZE & 0xFF) as u8;
+                BigEndian::write_u16(&mut report.input_data[1..3], MACRO_SPACE_SIZE as u16);
             }
             ViaCommand::DynamicKeymapMacroGetBuffer => {
                 let offset = BigEndian::read_u16(&report.output_data[1..3]) as usize;
                 let size = report.output_data[3] as usize;
+                // The payload is `[4..4 + size]` of a 32-byte report.
                 if size <= 28 {
-                    self.ctx.read_macro_buffer(offset, &mut report.input_data[4..4 + size]);
-                    debug!("Get macro buffer: offset: {}, data: {:?}", offset, report.input_data);
+                    let out = &mut report.input_data[4..4 + size];
+                    self.ctx.keymap.macros(|m| {
+                        let bytes = m.bytes().get(offset..).unwrap_or(&[]);
+                        let n = bytes.len().min(size);
+                        out[..n].copy_from_slice(&bytes[..n]);
+                        out[n..].fill(0);
+                    });
                 } else {
                     report.input_data[0] = 0xFF;
                 }
             }
             ViaCommand::DynamicKeymapMacroSetBuffer => {
-                // Every write writes all buffer space of the macro(if it's not empty)
-                let offset = BigEndian::read_u16(&report.output_data[1..3]);
-                // Current sequence size, <= 28
-                let size = report.output_data[3];
-                // `output_data` is 32 bytes, so the payload slice output_data[4..4 + size]
-                // is only valid for size <= 28. Reject oversized writes instead of
-                // panicking, mirroring the DynamicKeymapMacroGetBuffer handler above.
+                let offset = BigEndian::read_u16(&report.output_data[1..3]) as usize;
+                let size = report.output_data[3] as usize;
                 if size <= 28 {
-                    // End of current sequence in the macro cache
-                    // The first sequence, reset the macro cache
-                    if offset == 0 {
-                        self.ctx.reset_macro_buffer();
+                    let changed = self
+                        .ctx
+                        .keymap
+                        .macros(|m| m.write(offset, &report.output_data[4..4 + size]));
+                    #[cfg(feature = "storage")]
+                    if crate::keyboard::macros::persist(self.ctx.keymap, changed)
+                        .await
+                        .is_err()
+                    {
+                        error!("Failed to save the macros");
                     }
-
-                    // Update macro cache + flush full buffer to storage
-                    info!("Setting macro buffer, offset: {}, size: {}", offset, size);
-                    self.ctx
-                        .write_macro_buffer(offset as usize, &report.output_data[4..4 + size as usize])
-                        .await;
+                    #[cfg(not(feature = "storage"))]
+                    if !changed.is_empty() {
+                        warn!("Macros changed but not saved: there is no storage");
+                    }
                 } else {
                     report.input_data[0] = 0xFF;
                 }
             }
             ViaCommand::DynamicKeymapMacroReset => {
-                warn!("Macro reset -- to be implemented")
+                let changed = self.ctx.keymap.macros(|m| m.clear());
+                #[cfg(feature = "storage")]
+                if crate::keyboard::macros::persist(self.ctx.keymap, changed)
+                    .await
+                    .is_err()
+                {
+                    error!("Failed to save the macros");
+                }
+                #[cfg(not(feature = "storage"))]
+                if !changed.is_empty() {
+                    warn!("Macros changed but not saved: there is no storage");
+                }
             }
             ViaCommand::DynamicKeymapGetLayerCount => {
                 report.input_data[1] = self.ctx.keymap_dimensions().2 as u8;
@@ -220,7 +234,11 @@ impl<'a> VialService<'a> {
                     let via_keycode = LittleEndian::read_u16(&report.output_data[idx..idx + 2]);
                     let action = from_via_keycode(via_keycode);
                     let flat_index = offset as usize + i;
-                    self.ctx.try_set_action_flat(flat_index, action, rows, cols);
+                    let (layer, in_layer) = (flat_index / (rows * cols), flat_index % (rows * cols));
+                    let _ = self
+                        .ctx
+                        .set_action(layer as u8, (in_layer / cols) as u8, (in_layer % cols) as u8, action)
+                        .await;
                     idx += 2;
                 }
             }
@@ -290,6 +308,15 @@ mod tests {
         f(&mut service)
     }
 
+    /// These tests run no storage task, so writes that wait for one would never be
+    /// answered; the stand-in answers them.
+    fn process(service: &mut VialService, report: &mut ViaReport) {
+        block_on(embassy_futures::select::select(
+            service.process_via_packet(report),
+            crate::test_support::drain_flash_channel(),
+        ));
+    }
+
     /// A `DynamicKeymapMacroSetBuffer` (0x0F) report with `offset = 0` and the
     /// given payload `size` byte. The caller mirrors `Runnable::run` by seeding
     /// `input_data` with a copy of `output_data`.
@@ -309,7 +336,7 @@ mod tests {
     fn macro_set_buffer_max_size_ok() {
         with_service(|service| {
             let mut report = macro_set_buffer_report(28);
-            block_on(service.process_via_packet(&mut report));
+            process(service, &mut report);
         });
     }
 
@@ -320,7 +347,7 @@ mod tests {
     fn macro_set_buffer_oversize_rejected() {
         with_service(|service| {
             let mut report = macro_set_buffer_report(29);
-            block_on(service.process_via_packet(&mut report));
+            process(service, &mut report);
             assert_eq!(report.input_data[0], 0xFF);
         });
     }
@@ -346,10 +373,10 @@ mod tests {
     fn layout_options_set_then_get_roundtrip() {
         with_service(|service| {
             let mut set = layout_options_report(0x03, 0x00C0_FFEE);
-            block_on(service.process_via_packet(&mut set));
+            process(service, &mut set);
 
             let mut get = layout_options_report(0x02, 0);
-            block_on(service.process_via_packet(&mut get));
+            process(service, &mut get);
             assert_eq!(BigEndian::read_u32(&get.input_data[2..6]), 0x00C0_FFEE);
         });
     }

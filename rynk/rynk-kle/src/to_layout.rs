@@ -448,10 +448,10 @@ pub(crate) fn generate(input: GenInput) -> Result<Generated, String> {
             if seen_enc.insert(id) {
                 units.push(Unit::Enc(enc_index[&id]));
             }
-        } else if let Some(rc) = k.matrix {
-            if seen_key.insert(rc) {
-                units.push(Unit::Key(index[&rc]));
-            }
+        } else if let Some(rc) = k.matrix
+            && seen_key.insert(rc)
+        {
+            units.push(Unit::Key(index[&rc]));
         }
     }
     struct UnitRender<'a> {

@@ -8,12 +8,13 @@ use defmt::*;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
+use embassy_rp::flash::Flash;
 use embassy_rp::gpio::{Input, Level, Output};
-use embassy_rp::peripherals::{UART0, USB};
+use embassy_rp::peripherals::UART0;
 use embassy_rp::uart::{self, BufferedUart};
-use embassy_rp::usb::InterruptHandler;
 use panic_probe as _;
 use rmk::debounce::default_debouncer::DefaultDebouncer;
+use rmk::dfu::{partitions_from_linkerscript, FlashDfuHandler, FlashMutex};
 use rmk::futures::future::join;
 use rmk::matrix::Matrix;
 use rmk::processor::builtin::dfu_led::DfuLedProcessor;
@@ -24,7 +25,6 @@ use rmk::watchdog::Rp2040Watchdog;
 use static_cell::StaticCell;
 
 bind_interrupts!(struct Irqs {
-    USBCTRL_IRQ => InterruptHandler<USB>;
     UART0_IRQ => uart::BufferedInterruptHandler<UART0>;
 });
 
@@ -35,10 +35,15 @@ async fn main(_spawner: Spawner) {
 
     let (row_pins, col_pins) = config_matrix_pins_rp!(peripherals: p, input: [PIN_8, PIN_9], output: [PIN_10]);
 
-    rmk::dfu::init_flash_from_linkerscript(p.FLASH);
-
-    // mark the firmware as booted otherwise the bootloader thinks it didn't and will revert to the old firmware
-    rmk::dfu::mark_booted();
+    // Flash partition layout comes from the DFU symbols in memory.x. The
+    // DFU partition is passed to the split firmware-update handler — the
+    // central forwards new firmware over the split link.
+    let flash_mutex = FlashMutex::new(rmk::storage::async_flash_wrapper(Flash::<
+        _,
+        embassy_rp::flash::Blocking,
+        { rmk::dfu::FLASH_SIZE },
+    >::new_blocking(p.FLASH)));
+    let (_, state_partition, dfu_partition) = partitions_from_linkerscript(&flash_mutex);
 
     // DFU LED processor, optional. Flashes the LED when DFU is active
     let mut dfu_led_processor = DfuLedProcessor::new(Output::new(p.PIN_25, Level::Low), false);
@@ -55,8 +60,10 @@ async fn main(_spawner: Spawner) {
 
     let mut watchdog_runner = Rp2040Watchdog::default_runner(embassy_rp::watchdog::Watchdog::new(p.WATCHDOG));
 
+    let mut dfu_handler = FlashDfuHandler::new(dfu_partition, state_partition);
+
     join(
-        run_all!(matrix, dfu_led_processor, watchdog_runner),
+        run_all!(matrix, dfu_led_processor, watchdog_runner, dfu_handler),
         run_rmk_split_peripheral(uart_instance),
     )
     .await;

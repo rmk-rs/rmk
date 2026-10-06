@@ -1,8 +1,17 @@
 # Pointing Processor
 
-The PointingProcessor converts raw sensor motion events into HID mouse reports (or caret key taps). Four modes are available, switched via a processor in your configuration.
+Use `PointingProcessor` to turn sensor movement into mouse reports or arrow key taps. Choose one of the four modes below, then [switch modes](#mode-switching) when a layer or key changes.
 
 ## Modes
+
+Choose the mode for the input you want to send to the host:
+
+| Mode   | Host input                             |
+| ------ | -------------------------------------- |
+| Cursor | Mouse movement.                        |
+| Sniper | Mouse movement at reduced sensitivity. |
+| Scroll | Vertical wheel and horizontal pan.     |
+| Caret  | Arrow key taps.                        |
 
 ### Cursor
 
@@ -17,7 +26,7 @@ rmk::input_device::pointing::CursorConfig {
 }
 ```
 
-Formula: `output = delta * multiplier`. No accumulator and no divisor — every sample is processed immediately. Small movements are never swallowed, which is exactly what you want for cursor tracking.
+Each sample produces `output = delta * multiplier`. Set an axis multiplier to `0` to disable that axis.
 
 ### Scroll
 
@@ -34,7 +43,7 @@ rmk::input_device::pointing::ScrollConfig {
 }
 ```
 
-Uses the `MotionAccumulator`: `total = remainder + delta * multiplier`, then `output = total / divisor`. The **remainder** (the part that didn't produce output) is kept for the next sample. Without this, small deltas like `3` with `divisor=8` would always produce `0` and the sensor would feel dead.
+Scroll mode keeps motion between samples. It computes `total = remainder + delta * multiplier`, emits `total / divisor`, and keeps the remainder for the next sample. A larger divisor requires more movement for each scroll step:
 
 | Sample | delta | total  | output (total/8) | remainder |
 | ------ | ----- | ------ | ---------------- | --------- |
@@ -55,13 +64,15 @@ rmk::input_device::pointing::SniperConfig {
 }
 ```
 
-Uses the same `MotionAccumulator` as Scroll mode.
+Like Scroll mode, Sniper mode keeps fractional movement between samples. Increase `divisor` to reduce cursor sensitivity.
 
 ### Caret
 
 Maps X/Y to arrow key taps (up/down/left/right). No mouse report is generated.
 
 ```rust
+use rmk::types::keycode::HidKeyCode;
+
 rmk::input_device::pointing::CaretConfig {
     disable_x: false,  // disable horizontal caret taps
     disable_y: false,  // disable vertical caret taps
@@ -75,17 +86,32 @@ rmk::input_device::pointing::CaretConfig {
 }
 ```
 
-Uses `MotionAccumulator` in persistent mode: `total = remainder + delta`, output = `total / divisor`, but the **full total** stays in the accumulator (not just the remainder). The consumer (caret logic) decides when to reset the accumulator via `reset_x()`/`reset_y()` after a tap has been triggered.
+Caret mode accumulates movement until it exceeds `threshold`, then sends the configured arrow key taps. Increase the threshold to require more movement before each tap.
 
 ::: note
 
-Caret mode currently gets rid of all pressed modifiers (shift, CTRL) and sends the bare HidKeyCode.
+Caret mode sends unmodified arrow key taps, even when modifiers such as Shift or Ctrl are held.
 
 :::
 
 ## Mode switching
 
-Users can define a processor, in this case called `PointingProcessorController`, which subscribes to events (e.g. layer changes) and updates the active mode. The example below extends the shipped [`rp2040_pointing_modes`](https://github.com/rmk-rs/rmk/tree/main/examples/use_config/rp2040_pointing_modes) example, which switches to Cursor on layer 0, Sniper on layer 1, Scroll on layer 2, and Caret on layer 3, with an `ActionEvent` handler that also switches to Caret when a key bound to `User0` is pressed:
+To change modes when a layer or key changes, create a controller that receives those events and publishes `PointingProcessorEvent`.
+
+Add the following module to your project. It selects Cursor on layer 0, Sniper on layer 1, Scroll on layer 2, and Caret on layer 3. Pressing a key bound to `User0` also selects Caret.
+
+The example uses `device_id = 255` with the default pointing processor. If your processor is configured for a specific device ID, use that same ID in these events.
+
+::: note
+
+Reserve a subscriber slot for `ActionEvent` in `keyboard.toml`. Its default subscriber count is zero:
+
+```toml
+[event.action]
+subs = 1
+```
+
+:::
 
 ```rust title="src/pointing_processor_controller.rs"
 use rmk::event::{ActionEvent, LayerChangeEvent, PointingProcessorEvent, publish_event};
@@ -94,7 +120,7 @@ use rmk::macros::processor;
 use rmk::types::action::Action;
 use rmk::types::keycode::HidKeyCode;
 
-#[processor(subscribe = [LayerChangeEvent, ActionEvent])] // could be any other event
+#[processor(subscribe = [LayerChangeEvent, ActionEvent])]
 pub struct PointingProcessorController;
 
 impl PointingProcessorController {
@@ -156,7 +182,6 @@ impl PointingProcessorController {
     }
 
     async fn on_action_event(&mut self, event: ActionEvent) {
-        // Every resolved key action is published as an ActionEvent.
         if event.keyboard_event.pressed && event.action == Action::User(0) {
             publish_event(PointingProcessorEvent {
                 device_id: 255,
@@ -167,18 +192,7 @@ impl PointingProcessorController {
 }
 ```
 
-::: note
-
-`ActionEvent` ships with zero subscriber slots by default, so subscribing to it requires reserving one in `keyboard.toml`:
-
-```toml
-[event.action]
-subs = 1
-```
-
-:::
-
-Register the controller on the **central** side (always — even if the sensor is on a peripheral):
+Run the controller on the central, including when the sensor is connected to a peripheral. For a unibody keyboard, run it on the keyboard itself. Choose the setup that matches your project:
 
 import { Rust, Toml, Tab, Tabs } from '@theme'
 
@@ -186,37 +200,42 @@ import { Rust, Toml, Tab, Tabs } from '@theme'
 <Tab label={<Toml />}>
 
 ```rust title="src/main.rs"
-// always into main.rs (or central.rs with #[rmk_central] for a split keyboard),
-// regardless of where the sensor is connected.
 #![no_main]
 #![no_std]
 
 mod pointing_processor_controller;
 
+use pointing_processor_controller::PointingProcessorController;
 use rmk::macros::rmk_keyboard;
 
 #[rmk_keyboard]
 mod keyboard {
-    #[register_processor(event)]
-    fn pointing_processor_controller() -> crate::pointing_processor_controller::PointingProcessorController {
-        crate::pointing_processor_controller::PointingProcessorController::new()
+    #[register_processor]
+    fn pointing_processor_controller() -> PointingProcessorController {
+        PointingProcessorController::new()
     }
 }
 ```
 
+Add the constructor to your existing keyboard module. For a split keyboard, use the central's `#[rmk_central]` module in `src/central.rs` instead. See [running a processor](../../features/processor#run-the-processor).
+
 </Tab>
 <Tab label={<Rust />}>
 
-```rust title="src/main.rs"
-// always into main.rs/ central.rs, regardless of where the sensor is connected.
-	mod pointing_processor_controller;
-	use crate::pointing_processor_controller::PointingProcessorController;
-// ...
-    let mut pointing_controller = PointingProcessorController::new();
-    run_all!(
-		/* other processors go here */
-        pointing_controller,
-    ),
+Declare the module and import the controller in `src/main.rs` or `src/central.rs`:
+
+```rust
+mod pointing_processor_controller;
+
+use pointing_processor_controller::PointingProcessorController;
+use rmk::run_all;
+```
+
+After initializing your keyboard and transport, add the controller to the existing task list. Here, `keyboard` and `transport` are your firmware's existing instances:
+
+```rust
+let mut pointing_controller = PointingProcessorController::new();
+run_all!(pointing_controller, keyboard, transport).await;
 ```
 
 </Tab>

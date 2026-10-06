@@ -46,6 +46,11 @@ impl DongleRouter {
         }
     }
 
+    /// Whether a keyboard is connected and being relayed right now.
+    pub fn is_connected(&self) -> bool {
+        self.link_connected.load(Ordering::Relaxed)
+    }
+
     /// Called by the dongle task once it is relaying: open the host→keyboard path.
     pub(super) fn link_up(&self) {
         // `link_dropped` latches; clear it and the queue before the first forward.

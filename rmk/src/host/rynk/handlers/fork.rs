@@ -15,10 +15,10 @@ impl Handle<GetFork> for RynkService<'_> {
 
 impl Handle<SetFork> for RynkService<'_> {
     async fn handle(&self, r: SetForkRequest) -> Result<(), RynkError> {
-        if self.ctx.set_fork(r.index, r.config).await {
-            Ok(())
-        } else {
-            Err(RynkError::Invalid)
+        match self.ctx.set_fork(r.index, r.config).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(RynkError::Invalid),
+            Err(()) => Err(RynkError::StorageFault),
         }
     }
 }

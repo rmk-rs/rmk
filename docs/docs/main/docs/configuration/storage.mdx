@@ -62,8 +62,8 @@ When using DFU (`dfu_rp` / `dfu_nrf`), the storage partition is placed **after t
 
 If you change the storage size in rmk-boot's `build.rs`, rebuild the bootloader and regenerate `rmk-memory.x`. All partition addresses recalculate automatically.
 
-::: info Storage is re-initialized when the firmware changes
+::: info Flashing a new firmware can erase stored data
 
-Every firmware build embeds a unique build hash, and on boot RMK compares it with the hash saved in Flash. If they differ (for example after flashing a new build), the whole storage area is erased and re-initialized with the firmware's defaults, so saved keymap changes and BLE bonds don't survive a firmware update.
+Changing the RMK version, commit or features erases everything, BLE pairings included. Changing only your layout preserves stored values and pairings. Set `clear_layout = true` to replace the stored layout with the firmware's defaults while keeping pairings. See [Storage](/docs/features/storage) for the full table.
 
 :::

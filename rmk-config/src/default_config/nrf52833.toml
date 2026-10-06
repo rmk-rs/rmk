@@ -14,4 +14,6 @@ num_sectors = 16
 [chip.nrf52833]
 # DCDC regulator 1 enabled (default: true)
 # Note: nrf52833 only has reg1, not reg0
-dcdc_reg1 = true 
+dcdc_reg1 = true
+
+[dfu]

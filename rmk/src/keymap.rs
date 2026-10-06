@@ -10,12 +10,11 @@ use {
     embedded_storage_async::nor_flash::NorFlash,
 };
 
-use crate::MACRO_SPACE_SIZE;
 use crate::config::{BehaviorConfig, Hand, MouseKeyConfig, OneShotModifiersConfig, PositionalConfig};
 use crate::event::{KeyboardEvent, KeyboardEventPos, LayerChangeEvent, publish_event};
 use crate::input_device::rotary_encoder::Direction;
 use crate::keyboard::combo::Combo;
-use crate::keyboard_macros::MacroOperation;
+use crate::keyboard::macros::Macros;
 #[cfg(feature = "host_lock")]
 use crate::matrix::MatrixState;
 
@@ -33,8 +32,14 @@ pub struct KeymapData<const ROW: usize, const COL: usize, const NUM_LAYER: usize
     layer_cache: [[u8; COL]; ROW],
     /// Layer cache for encoder directions
     encoder_layer_cache: [[u8; 2]; NUM_ENCODER],
-    /// VIA/Vial layout options; persisted via `LayoutConfig`
+    /// VIA/Vial layout options; persisted via `LayoutOption`
     pub(crate) layout_option: u32,
+    /// The macro buffer, see [`crate::keyboard::macros`].
+    #[cfg(feature = "host")]
+    pub(crate) macros: [u8; crate::MACRO_SPACE_SIZE],
+    /// Whether flash holds the buffer; otherwise it is seeded from the defaults.
+    #[cfg(feature = "host")]
+    pub(crate) macros_stored: bool,
 }
 
 impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize> KeymapData<ROW, COL, NUM_LAYER, 0> {
@@ -47,6 +52,10 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize> KeymapData<ROW,
             layer_cache: [[0; COL]; ROW],
             encoder_layer_cache: [],
             layout_option: 0,
+            #[cfg(feature = "host")]
+            macros: [0; crate::MACRO_SPACE_SIZE],
+            #[cfg(feature = "host")]
+            macros_stored: false,
         }
     }
 }
@@ -66,6 +75,10 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             layer_cache: [[0; COL]; ROW],
             encoder_layer_cache: [[0u8; 2]; NUM_ENCODER],
             layout_option: 0,
+            #[cfg(feature = "host")]
+            macros: [0; crate::MACRO_SPACE_SIZE],
+            #[cfg(feature = "host")]
+            macros_stored: false,
         }
     }
 }
@@ -106,8 +119,9 @@ struct KeyMapInner<'a> {
     hand: &'a [Hand],
     /// Mouse button state
     mouse_buttons: u8,
-    /// VIA/Vial layout options; persisted via `LayoutConfig`
+    /// VIA/Vial layout options; persisted via `LayoutOption`
     layout_option: u32,
+    macros: Macros<'a>,
     /// Matrix state for vial lock
     #[cfg(feature = "host_lock")]
     matrix_state: MatrixState,
@@ -189,6 +203,7 @@ impl KeyMapInner<'_> {
                 }
                 KeyAction::No
             }
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => KeyAction::No,
         }
     }
 
@@ -216,6 +231,7 @@ impl KeyMapInner<'_> {
                     }
                 }
             }
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {}
         }
     }
 
@@ -239,6 +255,8 @@ impl KeyMapInner<'_> {
             }
         }
 
+        // Keep release on the same transparent default-layer action as press.
+        self.save_layer_cache(event.pos, self.behavior.default_layer);
         KeyAction::No
     }
 
@@ -273,6 +291,9 @@ impl KeyMapInner<'_> {
                 }
                 self.behavior.default_layer
             }
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {
+                self.behavior.default_layer
+            }
         }
     }
 
@@ -292,6 +313,7 @@ impl KeyMapInner<'_> {
                     }
                 }
             }
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {}
         }
     }
 
@@ -371,6 +393,10 @@ impl<'a> KeyMap<'a> {
         let layer_cache = data.layer_cache.as_mut_slice().as_flattened_mut();
         let encoder_layer_cache = data.encoder_layer_cache.as_mut_slice().as_flattened_mut();
         let hand = positional_config.hand.as_slice().as_flattened();
+        #[cfg(feature = "host")]
+        let macros = Macros::new(behavior.keyboard_macros, &mut data.macros, data.macros_stored);
+        #[cfg(not(feature = "host"))]
+        let macros = Macros::new(behavior.keyboard_macros, &mut [], false);
 
         KeyMap {
             inner: RefCell::new(KeyMapInner {
@@ -387,6 +413,7 @@ impl<'a> KeyMap<'a> {
                 hand,
                 mouse_buttons: 0,
                 layout_option: data.layout_option,
+                macros,
                 #[cfg(feature = "host_lock")]
                 matrix_state: MatrixState::new(ROW, COL),
             }),
@@ -421,25 +448,15 @@ impl<'a> KeyMap<'a> {
         fill_vec(&mut behavior.morse.morses);
 
         // Read from storage BEFORE flattening (storage expects typed arrays).
-        if let Some(storage) = storage
-            && {
-                Ok(())
-                    .and(storage.read_keymap(data, behavior).await)
-                    .and(storage.read_behavior_config(behavior).await)
-                    .and(
-                        storage
-                            .read_macro_cache(&mut behavior.keyboard_macros.macro_sequences)
-                            .await,
-                    )
-                    .and(storage.read_combos(&mut behavior.combo.combos).await)
-                    .and(storage.read_forks(&mut behavior.fork.forks).await)
-                    .and(storage.read_morses(&mut behavior.morse.morses).await)
+        if let Some(storage) = storage {
+            if storage.clear_layout {
+                debug!("`clear_layout` is set, rewriting the items the compiled-in layout owns.");
+                storage.write_layout(data, behavior).await;
+            } else if storage.read_keymap(data, behavior).await.is_err() {
+                error!("Failed to read from storage, clearing...");
+                storage.flash.erase_all().await.ok();
+                reboot_keyboard();
             }
-            .is_err()
-        {
-            error!("Failed to read from storage, clearing...");
-            storage.flash.erase_all().await.ok();
-            reboot_keyboard();
         }
 
         Self::build(data, behavior, positional_config)
@@ -555,6 +572,13 @@ impl<'a> KeyMap<'a> {
 
     pub(crate) fn set_layout_option(&self, layout_option: u32) {
         self.inner.borrow_mut().layout_option = layout_option;
+    }
+
+    /// The behavior config as one storage item; taken after a RAM change so the
+    /// next writer's snapshot includes it.
+    #[cfg(feature = "storage")]
+    pub(crate) fn behavior_snapshot(&self) -> crate::storage::BehaviorConfig {
+        (&*self.inner.borrow().behavior).into()
     }
 
     pub(crate) fn update_fn_layer_state(&self) {
@@ -689,16 +713,8 @@ impl<'a> KeyMap<'a> {
         f(&mut inner.behavior.combo.combos)
     }
 
-    pub(crate) fn get_macro_sequence_start(&self, idx: u8) -> Option<usize> {
-        MacroOperation::get_macro_sequence_start(&self.inner.borrow().behavior.keyboard_macros.macro_sequences, idx)
-    }
-
-    pub(crate) fn get_next_macro_operation(&self, start: usize, offset: usize) -> (MacroOperation, usize) {
-        MacroOperation::get_next_macro_operation(
-            &self.inner.borrow().behavior.keyboard_macros.macro_sequences,
-            start,
-            offset,
-        )
+    pub(crate) fn macros<R>(&self, f: impl FnOnce(&mut Macros<'a>) -> R) -> R {
+        f(&mut self.inner.borrow_mut().macros)
     }
 
     pub(crate) fn mouse_buttons(&self) -> u8 {
@@ -715,13 +731,6 @@ impl<'a> KeyMap<'a> {
             inner.layers[index]
         } else {
             KeyAction::No
-        }
-    }
-
-    pub(crate) fn set_action_by_flat_index(&self, index: usize, action: KeyAction) {
-        let mut inner = self.inner.borrow_mut();
-        if index < inner.layers.len() {
-            inner.layers[index] = action;
         }
     }
 
@@ -778,32 +787,6 @@ impl<'a> KeyMap<'a> {
             return true;
         }
         false
-    }
-
-    pub(crate) fn read_macro_buffer(&self, offset: usize, target: &mut [u8]) {
-        let inner = self.inner.borrow();
-        let src = &inner.behavior.keyboard_macros.macro_sequences;
-        let end = (offset + target.len()).min(src.len());
-        if offset < end {
-            target[..end - offset].copy_from_slice(&src[offset..end]);
-        }
-    }
-
-    pub(crate) fn write_macro_buffer(&self, offset: usize, data: &[u8]) {
-        let mut inner = self.inner.borrow_mut();
-        let dst = &mut inner.behavior.keyboard_macros.macro_sequences;
-        let end = (offset + data.len()).min(dst.len());
-        if offset < end {
-            dst[offset..end].copy_from_slice(&data[..end - offset]);
-        }
-    }
-
-    pub(crate) fn reset_macro_buffer(&self) {
-        self.inner.borrow_mut().behavior.keyboard_macros.macro_sequences = [0; MACRO_SPACE_SIZE];
-    }
-
-    pub(crate) fn get_macro_sequences(&self) -> [u8; MACRO_SPACE_SIZE] {
-        self.inner.borrow().behavior.keyboard_macros.macro_sequences
     }
 
     #[cfg(feature = "host_lock")]

@@ -26,8 +26,8 @@ impl Handle<SetKeyAction> for RynkService<'_> {
         self.check_key_position(&set.position)?;
         self.ctx
             .set_action(set.position.layer, set.position.row, set.position.col, set.action)
-            .await;
-        Ok(())
+            .await
+            .or(Err(RynkError::StorageFault))
     }
 }
 
@@ -43,8 +43,7 @@ impl Handle<SetDefaultLayer> for RynkService<'_> {
         if (layer as usize) >= num_layers {
             return Err(RynkError::Invalid);
         }
-        self.ctx.set_default_layer(layer).await;
-        Ok(())
+        self.ctx.set_default_layer(layer).await.or(Err(RynkError::StorageFault))
     }
 }
 
@@ -58,8 +57,10 @@ impl Handle<GetEncoderAction> for RynkService<'_> {
 impl Handle<SetEncoderAction> for RynkService<'_> {
     async fn handle(&self, r: SetEncoderRequest) -> Result<(), RynkError> {
         self.check_encoder_bounds(r.layer, r.encoder_id)?;
-        self.ctx.set_encoder(r.layer, r.encoder_id, r.action).await;
-        Ok(())
+        self.ctx
+            .set_encoder(r.layer, r.encoder_id, r.action)
+            .await
+            .or(Err(RynkError::StorageFault))
     }
 }
 
@@ -125,7 +126,10 @@ impl HandleBulk<SetKeymapBulk> for RynkService<'_> {
             let layer = (offset / (rows * cols)) as u8;
             let row = (offset / cols % rows) as u8;
             let col = (offset % cols) as u8;
-            self.ctx.set_action(layer, row, col, action).await;
+            self.ctx
+                .set_action(layer, row, col, action)
+                .await
+                .or(Err(RynkError::StorageFault))?;
         }
         msg.encode_response(&())
     }

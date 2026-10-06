@@ -38,7 +38,7 @@ Run format test from root:
 bash scripts/format_all.sh
 ```
 
-Behavioral test suite (the three RMK feature rows CI runs):
+Behavioral test suite (RMK feature rows are defined by `RMK_TEST_FEATURESETS` in `.github/ci/_lib.sh`):
 ```bash
 bash scripts/test_all.sh
 ```

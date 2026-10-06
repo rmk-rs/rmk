@@ -404,6 +404,12 @@ impl HidKeyCode {
         HidKeyCode::MouseUp <= self && self <= HidKeyCode::MouseAccel2
     }
 
+    /// Returns `true` if the keycode is sent in the keyboard report, rather than
+    /// on the consumer, system control or mouse page
+    pub fn is_keyboard_key(self) -> bool {
+        self.process_as_consumer().is_none() && self.process_as_system_control().is_none() && !self.is_mouse_key()
+    }
+
     /// Returns the byte with the bit corresponding to the USB HID
     /// modifier bitfield set.
     pub fn to_hid_modifiers(self) -> ModifierCombination {

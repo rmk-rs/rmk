@@ -63,7 +63,8 @@ expect = [
   [],
 ]
 
-# Press `>` first and roll back to `<`. The re-strike is symmetric.
+# Press `>` first and roll back to `<`. The next press consumes the earlier
+# key's `SHIFTED()` modifier, so both transition reports are unshifted.
 [[test]]
 name = "reverse_roll_shifted_first"
 steps = [
@@ -119,7 +120,7 @@ expect = [
 ]
 
 # The half this must not break: with two owners holding one usage, releasing
-# the first keeps it down, and releasing the last clears it. Both orders.
+# the second owner first keeps it down, and releasing the last clears it.
 [[test]]
 name = "shared_usage_survives_first_release"
 steps = [

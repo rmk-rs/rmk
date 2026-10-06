@@ -106,5 +106,5 @@ insecure = true
 ```
 
 ::: note
-`insecure` (formerly `vial_insecure`; the old name still parses) only takes effect for Vial with the `host_lock` Cargo feature, which is enabled by default. If you disable default features and select Vial explicitly, add both `vial` and `host_lock`. `insecure` does not replace `unlock_keys`: the host can still lock and re-unlock a session that started unlocked, so you may keep `unlock_keys` configured alongside it.
+`insecure` (formerly `vial_insecure`; the old name still parses) only takes effect for Vial with the `host_lock` Cargo feature, which is enabled by default. If you disable default features and select Vial explicitly, add both `vial` and `host_lock`. With `insecure = true`, Vial stays unlocked even if the host sends a lock request. To require physical unlocking, set `insecure = false`, configure `unlock_keys`, then rebuild and flash the firmware.
 :::

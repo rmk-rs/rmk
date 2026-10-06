@@ -142,7 +142,7 @@ unit = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }                 // non-negative
 signed_unit = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }   // may be negative, for [y=n]
 shape_name = @{ (ASCII_ALPHANUMERIC | "_" | ".")+ }              // stock (2u/1.5u) or custom (iso_enter)
 shape_ref = ${ "@" ~ shape_name }                                // @name into [layout.shapes]
-hws = _{ " " | "\t" }                                            // spaces/tabs between tokens (silent)
+hws = _{ (" " | "\t")+ }                                         // spaces/tabs between tokens (silent)
 newline = @{ "\r"? ~ "\n" }                                      // significant row break
 spacer = ${ "[" ~ hws? ~ unit ~ hws? ~ "]" }                     // gap
 vertical = ${ "[" ~ hws? ~ "y" ~ hws? ~ "=" ~ hws? ~ signed_unit ~ hws? ~ "]" } // extra y for next row

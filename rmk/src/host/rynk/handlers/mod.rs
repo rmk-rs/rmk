@@ -10,7 +10,7 @@ mod connection;
 mod fork;
 mod keymap;
 mod layout;
-mod macro_data;
+mod macros;
 mod morse;
 mod status;
 mod system;

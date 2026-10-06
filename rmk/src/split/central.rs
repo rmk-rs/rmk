@@ -2,7 +2,7 @@
 use embedded_io_async::{Read, Write};
 
 #[cfg(feature = "dfu_split")]
-pub use crate::split::driver::UpdatePolicy;
+pub use crate::split::dfu::UpdatePolicy;
 
 /// Run the manager task of one serial split peripheral.
 ///
@@ -14,7 +14,7 @@ pub async fn run_peripheral_manager<S: Read + Write>(
     id: usize,
     receiver: S,
     matrix_config: crate::split::PeripheralMatrixConfig,
-    #[cfg(feature = "dfu_split")] policy: crate::split::driver::UpdatePolicy,
+    #[cfg(feature = "dfu_split")] policy: crate::split::dfu::UpdatePolicy,
 ) {
     crate::split::serial::run_serial_peripheral_manager(
         id,

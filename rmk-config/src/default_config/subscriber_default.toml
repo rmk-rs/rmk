@@ -39,7 +39,6 @@ events = [
     # (gated on #[cfg(feature = "display")] in driver.rs)
     # Covers up to 2 peripherals; for 3+ peripherals override subs in keyboard.toml
     { name = "wpm_update", count = 2 },
-    { name = "sleep_state", count = 2 },
 ]
 
 # --- BLE-gated internal subscribers ---
@@ -99,6 +98,13 @@ events = [
     { name = "battery_status" },
 ]
 
+[[subscriber]]
+features = ["dongle", "display"]
+events = [
+    # display/mod.rs: DisplayProcessor subscribes on a dongle with a screen.
+    { name = "dongle_state" },
+]
+
 # --- Split-gated internal subscribers ---
 
 [[subscriber]]
@@ -116,6 +122,9 @@ events = [
     # split/driver.rs: ConnectionStatusChangeEvent::subscriber()
     # Covers up to 2 peripherals; for 3+ peripherals override subs in keyboard.toml
     { name = "connection_status_change", count = 2 },
+    # split/driver.rs: SleepStateEvent::subscriber()
+    # Covers up to 2 peripherals; for 3+ peripherals override subs in keyboard.toml
+    { name = "sleep_state", count = 2 },
 ]
 
 # --- Split + BLE-gated internal subscribers ---
@@ -135,4 +144,13 @@ events = [
     # split/ble/central.rs: SleepStateEvent::subscriber() per connected link
     # Covers up to 2 peripherals; for 3+ peripherals override subs in keyboard.toml
     { name = "sleep_state", count = 2 },
+]
+
+# --- DFU Lock-gated internal subscribers ---
+
+[[subscriber]]
+features = ["dfu_lock"]
+events = [
+    # dfu/mod.rs: DfuLock subscribes to DfuCmdEvent for UnlockRequest
+    { name = "dfu_cmd" },
 ]

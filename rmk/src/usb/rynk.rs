@@ -26,9 +26,6 @@ const RYNK_USB_MAX_PACKET_SIZE: usize = 512;
 #[cfg(not(feature = "_usb_high_speed"))]
 const RYNK_USB_MAX_PACKET_SIZE: usize = 64;
 
-/// bRequest value Windows sends to fetch the MS OS 2.0 descriptor set.
-const MSOS_VENDOR_CODE: u8 = 0x52;
-
 /// GUID WinUSB registers the Rynk interface under; Windows hosts open the
 /// device node by it.
 const DEVICE_INTERFACE_GUID: &str = "{CE60F742-A8DB-43C4-8B97-7C41B43CD4AA}";
@@ -49,7 +46,7 @@ pub(crate) struct HostUsbWriter<D: Driver<'static>> {
 pub(crate) fn build_host_usb<D: Driver<'static>>(
     builder: &mut Builder<'static, D>,
 ) -> (HostUsbReader<D>, HostUsbWriter<D>) {
-    builder.msos_descriptor(msos::windows_version::WIN8_1, MSOS_VENDOR_CODE);
+    builder.msos_descriptor(msos::windows_version::WIN8_1, super::MSOS_VENDOR_CODE);
     let mut function = builder.function(
         RYNK_USB_INTERFACE_CLASS,
         RYNK_USB_INTERFACE_SUBCLASS,

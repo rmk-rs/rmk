@@ -4,6 +4,7 @@ use std::time::Duration;
 use embassy_futures::join::join;
 use rmk_types::action::KeyAction;
 use rmk_types::battery::BatteryStatus;
+use rmk_types::ble::BleStatus;
 use rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rmk_types::protocol::rynk::{
     GetComboBulkResponse, GetKeymapBulkResponse, GetMorseBulkResponse, PeripheralStatus, ProtocolVersion,
@@ -164,13 +165,14 @@ fn caps() -> DeviceCapabilities {
         num_cols: 14,
         max_combos: 8,
         max_combo_keys: 4,
-        macro_space_size: 1024,
+        max_macros: 32,
+        macro_space_size: 256,
+        macros_writable: true,
         max_morse: 4,
         max_patterns_per_key: 4,
         max_forks: 4,
         storage_enabled: true,
         max_payload_size: 256,
-        macro_chunk_size: 64,
         ..Default::default()
     }
 }
@@ -414,13 +416,20 @@ async fn topic_queue_overflow_drops_oldest() {
 #[tokio::test]
 async fn next_topic_decodes_typed_payload() {
     let status = ConnectionStatus {
+        ble: BleStatus {
+            bonded: true,
+            ..Default::default()
+        },
         preferred: ConnectionType::Ble,
         ..Default::default()
     };
     let (client, mut driver) = raw_session(vec![Step::Chunk(topic(Cmd::ConnectionChange, status)), Step::Hang]);
     let ev = drive(&mut driver, &client, client.next_topic()).await;
     match ev {
-        TopicEvent::ConnectionChange(s) => assert_eq!(s.preferred, ConnectionType::Ble),
+        TopicEvent::ConnectionChange(s) => {
+            assert_eq!(s.preferred, ConnectionType::Ble);
+            assert!(s.ble.bonded);
+        }
         other => panic!("expected ConnectionChange, got {other:?}"),
     }
 }
@@ -721,22 +730,15 @@ async fn connect_rejects_newer_major() {
     assert!(matches!(err, RynkHostError::VersionMismatch { .. }));
 }
 
-#[tokio::test]
-async fn connect_accepts_newer_minor() {
-    let newer = ProtocolVersion {
-        major: ProtocolVersion::CURRENT.major,
-        minor: ProtocolVersion::CURRENT.minor + 1,
-    };
-    MockDevice(vec![
-        Step::AwaitWrites(1),
-        Step::Chunk(reply(Cmd::GetVersion, 1, newer)),
-        Step::AwaitWrites(2),
-        Step::Chunk(reply(Cmd::GetCapabilities, 2, caps())),
-        Step::Hang,
-    ])
-    .connect()
-    .await
-    .expect("same-major newer-minor must connect");
+#[test]
+fn version_compatibility() {
+    let v = |major, minor| ProtocolVersion { major, minor };
+    assert!(crate::device::compatible(v(0, 2), v(0, 2)));
+    assert!(!crate::device::compatible(v(0, 1), v(0, 2)));
+    assert!(!crate::device::compatible(v(0, 3), v(0, 2)));
+    assert!(crate::device::compatible(v(1, 3), v(1, 2)));
+    assert!(crate::device::compatible(v(1, 1), v(1, 2)));
+    assert!(!crate::device::compatible(v(2, 0), v(1, 2)));
 }
 
 #[tokio::test(start_paused = true)]

@@ -30,10 +30,12 @@ serde_json = { version = "1", optional = true }
 watchdog = []
 ## Expose the `run_tests!` simulator-scenario macro (rmk test suite only)
 _simulator = ["dep:toml", "dep:serde", "dep:serde_json"]
-dfu_rp = []
-## Enable nRF DFU firmware update code generation
-dfu_nrf = []
+## Base DFU code generation, pulled by `dfu_rp`/`dfu_nrf`
+_dfu = []
+dfu_rp = ["_dfu"]
+dfu_nrf = ["_dfu"]
 dfu_split = []
+dfu_ext = []
 
 [lib]
 proc-macro = true

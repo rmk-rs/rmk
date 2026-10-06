@@ -1,0 +1,116 @@
+# Macros run while the user holds a modifier.
+#
+# Layer 0: LCtrl@(0,0)  MACRO(0)@(0,1)  MouseBtn1@(0,2)  MACRO(1)@(0,3)
+
+[layout]
+rows = 1
+cols = 4
+map = "(0,0) (0,1) (0,2) (0,3)"
+
+[[keymap.layer]]
+keys = "LCtrl MACRO(0) MouseBtn1 MACRO(1)"
+
+# Text types with its own shift state only; the end of the macro restores Ctrl.
+[[test]]
+name = "text_macro_restores_held_ctrl_before_mouse_click"
+behavior.macro = { macros = [{ operations = [{ operation = "text", text = "a" }] }] }
+steps = [
+  { press = [0, 0] },
+  { tap = { pos = [0, 1], duration = 100 } },
+  { press = [0, 2] },
+  { release = [0, 2] },
+  { release = [0, 0] },
+]
+expect = [["LCtrl"], ["A"], [], ["LCtrl"], { mouse = { buttons = 1 } }, { mouse = {} }, []]
+
+[[test]]
+name = "uppercase_text_macro_restores_ctrl_without_shift"
+behavior.macro = { macros = [{ operations = [{ operation = "text", text = "A" }] }] }
+steps = [
+  { press = [0, 0] },
+  { tap = { pos = [0, 1], duration = 100 } },
+  { release = [0, 0] },
+]
+expect = [["LCtrl"], ["LShift", "A"], ["LShift"], ["LCtrl"], []]
+
+# Every report after a character carries the real modifiers again: a tap, a
+# delay and the end of the macro each bring Ctrl back.
+[[test]]
+name = "held_ctrl_returns_after_each_text_character"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "text", text = "a" },
+    { operation = "tap", keycode = "B" },
+    { operation = "text", text = "c" },
+    { operation = "delay", duration = "10ms" },
+    { operation = "text", text = "d" },
+  ] },
+] }
+steps = [
+  { press = [0, 0] },
+  { tap = { pos = [0, 1], duration = 100 } },
+  { release = [0, 0] },
+]
+expect = [["LCtrl"], ["A"], [], ["LCtrl"], ["LCtrl", "B"], ["LCtrl"], ["C"], [], ["LCtrl"], ["D"], [], ["LCtrl"], []]
+
+# A mouse click right after the text still carries Ctrl.
+# Regression: Ctrl came back only before a delay or at the end of the macro.
+[[test]]
+name = "text_restores_held_ctrl_before_a_mouse_click_in_the_macro"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "text", text = "a" },
+    { operation = "tap", keycode = "MouseBtn1" },
+  ] },
+] }
+steps = [
+  { press = [0, 0] },
+  { tap = { pos = [0, 1], duration = 100 } },
+  { release = [0, 0] },
+]
+expect = [["LCtrl"], ["A"], [], ["LCtrl"], { mouse = { buttons = 1 } }, { mouse = {} }, []]
+
+# The macro's own Ctrl and the held key's Ctrl are two holders of one modifier.
+# Regression: `up LCtrl` in the macro cleared the modifier bit outright, so the
+# physically held Ctrl went up with it.
+[[test]]
+name = "macro_releasing_a_modifier_keeps_the_physical_one"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "down", keycode = "LCtrl" },
+    { operation = "tap", keycode = "A" },
+    { operation = "up", keycode = "LCtrl" },
+  ] },
+] }
+steps = [
+  { press = [0, 0] },
+  { tap = { pos = [0, 1], duration = 100 } },
+  { release = [0, 0] },
+]
+expect = [["LCtrl"], ["LCtrl"], ["LCtrl", "A"], ["LCtrl"], ["LCtrl"], []]
+
+# A press the macro never releases stays down after the macro ends, until a
+# macro's `up` for it runs, whichever macro sends it.
+[[test]]
+name = "macro_press_without_release_stays_until_a_macro_releases_it"
+behavior.macro = { macros = [
+  { operations = [{ operation = "down", keycode = "LCtrl" }] },
+  { operations = [{ operation = "up", keycode = "LCtrl" }] },
+] }
+steps = [
+  { tap = { pos = [0, 1], duration = 100 } },
+  { tap = { pos = [0, 3], duration = 100 } },
+]
+expect = [["LCtrl"], []]
+
+# The user's own press of the key takes over a macro's press of it: a macro's
+# press has no release of its own, and tapping the key is how the user lets go.
+[[test]]
+name = "macro_press_without_release_ends_when_the_user_releases_the_key"
+behavior.macro = { macros = [{ operations = [{ operation = "down", keycode = "LCtrl" }] }] }
+steps = [
+  { tap = { pos = [0, 1], duration = 100 } },
+  { press = [0, 0] },
+  { release = [0, 0] },
+]
+expect = [["LCtrl"], ["LCtrl"], []]

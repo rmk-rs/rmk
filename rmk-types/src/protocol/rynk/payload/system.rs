@@ -22,8 +22,8 @@ pub struct ProtocolVersion {
 
 impl ProtocolVersion {
     /// Current protocol version for this firmware release.
-    /// Now the protocol is still being developed, so the version is v0.1
-    pub const CURRENT: Self = Self { major: 0, minor: 1 };
+    /// Now the protocol is still being developed, so the version is v0.2
+    pub const CURRENT: Self = Self { major: 0, minor: 2 };
 }
 
 /// Device capabilities discovered during the connection handshake.
@@ -43,8 +43,14 @@ pub struct DeviceCapabilities {
     pub num_encoders: u8,
     pub max_combos: u8,
     pub max_combo_keys: u8,
-    /// Byte size of the flat macro region. `0` disables macro data endpoints.
+    /// Macro slots, `GetMacro`/`SetMacro` index below this.
+    pub max_macros: u8,
+    /// Bytes of the buffer every macro shares, in the postcard encoding
+    /// `GetMacro`/`SetMacro` carry, each slot costing its length prefix.
     pub macro_space_size: u16,
+    /// Whether `SetMacro` persists; a firmware without storage serves its
+    /// compiled-in macros read-only.
+    pub macros_writable: bool,
     pub max_morse: u8,
     pub max_patterns_per_key: u8,
     pub max_forks: u8,
@@ -67,7 +73,6 @@ pub struct DeviceCapabilities {
     /// pipelined reads. Separate from `max_bulk_keys` because these items are
     /// far larger than keys. Writes pack by encoded size up to `max_payload_size`.
     pub max_bulk_items: u8,
-    pub macro_chunk_size: u16,
     pub bulk_transfer_supported: bool,
 }
 
@@ -187,7 +192,9 @@ mod tests {
             num_encoders: 2,
             max_combos: 16,
             max_combo_keys: 4,
-            macro_space_size: 2048,
+            max_macros: 32,
+            macro_space_size: 256,
+            macros_writable: true,
             max_morse: 8,
             max_patterns_per_key: 8,
             max_forks: 4,
@@ -200,7 +207,6 @@ mod tests {
             max_payload_size: 256,
             max_bulk_keys: 32,
             max_bulk_items: 8,
-            macro_chunk_size: 64,
             bulk_transfer_supported: true,
         });
         round_trip(&DeviceCapabilities {
@@ -210,7 +216,9 @@ mod tests {
             num_encoders: 0,
             max_combos: 0,
             max_combo_keys: 0,
+            max_macros: 0,
             macro_space_size: 0,
+            macros_writable: false,
             max_morse: 0,
             max_patterns_per_key: 0,
             max_forks: 0,
@@ -223,7 +231,6 @@ mod tests {
             max_payload_size: 0,
             max_bulk_keys: 0,
             max_bulk_items: 0,
-            macro_chunk_size: 0,
             bulk_transfer_supported: false,
         });
     }

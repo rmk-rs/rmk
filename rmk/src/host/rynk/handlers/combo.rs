@@ -25,10 +25,10 @@ impl Handle<GetCombo> for RynkService<'_> {
 
 impl Handle<SetCombo> for RynkService<'_> {
     async fn handle(&self, r: SetComboRequest) -> Result<(), RynkError> {
-        if self.ctx.set_combo(r.index, r.config).await {
-            Ok(())
-        } else {
-            Err(RynkError::Invalid)
+        match self.ctx.set_combo(r.index, r.config).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(RynkError::Invalid),
+            Err(()) => Err(RynkError::StorageFault),
         }
     }
 }
@@ -57,7 +57,10 @@ impl HandleBulk<SetComboBulk> for RynkService<'_> {
         let start_index = take_element::<u8>(&mut cursor)? as usize;
         let num_combos = self.ctx.with_combos(|combos| combos.len());
         for (idx, config) in take_bulk::<ComboConfig>(&mut cursor, start_index, num_combos)? {
-            self.ctx.set_combo(idx as u8, config).await;
+            self.ctx
+                .set_combo(idx as u8, config)
+                .await
+                .or(Err(RynkError::StorageFault))?;
         }
         msg.encode_response(&())
     }

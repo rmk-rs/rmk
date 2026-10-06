@@ -107,12 +107,16 @@ fn expand_i2c_init(chip_series: &ChipSeries, i2c: &I2cConfig) -> TokenStream {
             }
         }
         ChipSeries::Esp32 => {
+            // The display drivers need `embedded_hal_async::i2c::I2c`, which esp-hal implements for
+            // the async driver only.
             quote! {
                 let display_i2c = ::esp_hal::i2c::master::I2c::new(
                     p.#instance, ::esp_hal::i2c::master::Config::default()
                 )
+                .unwrap()
                 .with_sda(p.#sda)
-                .with_scl(p.#scl);
+                .with_scl(p.#scl)
+                .into_async();
             }
         }
     }

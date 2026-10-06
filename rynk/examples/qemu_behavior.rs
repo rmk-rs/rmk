@@ -15,11 +15,12 @@ use rynk::rmk_types::ble::{BleState, BleStatus};
 use rynk::rmk_types::combo::Combo;
 use rynk::rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
 use rynk::rmk_types::fork::{Fork, StateBits};
+use rynk::rmk_types::keyboard_macros::MacroOp;
 use rynk::rmk_types::keycode::{HidKeyCode, KeyCode};
 use rynk::rmk_types::led_indicator::LedIndicator;
 use rynk::rmk_types::modifier::ModifierCombination;
 use rynk::rmk_types::morse::{Morse, MorseProfile};
-use rynk::rmk_types::protocol::rynk::{MacroData, ProtocolVersion, RynkError, StorageResetMode};
+use rynk::rmk_types::protocol::rynk::{ProtocolVersion, RynkError, StorageResetMode};
 use rynk::{Client, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
 use tokio::net::TcpStream;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -110,8 +111,9 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(caps.num_encoders, 1);
     assert_eq!(caps.max_combos, 8);
     assert_eq!(caps.max_combo_keys, 4);
+    assert_eq!(caps.max_macros, 32);
     assert_eq!(caps.macro_space_size, 256);
-    assert_eq!(caps.macro_chunk_size, 64);
+    assert!(!caps.macros_writable, "no storage, so macros are read-only");
     assert_eq!(caps.max_morse, 8);
     assert_eq!(caps.max_patterns_per_key, 8);
     assert_eq!(caps.max_forks, 8);
@@ -210,13 +212,12 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
         .set_encoder(0, 0, encoder(HidKeyCode::KpPlus, HidKeyCode::KpMinus))
         .await?;
 
-    let mut macro_bytes = heapless::Vec::new();
-    macro_bytes.extend_from_slice(&[1, 2, 3, 4]).unwrap();
-    client.set_macro(0, MacroData { data: macro_bytes }).await?;
-    let got_macro = client.get_macro(0).await?;
-    assert_eq!(got_macro.data.len(), caps.macro_chunk_size as usize);
-    assert_eq!(&got_macro.data[..4], &[1, 2, 3, 4]);
-    assert!(got_macro.data[4..].iter().all(|&b| b == 0));
+    assert_eq!(client.read_macro(0).await?, []);
+    expect_rejected(
+        "write_macro without storage",
+        client.write_macro(0, &[MacroOp::Char(b'a')]).await,
+        RynkError::Unimplemented,
+    );
 
     assert_eq!(client.get_combo(0).await?, Combo::empty());
     let changed_combo = Combo::new(
@@ -280,6 +281,7 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
             ble: BleStatus {
                 profile: 0,
                 state: BleState::Inactive,
+                bonded: false,
             },
             preferred: ConnectionType::Usb,
         }

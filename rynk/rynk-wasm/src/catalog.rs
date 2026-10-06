@@ -17,8 +17,8 @@ pub fn all_hid_keycodes() -> Vec<HidKeyCode> {
 
 /// The raw byte behind each entry of [`all_hid_keycodes`], in the same order.
 ///
-/// Keyboard macros store a key as this number rather than as a name, and the
-/// enum is not contiguous, so a host cannot recover it from the list index.
+/// The enum is not contiguous, so a host cannot recover a keycode's HID usage
+/// from the list index.
 #[wasm_bindgen]
 pub fn hid_keycode_values() -> Vec<u8> {
     HidKeyCode::all().map(|k| k as u8).collect()

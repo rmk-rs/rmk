@@ -1,19 +1,20 @@
 use embassy_time::Duration;
 use heapless::Vec;
 use rmk_types::fork::Fork;
+use rmk_types::keyboard_macros::MacroOp;
 use rmk_types::keycode::KeyCode;
 use rmk_types::morse::{Morse, MorseMode, MorseProfile};
 
 use crate::keyboard::combo::Combo;
 use crate::{
-    AUTO_MOUSE_LAYER_MAX_NUM, COMBO_MAX_NUM, FORK_MAX_NUM, MACRO_SPACE_SIZE, MORSE_MAX_NUM, MORSE_PROFILE_MAX_NUM,
-    MOUSE_KEY_INTERVAL, MOUSE_WHEEL_INTERVAL,
+    AUTO_MOUSE_LAYER_MAX_NUM, COMBO_MAX_NUM, FORK_MAX_NUM, MORSE_MAX_NUM, MORSE_PROFILE_MAX_NUM, MOUSE_KEY_INTERVAL,
+    MOUSE_WHEEL_INTERVAL,
 };
 
 /// Config for configurable action behavior
 #[derive(Debug, Default)]
 pub struct BehaviorConfig {
-    /// Base layer; restored from flash (LayoutConfig) on boot, set at runtime by DF/PDF
+    /// Base layer; restored from flash (`DefaultLayer`) on boot, set at runtime by DF/PDF
     pub default_layer: u8,
     pub tri_layer: Option<[u8; 3]>,
     pub tap: TapConfig,
@@ -22,7 +23,10 @@ pub struct BehaviorConfig {
     pub combo: CombosConfig,
     pub fork: ForksConfig,
     pub morse: MorsesConfig,
-    pub keyboard_macros: KeyboardMacrosConfig,
+    /// The default macros, `MACRO(i)` runs the `i`th. A host-written macro in
+    /// flash replaces its default. Check a hand-written table with
+    /// `const _: () = assert!(validate_default_macros(MACROS));`.
+    pub keyboard_macros: &'static [&'static [MacroOp]],
     pub mouse_key: MouseKeyConfig,
     pub auto_mouse_layer: Vec<AutoMouseLayerConfig, AUTO_MOUSE_LAYER_MAX_NUM>,
 }
@@ -200,26 +204,6 @@ pub struct ForksConfig {
 impl Default for ForksConfig {
     fn default() -> Self {
         Self { forks: Vec::new() }
-    }
-}
-
-#[derive(Debug)]
-pub struct KeyboardMacrosConfig {
-    /// macros stored in biunary format to be compatible with Vial
-    pub macro_sequences: [u8; MACRO_SPACE_SIZE],
-}
-
-impl Default for KeyboardMacrosConfig {
-    fn default() -> Self {
-        Self {
-            macro_sequences: [0; MACRO_SPACE_SIZE],
-        }
-    }
-}
-
-impl KeyboardMacrosConfig {
-    pub fn new(macro_sequences: [u8; MACRO_SPACE_SIZE]) -> Self {
-        Self { macro_sequences }
     }
 }
 

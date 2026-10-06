@@ -14,7 +14,7 @@ pub enum RynkError {
     Malformed,
     /// Device is not currently in a state to satisfy the request
     NotReady,
-    /// Persistent storage failed on a write path (flash erase/write error)
+    /// Persistent storage failed (flash read, write or erase error)
     StorageFault,
     /// Internal firmware fault.
     Internal,

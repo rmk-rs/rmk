@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: invalid macros
+ --> tests/compile_fail/macro_text_is_not_ascii.rs:5:15
+  |
+5 | const _: () = assert!(validate_default_macros(MACROS), "invalid macros");
+  |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here

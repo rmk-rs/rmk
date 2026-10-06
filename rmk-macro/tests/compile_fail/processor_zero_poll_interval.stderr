@@ -1,0 +1,5 @@
+error: invalid `poll_interval` value: number would be zero for non-zero type
+ --> tests/compile_fail/processor_zero_poll_interval.rs:6:29
+  |
+6 | #[processor(poll_interval = 0)]
+  |                             ^

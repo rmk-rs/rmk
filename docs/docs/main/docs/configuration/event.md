@@ -71,8 +71,11 @@ peripheral_battery.subs = 4
 | `central_connected`        | `CentralConnectedEvent`       |                                 |
 | `peripheral_battery`       | `PeripheralBatteryEvent`      | channel_size=2, subs=2          |
 | `clear_peer`               | `ClearPeerEvent`              | subs=0                          |
+| **Dongle Events**          |                               |                                 |
+| `dongle_state`             | `DongleStateEvent`            | subs=0                          |
 | **DFU Events**             |                               |                                 |
 | `dfu_status`               | `DfuStatusEvent`              | channel_size=2                  |
+| `dfu_cmd`                  | `DfuCmdEvent`                 | channel_size=4, subs=1 (+`split_peripherals_num` for `dfu_split`, +1 for `dfu_lock`) |
 | **Action Events**          |                               |                                 |
 | `action`                   | `ActionEvent`                 | channel_size=16, subs=0         |
 

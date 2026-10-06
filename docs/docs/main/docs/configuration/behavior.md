@@ -100,24 +100,25 @@ combos = [
 
 ## Macro
 
-In the `macro` sub-table, you can configure the keyboard's macro functionality. Macros are explained in more detail in the [keyboard macros](./keymap_configuration/keyboard_macros.md) page.
+The `macro` sub-table defines the default macros. [Keyboard macros](./keymap_configuration/keyboard_macros.md) explains what each operation does and the limits a macro must follow.
 
-Macro operations are defined with an `operation` and a `keycode`, `duration` or `text` field depending on the operation. Available operations are:
+Each operation has an `operation` name and, depending on it, a `keycode`, `duration` or `text` field:
 
 ```toml
 [[behavior.macro.macros]]
 operations = [
-  { operation = "down", keycode = "_" }, # [!code focus:5]
+  { operation = "down", keycode = "_" }, # [!code focus:6]
   { operation = "up", keycode = "_" },
   { operation = "tap", keycode = "_" },
   { operation = "delay", duration = "0ms" },
-  { operation = "text", text = "foo" }
+  { operation = "text", text = "foo" },
+  { operation = "pause_for_release" },
 ]
 ```
 
-- `keycode` accepts a plain [keycode](./keymap_configuration/keycodes.md) or an action expression such as `WM(A, LCtrl)`, `PDF(1)` or `OSM(LShift)`. Action expressions use the Vial extended encoding and require the `vial` feature; without it, the build fails.
-- `duration` is at most 65024ms; longer delays fail the build.
-- A macro cannot trigger another macro. `Macro(n)` inside a macro is ignored with a warning.
+- `keycode` takes a [keycode](./keymap_configuration/keycodes.md) or a single action such as `WM(A, LCtrl)`, `MO(1)` or `Macro(n)`. Tap-hold and tap-dance keys (`MT`, `LT`, `TH`, `TT`, `TD`) are not accepted.
+- `duration` takes a time such as `100ms` or `1s`, at most 65535 ms.
+- `text` is ASCII.
 
 ```toml
 # Outputs "Hello"

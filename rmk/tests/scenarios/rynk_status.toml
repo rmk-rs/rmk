@@ -51,14 +51,14 @@ steps = [
 name = "connection_reads_agree_with_each_other"
 steps = [
   { rynk = { cmd = "GetConnectionType", reply = "Usb" } },
-  { rynk = { cmd = "GetConnectionStatus", reply = { usb = "Configured", ble = { profile = 0, state = "Inactive" }, preferred = "Usb" } } },
+  { rynk = { cmd = "GetConnectionStatus", reply = { usb = "Configured", ble = { profile = 0, state = "Inactive", bonded = false }, preferred = "Usb" } } },
 ]
 
 [[test]]
 name = "ble_status_mirrors_the_connection_status"
 features = ["_ble"]
 steps = [
-  { rynk = { cmd = "GetBleStatus", reply = { profile = 0, state = "Inactive" } } },
+  { rynk = { cmd = "GetBleStatus", reply = { profile = 0, state = "Inactive", bonded = false } } },
   { rynk = { cmd = "GetBatteryStatus", reply = "Unavailable" } },
 ]
 

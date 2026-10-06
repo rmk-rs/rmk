@@ -500,10 +500,17 @@ mod multi_attr {
             }
         }
     }
+    impl ::rmk::processor::PollingProcessor for MultiAttrProcessor {
+        fn interval(&self) -> ::embassy_time::Duration {
+            ::embassy_time::Duration::from_millis(100u64)
+        }
+        async fn update(&mut self) {
+            self.poll().await;
+        }
+    }
     impl ::rmk::core_traits::Runnable for MultiAttrProcessor {
         async fn run(&mut self) -> ! {
-            use ::rmk::processor::Processor;
-            self.process_loop().await
+            ::rmk::processor::DeadlineProcessor::polling_deadline_loop(self).await
         }
     }
 }
@@ -732,6 +739,58 @@ mod polling_multi {
         async fn run(&mut self) -> ! {
             use ::rmk::processor::PollingProcessor;
             self.polling_loop().await
+        }
+    }
+}
+mod timer_only {
+    use super::processor;
+    pub struct Polling;
+    impl ::rmk::processor::Processor for Polling {
+        type Event = ::core::convert::Infallible;
+        fn subscriber() -> impl ::rmk::event::EventSubscriber<Event = Self::Event> {
+            ::core::future::pending::<Self::Event>()
+        }
+        async fn process(&mut self, event: Self::Event) {
+            match event {}
+        }
+    }
+    impl ::rmk::processor::PollingProcessor for Polling {
+        fn interval(&self) -> ::embassy_time::Duration {
+            ::embassy_time::Duration::from_millis(100u64)
+        }
+        async fn update(&mut self) {
+            self.poll().await;
+        }
+    }
+    impl ::rmk::core_traits::Runnable for Polling {
+        async fn run(&mut self) -> ! {
+            use ::rmk::processor::PollingProcessor;
+            self.polling_loop().await
+        }
+    }
+    pub struct Deadline;
+    impl ::rmk::processor::Processor for Deadline {
+        type Event = ::core::convert::Infallible;
+        fn subscriber() -> impl ::rmk::event::EventSubscriber<Event = Self::Event> {
+            ::core::future::pending::<Self::Event>()
+        }
+        async fn process(&mut self, event: Self::Event) {
+            match event {}
+        }
+    }
+    impl ::rmk::core_traits::Runnable for Deadline {
+        async fn run(&mut self) -> ! {
+            ::rmk::processor::DeadlineProcessor::deadline_loop(self).await
+        }
+    }
+    pub struct Custom;
+    impl ::rmk::processor::Processor for Custom {
+        type Event = ::core::convert::Infallible;
+        fn subscriber() -> impl ::rmk::event::EventSubscriber<Event = Self::Event> {
+            ::core::future::pending::<Self::Event>()
+        }
+        async fn process(&mut self, event: Self::Event) {
+            match event {}
         }
     }
 }

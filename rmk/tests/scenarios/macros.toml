@@ -1,13 +1,19 @@
 # Keyboard macros.
 #
 # On the shared split board MACRO(0) sits at (0,6) and MACRO(1) at (0,7); each
-# test brings its own macro set via `behavior.macro` and drives macro 0.
+# test brings its own macro set via `behavior.macro` and drives macro 0. Other
+# keys used below: OSM(LShift)@(0,0), A@(0,2), MT(B, LShift)@(1,1), W@(1,3), and
+# C@(0,2) on layer 1.
+#
+# A macro that ends on a character closes with one report carrying the real
+# modifiers; any other macro ends on its last op's report.
 #
 # The file stem is `macros`, not `macro`, because the generated module name
 # cannot be a Rust keyword.
 
 keyboard = "boards/split.toml"
 
+# A character is two reports whose modifiers are its own shift and nothing else.
 [[test]]
 name = "macro_text"
 behavior.macro = { macros = [{ operations = [{ operation = "text", text = "AbCd123456" }] }] }
@@ -15,32 +21,12 @@ steps = [
   { tap = { pos = [0, 6], duration = 100 } },
 ]
 expect = [
-  ["LShift"],       # Press shift
-  ["LShift", "A"],  # Press A + shift
-  ["LShift"],       # Release A
-  [],               # Release shift
-  ["B"],
-  [],
-  ["LShift"],
-  ["LShift", "C"],
-  ["LShift"],
-  [],
-  ["D"],
-  [],
-  ["Kc1"],
-  [],
-  ["Kc2"],
-  [],
-  ["Kc3"],
-  [],
-  ["Kc4"],
-  [],
-  ["Kc5"],
-  [],
-  ["Kc6"],
-  [],
-  # The extended-macro text decode emits a final all-up report (#989).
-  [],
+  ["LShift", "A"], ["LShift"],
+  ["B"], [],
+  ["LShift", "C"], ["LShift"],
+  ["D"], [],
+  ["Kc1"], [], ["Kc2"], [], ["Kc3"], [], ["Kc4"], [], ["Kc5"], [], ["Kc6"], [],
+  [],  # the end of the macro
 ]
 
 [[test]]
@@ -56,15 +42,25 @@ behavior.macro = { macros = [
 steps = [
   { tap = { pos = [0, 6], duration = 100 } },
 ]
-expect = [
-  ["LShift"],       # Press shift
-  ["LShift", "A"],  # Press shift + A
-  ["LShift"],       # Release A
-  [],               # Release shift
-  ["B"],
-  [],
-]
+expect = [["LShift"], ["LShift", "A"], ["LShift"], [], ["B"], []]
 
+# Each op takes its own report slot, so a macro can hold two keys at once.
+[[test]]
+name = "macro_holds_two_keys_at_once"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "down", keycode = "A" },
+    { operation = "down", keycode = "B" },
+    { operation = "up", keycode = "B" },
+    { operation = "up", keycode = "A" },
+  ] },
+] }
+steps = [
+  { tap = { pos = [0, 6], duration = 100 } },
+]
+expect = [["A"], ["A", "B"], ["A"], []]
+
+# A delay resumes after `duration`.
 [[test]]
 name = "macro_with_delay"
 behavior.macro = { macros = [
@@ -77,45 +73,37 @@ behavior.macro = { macros = [
 steps = [
   { tap = { pos = [0, 6], duration = 100 } },
 ]
-expect = [
-  ["A"],  # Press A
-  [],     # Release A
-  ["B"],  # Press B, 50ms later
-  [],     # Release B
-]
+expect = [["A"], [], ["B"], []]
 
-# An operation whose key is a richer action than a plain keycode is serialized as
-# Vial's extended keycode and routed through the shared action path, so the
-# modifier applies exactly as it would from a physical key.
+# An op carries any action and dispatches exactly as a physical key would,
+# without the `vial` feature.
 [[test]]
 name = "macro_taps_a_key_with_modifier"
 behavior.macro = { macros = [{ operations = [{ operation = "tap", keycode = "WM(A, LCtrl)" }] }] }
-features = ["vial"]
 steps = [
   { tap = { pos = [0, 6], duration = 100 } },
 ]
 expect = [["LCtrl", "A"], []]
 
-# A macro cannot trigger another macro: that would re-enter the trigger queue and
-# could loop forever. Macro 0 tries to trigger macro 1, then taps A — the nested
-# trigger is dropped, so only A is emitted and the rest of macro 0 still runs.
+# A layer action is a layer key held for the macro: layer 1 stays on from the
+# `down` until the `up` after the pause.
 [[test]]
-name = "macro_cannot_trigger_macro"
+name = "macro_layer_action_needs_no_vial"
 behavior.macro = { macros = [
   { operations = [
-    { operation = "tap", keycode = "MACRO(1)" },
-    { operation = "tap", keycode = "A" },
+    { operation = "down", keycode = "MO(1)" },
+    { operation = "pause_for_release" },
+    { operation = "up", keycode = "MO(1)" },
   ] },
-  { operations = [{ operation = "tap", keycode = "B" }] },
 ] }
-features = ["vial"]
 steps = [
-  { tap = { pos = [0, 6], duration = 100 } },
+  { press = [0, 6] },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [0, 6] },
+  { delay = 30 }, 
+  { tap = { pos = [0, 2], duration = 10 } },
 ]
-expect = [
-  ["A"],  # A only; macro 1 never ran
-  [],
-]
+expect = [["C"], [], ["A"], []]
 
 # Macros fire on key press (matching QMK/ZMK), not release: the macro reports
 # arrive while the macro key is still held, so they precede the W tapped under
@@ -131,9 +119,182 @@ steps = [
   { delay = 100 },
   { release = [0, 6] },
 ]
-expect = [
-  ["A"],  # A down — emitted on press
-  [],     # A up
-  ["W"],
-  [],
+expect = [["A"], [], ["W"], []]
+
+# The keyboard keeps working while a macro waits: a key typed during the delay
+# lands between the macro's two halves, after the tap's 10ms hold.
+[[test]]
+name = "macro_interleaves_with_typing"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "tap", keycode = "A" },
+    { operation = "delay", duration = "30ms" },
+    { operation = "tap", keycode = "B" },
+  ] },
+] }
+steps = [
+  { press = [0, 6] },
+  { tap = { pos = [1, 3], duration = 5 } },
+  { delay = 100 },
+  { release = [0, 6] },
 ]
+expect = [["A"], [], ["W"], [], ["B"], []]
+
+# A tap-hold pressed during a macro's delay still resolves on its own timeout.
+[[test]]
+name = "macro_delay_keeps_tap_hold_timing"
+behavior.macro = { macros = [
+  { operations = [{ operation = "delay", duration = "500ms" }, { operation = "tap", keycode = "A" }] },
+] }
+steps = [
+  { press = [0, 6] },
+  { press = [1, 1] },
+  { delay = 300 },
+  { release = [1, 1] },
+  { delay = 300 },
+  { release = [0, 6] },
+]
+expect = [["LShift"], [], ["A"], []]
+
+# Macros run one at a time: a trigger while one runs waits for it to end.
+[[test]]
+name = "macro_trigger_while_running_is_queued"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "tap", keycode = "A" },
+    { operation = "delay", duration = "50ms" },
+    { operation = "tap", keycode = "B" },
+  ] },
+  { operations = [{ operation = "tap", keycode = "C" }] },
+] }
+steps = [
+  { tap = { pos = [0, 6], duration = 10 } },
+  { tap = { pos = [0, 7], duration = 10 } },  # queued: macro 0 is still waiting
+  { delay = 100 },
+]
+expect = [["A"], [], ["B"], [], ["C"], []]
+
+# A queued macro whose key was released before its turn does not wait at
+# `pause_for_release`.
+[[test]]
+name = "macro_queued_and_released_does_not_pause"
+behavior.macro = { macros = [
+  { operations = [{ operation = "delay", duration = "50ms" }] },
+  { operations = [
+    { operation = "tap", keycode = "A" },
+    { operation = "pause_for_release" },
+    { operation = "tap", keycode = "B" },
+  ] },
+] }
+steps = [
+  { tap = { pos = [0, 6], duration = 10 } },
+  { tap = { pos = [0, 7], duration = 10 } },  # queued and released while macro 0 waits
+  { delay = 100 },
+]
+expect = [["A"], [], ["B"], []]
+
+# The ops after `pause_for_release` wait 20ms after the key comes up. Sent at
+# once, the first shifted character made a host IME see a lone shift tap and
+# switch input mode.
+[[test]]
+name = "macro_release_half_waits_after_the_key_comes_up"
+behavior.macro = { macros = [
+  { operations = [{ operation = "pause_for_release" }, { operation = "text", text = "A" }] },
+] }
+steps = [
+  { press = [0, 6] },
+  { release = [0, 6] },
+  { delay = 1 },
+  { no_report = 8 },
+]
+expect = [["LShift", "A"], ["LShift"], []]
+
+# A text ends 10ms after its last key comes up, lowercase or not, and only then
+# does the next op run: W, pressed 2ms after `a` comes up, gets in ahead of the
+# tap. Sent at once, the text's end made a host IME switch input mode.
+[[test]]
+name = "macro_text_ends_10ms_after_its_last_key"
+behavior.macro = { macros = [
+  { operations = [{ operation = "text", text = "a" }, { operation = "tap", keycode = "X" }] },
+] }
+steps = [
+  { press = [0, 6] },
+  { delay = 12 },
+  { press = [1, 3] },
+  { release = [1, 3] },
+  { release = [0, 6] },
+]
+expect = [["A"], [], [], ["W"], ["W", "X"], ["W"], []]
+
+# A macro step that triggers a macro queues it behind the rest of the current
+# macro, so its A comes after the B that follows the step.
+[[test]]
+name = "macro_triggered_by_a_macro_runs_after_it"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "tap", keycode = "Macro(1)" },
+    { operation = "tap", keycode = "B" },
+  ] },
+  { operations = [{ operation = "tap", keycode = "A" }] },
+] }
+steps = [
+  { tap = { pos = [0, 6], duration = 10 } },
+  { delay = 100 },
+]
+expect = [["B"], [], ["A"], []]
+
+# `pause_for_release` splits a macro: the ops before it run on the macro key's
+# press, the ops after it on its release.
+[[test]]
+name = "macro_pauses_until_the_key_is_released"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "tap", keycode = "A" },
+    { operation = "pause_for_release" },
+    { operation = "tap", keycode = "B" },
+  ] },
+] }
+steps = [
+  { press = [0, 6] },
+  { delay = 100 },
+  { release = [0, 6] },
+]
+expect = [["A"], [], ["B"], []]
+
+# A key released before the pause is reached does not wait there: the second
+# half follows the first.
+[[test]]
+name = "macro_released_early_runs_through_the_pause"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "delay", duration = "50ms" },
+    { operation = "pause_for_release" },
+    { operation = "tap", keycode = "B" },
+  ] },
+] }
+steps = [
+  { tap = { pos = [0, 6], duration = 10 } },
+]
+expect = [["B"], []]
+
+# Without a pause, releasing the macro key changes nothing.
+[[test]]
+name = "macro_without_pause_ignores_release"
+behavior.macro = { macros = [{ operations = [{ operation = "tap", keycode = "A" }] }] }
+steps = [
+  { press = [0, 6] },
+  { delay = 100 },
+  { release = [0, 6] },
+]
+expect = [["A"], []]
+
+# A character does not consume a one-shot modifier; the next physical key does.
+[[test]]
+name = "one_shot_is_not_consumed_by_text"
+behavior.macro = { macros = [{ operations = [{ operation = "text", text = "a" }] }] }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 6], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["A"], [], [], ["LShift", "A"], []]

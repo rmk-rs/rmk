@@ -1,0 +1,57 @@
+[tasks.install-llvm-tools]
+install_crate = { rustup_component_name = "llvm-tools" }
+
+[tasks.flip-link]
+install_crate = { crate_name = "flip-link", binary = "flip-link", test_arg = ["-h"] }
+
+[tasks.build-peripheral]
+command = "cargo"
+args = ["build", "--bin", "peripheral", "--release"]
+dependencies = ["install-llvm-tools", "flip-link"]
+
+[tasks.bin-peripheral]
+install_crate = { crate_name = "cargo-binutils", binary = "cargo", test_arg = ["objcopy", "--help"] }
+command = "cargo"
+args = ["objcopy", "--release", "--bin", "peripheral", "--", "-O", "binary", "rmk-rp2040-dfu-split-dfu-ext-peripheral.bin"]
+dependencies = ["build-peripheral"]
+
+[tasks.build-central]
+command = "cargo"
+args = ["build", "--bin", "central", "--release"]
+dependencies = ["bin-peripheral", "install-llvm-tools", "flip-link"]
+
+[tasks.bin-central]
+install_crate = { crate_name = "cargo-binutils", binary = "cargo", test_arg = ["objcopy", "--help"] }
+command = "cargo"
+args = ["objcopy", "--release", "--bin", "central", "--", "-O", "binary", "rmk-rp2040-dfu-split-dfu-ext-central.bin"]
+dependencies = ["build-central"]
+
+[tasks.objcopy-peripheral]
+install_crate = { crate_name = "cargo-binutils", binary = "cargo", test_arg = ["objcopy", "--help"] }
+command = "cargo"
+args = ["objcopy", "--release", "--bin", "peripheral", "--", "-O", "ihex", "rmk-rp2040-dfu-split-dfu-ext-peripheral.hex"]
+dependencies = ["build-peripheral"]
+
+[tasks.objcopy-central]
+install_crate = { crate_name = "cargo-binutils", binary = "cargo", test_arg = ["objcopy", "--help"] }
+command = "cargo"
+args = ["objcopy", "--release", "--bin", "central", "--", "-O", "ihex", "rmk-rp2040-dfu-split-dfu-ext-central.hex"]
+dependencies = ["build-central"]
+
+[tasks.uf2-peripheral]
+install_crate = { crate_name = "cargo-hex-to-uf2", binary = "cargo", test_arg = ["hex-to-uf2", "--help"] }
+command = "cargo"
+args = ["hex-to-uf2", "--input-path", "rmk-rp2040-dfu-split-dfu-ext-peripheral.hex", "--output-path", "rmk-rp2040-dfu-split-dfu-ext-peripheral.uf2", "--family", "rp2040"]
+dependencies = ["objcopy-peripheral"]
+
+[tasks.uf2-central]
+install_crate = { crate_name = "cargo-hex-to-uf2", binary = "cargo", test_arg = ["hex-to-uf2", "--help"] }
+command = "cargo"
+args = ["hex-to-uf2", "--input-path", "rmk-rp2040-dfu-split-dfu-ext-central.hex", "--output-path", "rmk-rp2040-dfu-split-dfu-ext-central.uf2", "--family", "rp2040"]
+dependencies = ["objcopy-central", "uf2-peripheral"]
+
+[tasks.uf2]
+dependencies = ["uf2-central"]
+
+[tasks.bin]
+dependencies = ["bin-central"]

@@ -39,10 +39,14 @@ run_all!(matrix, storage, usb_transport, keyboard).await;
 Ensure you allocate sufficient storage space for your keymap and bonding information. 32 KiB is generally adequate for most keyboards.
 :::
 
-## Storage Is Cleared When RMK Is Rebuilt
+## When stored data is erased
 
-The firmware embeds a build hash computed by the `rmk` crate's build script from the git commit and build time. The hash is written to storage when storage is first initialized, and checked on every boot: if the stored hash doesn't match the running firmware's hash, RMK erases the storage and re-initializes it from the firmware's defaults.
+On boot, RMK might erase the stored data according to the change of the current firmware:
 
-The hash only changes when the `rmk` build script re-runs: after `cargo clean`, or when you change the `rmk` version, its Cargo features, or the build profile. Rebuilding your own crate — for example after editing the keymap or `keyboard.toml` — reuses the same hash, so the stored keymap, keymap edits made via Vial/Rynk and BLE bonds survive that flash, and your keymap edits in source do **not** replace the stored keymap. To force a reset in that case, set `clear_layout = true` (keymap only) or `clear_storage = true` (everything, including BLE bonds) in the `[storage]` section of `keyboard.toml`, or the same fields of `StorageConfig`, flash once, then set them back to `false`.
+| What changed | What's erased |
+| --- | --- |
+| The RMK version, commit, or Cargo features | Everything, BLE pairings included |
+| `macro_space_size`, `combo_max_length`, or `max_patterns_per_key` | Everything, BLE pairings included |
+| Anything else, your keymap included | Nothing |
 
-When the hash does change, **all stored data is cleared**, including BLE bonding information, so you'll need to re-pair BLE hosts.
+Editing the keymap in `keyboard.toml` or in Rust does **not** by itself replace what is stored: the stored keymap wins on boot, so edits made over Vial or Rynk survive a reflash. To hand the win back to the firmware, set `clear_layout = true` in the `[storage]` section of `keyboard.toml` (or the same field of `StorageConfig`), flash once, then set it back to `false`. It rewrites the keymap, encoders, behaviors, combos, forks, morses and macros from the firmware and keeps the BLE pairings; `clear_storage = true` erases everything, pairings included.

@@ -118,6 +118,15 @@ dongle crate points `KEYBOARD_TOML_PATH` (in its `.cargo/config.toml`) at a
 `keyboard.toml` that sets it. The `nrf_dongle` example has no such file and
 uses the default of 30 seconds.
 
+## Link state
+
+The dongle publishes what its BLE central is doing as `DongleStateEvent`
+(`DongleState`: `Searching`, `Pairing`, `Connected`), so a dongle with a screen
+can show whether its keyboard is there.
+With the `display` feature the built-in `DisplayProcessor` subscribes and hands
+it to renderers as `RenderContext::dongle_state`; without a subscriber the
+event costs nothing. Code that polls can ask `DongleRouter::is_connected()`.
+
 ## Example
 
 [`examples/use_rust/nrf_dongle`](https://github.com/rmk-rs/rmk/tree/main/examples/use_rust/nrf_dongle)

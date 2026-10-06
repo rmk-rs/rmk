@@ -52,6 +52,7 @@ impl ConnectionStatus {
             ble: BleStatus {
                 profile: 0,
                 state: BleState::Inactive,
+                bonded: false,
             },
             preferred: ConnectionType::Usb,
         }
@@ -97,6 +98,7 @@ mod tests {
             ble: BleStatus {
                 profile: 0,
                 state: ble_state,
+                bonded: false,
             },
             preferred,
         }

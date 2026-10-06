@@ -56,8 +56,8 @@ mod polling {
 mod multi_attr {
     use super::{EncoderEvent, KeyEvent, processor};
 
-    #[processor(subscribe = [KeyEvent])]
-    #[processor(subscribe = [EncoderEvent])]
+    #[processor(subscribe = [KeyEvent], poll_interval = 100)]
+    #[rmk_macro::processor(subscribe = [EncoderEvent], deadline)]
     pub struct MultiAttrProcessor;
 }
 
@@ -69,4 +69,18 @@ mod polling_multi {
     pub struct MultiPollingProcessor {
         pub state: u8,
     }
+}
+
+mod timer_only {
+    use super::processor;
+
+    #[processor(poll_interval = 100)]
+    pub struct Polling;
+
+    #[processor(subscribe = [], deadline)]
+    pub struct Deadline;
+
+    #[processor]
+    #[rmk_macro::runnable_generated]
+    pub struct Custom;
 }

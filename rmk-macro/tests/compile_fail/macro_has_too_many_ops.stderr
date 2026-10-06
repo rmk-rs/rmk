@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: invalid macros
+ --> tests/compile_fail/macro_has_too_many_ops.rs:6:15
+  |
+6 | const _: () = assert!(validate_default_macros(MACROS), "invalid macros");
+  |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here

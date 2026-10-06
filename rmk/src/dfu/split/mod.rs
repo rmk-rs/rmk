@@ -52,9 +52,11 @@
 //!     │   │                             │ │
 //!     ├── FirmwareChunk{offset,data} ──>│ │
 //!     │   │                             │ │
-//!     │   │               handler.write_chunk()
+//!     │   │               publish_event(Write(Local, offset, data))
+//!     │   │               Runnable → write_chunk()
 //!     │   │               — incremental erase (page-by-page)
 //!     │   │               — write to flash
+//!     │   │               SPLIT_RESPONSE_CHANNEL.signal()
 //!     │   │               chunk_crc = CRC32(chunk) │
 //!     │   │                             │ │
 //!     │   │<─ FirmwareChunkAck{offset,──┤ │
@@ -73,36 +75,41 @@
 //!
 //! ═══ PHASE 2: END-TO-END CRC ── flash readback ──────────────────────
 //!
-//! Central compares its accumulated CRC with the firmware hash.  If ok it
-//! sends FirmwareUpdateComplete.  Peripheral reads back the DFU partition
-//! from flash and sends FirmwareCrcReport.  Central verifies; on match it
-//! sends FirmwareCrcOk, peripheral marks the firmware valid and resets.
+//! Central compares its accumulated CRC with the firmware hash (direct) or
+//! with the peripheral's CRC (passthrough).  If ok it sends
+//! FirmwareUpdateComplete.  Peripheral reads back the DFU partition from
+//! flash and sends FirmwareCrcReport.  Central verifies; on match it sends
+//! FirmwareCrcOk, peripheral marks the firmware valid and resets.
 //!
 //! ```text
 //!   Central                           Peripheral
 //!     │                                   │
-//!     │ central_crc.finalize()            │
-//!     │ == expected_hash?                 │
+//!     │ (direct only)                     │
+//!     │ central_crc == expected_hash?     │
 //!     │   ├─ No  → ABORT (binary bug!)    │
 //!     │   └─ Yes → ↓                      │
 //!     │                                   │
 //!     ├── FirmwareUpdateComplete ────────>│
 //!     │                                   │
-//!     │                     handler.compute_dfu_crc()
+//!     │                     publish_event(ComputeCrc)
+//!     │                     Runnable → compute_dfu_crc()
 //!     │                     = CRC32(whole DFU partition)
 //!     │                     via flash readback (256B blocks)
+//!     │                     SPLIT_RESPONSE_CHANNEL.signal(Crc(result))
 //!     │                                   │
 //!     │<── FirmwareCrcReport(dfu_crc) ────┤
 //!     │                                   │
-//!     │  dfu_crc == expected_hash?        │
+//!     │  (direct)  dfu_crc == expected_hash?
+//!     │  (passthru) dfu_crc == central_crc?
 //!     │    ├─ Yes → ↓                     │
-//!     │    └─ No  → send CrcFail ─────┐   │
-//!     │                               │   │
-//!     │                               │   attempt++ → Phase 1
-//!     │                               │   │
+//!     │    └─ No  → send CrcFail          │
+//!     │         (direct: attempt++ → P1)  │
+//!     │         (passthru: abort)         │
+//!     │                                   │
 //!     │    ├── FirmwareCrcOk ────────>│   │
 //!     │    │                          │   │
-//!     │    │                handler.mark_updated_and_reset()
+//!     │    │                publish_event(Finish(Local))
+//!     │    │                Runnable → sanity check + mark_updated_and_reset()
 //!     │    │               (only after CrcOk — never into corrupt FW)
 //!     │    │                          │   │
 //!     │    │<─ FirmwareUpdateConfirm ─┤   │
@@ -122,14 +129,17 @@
 //!   Layer           Max     Trigger                    Consequence
 //!   ─────           ───     ───────                    ──────────
 //!   Per-chunk       3×      Ack CRC mismatch           Re-send same chunk
-//!                           or 2s timeout
+//!                           or 2s timeout              (both paths)
 //!
 //!   Outer attempt   3×      Chunk never acked          Full restart of
-//!                           or E2E CRC mismatch        Phase 1 + 2
-//!                           or CRC timeout
+//!   (direct only)           or E2E CRC mismatch        Phase 1 + 2
+//!                           or CRC timeout             (send_firmware_update)
 //!
 //!   No retry        —       Central CRC != expected    Abort — binary
-//!                           (central_crc.finalize())   mismatch, not TX
+//!   (direct only)           (central_crc.finalize())   mismatch, not TX
+//!
+//!   Passthrough     —       Chunk fails after 3×       Abort immediately
+//!                           or E2E CRC mismatch        (no outer retry)
 //! ```
 //!
 //!
@@ -154,9 +164,5 @@
 mod central;
 mod peripheral;
 
-pub(crate) use central::{
-    PASSTHROUGH_SIGNAL, PASSTHROUGH_TARGET, PassthroughCommand, PassthroughDfuHandler, passthrough_done_if_empty,
-    passthrough_pending, passthrough_take_command,
-};
 pub use central::{get_firmware_update_data, set_firmware_update_data};
-pub use peripheral::{SplitDfuHandler, read_embedded_firmware_hash};
+pub use peripheral::read_embedded_firmware_hash;

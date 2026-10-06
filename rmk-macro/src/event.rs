@@ -149,6 +149,15 @@ fn generate_pubsub_channel(
         > = ::embassy_sync::pubsub::PubSubChannel::new();
     };
 
+    let empty_method = quote! {
+        impl #type_name #ty_generics {
+            /// Returns `true` when every subscriber has consumed every published message.
+            pub(crate) fn empty() -> bool {
+                #channel_name.is_empty()
+            }
+        }
+    };
+
     let trait_impls = quote! {
         impl #impl_generics ::rmk::event::PublishableEvent for #type_name #ty_generics #where_clause {
             type Publisher = ::embassy_sync::pubsub::ImmediatePublisher<
@@ -203,7 +212,7 @@ fn generate_pubsub_channel(
         }
     };
 
-    (channel_static, trait_impls)
+    (channel_static, quote! { #empty_method #trait_impls })
 }
 
 /// Implementation of the unified `#[event]` macro.

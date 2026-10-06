@@ -75,7 +75,18 @@ The peripheral forwards events to the central with the `device_id` preserved. Th
 
 ## Rust configuration
 
-Define a `PointingDevice` and add it to `run_all!` macro. For a split keyboard this must be added to the file (`central.rs` or `peripheral.rs`) corresponding to the side the sensor is connected to.
+Define a `PointingDevice` and add it to `run_all!` macro. A `PointingDevice`
+subscribes to `SleepStateEvent` (it releases the sensor's awake hold while the
+keyboard sleeps); sensors declared in `keyboard.toml` are counted into the
+`sleep_state` subscriber budget automatically, but a device built by hand needs
+its slot declared:
+
+```toml
+[event.sleep_state]
+subs = 1 # one per hand-built PointingDevice, plus your own subscribers
+```
+
+ For a split keyboard this must be added to the file (`central.rs` or `peripheral.rs`) corresponding to the side the sensor is connected to.
 
 ```rust
 use embassy_nrf::gpio::{Flex, Input, Level, Output, OutputDrive, Pull};

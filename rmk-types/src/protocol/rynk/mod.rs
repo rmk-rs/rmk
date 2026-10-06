@@ -49,8 +49,9 @@
 //! is informational: a new `Cmd` or a new/extended topic is a `minor` bump (old
 //! peers answer `UnknownCmd` or ignore trailing topic bytes), while reshaping an
 //! existing request/response — *including appending a field* — is a `major` bump,
-//! since hosts reject trailing response bytes. The `snapshots/*.snap` golden
-//! files (`tests.rs`) fail on any accidental drift.
+//! since hosts reject trailing response bytes. While `major` is 0 the protocol
+//! is unstable: any change bumps `minor`, and hosts require an exact match.
+//! The `snapshots/*.snap` golden files (`tests.rs`) fail on any accidental drift.
 
 pub mod command;
 

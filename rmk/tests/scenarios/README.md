@@ -6,7 +6,7 @@ directory is a scenario: `run_tests!("tests/scenarios")` expands each one into a
 adding one run `touch tests/integration/main.rs` to re-expand; a generated
 `scenarios_are_registered` test fails with that hint if you forget. Board
 fixtures live in `boards/`, a subdirectory, so they are not scenarios
-themselves. Run them from `rmk/` with any of the five feature rows CI uses
+themselves. Run them from `rmk/` with any of the feature rows CI uses
 (`RMK_TEST_FEATURESETS` in `.github/ci/_lib.sh`), for example:
 
 ```console
@@ -49,7 +49,8 @@ shared behavior for that test only. Tables merge key by key; arrays such as
 `behavior`, and `features`.
 
 `features` adds `#[cfg(feature = "...")]` gates; file and test features are
-combined. Test IDs are `<file>::<name>`, where `<file>` is the file stem with
+combined. Cases explicitly tagged with `storage` use simulated flash, including
+persistence replies, instead of the discard-only storage task. Test IDs are `<file>::<name>`, where `<file>` is the file stem with
 `-` replaced by `_`.
 
 ## Files
@@ -64,7 +65,8 @@ splits by resolution mode. Those all start with `morse_`, so
 | `morse_combo_*` | One combo table over morse keys, under each of those modes |
 | `morse_tap_dance`, `morse_bilateral`, `morse_rollover`, `morse_layer_release`, `morse_quick_tap` | Morse behavior that isn't mode-specific |
 | `rynk_*` | The Rynk host protocol, one file per endpoint group |
-| everything else | One feature each — `combo`, `one_shot`, `layer`, `encoder`, `macros`, `hid_reports`, `passkey`, `steno` |
+| `deadline_race` | Deadlines that must keep firing while a key is buffered |
+| everything else | One feature each — `combo`, `one_shot`, `layer`, `encoder`, `macros`, `hid_reports`, `passkey`, `steno`, `user_hold` |
 
 Cases that only differ by mode share a name across files, so
 `nextest run two_key_misses_window` runs that case under every mode at once —
@@ -140,7 +142,7 @@ type.
 
 ```toml
 { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 0 }, action = { Single = { Key = { Hid = "B" } } } } } },
-{ rynk = { cmd = "GetVersion", reply = { major = 0, minor = 1 } } },
+{ rynk = { cmd = "GetVersion", reply = { major = 0, minor = 2 } } },
 { rynk = { cmd = "GetMatrixState", error = "Locked" } },
 ```
 

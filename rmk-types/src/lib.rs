@@ -12,6 +12,7 @@
 //! - [`combo`] — `Combo`: combo trigger configuration
 //! - [`fork`] — `Fork`, `StateBits`: key-override configuration
 //! - [`morse`] — `Morse`, `MorsePattern`, `MorseProfile`, `MorseMode`: tap-dance/tap-hold
+//! - [`keyboard_macros`] — `MacroOp`, `Macro`: keyboard macro steps
 //!
 //! ### Hardware state
 //! - [`modifier`] — `ModifierCombination` bitfield
@@ -41,10 +42,11 @@ pub mod ble;
 pub mod combo;
 pub mod connection;
 pub mod constants;
-#[cfg(feature = "dfu")]
+#[cfg(feature = "_dfu")]
 pub mod dfu;
 pub mod fmt;
 pub mod fork;
+pub mod keyboard_macros;
 pub mod keycode;
 pub mod led_indicator;
 pub mod modifier;

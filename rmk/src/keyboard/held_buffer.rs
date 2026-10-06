@@ -20,18 +20,8 @@ impl HeldBuffer {
         }
     }
 
-    /// Push a new held key into the buffer and then sort by the timeout
-    pub fn push(&mut self, key: HeldKey) {
-        if let Err(e) = self.keys.push(key) {
-            error!("Held buffer overflowed, cannot save: {:?}", e);
-        }
-
-        // Sort the buffer after push
-        self.keys.sort_unstable_by_key(|k| k.timeout_time);
-    }
-
     /// Push a new held key into the buffer
-    pub fn push_without_sort(&mut self, key: HeldKey) {
+    pub fn push(&mut self, key: HeldKey) {
         if let Err(e) = self.keys.push(key) {
             error!("Held buffer overflowed, cannot save: {:?}", e);
         }
@@ -64,21 +54,16 @@ impl HeldBuffer {
         }
     }
 
-    /// Remove a held key from the buffer and then resort the buffer
-    pub fn remove(&mut self, pos: KeyboardEventPos) -> Option<HeldKey> {
-        let k = self.remove_if(|k| k.event.pos == pos);
-        // Re-sort the buffer after remove
-        self.keys.sort_unstable_by_key(|k| k.timeout_time);
-        k
-    }
-
-    /// Get the next timeout key in the buffer
+    /// Get the key with the earliest timeout among those matching `predicate`.
     pub fn next_timeout<P>(&self, mut predicate: P) -> Option<HeldKey>
     where
         P: FnMut(&HeldKey) -> bool,
     {
-        // Support that the held buffer is already sorted by the timeout time
-        self.keys.iter().find(|&x| predicate(x)).copied()
+        self.keys
+            .iter()
+            .filter(|k| predicate(k))
+            .min_by_key(|k| k.timeout_time)
+            .copied()
     }
 
     pub fn is_empty(&self) -> bool {

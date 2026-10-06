@@ -702,6 +702,37 @@ mod tests {
     }
 
     #[test]
+    fn layout_map_accepts_alignment_whitespace() {
+        for ws in ["", " ", "  ", "\t", " \t\t "] {
+            let map = format!("({ws}5{ws},{ws}5{ws},{ws}R{ws},{ws}@2u{ws})");
+            let tokens = parse_map(&map, 6, 6).unwrap();
+            assert!(matches!(
+                tokens.as_slice(),
+                [MapToken::Key { row: 5, col: 5, hand: 'R', shape: Some(shape) }] if shape == "2u"
+            ));
+        }
+    }
+
+    #[test]
+    fn layout_map_alignment_preserves_geometry() {
+        let compact = "(0,0) [1] (e,0)\n[y=0.5] [r=15@(0,1)] (1,0,@2u)";
+        let aligned = "(  0  ,  0  )  [  1  ]  (  e  ,  0  )\n\
+                       [  y  =  0.5  ]  [  r  =  15  @  (  0  ,  1  )  ]  (  1  ,  0  ,  @2u  )";
+        let blobs: Vec<_> = [compact, aligned]
+            .into_iter()
+            .map(|map| layout_blob_from_toml(&format!("rows = 2\ncols = 1\nmap = {map:?}")).unwrap())
+            .collect();
+        assert_eq!(blobs[0], blobs[1]);
+    }
+
+    #[test]
+    fn layout_map_rejects_newlines_inside_tokens() {
+        for map in ["(0,\n0)", "(e,\n0)", "[\n1]", "[y=\n1]", "[r=0\n]"] {
+            assert!(parse_map(map, 1, 1).is_err(), "{map:?}");
+        }
+    }
+
+    #[test]
     fn duplicate_coord_is_rejected() {
         // Blob and keymap paths must reject duplicate cells consistently.
         let cfg: LayoutTomlConfig = toml::from_str("rows = 1\ncols = 2\nmap = \"(0,0) (0,0)\"").unwrap();

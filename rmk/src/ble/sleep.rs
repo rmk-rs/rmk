@@ -127,6 +127,64 @@ mod tests {
         });
     }
 
+    /// Ball motion is activity too. A trackball can go minutes without a key
+    /// event, and treating only `KeyboardEvent` as activity put a board that is
+    /// being actively moused to sleep mid-use.
+    #[test]
+    fn pointing_activity_restarts_the_idle_timeout() {
+        use embassy_futures::select::select3;
+        use rmk_types::action::KeyAction;
+
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::core_traits::Runnable;
+        use crate::event::{Axis, AxisEvent, AxisValType, PointingEvent, publish_event};
+        use crate::input_device::pointing::{PointingProcessor, PointingProcessorConfig};
+        use crate::keymap::{KeyMap, KeymapData};
+
+        let roll = || PointingEvent {
+            device_id: 0,
+            axes: [
+                AxisEvent {
+                    typ: AxisValType::Rel,
+                    axis: Axis::X,
+                    value: 4,
+                },
+                AxisEvent {
+                    typ: AxisValType::Rel,
+                    axis: Axis::Y,
+                    value: -3,
+                },
+                AxisEvent {
+                    typ: AxisValType::Rel,
+                    axis: Axis::Z,
+                    value: 0,
+                },
+            ],
+        };
+
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 1> = PositionalConfig::default();
+            let mut data: KeymapData<1, 1, 1, 0> = KeymapData::new([[[KeyAction::No]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut processor = PointingProcessor::new(&keymap, PointingProcessorConfig::default());
+
+            let script = async {
+                // Same shape as `activity_restarts_the_idle_timeout`, with the
+                // ball as the only input: 1.8s of steady rolling, no key ever.
+                for _ in 0..3 {
+                    Timer::after_millis(600).await;
+                    assert!(!sleeping(), "ball motion must restart the idle timeout");
+                    publish_event(roll());
+                    // Let the processor pick the event up before the next check.
+                    Timer::after_millis(1).await;
+                }
+            };
+
+            select3(manage_sleep_state(Duration::from_secs(1)), processor.run(), script).await;
+        });
+    }
+
     #[test]
     fn sleep_request_skips_the_idle_timeout() {
         with_sleep_manager(async {

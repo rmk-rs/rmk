@@ -17,6 +17,7 @@ mod router;
 #[cfg(feature = "vial")]
 mod vial_router;
 use core::cell::Cell;
+use core::ops::ControlFlow;
 
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
@@ -32,7 +33,7 @@ pub use router::DongleRouter;
 #[cfg(feature = "vial")]
 use router::VialReport;
 use trouble_host::prelude::*;
-use usbd_hid::descriptor::{MediaKeyboardReport, MouseReport, SystemControlReport};
+use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 #[cfg(feature = "vial")]
 use vial_router as router;
 
@@ -42,9 +43,13 @@ use crate::ble::scan::{DONGLE_SCAN_WINDOW, scan_config, start_scan};
 use crate::ble::wait_for_stack_started;
 use crate::channel::send_hid_report;
 use crate::core_traits::Runnable;
+#[cfg(feature = "custom_message")]
+use crate::dongle::event::{CUSTOM_TO_DONGLE_UUID, CUSTOM_TO_KEYBOARD_UUID};
 use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_SERVICE_UUID, DongleEvent};
-use crate::event::{EventSubscriber, LedIndicatorEvent, SubscribableEvent, publish_event};
-use crate::hid::{KeyboardReport, Report};
+use crate::event::{
+    DongleState, DongleStateEvent, EventSubscriber, LedIndicatorEvent, SubscribableEvent, publish_event,
+};
+use crate::hid::{CompositeReportType, KeyboardReport, MOUSE_REPORT_SIZE, MouseReport, Report};
 use crate::{DONGLE_PAIRING_WINDOW_SECS, RawMutex};
 
 /// The dongle relays exactly one keyboard.
@@ -170,6 +175,7 @@ where
             scan: &scan,
             router: self.router,
             profiles: ProfileManager::new(stack),
+            state: Cell::new(DongleState::default()),
         };
 
         join(crate::ble::ble_task(stack.runner(), &scan), central.run()).await;
@@ -184,6 +190,8 @@ struct DongleCentral<'b, 's: 'b, C: Controller + ControllerCmdAsync<LeSetPhy>> {
     scan: &'b ScanHandler,
     router: &'b DongleRouter,
     profiles: ProfileManager<'b, 's, C, DefaultPacketPool, 1>,
+    /// The last state published, so a path that ends where it began says nothing.
+    state: Cell<DongleState>,
 }
 
 impl<'b, 's: 'b, C> DongleCentral<'b, 's, C>
@@ -193,6 +201,13 @@ where
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<LeSetScanParams>,
 {
+    /// Publish current `DongleState` if it is a change.
+    fn set_state(&self, state: DongleState) {
+        if self.state.replace(state) != state {
+            publish_event(DongleStateEvent(state));
+        }
+    }
+
     async fn run(&mut self) -> ! {
         wait_for_stack_started().await;
         self.profiles.load_bonded_devices().await;
@@ -214,6 +229,7 @@ where
             self.scan.bonded_addr.lock(|a| a.set(bonded.map(|addr| addr.addr)));
 
             if let Some(addr) = bonded {
+                self.set_state(DongleState::Searching);
                 // Connect only once the keyboard asks for the dongle; its bare address
                 // would match its host advertising too. The accept list drops other traffic.
                 self.scan.bonded_asked.reset();
@@ -267,6 +283,7 @@ where
     /// user before the (re)plug — that beats the automatic reconnect.
     async fn run_pairing_window(&self) -> Option<(AddrKind, BdAddr)> {
         info!("[dongle] pairing window open for {}s", DONGLE_PAIRING_WINDOW_SECS);
+        self.set_state(DongleState::Pairing);
         self.scan.seeking_keyboard.reset();
         self.scan.bonded_seen.reset();
         let deadline = Instant::now() + Duration::from_secs(DONGLE_PAIRING_WINDOW_SECS as u64);
@@ -417,6 +434,7 @@ where
         let mut listener = client.listen_all().ok()?;
 
         self.router.link_up();
+        self.set_state(DongleState::Connected);
         info!("[dongle] relaying");
         self.relay(
             #[cfg(not(feature = "vial"))]
@@ -450,6 +468,10 @@ where
             loop {
                 let notification = listener.next().await;
                 let (handle, data) = (notification.handle(), notification.as_ref());
+                #[cfg(feature = "custom_message")]
+                let is_custom_message = chars.custom_to_dongle.as_ref().is_some_and(|ch| ch.handle == handle);
+                #[cfg(not(feature = "custom_message"))]
+                let is_custom_message = false;
                 // The config stream is the only one not parsed; it goes straight to the host.
                 if handle == chars.config_input.handle {
                     // A full pipe usually means the host is a moment behind, so wait 20ms at most.
@@ -471,6 +493,18 @@ where
                             }
                         }
                         Err(_) => warn!("[dongle] non-report-size vial notify dropped"),
+                    }
+                } else if is_custom_message {
+                    // The dongle is an end of the chain: nothing to forward to.
+                    #[cfg(feature = "custom_message")]
+                    match postcard::from_bytes::<crate::custom_message::CustomMessage>(data) {
+                        // An end of the chain: it delivers what names it and has nowhere
+                        // to relay the rest to.
+                        Ok(message) => match message.target {
+                            crate::custom_message::CustomMessageTarget::Dongle => publish_event(message),
+                            _ => (),
+                        },
+                        Err(_) => warn!("[dongle] undecodable custom message dropped"),
                     }
                 } else if chars.event.as_ref().is_some_and(|ch| ch.handle == handle) {
                     // One notification is one whole event, so there is nothing to reassemble.
@@ -519,7 +553,22 @@ where
 
         // Three independent loops, not one combined one: an LED update must not
         // wait behind a config write, or the other way around.
+        #[cfg(not(feature = "custom_message"))]
         select3(keyboard_to_host, led_to_keyboard, request_to_keyboard).await;
+        #[cfg(feature = "custom_message")]
+        embassy_futures::select::select4(keyboard_to_host, led_to_keyboard, request_to_keyboard, async {
+            let Some(characteristic) = chars.custom_to_keyboard.as_ref() else {
+                return core::future::pending().await;
+            };
+            // The dongle has one link, so everything queued goes out on it.
+            crate::custom_message::forward(None, async |encoded| {
+                client
+                    .write_characteristic_without_response(characteristic, encoded)
+                    .await
+            })
+            .await
+        })
+        .await;
     }
 }
 
@@ -537,32 +586,29 @@ struct KeyboardCharacteristics {
     /// `None` on a keyboard whose firmware has no event service; the relay
     /// works without it, there is just nothing to publish.
     event: Option<Characteristic<[u8]>>,
+    /// `None` on a keyboard built without `custom_message`.
+    #[cfg(feature = "custom_message")]
+    custom_to_dongle: Option<Characteristic<[u8]>>,
+    #[cfg(feature = "custom_message")]
+    custom_to_keyboard: Option<Characteristic<[u8]>>,
 }
 
 impl KeyboardCharacteristics {
     /// Discover the HID and host-protocol services. Report characteristics all
-    /// share UUID 0x2A4D, but both ends are RMK, so the declaration order below
-    /// is fixed and identifies them.
+    /// share UUID 0x2A4D; like any HID-over-GATT host, the dongle tells them
+    /// apart by their Report Reference descriptor.
     async fn discover<C: Controller>(client: &Client<'_, C>) -> Option<Self> {
         let mut hid_services = client
             .services_by_uuid(&Uuid::new_short(0x1812))
             .await
             .ok()?
             .into_iter();
-        let hid = hid_services.next()?;
-        let report_uuid = Uuid::new_short(0x2A4D);
-        // The 9 must fit every characteristic `HidService` declares, or discovery fails.
-        let mut reports = client
-            .characteristics::<9>(&hid)
-            .await
-            .ok()?
-            .into_iter()
-            .filter(|c| c.uuid == report_uuid);
-        let keyboard_input = reports.next()?;
-        let keyboard_output = reports.next()?;
-        let mouse = reports.next()?;
-        let media = reports.next()?;
-        let system = reports.next()?;
+        let mut hid = ReportCharacteristics::discover(client, &hid_services.next()?).await?;
+        let keyboard_input = hid.take(CompositeReportType::Keyboard as u8, 1)?;
+        let keyboard_output = hid.take(CompositeReportType::Keyboard as u8, 2)?;
+        let mouse = hid.take(CompositeReportType::Mouse as u8, 1)?;
+        let media = hid.take(CompositeReportType::Media as u8, 1)?;
+        let system = hid.take(CompositeReportType::System as u8, 1)?;
 
         #[cfg(not(feature = "vial"))]
         let (config_input, config_output) = {
@@ -583,20 +629,18 @@ impl KeyboardCharacteristics {
                     .ok()?,
             )
         };
-        // Vial uses the second HID service: input (notify) first, then output (write).
+        // Vial's own HID service carries one report with no id: input and output.
         #[cfg(feature = "vial")]
         let (config_input, config_output) = {
-            let vial = hid_services.next()?;
-            let mut reports = client
-                .characteristics::<9>(&vial)
-                .await
-                .ok()?
-                .into_iter()
-                .filter(|c| c.uuid == report_uuid);
-            (reports.next()?, reports.next()?)
+            let mut vial = ReportCharacteristics::discover(client, &hid_services.next()?).await?;
+            (vial.take(0, 1)?, vial.take(0, 2)?)
         };
 
         let mut event = None;
+        #[cfg(feature = "custom_message")]
+        let mut custom_to_dongle = None;
+        #[cfg(feature = "custom_message")]
+        let mut custom_to_keyboard = None;
         if let Ok(services) = client.services_by_uuid(&DONGLE_EVENT_SERVICE_UUID.into()).await
             && let Some(service) = services.into_iter().next()
         {
@@ -604,6 +648,17 @@ impl KeyboardCharacteristics {
                 .characteristic_by_uuid::<[u8]>(&service, &DONGLE_EVENT_CHAR_UUID.into())
                 .await
                 .ok();
+            #[cfg(feature = "custom_message")]
+            {
+                custom_to_dongle = client
+                    .characteristic_by_uuid::<[u8]>(&service, &CUSTOM_TO_DONGLE_UUID.into())
+                    .await
+                    .ok();
+                custom_to_keyboard = client
+                    .characteristic_by_uuid::<[u8]>(&service, &CUSTOM_TO_KEYBOARD_UUID.into())
+                    .await
+                    .ok();
+            }
         }
 
         Some(Self {
@@ -615,6 +670,10 @@ impl KeyboardCharacteristics {
             config_input,
             config_output,
             event,
+            #[cfg(feature = "custom_message")]
+            custom_to_dongle,
+            #[cfg(feature = "custom_message")]
+            custom_to_keyboard,
         })
     }
 
@@ -629,7 +688,16 @@ impl KeyboardCharacteristics {
         ]
         .into_iter()
         .chain(self.event.as_ref())
-        {
+        .chain({
+            #[cfg(feature = "custom_message")]
+            {
+                self.custom_to_dongle.as_ref()
+            }
+            #[cfg(not(feature = "custom_message"))]
+            {
+                None
+            }
+        }) {
             if let Some(cccd) = ch.cccd_handle {
                 client.write_handle(cccd, &[0x01, 0x00]).await.ok()?;
             }
@@ -647,13 +715,13 @@ impl KeyboardCharacteristics {
                 leds: 0,
                 keycodes: data[2..8].try_into().unwrap(),
             }))
-        } else if handle == self.mouse.handle && data.len() >= 5 {
+        } else if handle == self.mouse.handle && data.len() >= MOUSE_REPORT_SIZE {
             Some(Report::MouseReport(MouseReport {
                 buttons: data[0],
-                x: data[1] as i8,
-                y: data[2] as i8,
-                wheel: data[3] as i8,
-                pan: data[4] as i8,
+                x: i16::from_le_bytes([data[1], data[2]]),
+                y: i16::from_le_bytes([data[3], data[4]]),
+                wheel: i16::from_le_bytes([data[5], data[6]]),
+                pan: i16::from_le_bytes([data[7], data[8]]),
             }))
         } else if handle == self.media.handle && data.len() >= 2 {
             Some(Report::MediaKeyboardReport(MediaKeyboardReport {
@@ -664,6 +732,43 @@ impl KeyboardCharacteristics {
         } else {
             None
         }
+    }
+}
+
+/// The report characteristics of one HID service, keyed by their Report
+/// Reference `(report_id, report_type)`: report_type 1 is input, 2 is output.
+struct ReportCharacteristics(heapless::LinearMap<(u8, u8), Characteristic<[u8]>, 8>);
+
+impl ReportCharacteristics {
+    /// Two ATT exchanges: characteristic discovery, then one Read By Type that
+    /// returns every Report Reference descriptor in the service.
+    async fn discover<C: Controller>(client: &Client<'_, C>, service: &ServiceHandle) -> Option<Self> {
+        // 16 leaves room beyond the 9 characteristics `HidService` declares today.
+        let mut characteristics = client.characteristics::<16>(service).await.ok()?;
+        let mut reports = heapless::LinearMap::new();
+        let report_reference = Uuid::new_short(0x2908);
+        let (start, end) = service.handle_range().into_inner();
+        client
+            .read_by_type(start, end, &report_reference, |descriptor_handle, reference| {
+                // A descriptor sits inside the handle range of the characteristic it describes.
+                let owner = characteristics
+                    .iter()
+                    .position(|c| (c.handle..=c.end_handle).contains(&descriptor_handle));
+                if let Some(i) = owner
+                    && let &[report_id, report_type] = reference
+                {
+                    let _ = reports.insert((report_id, report_type), characteristics.swap_remove(i));
+                }
+                ControlFlow::<()>::Continue(())
+            })
+            .await
+            .ok()?;
+        Some(Self(reports))
+    }
+
+    /// The characteristic carrying this report, moved out of the set.
+    fn take(&mut self, report_id: u8, report_type: u8) -> Option<Characteristic<[u8]>> {
+        self.0.remove(&(report_id, report_type))
     }
 }
 
