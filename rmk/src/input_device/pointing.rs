@@ -496,7 +496,7 @@ impl MotionAccumulator {
     }
 }
 
-/// Pointer acceleration for cursor mode. Motion faster than `from_counts_per_s` is
+/// Pointer acceleration for cursor or scroll mode. Motion faster than `from_counts_per_s` is
 /// scaled up in proportion to its speed, to at most `max_percent`; slower motion
 /// passes unchanged, so fine positioning keeps its precision while fast moves cover
 /// more ground.
@@ -542,6 +542,9 @@ pub struct PointingProcessorConfig {
     pub swap_xy: bool,
     /// Acceleration in cursor mode, applied before the cursor multiplier. Off when `None`.
     pub acceleration: Option<PointerAcceleration>,
+    /// Acceleration in scroll mode, applied before the scroll multipliers and divisors.
+    /// Off when `None`.
+    pub scroll_acceleration: Option<PointerAcceleration>,
 }
 
 impl Default for PointingProcessorConfig {
@@ -552,6 +555,7 @@ impl Default for PointingProcessorConfig {
             invert_y: false,
             swap_xy: false,
             acceleration: None,
+            scroll_acceleration: None,
         }
     }
 }
@@ -566,8 +570,10 @@ pub struct PointingProcessor<'a> {
     accumulator: MotionAccumulator,
     /// current active mode
     current_mode: PointingMode,
-    /// Fractions of a count that acceleration carries to the next event
+    /// Fractions of a count that acceleration carries to the next event, for the
+    /// cursor and for scrolling
     acceleration_rest: (i64, i64),
+    scroll_acceleration_rest: (i64, i64),
     /// When the previous event arrived, to measure the speed for acceleration
     last_event_at: Instant,
 }
@@ -581,6 +587,7 @@ impl<'a> PointingProcessor<'a> {
             accumulator: MotionAccumulator::default(),
             current_mode: PointingMode::default(),
             acceleration_rest: (0, 0),
+            scroll_acceleration_rest: (0, 0),
             last_event_at: Instant::MIN,
         }
     }
@@ -654,6 +661,9 @@ impl<'a> PointingProcessor<'a> {
                         }
                     }
                     PointingMode::Scroll(scroll_config) => {
+                        if let Some(acceleration) = self.config.scroll_acceleration {
+                            (x, y) = accelerate(x, y, dt_ms, acceleration, &mut self.scroll_acceleration_rest);
+                        }
                         let (sx, sy) = self.accumulator.accumulate(
                             x,
                             y,

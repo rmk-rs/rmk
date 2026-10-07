@@ -55,6 +55,8 @@ rdy = "PIN_15"
 # `max` percent. Slower motion passes unchanged. Counts depend on the sensor's
 # resolution, so retune `from` after changing it.
 # proc_acceleration = { from = 1500, max = 250 }
+# The same for scroll mode, applied before the scroll divisor.
+# proc_scroll_acceleration = { from = 1500, max = 300 }
 ```
 
 ### Split
@@ -104,6 +106,7 @@ let proc_config = PointingProcessorConfig {
     // invert_y: true,
     // swap_xy: true,
     // acceleration: Some(PointerAcceleration { from_counts_per_s: 1500, max_percent: 250 }),
+    // scroll_acceleration: Some(PointerAcceleration { from_counts_per_s: 1500, max_percent: 300 }),
     ..Default::default()
 };
 let mut trackpad_proc = PointingProcessor::new(&keymap, proc_config);

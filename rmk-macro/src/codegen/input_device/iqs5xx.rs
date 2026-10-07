@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use rmk_config::resolved::hardware::{ChipModel, ChipSeries, Iqs5xxConfig};
 
-use super::{Initializer, expand_pointing_acceleration};
+use super::{expand_pointing_acceleration, Initializer};
 
 /// Expand IQS5xx device configuration.
 /// Returns (device initializers, processor initializers).
@@ -48,6 +48,8 @@ pub(crate) fn expand_iqs5xx_device(
         let proc_invert_y = sensor.proc_invert_y;
         let proc_swap_xy = sensor.proc_swap_xy;
         let proc_acceleration = expand_pointing_acceleration(&sensor.proc_acceleration);
+        let proc_scroll_acceleration =
+            expand_pointing_acceleration(&sensor.proc_scroll_acceleration);
 
         let rdy_init = match (&sensor.rdy, &chip.series) {
             (Some(rdy_pin), ChipSeries::Nrf52) => {
@@ -126,6 +128,7 @@ pub(crate) fn expand_iqs5xx_device(
                 invert_y: #proc_invert_y,
                 swap_xy: #proc_swap_xy,
                 acceleration: #proc_acceleration,
+                scroll_acceleration: #proc_scroll_acceleration,
             };
             let mut #processor_ident = ::rmk::input_device::pointing::PointingProcessor::new(
                 &keymap,
