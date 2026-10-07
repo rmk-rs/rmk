@@ -1,5 +1,7 @@
 #[cfg(feature = "subrating")]
-use bt_hci::{cmd::le::LeSetHostFeature, controller::ControllerCmdSync};
+use bt_hci::cmd::le::LeSetHostFeature;
+use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetDefaultPhy};
+use bt_hci::controller::ControllerCmdSync;
 use embassy_futures::join::join;
 #[cfg(feature = "custom_message")]
 use embassy_futures::select::select;
@@ -179,7 +181,12 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitWriter for BleSplitPeripheralDrive
 /// and before any advertising, since the flag only applies to links opened after
 /// it is set.
 #[cfg(feature = "subrating")]
-async fn init_subrating_host_feature<C: Controller + ControllerCmdSync<LeSetHostFeature>>(
+async fn init_subrating_host_feature<
+    C: Controller
+        + ControllerCmdSync<LeSetHostFeature>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>
+        + ControllerCmdSync<LeSetDefaultPhy>,
+>(
     stack: &Stack<'_, C, impl PacketPool>,
 ) {
     const CONN_SUBRATING_HOST_BIT: u8 = 38;
@@ -199,8 +206,11 @@ async fn init_subrating_host_feature<C: Controller + ControllerCmdSync<LeSetHost
 pub async fn initialize_nrf_ble_split_peripheral_and_run<
     'b,
     's: 'b,
-    #[cfg(feature = "subrating")] C: Controller + ControllerCmdSync<LeSetHostFeature>,
-    #[cfg(not(feature = "subrating"))] C: Controller,
+    #[cfg(feature = "subrating")] C: Controller
+        + ControllerCmdSync<LeSetHostFeature>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>
+        + ControllerCmdSync<LeSetDefaultPhy>,
+    #[cfg(not(feature = "subrating"))] C: Controller + ControllerCmdSync<LeReadLocalSupportedFeatures> + ControllerCmdSync<LeSetDefaultPhy>,
 >(
     id: usize,
     stack: &'b Stack<'s, C, DefaultPacketPool>,
@@ -217,6 +227,7 @@ pub async fn initialize_nrf_ble_split_peripheral_and_run<
     };
 
     let peri_task = async {
+        crate::ble::configure_default_phy(stack).await;
         // Set subrating host support before any advertising/connecting
         #[cfg(feature = "subrating")]
         init_subrating_host_feature(stack).await;

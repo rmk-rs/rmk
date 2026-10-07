@@ -51,6 +51,7 @@ pub struct BuildConstants {
     pub split_battery_peripheral_ids: Vec<usize>,
     pub split_battery_peripheral_user_descriptions: Vec<String>,
     pub ble_profiles_num: usize,
+    pub ble_use_2m_phy: bool,
     pub split_central_sleep_timeout_seconds: u32,
     pub auto_mouse_layer_max_num: usize,
     /// Rynk RX/TX buffer size (bytes).
@@ -302,6 +303,7 @@ impl crate::KeyboardTomlConfig {
             split_battery_peripheral_ids,
             split_battery_peripheral_user_descriptions,
             ble_profiles_num: rmk.ble_profiles_num,
+            ble_use_2m_phy: self.ble.as_ref().and_then(|ble| ble.use_2m_phy).unwrap_or(true),
             split_central_sleep_timeout_seconds: rmk.split_central_sleep_timeout_seconds,
             auto_mouse_layer_max_num,
             rynk_buffer_size: rmk.rynk_buffer_size,

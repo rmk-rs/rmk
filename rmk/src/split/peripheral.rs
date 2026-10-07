@@ -1,6 +1,11 @@
 #[cfg(feature = "_ble")]
 #[cfg(all(feature = "_ble", feature = "subrating"))]
-use bt_hci::{cmd::le::LeSetHostFeature, controller::ControllerCmdSync};
+use bt_hci::cmd::le::LeSetHostFeature;
+#[cfg(feature = "_ble")]
+use bt_hci::{
+    cmd::le::{LeReadLocalSupportedFeatures, LeSetDefaultPhy},
+    controller::ControllerCmdSync,
+};
 use embassy_futures::select::{Either, select};
 #[cfg(not(feature = "_ble"))]
 use embedded_io_async::{Read, Write};
@@ -48,8 +53,11 @@ use crate::state::update_status;
 /// * `address` - (optional) The BLE address of this peripheral
 /// * `serial` - (optional) serial port used to send peripheral split message. This argument is enabled only for serial split now
 pub async fn run_rmk_split_peripheral<
-    #[cfg(all(feature = "_ble", feature = "subrating"))] C: Controller + ControllerCmdSync<LeSetHostFeature>,
-    #[cfg(all(feature = "_ble", not(feature = "subrating")))] C: Controller,
+    #[cfg(all(feature = "_ble", feature = "subrating"))] C: Controller
+        + ControllerCmdSync<LeSetHostFeature>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>
+        + ControllerCmdSync<LeSetDefaultPhy>,
+    #[cfg(all(feature = "_ble", not(feature = "subrating")))] C: Controller + ControllerCmdSync<LeReadLocalSupportedFeatures> + ControllerCmdSync<LeSetDefaultPhy>,
     #[cfg(not(feature = "_ble"))] S: Write + Read,
 >(
     #[cfg(feature = "_ble")] id: usize,

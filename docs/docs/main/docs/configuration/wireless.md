@@ -23,7 +23,7 @@ adc_divider_total = 2806
 # Set the BLE tx power; higher means better signal but more power consumption. For nRF52840 the maximum tx power is 8.
 # nRF52 only, ignored on other chips
 default_tx_power = 0
-# Whether to enable 2M PHY, defaults to true. nRF52 only, ignored on other chips
+# Whether to prefer 2M PHY, defaults to true; applies to every BLE backend
 use_2m_phy = true
 # Enable or disable passkey entry, defaults to false
 passkey_entry = false
@@ -36,7 +36,7 @@ passkey_entry_timeout = 120
 ```
 
 Some legacy BLE adapters cannot connect to devices using 2M PHY at all. For those hosts, enable the `use_1m_phy` Cargo feature of the `rmk` crate, which makes the keyboard use 1M PHY for the host connection.
-This only affects host connections. The dongle link and the split link between the halves always run at 2M PHY, so a keyboard built with both `dongle` and `use_1m_phy` keeps those links fast and still connects to a legacy adapter on its other BLE profiles.
+This only affects host connections. Split and dongle links follow `[ble].use_2m_phy`. Setting it to false selects 1M for every role. Both peers must support 2M to negotiate it.
 
 ### Passkey entry
 

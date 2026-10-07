@@ -107,6 +107,7 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         bc.split_battery_peripheral_user_descriptions
     ));
     lines.push(format!("pub const NUM_BLE_PROFILE: usize = {};", bc.ble_profiles_num));
+    lines.push(format!("pub const BLE_USE_2M_PHY: bool = {};", bc.ble_use_2m_phy));
     lines.push(format!(
         "pub const SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS: u32 = {};",
         bc.split_central_sleep_timeout_seconds
