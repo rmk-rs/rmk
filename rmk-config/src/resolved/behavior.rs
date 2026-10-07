@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
+use serde::Deserialize;
+
 /// Resolved behavioral configuration.
 pub struct Behavior {
     pub tri_layer: Option<[u8; 3]>,
-    pub one_shot_timeout_ms: Option<u64>,
-    pub one_shot_modifiers: Option<OneShot>,
+    pub sticky_key: Option<StickyKey>,
     pub combos: Option<Combos>,
     pub macros: Option<Macros>,
     pub forks: Option<Forks>,
@@ -31,9 +32,33 @@ pub const DEFAULT_AUTO_MOUSE_LAYER_THRESHOLD: u16 = 1;
 /// Fallback for `auto_mouse_layer_max_num` when no `keyboard.toml` is loaded.
 pub const DEFAULT_AUTO_MOUSE_LAYER_MAX_NUM: usize = 2;
 
-pub struct OneShot {
-    pub activate_on_keypress: Option<bool>,
-    pub quick_release: Option<bool>,
+/// Resolved sticky key configuration: the default profile plus the named ones.
+pub struct StickyKey {
+    pub default: StickyProfile,
+    /// Named profiles sorted by name, so a profile's index is stable across builds.
+    pub profiles: Vec<(String, StickyProfile)>,
+}
+
+pub const DEFAULT_STICKY_WAIT_TIMEOUT_MS: u16 = 1000;
+pub const DEFAULT_STICKY_HOLD_TIMEOUT_MS: u16 = 250;
+
+/// A profile after field-wise inheritance and capacity validation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StickyProfile {
+    pub release_on: Vec<StickyReleaseCondition>,
+    pub ignore: Vec<String>,
+    pub wait_timeout_ms: u16,
+    pub hold_timeout_ms: u16,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StickyReleaseCondition {
+    BeforeNextPress,
+    AfterNextPress,
+    AfterNextRelease,
+    LayerActivate,
+    LayerDeactivate,
 }
 
 pub struct Combos {
@@ -118,18 +143,103 @@ pub struct MorseActionPair {
 }
 
 impl crate::KeyboardTomlConfig {
+    /// Share inferred capacities between constant generation and profile validation.
+    pub(crate) fn sticky_capacities(&self) -> Result<(usize, usize), String> {
+        let sticky = self.behavior.as_ref().and_then(|b| b.sticky_key.as_ref());
+        let profiles = sticky.and_then(|s| s.profiles.as_ref());
+        let profile_max = self
+            .rmk
+            .sticky_profile_max_num
+            .unwrap_or_else(|| profiles.map_or(0, |p| p.len()).max(8));
+        // Index 255 selects the default profile for SK, OSM and OSL.
+        if profile_max > 255 {
+            return Err(format!("sticky_profile_max_num must be at most 255, got {profile_max}"));
+        }
+        let default_ignore = sticky.and_then(|s| s.ignore.as_ref()).map_or(0, Vec::len);
+        let ignore_max = self.rmk.sticky_ignore_max.unwrap_or_else(|| {
+            profiles
+                .into_iter()
+                .flat_map(|p| p.values())
+                .filter_map(|p| p.ignore.as_ref())
+                .map(Vec::len)
+                .max()
+                .unwrap_or(0)
+                .max(default_ignore)
+                .max(4)
+        });
+        Ok((profile_max, ignore_max))
+    }
+
     /// Resolve behavioral configuration from TOML config.
     pub fn behavior(&self) -> Result<Behavior, String> {
         let toml_behavior = self.get_behavior_config()?;
+        let (sticky_profile_max_num, sticky_ignore_max) = self.sticky_capacities()?;
 
         let tri_layer = toml_behavior.tri_layer.map(|t| [t.upper, t.lower, t.adjust]);
 
-        let one_shot_timeout_ms = toml_behavior.one_shot.and_then(|o| o.timeout.map(|t| t.0));
-
-        let one_shot_modifiers = toml_behavior.one_shot_modifiers.map(|o| OneShot {
-            activate_on_keypress: o.activate_on_keypress,
-            quick_release: o.quick_release,
-        });
+        let sticky_key = if let Some(config) = toml_behavior.sticky_key {
+            let duration = |value: Option<&crate::DurationMillis>, fallback, path: &str| {
+                value.map_or(Ok(fallback), |v| {
+                    u16::try_from(v.0).map_err(|_| format!("{path} must be between 0ms and 65535ms"))
+                })
+            };
+            let resolve = |overrides: &crate::StickyProfileConfig, path: &str| -> Result<StickyProfile, String> {
+                let profile = StickyProfile {
+                    release_on: overrides
+                        .release_on
+                        .as_ref()
+                        .or(config.release_on.as_ref())
+                        .cloned()
+                        .unwrap_or_else(|| vec![StickyReleaseCondition::AfterNextRelease]),
+                    ignore: overrides
+                        .ignore
+                        .as_ref()
+                        .or(config.ignore.as_ref())
+                        .cloned()
+                        .unwrap_or_default(),
+                    wait_timeout_ms: duration(
+                        overrides.wait_timeout.as_ref().or(config.wait_timeout.as_ref()),
+                        DEFAULT_STICKY_WAIT_TIMEOUT_MS,
+                        &format!("{path}.wait_timeout"),
+                    )?,
+                    hold_timeout_ms: duration(
+                        overrides.hold_timeout.as_ref().or(config.hold_timeout.as_ref()),
+                        DEFAULT_STICKY_HOLD_TIMEOUT_MS,
+                        &format!("{path}.hold_timeout"),
+                    )?,
+                };
+                if profile.ignore.len() > sticky_ignore_max {
+                    return Err(format!(
+                        "{path}.ignore has {} entries, but [rmk] sticky_ignore_max is {}",
+                        profile.ignore.len(),
+                        sticky_ignore_max
+                    ));
+                }
+                Ok(profile)
+            };
+            let default = resolve(&crate::StickyProfileConfig::default(), "behavior.sticky_key")?;
+            let mut profiles = config
+                .profiles
+                .iter()
+                .flatten()
+                .map(|(name, profile)| {
+                    resolve(profile, &format!("behavior.sticky_key.profiles.{name}"))
+                        .map(|profile| (name.clone(), profile))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            // Profile indices must not depend on hash-map iteration order.
+            profiles.sort_by(|a, b| a.0.cmp(&b.0));
+            if profiles.len() > sticky_profile_max_num {
+                return Err(format!(
+                    "behavior.sticky_key.profiles defines {} profiles, but `[rmk] sticky_profile_max_num` is {}. Raise it in keyboard.toml",
+                    profiles.len(),
+                    sticky_profile_max_num
+                ));
+            }
+            Some(StickyKey { default, profiles })
+        } else {
+            None
+        };
 
         let combos = toml_behavior.combo.map(|c| Combos {
             combos: c
@@ -257,8 +367,7 @@ impl crate::KeyboardTomlConfig {
 
         Ok(Behavior {
             tri_layer,
-            one_shot_timeout_ms,
-            one_shot_modifiers,
+            sticky_key,
             combos,
             macros,
             forks,

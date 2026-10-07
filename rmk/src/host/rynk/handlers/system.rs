@@ -75,6 +75,8 @@ impl Handle<GetCapabilities> for RynkService<'_> {
             max_bulk_keys: MAX_BULK_KEYS as u8,
             max_bulk_items: MAX_BULK_ITEMS as u8,
             bulk_transfer_supported: true,
+            num_sticky_profiles: self.ctx.sticky_profiles_len() as u8,
+            max_sticky_ignore: constants::STICKY_IGNORE_MAX as u32,
         })
     }
 }

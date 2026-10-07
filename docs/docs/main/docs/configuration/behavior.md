@@ -5,8 +5,7 @@ The `[behavior]` section contains configuration for how different keyboard actio
 ```toml
 [behavior]
 tri_layer = { upper = 1, lower = 2, adjust = 3 }
-one_shot = { timeout = "1s" }
-one_shot_modifiers = { activate_on_keypress = false }
+sticky_key = { wait_timeout = "1s" }
 ```
 
 ::: note Rust API only
@@ -28,46 +27,122 @@ adjust = 3
 
 In this example, when both layers 1 (`upper`) and 2 (`lower`) are active, layer 3 (`adjust`) will also be enabled.
 
-## One-Shot
+## Sticky Key
 
-The `one_shot` sub-table contains common one-shot configuration (for both OSM and OSL)
+A sticky key activates an action on press and can keep it active after release until its waiting
+timeout expires or the next input is released.
 
-Currently, there are only `timeout` field that specifies how long the one-shot modifier/layer remains active. When no key is pressed within this time, the one-shot modifier/layer will be canceled. `timeout` value is a string suffixed with `s` or `ms` (default: `1s`).
+Sticky keys are a superset of one-shot keys, such as one-shot modifiers (`OSM`) and one-shot layers
+(`OSL`). `OSM(modifiers)` is shorthand for `SK(MOD(modifiers))`; `OSL(layer)` is shorthand for `SK(MO(layer))`.
 
-## One-Shot Modifiers
+Sticky keys accept a profile parameter to configure their behavior, such as release conditions,
+timeouts, and ignored inputs.
 
-The `one_shot_modifiers` sub-table configures one-shot modifiers (OSM).
+### Keymap syntax
 
-By default, one-shot modifiers do not activate on keypress and will be sent only when other key is pressed. You can change this behavior by setting `activate_on_keypress` to `true`. This behavior is also known as One-Shot Sticky Modifiers (OSSM).
+Use these bindings in `keyboard.toml`. The second argument selects a named profile; omit it to
+use the default profile.
 
-If you press One-Shot Modifier again, it will be sent as a normal modifier key press and, therefore, released.
+| Binding                | With a profile                 | Action               |
+| ---------------------- | ------------------------------ | -------------------- |
+| `SK(A)`                | `SK(A, profile)`                | Hold the A key.      |
+| `OSM(LCtrl \| LShift)` | `OSM(LCtrl \| LShift, profile)` | Hold Ctrl and Shift. |
+| `OSL(1)`               | `OSL(1, profile)`               | Activate layer 1.    |
 
-The `quick_release` option controls when the one-shot modifier is released:
+`SK` accepts a single action, such as `A`, `MOD(LCtrl | LShift)`, or `MO(1)`.
 
-- `false` (default): the modifier is included in the next key's press report and stays part of that report for as long as the key is held, including key repeat (chain mode, equivalent to ZMK `&skn`). No separate report is sent when the key is released.
-- `true`: an extra report is sent right after the next key's press with the modifier removed (equivalent to ZMK `&skq`). Only the initial press of the next key is modified; key repeat will not include the modifier.
+### Profile configuration
 
-Default values:
+Sticky keys use the default profile in `[behavior.sticky_key]` unless a profile argument is
+specified. The following settings apply to both default and custom profiles:
+
+| Setting        | Default                  | Description                                                                                                        |
+| -------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `wait_timeout` | `"1s"`                   | Waiting timeout after the sticky key is released. `"0ms"` disables it.                                             |
+| `hold_timeout` | `"250ms"`                | Hold duration that makes the action end on sticky key release. `"0ms"` disables this duration check.               |
+| `release_on`   | `["after_next_release"]` | Release conditions: `before_next_press`, `after_next_press`, `after_next_release`, `layer_activate`, or `layer_deactivate`. |
+| `ignore`       | `[]`                     | Keycodes excluded from input-based release conditions.                                                             |
+
+Define a custom profile in `[behavior.sticky_key.profiles.<name>]`, then pass its name as the
+second argument of `SK`, `OSM`, or `OSL`. For example, use `OSM(LCtrl, long_wait)` with:
 
 ```toml
-[behavior.one_shot_modifiers]
-activate_on_keypress = false
-quick_release = false
+[behavior.sticky_key.profiles.long_wait]
+wait_timeout = "2s"
 ```
 
-OSSM example:
+Custom profiles inherit omitted settings from the default profile. A `release_on` or `ignore`
+list replaces the default list rather than adding to it.
+
+### Examples
+
+These profiles change when a sticky modifier releases. Add the profile to `keyboard.toml` and
+the corresponding binding to the keymap.
+
+#### Release a modifier after the next press
+
+Use `OSM(LCtrl, quick_release)` to apply Ctrl to the next key's initial press without keeping
+Ctrl held until that key is released:
 
 ```toml
-[behavior.one_shot_modifiers]
-activate_on_keypress = true
+[behavior.sticky_key.profiles.quick_release]
+release_on = ["after_next_press"]
 ```
 
-Quick-release example:
+#### Keep Alt active across Tab presses
+
+Use `OSM(LAlt, alt_tab)` with this profile:
 
 ```toml
-[behavior.one_shot_modifiers]
-quick_release = true
+[behavior.sticky_key.profiles.alt_tab]
+release_on = ["before_next_press"]
+ignore = ["Tab", "LShift", "RShift"]
+wait_timeout = "0ms"
 ```
+
+After a tap on the sticky Alt key, Tab and Shift+Tab cycle through windows. Alt remains active
+between presses because the profile ignores these keys and disables the waiting timeout.
+The next input outside the ignore list releases Alt before its press action runs. Another tap
+on the sticky Alt key cancels it.
+
+### Configure a profile in Rust
+
+In Rust, `BehaviorConfig::sticky_key.default_profile` stores the defaults, and `profiles` stores
+custom `StickyProfile` values. Bindings select a custom profile by its zero-based index rather
+than a name. For example, this creates the quick-release profile:
+
+```rust
+use rmk::config::BehaviorConfig;
+use rmk::types::modifier::ModifierCombination;
+use rmk::types::sticky::{StickyProfile, StickyReleaseConditions};
+
+let mut behavior = BehaviorConfig::default();
+let quick_release = StickyProfile {
+    release_on: StickyReleaseConditions::new().with_after_next_press(true),
+    ..behavior.sticky_key.default_profile.clone()
+};
+behavior.sticky_key.profiles.push(quick_release).expect("profile table is full");
+
+let ctrl = rmk::osm!(ModifierCombination::LCTRL, 0);
+```
+
+Add `ctrl` to the keymap and pass `behavior` to the keyboard setup. `sk!(action, index)` and
+`osl!(layer, index)` use the same profile indices. Omitting the index selects the default profile.
+Rust timeout fields are `wait_timeout_ms` and `hold_timeout_ms`, both in milliseconds.
+
+### Host settings and capacity
+
+Vial's **One Shot Timeout** controls the default profile's `wait_timeout`, in milliseconds.
+Named profiles are unaffected. Rynk reads and writes Sticky Key profiles through
+`GetStickyProfile` and `SetStickyProfile`; index `255` selects the default profile.
+When storage is enabled, saved profiles take precedence over firmware defaults after restart.
+
+Vial keycodes can represent `OSM` and `OSL` bindings that use the default profile. Other sticky
+actions and bindings with named profiles cannot be represented by Vial keycodes.
+
+[Sticky Key capacity](./rmk_config#sticky-key-capacity) controls the number of active actions,
+profiles, and ignored keycodes. Check these limits when adding profiles in Rust or overriding
+the sizes calculated from `keyboard.toml`.
 
 ## Combo
 
@@ -453,7 +528,7 @@ Here `TD(0)`, `TD(1)`, and `TD(2)` reference morse dances by index, and the trai
 
 ## Fork
 
-In the `fork` sub-table, you can configure the keyboard's state-based key fork functionality. Forks allow you to define a trigger key and condition-dependent possible replacement keys. When the trigger key is pressed, the condition is checked by the following rule: If any of the `match_any` states are active AND none of the `match_none` states are active, the trigger key will be replaced with positive_output; otherwise, it will be replaced with the negative_output. By default, the modifiers listed in `match_any` will be suppressed (even the one-shot modifiers) for the time the replacement key action is executed. However, with `kept_modifiers` some of them can be kept instead of automatic suppression.
+In the `fork` sub-table, you can configure the keyboard's state-based key fork functionality. Forks allow you to define a trigger key and condition-dependent possible replacement keys. When the trigger key is pressed, the condition is checked by the following rule: If any of the `match_any` states are active AND none of the `match_none` states are active, the trigger key will be replaced with positive_output; otherwise, it will be replaced with the negative_output. By default, the modifiers listed in `match_any` will be suppressed (including sticky modifiers) for the time the replacement key action is executed. However, with `kept_modifiers` some of them can be kept instead of automatic suppression.
 
 Fork configuration includes the following parameters:
 
@@ -470,7 +545,7 @@ Each fork must set at least one of `match_any` and `match_none`; the build fails
 
 For `match_any`, `match_none` the legal values are listed below (many values may be combined with "|"):
 
-- `LShift`, `LCtrl`, `LAlt`, `LGui`, `RShift`, `RCtrl`, `RAlt`, `RGui` (these include the effect of explicitly held and one-shot modifiers too)
+- `LShift`, `LCtrl`, `LAlt`, `LGui`, `RShift`, `RCtrl`, `RAlt`, `RGui` (these include the effect of explicitly held and sticky modifiers too)
 - `CapsLock`, `ScrollLock`, `NumLock`, `Compose`, `Kana`
 - `MouseBtn1` .. `MouseBtn8`
 
@@ -583,7 +658,7 @@ Entries that share the same `target_layer` cooperate: the layer stays active unt
 
 Some keys cannot be classified; they never trigger immediate deactivation (only `timeout` clears the layer) and extend the deadline when `reset_timeout_on_key` is set:
 
-- **Keys that emit no keycode**: layer keys (`MO`, `TG`, `TO`, `DF`, `TT`, `LM`, ...), one-shot modifiers/layers (`OSM`, `OSL`), user keys, and keyboard control keys (bootloader, reboot, ...).
+- **Keys that emit no keycode**: layer keys (`MO`, `TG`, `TO`, `DF`, `TT`, `LM`, ...), sticky modifiers/layers (`OSM`, `OSL`), user keys, and keyboard control keys (bootloader, reboot, ...).
 - **Macros**: keycodes emitted while a macro runs bypass action resolution; the trigger key itself is also unclassifiable.
 - **`Again` / `Repeat`**: the repeated keycode is unknown at classification time.
 - **`GraveEscape`**: resolves to Escape or Grave after classification.

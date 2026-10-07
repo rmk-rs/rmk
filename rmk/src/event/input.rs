@@ -71,6 +71,8 @@ pub enum KeyboardEventPos {
     Macro,
     /// A software source of events rather than a key, indexed by a u8.
     Virtual(u8),
+    /// An action held by the sticky state at this slot.
+    Sticky(u8),
 }
 
 impl KeyboardEventPos {

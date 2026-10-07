@@ -628,6 +628,7 @@ fn input(pos: KeyboardEventPos) -> String {
         KeyboardEventPos::Combo(idx) => format!("combo {idx}"),
         KeyboardEventPos::Macro => "macro".to_string(),
         KeyboardEventPos::Virtual(idx) => format!("virtual {idx}"),
+        KeyboardEventPos::Sticky(idx) => format!("sticky {idx}"),
     }
 }
 

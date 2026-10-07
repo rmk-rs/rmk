@@ -1,0 +1,55 @@
+features = ["rynk"]
+
+[layout]
+rows = 1
+cols = 3
+map = """
+(0,0) (0,1) (0,2)
+"""
+
+[[keymap.layer]]
+keys = "SK(A, named) SK(B) C"
+
+[behavior.sticky_key.profiles.named]
+
+[[test]]
+name = "named_profile_write_changes_release_behavior"
+steps = [
+  { rynk = { cmd = "SetStickyProfile", payload = { index = 0, config = { release_on = { before_next_press = true }, ignore = [{ Hid = "B" }], wait_timeout_ms = 0, hold_timeout_ms = 0 } } } },
+  { rynk = { cmd = "GetStickyProfile", payload = 0, reply = { release_on = { before_next_press = true }, ignore = [{ Hid = "B" }], wait_timeout_ms = 0, hold_timeout_ms = 0 } } },
+  { rynk = { cmd = "GetStickyProfile", payload = 255, reply = { release_on = { after_next_release = true }, ignore = [], wait_timeout_ms = 1000, hold_timeout_ms = 250 } } },
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["A"], [], ["C"], []]
+
+[[test]]
+name = "default_profile_write_changes_release_behavior"
+steps = [
+  { rynk = { cmd = "SetStickyProfile", payload = { index = 255, config = { release_on = { before_next_press = true }, ignore = [], wait_timeout_ms = 0, hold_timeout_ms = 0 } } } },
+  { rynk = { cmd = "SetBehaviorConfig", payload = { combo_timeout_ms = 42, tap_interval_ms = 180, tap_capslock_interval_ms = 240, morse_default_profile = {}, morse_prior_idle_time_ms = 95 } } },
+  { rynk = { cmd = "GetStickyProfile", payload = 255, reply = { release_on = { before_next_press = true }, ignore = [], wait_timeout_ms = 0, hold_timeout_ms = 0 } } },
+  { rynk = { cmd = "GetStickyProfile", payload = 0, reply = { release_on = { after_next_release = true }, ignore = [], wait_timeout_ms = 1000, hold_timeout_ms = 250 } } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["B"], [], ["C"], []]
+
+[[test]]
+name = "invalid_profile_does_not_fall_back_to_default"
+steps = [
+  { rynk = { cmd = "GetStickyProfile", payload = 1, error = "Invalid" } },
+  { rynk = { cmd = "SetStickyProfile", payload = { index = 1, config = { release_on = {}, ignore = [], wait_timeout_ms = 0, hold_timeout_ms = 0 } }, error = "Invalid" } },
+  { rynk = { cmd = "GetStickyProfile", payload = 255, reply = { release_on = { after_next_release = true }, ignore = [], wait_timeout_ms = 1000, hold_timeout_ms = 250 } } },
+]
+
+[[test]]
+name = "absent_runtime_profile_uses_configured_default"
+behavior.sticky_key = { release_on = ["before_next_press"], wait_timeout = "0ms" }
+steps = [
+  { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 0 }, action = { Sticky = [{ Key = { Hid = "A" } }, 1] } } } },
+  { rynk = { cmd = "GetStickyProfile", payload = 1, error = "Invalid" } },
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["A"], [], ["C"], []]

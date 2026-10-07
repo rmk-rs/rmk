@@ -270,17 +270,25 @@ The `layer.keys` string follows several rules:
 
 4. RMK supports many advanced layer operations:
    1. `DF(n)` — switch the default layer to layer `n`.
-   2. `PDF(n)` — switch the default layer to layer `n` and persist it to storage, so it survives reboots.
+   2. `PDF(n)` — switch the default layer to layer `n` and persist it to storage, so it survives
+      reboots.
    3. `MO(n)` — momentarily activate layer `n`.
    4. `LM(n, modifier)` — activate layer `n` with a modifier held. The modifier chains like `WM`.
-   5. `LT(n, key, <profile_name>)` — activate layer `n` on hold, or tap `key` (tap/hold). `key` is an RMK [`KeyCode`](./keymap_configuration/keycodes); the optional `profile_name` sets the key's [profile](./behavior#per-key-profiles-for-morse-tapdance-tap-hold-fine-tuning).
-   6. `OSL(n)` — one-shot layer `n`.
-   7. `OSM(modifier)` — one-shot modifier. The modifier chains like `WM`.
-   8. `TT(n)` — activate layer `n`, or tap-toggle it.
-   9. `TG(n)` — toggle layer `n`.
-   10. `TO(n)` — activate layer `n` and deactivate all other layers.
+   5. `LT(n, key, <profile_name>)` — activate layer `n` on hold, or tap `key` (tap/hold). `key` is
+      an RMK [`KeyCode`](./keymap_configuration/keycodes); the optional `profile_name` sets the
+      key's [profile](./behavior#per-key-profiles-for-morse-tapdance-tap-hold-fine-tuning).
+   6. `OSL(n)` / `OSL(n, profile)` — sticky layer `n`, equivalent to `SK(MO(n))` with the same
+      profile.
+   7. `OSM(modifiers)` / `OSM(modifiers, profile)` — sticky modifiers, equivalent to
+      `SK(MOD(modifiers))`. Use `|` to combine modifiers, for example `OSM(LCtrl | LShift)`.
+   8. `SK(action)` / `SK(action, profile)` — apply Sticky Key behavior to a single action.
+   9. `TT(n)` — activate layer `n`, or tap-toggle it.
+   10. `TG(n)` — toggle layer `n`.
+   11. `TO(n)` — activate layer `n` and deactivate all other layers.
 
-   These match QMK's definitions; see the [QMK layer docs](https://docs.qmk.fm/#/feature_layers). If you need another action, please [file an issue](https://github.com/rmk-rs/rmk/issues/new).
+   For SK/OSM/OSL release conditions and timeouts, see [Sticky Key](./behavior#sticky-key). For
+   background on layer actions, see the [QMK layer docs](https://docs.qmk.fm/#/feature_layers). If
+   you need another action, please [file an issue](https://github.com/rmk-rs/rmk/issues/new).
 
 5. For modifier-tap-hold, use `MT(key, modifier, <profile_name>)`, where the modifier can be a chain as in rule 1. The optional `profile_name` sets the key's [profile](./behavior#per-key-profiles-for-morse-tapdance-tap-hold-fine-tuning).
 <!-- If you're using home-row mod(HRM), you can also use `HRM(key, modifier)` to create a modifier-tap-hold whose configuration is optimized for home-row mod. -->

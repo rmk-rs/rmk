@@ -27,6 +27,9 @@ pub enum KeyAction {
     TapHold(Action, Action, u8),
     /// Morse action, references a morse configuration by index.
     Morse(u8),
+    /// Hold an action using the indexed [`crate::sticky::StickyProfile`].
+    /// An unconfigured index selects the default profile.
+    Sticky(Action, u8),
 }
 
 impl KeyAction {
@@ -66,6 +69,7 @@ impl PartialEq for KeyAction {
             (KeyAction::Tap(a), KeyAction::Tap(b)) => a == b,
             (KeyAction::TapHold(a, b, _), KeyAction::TapHold(c, d, _)) => a == c && b == d,
             (KeyAction::Morse(a), KeyAction::Morse(b)) => a == b,
+            (KeyAction::Sticky(a, _), KeyAction::Sticky(b, _)) => a == b,
             _ => false,
         }
     }

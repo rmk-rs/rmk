@@ -26,10 +26,11 @@ use rmk_types::protocol::rynk::{
     GetKeymapBulkRequest, GetKeymapBulkResponse, GetMorseBulkRequest, GetMorseBulkResponse, KeyPosition, LockStatus,
     MatrixState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest, SetComboRequest, SetEncoderRequest,
     SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest,
-    StorageResetMode, command,
+    SetStickyProfileRequest, StorageResetMode, command,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
+use rmk_types::sticky::StickyProfile;
 #[cfg(feature = "alloc")]
 use serde::Serialize;
 
@@ -262,6 +263,17 @@ impl Client {
     /// Write one fork entry by index.
     pub async fn set_fork(&self, index: u8, config: Fork) -> Result<(), RynkHostError> {
         self.request::<command::SetFork>(&SetForkRequest { index, config })
+            .await
+    }
+
+    /// Read a Sticky profile. Index 255 selects the default profile.
+    pub async fn get_sticky_profile(&self, index: u8) -> Result<StickyProfile, RynkHostError> {
+        self.request::<command::GetStickyProfile>(&index).await
+    }
+
+    /// Replace a complete Sticky profile. Named indices must be below `num_sticky_profiles`.
+    pub async fn set_sticky_profile(&self, index: u8, config: StickyProfile) -> Result<(), RynkHostError> {
+        self.request::<command::SetStickyProfile>(&SetStickyProfileRequest { index, config })
             .await
     }
 

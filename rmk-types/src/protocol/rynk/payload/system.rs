@@ -74,6 +74,10 @@ pub struct DeviceCapabilities {
     /// far larger than keys. Writes pack by encoded size up to `max_payload_size`.
     pub max_bulk_items: u8,
     pub bulk_transfer_supported: bool,
+    /// Defined named Sticky profiles, addressed by indices below this count. Default is index 255.
+    pub num_sticky_profiles: u8,
+    /// Maximum number of ignored inputs in one Sticky profile.
+    pub max_sticky_ignore: u32,
 }
 
 /// Version of the `rmk` crate baked into the firmware, so hosts can key
@@ -159,7 +163,6 @@ pub enum StorageResetMode {
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct BehaviorConfig {
     pub combo_timeout_ms: u16,
-    pub oneshot_timeout_ms: u16,
     pub tap_interval_ms: u16,
     pub tap_capslock_interval_ms: u16,
     /// Default profile for morse/tap-hold keys; per-key profiles override it.
@@ -208,6 +211,8 @@ mod tests {
             max_bulk_keys: 32,
             max_bulk_items: 8,
             bulk_transfer_supported: true,
+            num_sticky_profiles: 2,
+            max_sticky_ignore: 4,
         });
         round_trip(&DeviceCapabilities {
             num_layers: 0,
@@ -232,6 +237,8 @@ mod tests {
             max_bulk_keys: 0,
             max_bulk_items: 0,
             bulk_transfer_supported: false,
+            num_sticky_profiles: 0,
+            max_sticky_ignore: 0,
         });
     }
 
@@ -300,7 +307,6 @@ mod tests {
     fn round_trip_behavior_config() {
         round_trip(&BehaviorConfig {
             combo_timeout_ms: 50,
-            oneshot_timeout_ms: 500,
             tap_interval_ms: 200,
             tap_capslock_interval_ms: 20,
             morse_default_profile: MorseProfile::new(
@@ -318,7 +324,6 @@ mod tests {
         // the reserved high bits reach the 10-byte varint `MaxSize` counts.
         let cfg = BehaviorConfig {
             combo_timeout_ms: u16::MAX,
-            oneshot_timeout_ms: u16::MAX,
             tap_interval_ms: u16::MAX,
             tap_capslock_interval_ms: u16::MAX,
             morse_default_profile: MorseProfile::from(u64::MAX),

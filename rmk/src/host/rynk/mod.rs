@@ -57,6 +57,7 @@ impl<'a> RynkService<'a> {
                 | Cmd::SetCombo
                 | Cmd::SetMorse
                 | Cmd::SetFork
+                | Cmd::SetStickyProfile
                 | Cmd::SetBehaviorConfig
                 | Cmd::SetKeymapBulk
                 | Cmd::SetComboBulk
@@ -118,6 +119,9 @@ impl<'a> RynkService<'a> {
 
             Cmd::GetFork => serve::<command::GetFork, _>(self, msg).await,
             Cmd::SetFork => serve::<command::SetFork, _>(self, msg).await,
+
+            Cmd::GetStickyProfile => serve::<command::GetStickyProfile, _>(self, msg).await,
+            Cmd::SetStickyProfile => serve::<command::SetStickyProfile, _>(self, msg).await,
 
             Cmd::GetBehaviorConfig => serve::<command::GetBehaviorConfig, _>(self, msg).await,
             Cmd::SetBehaviorConfig => serve::<command::SetBehaviorConfig, _>(self, msg).await,

@@ -309,6 +309,15 @@ pub(crate) struct RmkConstantsConfig {
     #[serde_inline_default(16)]
     #[serde(deserialize_with = "check_morse_profile_max_num")]
     pub morse_profile_max_num: usize,
+    /// Capacity of the sticky profile table (named profiles in `[behavior.sticky_key.profiles]`)
+    #[serde(default)]
+    pub sticky_profile_max_num: Option<usize>,
+    /// Maximum number of keycodes in one sticky profile's `ignore` list
+    #[serde(default)]
+    pub sticky_ignore_max: Option<usize>,
+    /// Maximum number of sticky keys that can be active at the same time
+    #[serde_inline_default(8)]
+    pub sticky_max_active: usize,
     /// Maximum number of patterns a morse key can handle
     #[serde_inline_default(8)]
     #[serde(deserialize_with = "check_max_patterns_per_key")]
@@ -460,6 +469,9 @@ impl Default for RmkConstantsConfig {
             fork_max_num: 8,
             morse_max_num: 8,
             morse_profile_max_num: 16,
+            sticky_profile_max_num: None,
+            sticky_ignore_max: None,
+            sticky_max_active: 8,
             max_patterns_per_key: 8,
             macro_max_num: 32,
             macro_space_size: 256,
@@ -855,8 +867,7 @@ pub struct KeyInfo {
 #[serde(deny_unknown_fields)]
 pub(crate) struct BehaviorConfig {
     pub tri_layer: Option<TriLayerConfig>,
-    pub one_shot: Option<OneShotConfig>,
-    pub one_shot_modifiers: Option<OneShotModifiersConfig>,
+    pub sticky_key: Option<StickyKeyConfig>,
     pub combo: Option<CombosConfig>,
     #[serde(alias = "macro")]
     pub macros: Option<MacrosConfig>,
@@ -929,19 +940,24 @@ pub(crate) struct TriLayerConfig {
     pub adjust: u8,
 }
 
-/// Configurations for oneshot modifiers/layers
-#[derive(Clone, Debug, Deserialize)]
+/// Sticky defaults and named profiles. Named fields inherit independently.
+#[derive(Clone, Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OneShotConfig {
-    pub timeout: Option<DurationMillis>,
+pub(crate) struct StickyKeyConfig {
+    pub release_on: Option<Vec<crate::resolved::behavior::StickyReleaseCondition>>,
+    pub ignore: Option<Vec<String>>,
+    pub wait_timeout: Option<DurationMillis>,
+    pub hold_timeout: Option<DurationMillis>,
+    pub profiles: Option<HashMap<String, StickyProfileConfig>>,
 }
 
-/// Configurations for oneshot modifiers
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct OneShotModifiersConfig {
-    pub activate_on_keypress: Option<bool>,
-    pub quick_release: Option<bool>,
+pub(crate) struct StickyProfileConfig {
+    pub release_on: Option<Vec<crate::resolved::behavior::StickyReleaseCondition>>,
+    pub ignore: Option<Vec<String>>,
+    pub wait_timeout: Option<DurationMillis>,
+    pub hold_timeout: Option<DurationMillis>,
 }
 
 /// Configurations for combos
@@ -1201,7 +1217,9 @@ fn parse_duration_millis<'de, D: de::Deserializer<'de>>(deserializer: D) -> Resu
     })?;
 
     match unit {
-        "s" => Ok(num * 1000),
+        "s" => num
+            .checked_mul(1000)
+            .ok_or_else(|| de::Error::custom("duration exceeds u64 milliseconds")),
         "ms" => Ok(num),
         other => Err(de::Error::custom(format!(
             "Invalid duration unit \"{other}\": unit part must be either \"s\" or \"ms\""

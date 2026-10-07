@@ -457,3 +457,232 @@ led = "PIN_9"
         "peripheral should keep the global external flash"
     );
 }
+
+#[test]
+fn sticky_profiles_resolve_inheritance_and_explicit_empty_values() {
+    use rmk_config::resolved::behavior::StickyReleaseCondition;
+    let path = write_temp_keyboard_toml(
+        "sticky-inheritance",
+        r#"
+[behavior.sticky_key]
+wait_timeout = "750ms"
+hold_timeout = "300ms"
+ignore = ["Tab"]
+release_on = ["before_next_press", "after_next_press", "after_next_release", "layer_activate", "layer_deactivate"]
+[behavior.sticky_key.profiles.z_inherited]
+[behavior.sticky_key.profiles.a_overridden]
+wait_timeout = "0ms"
+hold_timeout = "0ms"
+ignore = []
+release_on = []
+"#,
+    );
+    let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+    std::fs::remove_file(&path).unwrap();
+    let sticky = config.behavior().unwrap().sticky_key.unwrap();
+    assert_eq!(sticky.default.wait_timeout_ms, 750);
+    assert_eq!(sticky.default.hold_timeout_ms, 300);
+    assert_eq!(sticky.default.ignore, ["Tab"]);
+    assert_eq!(
+        sticky.default.release_on,
+        [
+            StickyReleaseCondition::BeforeNextPress,
+            StickyReleaseCondition::AfterNextPress,
+            StickyReleaseCondition::AfterNextRelease,
+            StickyReleaseCondition::LayerActivate,
+            StickyReleaseCondition::LayerDeactivate
+        ]
+    );
+    assert_eq!(sticky.profiles[0].0, "a_overridden");
+    assert_eq!(sticky.profiles[1].0, "z_inherited");
+    assert_eq!(sticky.profiles[1].1, sticky.default);
+    let overridden = &sticky.profiles[0].1;
+    assert_eq!(overridden.wait_timeout_ms, 0);
+    assert_eq!(overridden.hold_timeout_ms, 0);
+    assert!(overridden.ignore.is_empty());
+    assert!(overridden.release_on.is_empty());
+}
+
+#[test]
+fn sticky_empty_profiles_resolve_builtin_defaults() {
+    use rmk_config::resolved::behavior::{
+        DEFAULT_STICKY_HOLD_TIMEOUT_MS, DEFAULT_STICKY_WAIT_TIMEOUT_MS, StickyReleaseCondition,
+    };
+    for rmk_section in ["", "[rmk]\n"] {
+        let path = write_temp_keyboard_toml(
+            "sticky-defaults",
+            &format!("{rmk_section}[behavior.sticky_key.profiles.empty]"),
+        );
+        let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+        std::fs::remove_file(&path).unwrap();
+        let constants = config.build_constants(&[]).unwrap();
+        assert_eq!(constants.sticky_max_active, 8);
+        assert_eq!(constants.sticky_profile_max_num, 8);
+        assert_eq!(constants.sticky_ignore_max, 4);
+        let sticky = config.behavior().unwrap().sticky_key.unwrap();
+        assert_eq!(sticky.default.wait_timeout_ms, DEFAULT_STICKY_WAIT_TIMEOUT_MS);
+        assert_eq!(sticky.default.hold_timeout_ms, DEFAULT_STICKY_HOLD_TIMEOUT_MS);
+        assert!(sticky.default.ignore.is_empty());
+        assert_eq!(sticky.default.release_on, [StickyReleaseCondition::AfterNextRelease]);
+        assert_eq!(sticky.profiles[0].1, sticky.default);
+    }
+}
+
+#[test]
+fn sticky_rejects_duration_truncation_and_ignore_overflow() {
+    for (index, (table, field)) in [
+        ("behavior.sticky_key", "wait_timeout"),
+        ("behavior.sticky_key", "hold_timeout"),
+        ("behavior.sticky_key.profiles.named", "wait_timeout"),
+        ("behavior.sticky_key.profiles.named", "hold_timeout"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = write_temp_keyboard_toml(
+            &format!("sticky-duration-{index}"),
+            &format!("[{table}]\n{field} = \"65536ms\""),
+        );
+        let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+        std::fs::remove_file(path).unwrap();
+        assert!(
+            config
+                .behavior()
+                .err()
+                .unwrap()
+                .contains(&format!("{table}.{field} must be between 0ms and 65535ms"))
+        );
+    }
+    for (index, table) in ["behavior.sticky_key", "behavior.sticky_key.profiles.named"]
+        .into_iter()
+        .enumerate()
+    {
+        let path = write_temp_keyboard_toml(
+            &format!("sticky-ignore-{index}"),
+            &format!("[rmk]\nsticky_ignore_max = 4\n[{table}]\nignore = [\"A\", \"B\", \"C\", \"D\", \"E\"]"),
+        );
+        let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+        std::fs::remove_file(path).unwrap();
+        assert!(config.behavior().err().unwrap().contains("sticky_ignore_max is 4"));
+    }
+}
+
+#[test]
+fn sticky_capacities_grow_only_when_omitted() {
+    let profiles = (0..9)
+        .map(|i| format!("[behavior.sticky_key.profiles.p{i}]\n"))
+        .collect::<String>();
+    let behavior = format!(
+        "[behavior.sticky_key]\nignore = [\"A\", \"B\", \"C\", \"D\", \"E\"]\n{profiles}\n[behavior.sticky_key.profiles.long]\nignore = [\"A\", \"B\", \"C\", \"D\", \"E\", \"F\"]"
+    );
+    for (rmk_section, expected) in [
+        ("", (10, 6)),
+        ("[rmk]\n", (10, 6)),
+        ("[rmk]\nsticky_profile_max_num = 12\nsticky_ignore_max = 7\n", (12, 7)),
+    ] {
+        let path = write_temp_keyboard_toml("sticky-auto-capacities", &format!("{rmk_section}{behavior}"));
+        let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+        std::fs::remove_file(path).unwrap();
+        let constants = config.build_constants(&[]).unwrap();
+        assert_eq!(
+            (constants.sticky_profile_max_num, constants.sticky_ignore_max),
+            expected
+        );
+        let sticky = config.behavior().unwrap().sticky_key.unwrap();
+        assert_eq!(sticky.profiles.len(), 10);
+        assert_eq!(sticky.profiles[0].1.ignore.len(), 6);
+        assert_eq!(sticky.profiles[1].1.ignore, sticky.default.ignore);
+    }
+    for (setting, limit) in [("sticky_profile_max_num", 8), ("sticky_ignore_max", 4)] {
+        let path = write_temp_keyboard_toml(
+            "sticky-explicit-capacity",
+            &format!("[rmk]\n{setting} = {limit}\n{behavior}"),
+        );
+        let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+        std::fs::remove_file(path).unwrap();
+        assert!(config.behavior().err().unwrap().contains(setting));
+    }
+    let path = write_temp_keyboard_toml(
+        "sticky-default-ignore-capacity",
+        "[behavior.sticky_key]\nignore = [\"A\", \"B\", \"C\", \"D\", \"E\"]\n[behavior.sticky_key.profiles.empty]\nignore = []",
+    );
+    let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(config.build_constants(&[]).unwrap().sticky_ignore_max, 5);
+    let sticky = config.behavior().unwrap().sticky_key.unwrap();
+    assert!(sticky.profiles[0].1.ignore.is_empty());
+}
+
+#[test]
+fn sticky_duration_and_capacity_boundaries() {
+    let path = write_temp_keyboard_toml(
+        "sticky-limits",
+        r#"
+[rmk]
+sticky_max_active = 256
+sticky_profile_max_num = 255
+sticky_ignore_max = 2
+[behavior.sticky_key]
+wait_timeout = "65535ms"
+hold_timeout = "0ms"
+ignore = ["Tab", "LShift"]
+[behavior.sticky_key.profiles.empty]
+ignore = []
+"#,
+    );
+    let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+    std::fs::remove_file(path).unwrap();
+    let constants = config.build_constants(&[]).unwrap();
+    assert_eq!(constants.sticky_max_active, 256);
+    assert_eq!(constants.sticky_profile_max_num, 255);
+    let sticky = config.behavior().unwrap().sticky_key.unwrap();
+    assert_eq!(sticky.default.wait_timeout_ms, 65535);
+    assert!(sticky.profiles[0].1.ignore.is_empty());
+
+    let path = write_temp_keyboard_toml("sticky-active-overflow", "[rmk]\nsticky_max_active = 257");
+    let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(
+        config.build_constants(&[]).err().unwrap(),
+        "sticky_max_active must be at most 256"
+    );
+
+    let path = write_temp_keyboard_toml("sticky-profile-overflow", "[rmk]\nsticky_profile_max_num = 256");
+    let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+    std::fs::remove_file(path).unwrap();
+    assert!(
+        config
+            .build_constants(&[])
+            .err()
+            .unwrap()
+            .contains("sticky_profile_max_num must be at most 255")
+    );
+
+    let profiles = (0..255)
+        .map(|i| format!("[behavior.sticky_key.profiles.p{i}]\n"))
+        .collect::<String>();
+    let path = write_temp_keyboard_toml("sticky-inferred-profile-limit", &profiles);
+    let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(config.build_constants(&[]).unwrap().sticky_profile_max_num, 255);
+    assert_eq!(config.behavior().unwrap().sticky_key.unwrap().profiles.len(), 255);
+
+    let profiles = format!("{profiles}[behavior.sticky_key.profiles.overflow]\n");
+    let path = write_temp_keyboard_toml("sticky-inferred-profile-overflow", &profiles);
+    let config = KeyboardTomlConfig::new_from_toml_path_with_event_defaults(&path);
+    std::fs::remove_file(path).unwrap();
+    assert!(
+        config
+            .build_constants(&[])
+            .err()
+            .unwrap()
+            .contains("sticky_profile_max_num must be at most 255")
+    );
+    assert!(
+        config
+            .behavior()
+            .err()
+            .unwrap()
+            .contains("sticky_profile_max_num must be at most 255")
+    );
+}

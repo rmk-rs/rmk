@@ -22,7 +22,7 @@ impl<'a> Keyboard<'a> {
                 let final_action = Self::try_predict_final_action(self.keymap, &key.action, pattern);
                 if let Some(action) = final_action {
                     debug!("hold prediction {:?} -> {:?}", pattern, action);
-                    self.process_key_action_normal(action, key.event).await;
+                    self.process_action(action, key.event).await;
                     if let Some(k) = self.held_buffer.find_pos_mut(key.event.pos) {
                         k.state = KeyState::ProcessedButReleaseNotReportedYet(action);
                     }
@@ -86,7 +86,7 @@ impl<'a> Keyboard<'a> {
                                     k.state = KeyState::ProcessedButReleaseNotReportedYet(tap_action);
                                     k.press_time = event_time;
                                     k.timeout_time = timeout_time;
-                                    self.process_key_action_normal(tap_action, event).await;
+                                    self.process_action(tap_action, event).await;
                                     return;
                                 }
                             }
@@ -228,12 +228,12 @@ impl<'a> Keyboard<'a> {
                         let _ = self.held_buffer.remove_if(|k| k.event.pos == event.pos);
                         // Process the release action
                         debug!("[morse] Releasing morse key: {:?}", event);
-                        self.process_key_action_normal(action, event).await;
+                        self.process_action(action, event).await;
                     }
                     KeyState::FlowTapped(action) => {
                         // Flow-tap fired the tap action and is holding it down; release it now.
                         debug!("[morse] Releasing flow-tapped morse key: {:?}", event);
-                        self.process_key_action_normal(action, event).await;
+                        self.process_action(action, event).await;
                         // If the key has a hold-after-tap action, keep it in the buffer as if it
                         // had been early-fired so a re-press within the gap timeout continues into
                         // hold-after-tap (the tap-then-hold repeat). Without this a flow-tapped
@@ -268,7 +268,7 @@ impl<'a> Keyboard<'a> {
                 key.action
             };
             match action {
-                KeyAction::Single(action) => self.process_key_action_normal(action, key.event).await,
+                KeyAction::Single(action) => self.process_action(action, key.event).await,
                 KeyAction::Tap(action) => self.process_key_action_tap(action, key.event).await,
                 _ => (),
             }

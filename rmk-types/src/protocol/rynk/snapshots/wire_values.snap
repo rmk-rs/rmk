@@ -9,26 +9,23 @@
 Action::DefaultLayer(5)                          08 05
 Action::Key(Hid(A))                              01 00 04
 Action::KeyWithModifier(A,LShift)                03 04 02
-Action::KeyboardControl(Bootloader)              11 00
+Action::KeyboardControl(Bootloader)              0e 00
 Action::LayerOff(3)                              06 03
 Action::LayerOn(1)                               04 01
 Action::LayerOnWithModifier(2,LCtrl)             05 02 01
 Action::LayerToggle(4)                           07 04
 Action::LayerToggleOnly(6)                       09 06
-Action::Light(RgbTog)                            10 07
+Action::Light(RgbTog)                            0d 07
 Action::Modifier(LCtrl)                          02 01
 Action::No                                       00
-Action::OneShotKey(Hid(B))                       0f 05
-Action::OneShotLayer(8)                          0d 08
-Action::OneShotModifier(LAlt)                    0e 04
-Action::Special(GraveEscape)                     12 00
+Action::Special(GraveEscape)                     0f 00
 Action::TriLayerLower                            0a
 Action::TriLayerUpper                            0b
 Action::TriggerMacro(7)                          0c 07
-Action::User(9)                                  13 09
+Action::User(9)                                  10 09
 BatteryStatus::Available{Discharging,85}         01 01 01 55
 BatteryStatus::Unavailable                       00
-BehaviorConfig{50..120}                          32 3c 46 50 da 80 a6 86 e8 8d 08 78
+BehaviorConfig{50..120}                          32 46 50 da 80 a6 86 e8 8d 08 78
 BleState::Advertising                            00
 BleState::Connected                              01
 BleState::Inactive                               02
@@ -40,7 +37,7 @@ Combo{[Single(A)],Morse(1),L2}                   01 02 01 00 04 05 01 01 02
 ConnectionStatus{Configured,{1,Adv,bonded},Ble}  02 01 00 01 01
 ConnectionType::Ble                              01
 ConnectionType::Usb                              00
-DeviceCapabilities{1..16}                        01 02 03 04 05 06 07 08 01 09 0a 0b 01 00 01 0c 00 0d 0e 0f 10 01
+DeviceCapabilities{1..16}                        01 02 03 04 05 06 07 08 01 09 0a 0b 01 00 01 0c 00 0d 0e 0f 10 01 02 04
 DeviceInfo{1.2.3,4,5,RMK,..}                     01 02 03 04 05 03 52 4d 4b 0c 52 4d 4b 20 4b 65 79 62 6f 61 72 64 09 72 79 6e 6b 3a 30 30 30 31
 EncoderAction{Morse(3),No}                       05 03 00
 Fork{Single(A),No,Morse(2)}                      02 01 00 04 00 05 02 01 02 01 00 00 00 02 01
@@ -48,6 +45,7 @@ GetEncoderRequest{1,2}                           01 02
 KeyAction::Morse(3)                              05 03
 KeyAction::No                                    00
 KeyAction::Single(Action::Key(Hid(A)))           02 01 00 04
+KeyAction::Sticky(Modifier(LShift))              06 02 02 ff
 KeyAction::Tap(Action::No)                       03 00
 KeyAction::TapHold(Key(A),LayerOn(3))            04 01 00 04 04 03 ff
 KeyAction::Transparent                           01
@@ -89,7 +87,9 @@ SetForkRequest{2,fork}                           02 02 01 00 04 00 05 02 01 02 0
 SetKeyRequest{{0,5,13},Morse(7)}                 00 05 0d 05 07
 SetMacroRequest{2,macro}                         02 04 00 01 00 04 03 ac 02 04 61 05
 SetMorseRequest{0,morse}                         00 00 01 02 01 00 04
+SetStickyProfileRequest{255,sticky}              ff 0c 01 00 d6 01 d2 09 b7 04
 StateBits{LCtrl,Caps,B1}                         01 02 01
+StickyProfile                                    0c 01 00 d6 01 d2 09 b7 04
 StorageResetMode::Full                           00
 StorageResetMode::LayoutOnly                     01
 UsbState::Configured                             02

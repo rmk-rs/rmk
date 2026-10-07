@@ -1,6 +1,7 @@
 use rmk_types::action::{Action, KeyAction, KeyboardAction};
 use rmk_types::keycode::{HidKeyCode, KeyCode, SpecialKey};
 use rmk_types::modifier::ModifierCombination;
+use rmk_types::sticky::STICKY_PROFILE_DEFAULT;
 
 pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
     match key_action {
@@ -47,15 +48,6 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
             Action::TriLayerLower => 0x7c77,
             Action::TriLayerUpper => 0x7c78,
             Action::TriggerMacro(idx) => 0x7700 + (idx as u16),
-            Action::OneShotLayer(l) => {
-                // One-shot layer
-                if l < 32 { 0x5280 | l as u16 } else { 0x0000 }
-            }
-            Action::OneShotModifier(m) => {
-                // One-shot modifier
-                let modifier_bits = m.into_packed_bits();
-                0x52A0 | modifier_bits as u16
-            }
             Action::LayerOnWithModifier(l, m) => {
                 if l < 16 {
                     0x5000 | ((l as u16) << 5) | ((m.into_packed_bits() & 0b11111) as u16)
@@ -87,6 +79,15 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
             Action::User(id) => (id as u16 & 0x1F) | 0x7E00,
             _ => {
                 warn!("Action: {:?} in vial is not supported yet", a);
+                0
+            }
+        },
+        // Via only has keycodes for OSM and OSL.
+        KeyAction::Sticky(action, STICKY_PROFILE_DEFAULT) => match action {
+            Action::Modifier(m) => 0x52A0 | m.into_packed_bits() as u16,
+            Action::LayerOn(l) if l < 32 => 0x5280 | l as u16,
+            _ => {
+                warn!("Sticky action {:?} has no via keycode", action);
                 0
             }
         },
@@ -188,12 +189,12 @@ pub(crate) fn from_via_keycode(via_keycode: u16) -> KeyAction {
         0x5280..=0x529F => {
             // One-shot layer
             let layer = via_keycode as u8 & 0x1F;
-            KeyAction::Single(Action::OneShotLayer(layer))
+            KeyAction::Sticky(Action::LayerOn(layer), STICKY_PROFILE_DEFAULT)
         }
         0x52A0..=0x52BF => {
             // One-shot modifier
             let m = ModifierCombination::from_packed_bits((via_keycode & 0x1F) as u8);
-            KeyAction::Single(Action::OneShotModifier(m))
+            KeyAction::Sticky(Action::Modifier(m), STICKY_PROFILE_DEFAULT)
         }
         0x52C0..=0x52DF => {
             // Layer tap toggle: tap toggles the layer, hold activates it momentarily
@@ -334,17 +335,18 @@ mod test {
 
         // OSL(3)
         let via_keycode = 0x5283;
-        assert_eq!(
-            KeyAction::Single(Action::OneShotLayer(3)),
-            from_via_keycode(via_keycode)
-        );
+        assert!(matches!(
+            from_via_keycode(via_keycode),
+            KeyAction::Sticky(Action::LayerOn(3), STICKY_PROFILE_DEFAULT)
+        ));
 
         // OSM RCtrl
         let via_keycode = 0x52B1;
         assert_eq!(
-            KeyAction::Single(Action::OneShotModifier(ModifierCombination::new_from(
-                true, false, false, false, true
-            ))),
+            KeyAction::Sticky(
+                Action::Modifier(ModifierCombination::new_from(true, false, false, false, true)),
+                STICKY_PROFILE_DEFAULT
+            ),
             from_via_keycode(via_keycode)
         );
 
@@ -610,15 +612,18 @@ mod test {
                 (0x5220, Action::LayerOn(layer)),
                 (0x5240, Action::DefaultLayer(layer)),
                 (0x5260, Action::LayerToggle(layer)),
-                (0x5280, Action::OneShotLayer(layer)),
                 (0x52E0, Action::PersistentDefaultLayer(layer)),
             ] {
                 let keycode = base | u16::from(layer);
                 assert_eq!(from_via_keycode(keycode), KeyAction::Single(action), "{keycode:#06x}");
                 assert_eq!(to_via_keycode(KeyAction::Single(action)), keycode);
             }
+            let sticky = KeyAction::Sticky(Action::LayerOn(layer), STICKY_PROFILE_DEFAULT);
+            let keycode = 0x5280 | u16::from(layer);
+            assert_eq!(from_via_keycode(keycode), sticky, "{keycode:#06x}");
+            assert_eq!(to_via_keycode(sticky), keycode);
         }
-        assert_eq!(to_via_keycode(KeyAction::Single(Action::OneShotLayer(32))), 0);
+        assert_eq!(to_via_keycode(KeyAction::Sticky(Action::LayerOn(32), u8::MAX)), 0);
     }
 
     #[test]
@@ -675,13 +680,14 @@ mod test {
         assert_eq!(0x7C03, to_via_keycode(a));
 
         // OSL(3)
-        let a = KeyAction::Single(Action::OneShotLayer(3));
+        let a = KeyAction::Sticky(Action::LayerOn(3), STICKY_PROFILE_DEFAULT);
         assert_eq!(0x5283, to_via_keycode(a));
 
         // OSM RCtrl
-        let a = KeyAction::Single(Action::OneShotModifier(ModifierCombination::new_from(
-            true, false, false, false, true,
-        )));
+        let a = KeyAction::Sticky(
+            Action::Modifier(ModifierCombination::new_from(true, false, false, false, true)),
+            STICKY_PROFILE_DEFAULT,
+        );
         assert_eq!(0x52B1, to_via_keycode(a));
 
         // DF(3)

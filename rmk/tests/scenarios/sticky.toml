@@ -1,0 +1,177 @@
+keyboard = "boards/split.toml"
+
+[[test]]
+name = "overdue_stickies_release_in_one_batch_after_buffered_hold"
+behavior.sticky_key = { wait_timeout = "100ms", release_on = [] }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 4], duration = 10 } },
+  { press = [0, 3] },
+  { delay = 300 },
+  { release = [0, 3] },
+]
+expect = [["LShift"], ["LShift", "LCtrl"], ["LShift", "LCtrl", "C"], ["C"], []]
+
+[[test]]
+name = "osm_timeout"
+behavior.sticky_key = { wait_timeout = "100ms" }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { delay = 150 },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["LShift"], [], ["A"], []]
+
+[[test]]
+name = "osm_default_keeps_shift_until_consumer_release"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift)
+  { press = [0, 2] },  # Press A
+  { delay = 1200 }, # A held beyond the waiting timeout must keep Shift.
+  { press = [1, 3] },  # Press W before A is released (rollover)
+  { release = [0, 2] },
+  { release = [1, 3] },
+]
+expect = [["LShift"], ["LShift", "A"], ["LShift", "A", "W"], ["LShift", "W"], ["W"], []]
+
+[[test]]
+name = "osm_rolling_with_tap_hold"
+steps = [
+  { press = [0, 0] },    # Press OSM(LShift)
+  { press = [0, 3] },    # Press TH(B, C)
+  { release = [0, 0] },  # Release OSM(LShift)
+  { release = [0, 3] },  # Release TH(B, C)
+]
+expect = [["LShift"], ["LShift", "B"], ["LShift"], []]
+
+[[test]]
+name = "osm_outlives_deadline_while_tap_hold_unresolved"
+behavior.sticky_key = { wait_timeout = "100ms" }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift), deadline at 110ms
+  { delay = 40 },
+  { press = [0, 3] },                         # TH(B, C) at 50ms, unresolved
+  { delay = 100 },                            # deadline passes at 110ms
+  { release = [0, 3] },                       # tap at 150ms
+]
+expect = [["LShift"], ["LShift", "B"], ["LShift"], []]
+
+[[test]]
+name = "osm_outlives_deadline_while_tap_hold_unresolved_hold"
+behavior.sticky_key = { wait_timeout = "100ms" }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift), deadline at 110ms
+  { delay = 40 },
+  { press = [0, 3] },                         # TH(B, C) at 50ms, hold fires at 300ms
+  { delay = 300 },
+  { release = [0, 3] },
+]
+expect = [["LShift"], ["LShift", "C"], ["LShift"], []]
+
+[[test]]
+name = "osm_multiple_osm_with_wm"
+behavior.sticky_key.ignore = ["LCtrl"]
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [0, 5], duration = 10 } },
+]
+expect = [["LShift"], ["LShift", "LCtrl"], ["LShift", "LCtrl", "LGui", "B"], ["LShift", "LCtrl"], []]
+
+[[test]]
+name = "osm_modifier_consumes_waiting_modifier"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["LShift"], ["LShift", "LCtrl"], ["LShift", "LCtrl", "A"], ["LShift", "LCtrl"], []]
+
+[[test]]
+name = "osl_held_behavior"
+steps = [
+  { press = [0, 1] },    # Press OSL(1)
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [0, 1] },  # Release OSL(1)
+]
+expect = [
+  ["C"],  # C from layer 1
+  [],
+]
+
+[[test]]
+name = "osm_then_osl"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["LShift"], ["LShift", "C"], ["LShift"], []]
+
+[[test]]
+name = "osl_then_osm"
+steps = [
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["LShift", "LCtrl"], ["LShift", "LCtrl", "C"], ["LShift", "LCtrl"], []]
+
+[[test]]
+name = "osm_timeout_survives_intervening_keys"
+behavior.sticky_key = { wait_timeout = "150ms" }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift)
+  { tap = { pos = [3, 0], duration = 10 } },  # MO(1) down and up
+  { delay = 135 }, # Past the original deadline, before a wrongly refreshed deadline
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["LShift"], [], ["A"], []]
+
+[[test]]
+name = "osm_armed_does_not_stall_mouse_repeats"
+behavior.sticky_key = { wait_timeout = "600ms" }
+steps = [
+  { press = [0, 8] },   # Hold MouseWheelUp: initial delta, first repeat due at +100ms
+  { press = [0, 0] },   # OSM(LShift) down
+  { release = [0, 0] }, # OSM(LShift) up and still armed; repeats must continue regardless
+  { delay = 280 },      # covers the repeat ticks at +100/+180/+260ms
+  { release = [0, 8] },
+  { tap = { pos = [0, 2], duration = 10 } },  # Control: OSM still armed here
+]
+expect = [{ mouse = { wheel = -1 } }, ["LShift"], { mouse = { wheel = -1 } }, { mouse = { wheel = -1 } }, { mouse = { wheel = -1 } }, { mouse = {} }, ["LShift", "A"], ["LShift"], []]
+
+[[test]]
+name = "expiring_osm_keeps_a_held_copy_of_its_modifier"
+behavior.sticky_key = { wait_timeout = "100ms", ignore = ["C", "LShift"] }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },   # OSM(LShift), now armed
+  { press = [0, 12] },                         # LM(1, LShift): LShift held for real
+  { delay = 150 },                             # the sticky expires
+  { tap = { pos = [0, 2], duration = 10 } },   # layer 1 C, still shifted
+  { release = [0, 12] },
+]
+expect = [["LShift"], ["LShift"], ["LShift", "C"], ["LShift"], []]
+
+[[test]]
+name = "layer_activate_drains_multiple_stickies"
+behavior.sticky_key = { release_on = ["layer_activate"] }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },  # OSM(LShift), armed
+  { tap = { pos = [0, 4], duration = 10 } },  # OSM(LCtrl), armed
+  { press = [3, 0] },                         # MO(1): activation ends both at once
+  { release = [3, 0] },
+]
+expect = [["LShift"], ["LShift", "LCtrl"], []]
+
+[[test]]
+name = "osl_default_restores_layer_on_consumer_release"
+steps = [
+  { tap = { pos = [0, 1], duration = 10 } },
+  { press = [0, 2] },
+  { press = [0, 5] },
+  { release = [0, 5] },
+  { release = [0, 2] },
+  { tap = { pos = [0, 2], duration = 10 } }, # Back on the base layer after C releases.
+]
+expect = [["C"], ["C", "F"], ["C"], [], ["A"], []]

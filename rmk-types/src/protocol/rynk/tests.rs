@@ -214,6 +214,7 @@ struct Exemplars {
     combo: Combo,
     fork: Fork,
     morse: Morse,
+    sticky: crate::sticky::StickyProfile,
     macro_ops: Macro,
     encoder: EncoderAction,
     battery: BatteryStatus,
@@ -249,6 +250,8 @@ fn exemplars() -> Exemplars {
         max_bulk_keys: 15,
         max_bulk_items: 16,
         bulk_transfer_supported: true,
+        num_sticky_profiles: 2,
+        max_sticky_ignore: 4,
     };
     // Ascending version/id values; distinct strings so a field swap shows.
     let device_info = DeviceInfo {
@@ -267,7 +270,6 @@ fn exemplars() -> Exemplars {
     // long-varint encoding.
     let behavior = BehaviorConfig {
         combo_timeout_ms: 50,
-        oneshot_timeout_ms: 60,
         tap_interval_ms: 70,
         tap_capslock_interval_ms: 80,
         morse_default_profile: MorseProfile::new(Some(true), Some(MorseMode::HoldOnOtherPress), Some(90), Some(100))
@@ -340,6 +342,14 @@ fn exemplars() -> Exemplars {
         combo,
         fork,
         morse,
+        sticky: crate::sticky::StickyProfile {
+            release_on: crate::sticky::StickyReleaseConditions::new()
+                .with_layer_activate(true)
+                .with_after_next_release(true),
+            ignore: [KeyCode::Hid(HidKeyCode::LCtrl)].into_iter().collect(),
+            wait_timeout_ms: 1234,
+            hold_timeout_ms: 567,
+        },
         macro_ops,
         encoder,
         battery: BatteryStatus::Available {
@@ -414,6 +424,13 @@ fn wire_values_locked() {
             )),
         ),
         ("KeyAction::Morse(3)", encode(&KeyAction::Morse(3))),
+        (
+            "KeyAction::Sticky(Modifier(LShift))",
+            encode(&KeyAction::Sticky(
+                Action::Modifier(ModifierCombination::LSHIFT),
+                u8::MAX
+            )),
+        ),
         // --- Action: every feature-independent variant tag (positional) ---
         ("Action::No", encode(&Action::No)),
         ("Action::Key(Hid(A))", encode(&Action::Key(KeyCode::Hid(HidKeyCode::A)))),
@@ -437,12 +454,6 @@ fn wire_values_locked() {
         ("Action::TriLayerLower", encode(&Action::TriLayerLower)),
         ("Action::TriLayerUpper", encode(&Action::TriLayerUpper)),
         ("Action::TriggerMacro(7)", encode(&Action::TriggerMacro(7))),
-        ("Action::OneShotLayer(8)", encode(&Action::OneShotLayer(8))),
-        (
-            "Action::OneShotModifier(LAlt)",
-            encode(&Action::OneShotModifier(ModifierCombination::LALT))
-        ),
-        ("Action::OneShotKey(Hid(B))", encode(&Action::OneShotKey(HidKeyCode::B))),
         ("Action::Light(RgbTog)", encode(&Action::Light(LightAction::RgbTog))),
         (
             "Action::KeyboardControl(Bootloader)",
@@ -590,6 +601,14 @@ fn wire_values_locked() {
                 index: 0,
                 config: ex.morse.clone()
             })
+        ),
+        ("StickyProfile", encode(&ex.sticky),),
+        (
+            "SetStickyProfileRequest{255,sticky}",
+            encode(&SetStickyProfileRequest {
+                index: 255,
+                config: ex.sticky.clone()
+            }),
         ),
         (
             "SetForkRequest{2,fork}",
@@ -881,6 +900,29 @@ fn wire_frames_locked() {
         (
             "SetFork reply Ok(())",
             encode_frame(Cmd::SetFork, SEQ, &Ok::<(), RynkError>(()))
+        ),
+        (
+            "GetStickyProfile request 255",
+            encode_frame(Cmd::GetStickyProfile, SEQ, &255u8),
+        ),
+        (
+            "GetStickyProfile reply Ok(StickyProfile)",
+            encode_frame(Cmd::GetStickyProfile, SEQ, &Ok::<_, RynkError>(ex.sticky.clone())),
+        ),
+        (
+            "SetStickyProfile request {255,sticky}",
+            encode_frame(
+                Cmd::SetStickyProfile,
+                SEQ,
+                &SetStickyProfileRequest {
+                    index: 255,
+                    config: ex.sticky.clone()
+                }
+            ),
+        ),
+        (
+            "SetStickyProfile reply Ok(())",
+            encode_frame(Cmd::SetStickyProfile, SEQ, &Ok::<(), RynkError>(())),
         ),
         // Behavior (0x06xx).
         (

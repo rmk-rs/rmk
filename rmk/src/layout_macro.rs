@@ -307,47 +307,69 @@ macro_rules! thp {
     };
 }
 
-/// Create a one-shot layer action.
-///
-/// This macro creates a key that activates a layer for the next keypress only.
-/// After the next key is pressed, the layer automatically deactivates.
-///
-/// # Parameters
-/// - `$x`: Layer number (0-255)
+/// Sticky layer(One-shot layer) action.
+/// The optional second argument selects a profile index; omit to use the default profile.
 ///
 /// # Example
-/// ```ignore
-/// osl!(1)  // Next key will be from layer 1, then return to current layer
-/// osl!(2)  // Next key will be from layer 2, then return to current layer
+/// ```
+/// use rmk::osl;
+///
+/// let default_layer_key = osl!(1);
+/// let custom_layer_key = osl!(1, 0); // Profile 0
 /// ```
 #[macro_export]
 macro_rules! osl {
+    ($x:literal, $p:expr) => {
+        $crate::sk!($crate::types::action::Action::LayerOn($x), $p)
+    };
     ($x: literal) => {
-        $crate::types::action::KeyAction::Single($crate::types::action::Action::OneShotLayer($x))
+        $crate::sk!($crate::types::action::Action::LayerOn($x))
     };
 }
 
-/// Create a one-shot modifier action.
-///
-/// This macro creates a key that applies modifiers for the next keypress only.
-/// They automatically deactivate if:
-/// - other key that sends keyboard report is pressed,
-/// - timeout has passed before next key is triggered.
-///
-/// # Parameters
-/// - `$m`: `ModifierCombination` to apply for the next keypress
+/// Sticky modifier(One-shot modifier) action.
+/// The optional second argument selects a profile index; omit to use the default profile.
 ///
 /// # Example
-/// ```ignore
-/// // Next key will be shifted
-/// osm!(ModifierCombination::LSHIFT)
-/// // Next key will have both Shift and Ctrl applied
-/// osm!(ModifierCombination::LSHIFT | ModifierCombination::LCTRL)
+/// ```
+/// use rmk::osm;
+/// use rmk::types::modifier::ModifierCombination;
+///
+/// let shift = osm!(ModifierCombination::LSHIFT);
+/// let ctrl_shift = osm!(ModifierCombination::LCTRL | ModifierCombination::LSHIFT);
+/// let custom_alt = osm!(ModifierCombination::LALT, 0); // Profile 0
 /// ```
 #[macro_export]
 macro_rules! osm {
+    ($m:expr, $p:expr) => {
+        $crate::sk!($crate::types::action::Action::Modifier($m), $p)
+    };
     ($m: expr) => {
-        $crate::types::action::KeyAction::Single($crate::types::action::Action::OneShotModifier($m))
+        $crate::sk!($crate::types::action::Action::Modifier($m))
+    };
+}
+
+/// Sticky key action.
+/// The optional second argument selects a profile index; omit to use the default profile.
+/// See [`crate::types::sticky::StickyProfile`] for hold settings.
+///
+/// # Example
+/// ```
+/// use rmk::sk;
+/// use rmk::types::action::Action;
+/// use rmk::types::keycode::{HidKeyCode, KeyCode};
+/// use rmk::types::modifier::ModifierCombination;
+///
+/// let sticky_a = sk!(Action::Key(KeyCode::Hid(HidKeyCode::A)));
+/// let custom_alt = sk!(Action::Modifier(ModifierCombination::LALT), 0);
+/// ```
+#[macro_export]
+macro_rules! sk {
+    ($a: expr, $p: expr) => {
+        $crate::types::action::KeyAction::Sticky($a, $p)
+    };
+    ($a: expr) => {
+        $crate::sk!($a, $crate::types::sticky::STICKY_PROFILE_DEFAULT)
     };
 }
 

@@ -216,7 +216,11 @@ pub(crate) fn expand_profile_name(
             let morse_profile = expand_profile(profile);
             quote! { #morse_profile }
         } else {
-            panic_unknown_profile(profile_name, profiles.keys().map(String::as_str));
+            panic_unknown_profile(
+                profile_name,
+                profiles.keys().map(String::as_str),
+                "behavior.morse.profiles",
+            );
         }
     } else {
         panic!(
@@ -293,9 +297,6 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
                 #modifiers,
             )
         };
-    } else if lower.starts_with("osm(") {
-        let modifiers = parse_modifiers(strip_call(key));
-        return quote! { ::rmk::types::action::Action::OneShotModifier(#modifiers) };
     } else if lower.starts_with("lm(") {
         let keys = split_top_level(strip_call(key));
         if keys.len() != 2 {
@@ -307,9 +308,6 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
     } else if lower.starts_with("mo(") {
         let layer = parse_layer(key);
         return quote! { ::rmk::types::action::Action::LayerOn(#layer) };
-    } else if lower.starts_with("osl(") {
-        let layer = parse_layer(key);
-        return quote! { ::rmk::types::action::Action::OneShotLayer(#layer) };
     } else if lower.starts_with("tg(") {
         let layer = parse_layer(key);
         return quote! { ::rmk::types::action::Action::LayerToggle(#layer) };
@@ -407,10 +405,7 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
 /// [`Action`] parsed by [`parse_action`] and wrapped in `KeyAction::Single`.
 /// The tap/hold slots of `MT`/`TH`/`LT` accept any single-action form, so e.g.
 /// `MT(WM(P, RAlt), LShift, HRM)` is valid.
-pub(crate) fn parse_key(
-    key: String,
-    profiles: &Option<HashMap<String, MorseProfile>>,
-) -> TokenStream2 {
+pub(crate) fn parse_key(key: String, names: &ProfileNames) -> TokenStream2 {
     if !key.is_empty() && (key.trim_start_matches("_").is_empty() || key.to_lowercase() == "trns") {
         return quote! { ::rmk::a!(Transparent) };
     } else if !key.is_empty() && key == "No" {
@@ -426,7 +421,7 @@ pub(crate) fn parse_key(
         }
         let tap = parse_action(&keys[0]);
         let modifiers = parse_modifiers(&keys[1]);
-        let profile = morse_profile(keys.get(2), profiles);
+        let profile = profile_index(keys.get(2), &names.morse, "behavior.morse.profiles");
         quote! {
             ::rmk::types::action::KeyAction::TapHold(#tap, ::rmk::types::action::Action::Modifier(#modifiers), #profile)
         }
@@ -437,7 +432,7 @@ pub(crate) fn parse_key(
         }
         let tap = parse_action(&keys[0]);
         let hold = parse_action(&keys[1]);
-        let profile = morse_profile(keys.get(2), profiles);
+        let profile = profile_index(keys.get(2), &names.morse, "behavior.morse.profiles");
         quote! { ::rmk::types::action::KeyAction::TapHold(#tap, #hold, #profile) }
     } else if lower.starts_with("lt(") {
         let keys = split_top_level(strip_call(&key));
@@ -446,13 +441,29 @@ pub(crate) fn parse_key(
         }
         let layer = parse_numeric_arg(&keys[0], "layer");
         let tap = parse_action(&keys[1]);
-        let profile = morse_profile(keys.get(2), profiles);
+        let profile = profile_index(keys.get(2), &names.morse, "behavior.morse.profiles");
         quote! {
             ::rmk::types::action::KeyAction::TapHold(#tap, ::rmk::types::action::Action::LayerOn(#layer), #profile)
         }
     } else if lower.starts_with("tt(") {
         let layer = parse_layer(&key);
         quote! { ::rmk::tt!(#layer) }
+    } else if lower.starts_with("sk(") || lower.starts_with("osm(") || lower.starts_with("osl(") {
+        let keys = split_top_level(strip_call(&key));
+        if keys.is_empty() || keys.len() > 2 {
+            panic!("keyboard.toml: SK, OSM and OSL take one argument and an optional profile");
+        }
+        let action = if lower.starts_with("osl(") {
+            let layer = parse_numeric_arg(&keys[0], "layer");
+            quote! { ::rmk::types::action::Action::LayerOn(#layer) }
+        } else if lower.starts_with("osm(") {
+            let modifiers = parse_modifiers(&keys[0]);
+            quote! { ::rmk::types::action::Action::Modifier(#modifiers) }
+        } else {
+            parse_action(&keys[0])
+        };
+        let profile = profile_index(keys.get(1), &names.sticky, "behavior.sticky_key.profiles");
+        quote! { ::rmk::types::action::KeyAction::Sticky(#action, #profile) }
     } else if lower.starts_with("td(") || lower.starts_with("morse(") {
         let index = parse_numeric_arg(strip_call(&key), "morse");
         quote! { ::rmk::types::action::KeyAction::Morse(#index) }
@@ -462,54 +473,39 @@ pub(crate) fn parse_key(
     }
 }
 
-/// Named profiles sorted by name, giving each a stable index into the runtime
-/// morse profile table: a name at sorted position `i` is table index `i`.
-pub(crate) fn sorted_profile_names(
-    profiles: &Option<HashMap<String, MorseProfile>>,
-) -> Vec<String> {
-    match profiles {
-        Some(p) => {
-            let mut names: Vec<String> = p.keys().cloned().collect();
-            names.sort();
-            names
-        }
-        None => Vec::new(),
-    }
+/// The interned profile-name tables a keymap cell can point at, each in the
+/// order its runtime table is emitted, so a name expands to its index.
+#[derive(Default)]
+pub(crate) struct ProfileNames {
+    pub(crate) morse: Vec<String>,
+    pub(crate) sticky: Vec<String>,
 }
 
-/// Expand the optional trailing profile argument of a tap-hold action into its
-/// morse profile table index. When omitted, emit `u8::MAX`: an index with no
-/// table entry falls back to the default profile at runtime (the table
-/// capacity is validated to be ≤ 255, so `u8::MAX` is always vacant).
-fn morse_profile(
+/// Resolve a named profile. Both tables reserve `u8::MAX` for the configured default.
+fn profile_index(
     profile_name: Option<&String>,
-    profiles: &Option<HashMap<String, MorseProfile>>,
+    profiles: &[String],
+    section: &str,
 ) -> TokenStream2 {
     let Some(name) = profile_name else {
         return quote! { ::core::primitive::u8::MAX };
     };
-    let idx = match sorted_profile_names(profiles)
-        .iter()
-        .position(|n| n == name)
-    {
+    let idx = match profiles.iter().position(|n| n == name) {
         Some(pos) => pos as u8,
-        None => panic_unknown_profile(
-            name,
-            sorted_profile_names(profiles).iter().map(String::as_str),
-        ),
+        None => panic_unknown_profile(name, profiles.iter().map(String::as_str), section),
     };
     quote! { #idx }
 }
 
-/// Panic for a failed morse-profile lookup, suggesting the nearest defined
-/// name when one plausibly matches.
-fn panic_unknown_profile<'a>(name: &str, known: impl Iterator<Item = &'a str>) -> ! {
+/// Panic for a failed profile lookup in `section`, suggesting the nearest
+/// defined name when one plausibly matches.
+fn panic_unknown_profile<'a>(name: &str, known: impl Iterator<Item = &'a str>, section: &str) -> ! {
     let hint = match closest_name(name, known) {
         Some(s) => format!(" (did you mean {s}?)"),
         None => String::new(),
     };
     panic!(
-        "\n\u{274c} keyboard.toml: `{:?}` profile name is not found in behavior.morse.profiles{hint}",
+        "\n\u{274c} keyboard.toml: `{:?}` profile name is not found in {section}{hint}",
         name
     )
 }
@@ -586,7 +582,7 @@ mod tests {
     use rmk_config::resolved::behavior::MorseProfile;
 
     fn expand(key: &str) -> String {
-        parse_key(key.to_string(), &None).to_string()
+        parse_key(key.to_string(), &ProfileNames::default()).to_string()
     }
 
     fn profile(enable_flow_tap: Option<bool>) -> MorseProfile {
@@ -692,7 +688,7 @@ mod tests {
         );
         assert!(squash(&expand("WM(C,LCtrl)")).contains("Action::KeyWithModifier"));
         assert!(squash(&expand("MOD(LCtrl | LAlt | LGui)")).contains("Action::Modifier"));
-        assert!(squash(&expand("OSM(LShift)")).contains("Action::OneShotModifier"));
+        assert!(squash(&expand("OSM(LShift)")).contains("KeyAction::Sticky"));
     }
 
     #[test]
@@ -746,8 +742,11 @@ mod tests {
         expected = "`\"home_roww\"` profile name is not found in behavior.morse.profiles (did you mean home_row?)"
     )]
     fn morse_profile_suggests_closest_defined_profile() {
-        let profiles = Some(HashMap::from([("home_row".to_string(), profile(None))]));
-        let _ = parse_key("TH(Space, Enter, home_roww)".to_string(), &profiles);
+        let names = ProfileNames {
+            morse: vec!["home_row".to_string()],
+            ..Default::default()
+        };
+        let _ = parse_key("TH(Space, Enter, home_roww)".to_string(), &names);
     }
 
     #[test]

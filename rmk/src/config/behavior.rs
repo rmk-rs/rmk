@@ -4,11 +4,12 @@ use rmk_types::fork::Fork;
 use rmk_types::keyboard_macros::MacroOp;
 use rmk_types::keycode::KeyCode;
 use rmk_types::morse::{Morse, MorseMode, MorseProfile};
+use rmk_types::sticky::StickyProfile;
 
 use crate::keyboard::combo::Combo;
 use crate::{
     AUTO_MOUSE_LAYER_MAX_NUM, COMBO_MAX_NUM, FORK_MAX_NUM, MORSE_MAX_NUM, MORSE_PROFILE_MAX_NUM, MOUSE_KEY_INTERVAL,
-    MOUSE_WHEEL_INTERVAL,
+    MOUSE_WHEEL_INTERVAL, STICKY_PROFILE_MAX_NUM,
 };
 
 /// Config for configurable action behavior
@@ -18,8 +19,7 @@ pub struct BehaviorConfig {
     pub default_layer: u8,
     pub tri_layer: Option<[u8; 3]>,
     pub tap: TapConfig,
-    pub one_shot: OneShotConfig,
-    pub one_shot_modifiers: OneShotModifiersConfig,
+    pub sticky_key: StickyKeyConfig,
     pub combo: CombosConfig,
     pub fork: ForksConfig,
     pub morse: MorsesConfig,
@@ -152,27 +152,22 @@ impl Default for MorsesConfig {
     }
 }
 
-/// Config for one shot behavior
-#[derive(Clone, Copy, Debug)]
-pub struct OneShotConfig {
-    /// Timeout after which modifiers/layers are canceled/released
-    pub timeout: Duration,
+/// Config for sticky keys, which is where `OSM`/`OSL` live too.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StickyKeyConfig {
+    /// Used by every sticky key that names no profile.
+    pub default_profile: StickyProfile,
+
+    /// Named sticky profiles (`[behavior.sticky_key.profiles]`), indexed by
+    /// `KeyAction::Sticky(_, idx)`. An index with no entry resolves to
+    /// [`Self::default_profile`].
+    pub profiles: Vec<StickyProfile, STICKY_PROFILE_MAX_NUM>,
 }
 
-impl Default for OneShotConfig {
-    fn default() -> Self {
-        Self {
-            timeout: Duration::from_secs(1),
-        }
+impl StickyKeyConfig {
+    pub(crate) fn get_profile(&self, idx: u8) -> &StickyProfile {
+        self.profiles.get(idx as usize).unwrap_or(&self.default_profile)
     }
-}
-/// Config for one-shot behavior
-#[derive(Clone, Copy, Debug, Default)]
-pub struct OneShotModifiersConfig {
-    /// Should modifiers be active from keypress (sticky modifiers)
-    pub activate_on_keypress: bool,
-    /// If true, OSM releases on next key press (ZMK skq); if false, on next key release (ZMK skn)
-    pub quick_release: bool,
 }
 
 /// Config for combo behavior

@@ -37,7 +37,7 @@ steps = [
     is_split = true, num_split_peripherals = 1,
     ble_enabled = true, num_ble_profiles = 3,
     max_payload_size = 482, max_bulk_keys = 47, max_bulk_items = 7,
-    bulk_transfer_supported = true,
+    bulk_transfer_supported = true, num_sticky_profiles = 0, max_sticky_ignore = 4,
   } } },
 ]
 

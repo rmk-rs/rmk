@@ -118,8 +118,8 @@ expect = [
 ]
 
 [[test]]
-name = "combo_with_one_shot_modifier"
-behavior.one_shot = { timeout = "300ms" }
+name = "combo_with_sticky_modifier"
+behavior.sticky_key = { wait_timeout = "300ms" }
 steps = [
   { press = [1, 4] },
   { press = [1, 6] },
@@ -130,7 +130,7 @@ steps = [
   { delay = 50 },
   { tap = { pos = [1, 4], duration = 110 } },
 ]
-expect = [["LShift", "E"], []]
+expect = [["LShift"], ["LShift", "E"], ["LShift"], []]
 
 [[test]]
 name = "combo_with_mod"
@@ -198,7 +198,7 @@ steps = [
   { delay = 50 },
   { release = [1, 5] },
 ]
-expect = [["Space"], [], ["LShift", "A"], [], ["Space"], []]
+expect = [["Space"], [], ["LShift"], ["LShift", "A"], ["LShift"], [], ["Space"], []]
 
 [[test]]
 name = "overlapped_combo"
@@ -215,7 +215,7 @@ steps = [
   { release = [1, 5] },
   { release = [1, 4] },
 ]
-expect = [["LShift", "A"], []]
+expect = [["LShift"], ["LShift", "A"], ["LShift"], []]
 
 [[test]]
 name = "taphold_with_combo"
@@ -306,43 +306,6 @@ steps = [
 ]
 expect = [["Equal"], ["Equal", "RightBracket"], ["Equal"], []]
 
-[[test]]
-name = "combo_with_one_shot_modifier_quick_release"
-behavior.one_shot = { timeout = "300ms" }
-behavior.one_shot_modifiers = { quick_release = true }
-steps = [
-  { press = [1, 4] },
-  { press = [1, 6] },
-  { delay = 50 },
-  { release = [1, 4] },
-  { delay = 70 },
-  { release = [1, 6] },
-  { delay = 50 },
-  { tap = { pos = [1, 4], duration = 110 } },
-]
-expect = [["LShift", "E"], ["E"], []]
-
-[[test]]
-name = "overlapped_combo_quick_release"
-behavior.one_shot_modifiers = { quick_release = true }
-steps = [
-  { press = [1, 4] },
-  { press = [1, 6] },
-  { delay = 50 },
-  { release = [1, 4] },
-  { release = [1, 6] },
-  { delay = 100 },
-  { press = [1, 5] },
-  { press = [1, 4] },
-  { delay = 50 },
-  { release = [1, 5] },
-  { release = [1, 4] },
-]
-expect = [["LShift", "A"], ["A"], []]
-
-# Regression for the overlapping subset combos bug: firing W+E+R must clear the
-# fully-pressed-but-not-triggered `W+E` subset, or it later fires as a phantom
-# F2 and strands R/modifiers on the host.
 [[test]]
 name = "subset_combo_wer_then_r_alone"
 behavior.combo = {

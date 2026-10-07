@@ -126,8 +126,8 @@ pub(crate) async fn process_vial<'a>(
                     LittleEndian::write_u16(&mut report.input_data[1..3], tapping_term);
                 }
                 SettingKey::OneShotTimeout => {
-                    let one_shot_timeout = ctx.one_shot_timeout().as_millis() as u16;
-                    LittleEndian::write_u16(&mut report.input_data[1..3], one_shot_timeout);
+                    let timeout_ms = ctx.default_sticky_wait_timeout_ms();
+                    LittleEndian::write_u16(&mut report.input_data[1..3], timeout_ms);
                 }
                 SettingKey::TapInterval => {
                     let tap_interval = ctx.tap_interval();
@@ -188,7 +188,7 @@ pub(crate) async fn process_vial<'a>(
                 }
                 SettingKey::OneShotTimeout => {
                     let timeout_time = u16::from_le_bytes([report.output_data[4], report.output_data[5]]);
-                    let _ = ctx.set_one_shot_timeout(timeout_time).await;
+                    let _ = ctx.set_default_sticky_wait_timeout_ms(timeout_time).await;
                 }
                 SettingKey::TapInterval => {
                     let tap_interval = u16::from_le_bytes([report.output_data[4], report.output_data[5]]);

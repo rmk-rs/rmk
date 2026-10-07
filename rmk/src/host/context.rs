@@ -176,8 +176,8 @@ impl<'a> KeyboardContext<'a> {
         self.keymap.combo_timeout()
     }
 
-    pub fn one_shot_timeout(&self) -> Duration {
-        self.keymap.one_shot_timeout()
+    pub fn default_sticky_wait_timeout_ms(&self) -> u16 {
+        self.keymap.default_sticky_wait_timeout_ms()
     }
 
     pub fn tap_interval(&self) -> u16 {
@@ -186,6 +186,34 @@ impl<'a> KeyboardContext<'a> {
 
     pub fn tap_capslock_interval(&self) -> u16 {
         self.keymap.tap_capslock_interval()
+    }
+
+    #[cfg(feature = "rynk")]
+    pub fn sticky_profiles_len(&self) -> usize {
+        self.keymap.sticky_profiles_len()
+    }
+
+    #[cfg(feature = "rynk")]
+    pub fn get_sticky_profile(&self, idx: u8) -> Option<rmk_types::sticky::StickyProfile> {
+        self.keymap.sticky_profile(idx)
+    }
+
+    #[cfg(feature = "rynk")]
+    pub async fn set_sticky_profile(&self, idx: u8, profile: rmk_types::sticky::StickyProfile) -> Result<bool, ()> {
+        if !self.keymap.set_sticky_profile(idx, profile.clone()) {
+            return Ok(false);
+        }
+        #[cfg(feature = "storage")]
+        if idx == rmk_types::sticky::STICKY_PROFILE_DEFAULT {
+            store(StorageItem::BehaviorConfig(self.keymap.behavior_snapshot())).await?;
+        } else {
+            store(StorageItem::StickyProfile {
+                idx,
+                profile: Some(profile),
+            })
+            .await?;
+        }
+        Ok(true)
     }
 
     pub fn morse_default_profile(&self) -> MorseProfile {
@@ -203,8 +231,8 @@ impl<'a> KeyboardContext<'a> {
         Ok(())
     }
 
-    pub async fn set_one_shot_timeout(&self, ms: u16) -> Result<(), ()> {
-        self.keymap.set_one_shot_timeout(Duration::from_millis(ms as u64));
+    pub async fn set_default_sticky_wait_timeout_ms(&self, ms: u16) -> Result<(), ()> {
+        self.keymap.set_default_sticky_wait_timeout_ms(ms);
         #[cfg(feature = "storage")]
         store(StorageItem::BehaviorConfig(self.keymap.behavior_snapshot())).await?;
         Ok(())
@@ -242,8 +270,6 @@ impl<'a> KeyboardContext<'a> {
     pub async fn set_behavior_config(&self, cfg: BehaviorConfig) -> Result<(), ()> {
         self.keymap
             .set_combo_timeout(Duration::from_millis(cfg.combo_timeout_ms as u64));
-        self.keymap
-            .set_one_shot_timeout(Duration::from_millis(cfg.oneshot_timeout_ms as u64));
         self.keymap.set_tap_interval(cfg.tap_interval_ms);
         self.keymap.set_tap_capslock_interval(cfg.tap_capslock_interval_ms);
         self.keymap.set_morse_default_profile(cfg.morse_default_profile);

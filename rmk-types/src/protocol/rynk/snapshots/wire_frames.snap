@@ -15,11 +15,11 @@ ClearBleProfile request 1                                                       
 ConnectionChange topic ConnectionStatus{Configured,{1,Adv,bonded},Ble}          03 03 80 03 02 01 03 01 01 00
 GetBatteryStatus reply Ok(Available{Discharging,85})                            04 03 08 01 05 01 01 01 55 00
 GetBatteryStatus request ()                                                     04 03 08 01 00
-GetBehaviorConfig reply Ok(BehaviorConfig{50..120})                             04 01 06 01 0d 32 3c 46 50 da 80 a6 86 e8 8d 08 78 00
+GetBehaviorConfig reply Ok(BehaviorConfig{50..120})                             04 01 06 01 0c 32 46 50 da 80 a6 86 e8 8d 08 78 00
 GetBehaviorConfig request ()                                                    04 01 06 01 00
 GetBleStatus reply Ok(BleStatus{1,Advertising,bonded})                          04 03 07 01 02 01 02 01 00
 GetBleStatus request ()                                                         04 03 07 01 00
-GetCapabilities reply Ok(DeviceCapabilities{1..16})                             02 02 02 01 0e 01 02 03 04 05 06 07 08 01 09 0a 0b 01 03 01 0c 06 0d 0e 0f 10 01 00
+GetCapabilities reply Ok(DeviceCapabilities{1..16})                             02 02 02 01 0e 01 02 03 04 05 06 07 08 01 09 0a 0b 01 03 01 0c 08 0d 0e 0f 10 01 02 04 00
 GetCapabilities request ()                                                      02 02 02 01 00
 GetCombo reply Ok(Combo{[Single(A)],Morse(1),L2})                               04 01 03 01 04 01 02 01 06 04 05 01 01 02 00
 GetCombo request 3                                                              05 01 03 01 03 00
@@ -55,6 +55,8 @@ GetPeripheralStatus reply Ok(PeripheralStatus{true,Available{Discharging,85}})  
 GetPeripheralStatus request 1                                                   05 04 08 01 01 00
 GetSleepState reply Ok(true)                                                    04 06 08 01 02 01 00
 GetSleepState request ()                                                        04 06 08 01 00
+GetStickyProfile reply Ok(StickyProfile)                                        04 03 06 01 03 0c 01 07 d6 01 d2 09 b7 04 00
+GetStickyProfile request 255                                                    05 03 06 01 ff 00
 GetVersion reply Ok(CURRENT)                                                    02 01 02 01 01 02 02 00
 GetVersion request ()                                                           02 01 02 01 00
 GetWpm reply Ok(42)                                                             04 05 08 01 02 2a 00
@@ -66,7 +68,7 @@ Lock request ()                                                                 
 Reboot reply Ok(())                                                             02 03 02 01 01 00
 Reboot request ()                                                               02 03 02 01 00
 SetBehaviorConfig reply Ok(())                                                  04 02 06 01 01 00
-SetBehaviorConfig request BehaviorConfig{50..120}                               10 02 06 01 32 3c 46 50 da 80 a6 86 e8 8d 08 78 00
+SetBehaviorConfig request BehaviorConfig{50..120}                               0f 02 06 01 32 46 50 da 80 a6 86 e8 8d 08 78 00
 SetCombo reply Ok(())                                                           04 02 03 01 01 00
 SetCombo request SetComboRequest{3,combo}                                       08 02 03 01 03 01 02 01 06 04 05 01 01 02 00
 SetDefaultLayer reply Ok(())                                                    04 04 01 01 01 00
@@ -82,6 +84,8 @@ SetMacro reply Ok(())                                                           
 SetMacro request SetMacroRequest{2,macro}                                       06 02 02 01 02 04 02 01 08 04 03 ac 02 04 61 05 00
 SetMorse reply Ok(())                                                           04 02 04 01 01 00
 SetMorse request SetMorseRequest{0,morse}                                       04 02 04 01 01 04 01 02 01 02 04 00
+SetStickyProfile reply Ok(())                                                   04 04 06 01 01 00
+SetStickyProfile request {255,sticky}                                           07 04 06 01 ff 0c 01 07 d6 01 d2 09 b7 04 00
 SleepState topic true                                                           03 04 80 02 01 00
 StorageReset reply Ok(())                                                       02 05 02 01 01 00
 StorageReset request StorageResetMode::Full                                     02 05 02 01 01 00

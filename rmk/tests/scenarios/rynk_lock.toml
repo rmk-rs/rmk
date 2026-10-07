@@ -114,3 +114,17 @@ steps = [
   { release = [0, 1] },
   { release = [0, 2] },
 ]
+
+[[test]]
+name = "sticky_profile_write_requires_unlock"
+steps = [
+  { rynk = { cmd = "SetStickyProfile", payload = { index = 255, config = { release_on = {}, ignore = [], wait_timeout_ms = 0, hold_timeout_ms = 0 } }, error = "Locked" } },
+  { rynk = { cmd = "GetStickyProfile", payload = 255, reply = { release_on = { after_next_release = true }, ignore = [], wait_timeout_ms = 1000, hold_timeout_ms = 250 } } },
+  { press = [0, 1] },
+  { press = [0, 2] },
+  { rynk = { cmd = "UnlockPoll", reply = { locked = false, unlocking = false, remaining_keys = 0, key_positions = [[0, 1], [0, 2]] } } },
+  { release = [0, 1] },
+  { release = [0, 2] },
+  { rynk = { cmd = "SetStickyProfile", payload = { index = 255, config = { release_on = {}, ignore = [], wait_timeout_ms = 0, hold_timeout_ms = 0 } } } },
+  { rynk = { cmd = "GetStickyProfile", payload = 255, reply = { release_on = {}, ignore = [], wait_timeout_ms = 0, hold_timeout_ms = 0 } } },
+]

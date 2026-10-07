@@ -18,7 +18,7 @@ use super::{
     GetKeymapBulkRequest, GetKeymapBulkResponse, GetMorseBulkRequest, GetMorseBulkResponse, KeyPosition, LayoutChunk,
     LockStatus, MatrixState, ProtocolVersion, RynkError, SetComboBulkRequest, SetComboRequest, SetEncoderRequest,
     SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest,
-    StorageResetMode,
+    SetStickyProfileRequest, StorageResetMode,
 };
 use crate::action::{EncoderAction, KeyAction};
 #[cfg(feature = "_ble")]
@@ -33,6 +33,7 @@ use crate::led_indicator::LedIndicator;
 use crate::morse::Morse;
 #[cfg(feature = "split")]
 use crate::protocol::rynk::PeripheralStatus;
+use crate::sticky::StickyProfile;
 
 /// CMD high bit marking a topic (server → host push).
 const RYNK_TOPIC_BIT: u16 = 0x8000;
@@ -313,6 +314,10 @@ endpoints! {
     // Behavior (0x06xx).
     GetBehaviorConfig = 0x0601: () => BehaviorConfig;
     SetBehaviorConfig = 0x0602: BehaviorConfig => ();
+    /// Index 255 selects the default; other indices must be below num_sticky_profiles.
+    GetStickyProfile = 0x0603: u8 => StickyProfile;
+    /// Replace one profile; requires the same unlock policy as other configuration writes.
+    SetStickyProfile = 0x0604: SetStickyProfileRequest => ();
 
     // Connection (0x07xx).
     GetConnectionType = 0x0701: () => ConnectionType;

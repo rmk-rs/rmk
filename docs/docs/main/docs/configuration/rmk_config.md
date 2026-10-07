@@ -20,6 +20,12 @@ fork_max_num = 8
 morse_max_num = 8
 # Maximum number of named morse profiles, shared by morse and tap-hold keys (max 255)
 morse_profile_max_num = 16
+# Maximum number of sticky keys active at the same time
+sticky_max_active = 8
+# Maximum number of custom sticky key profiles (excluding the default profile)
+sticky_profile_max_num = 8
+# Maximum number of keycodes in sticky key profile's ignore list
+sticky_ignore_max = 4
 # Maximum number of patterns a morse key can handle (default: 8, min: 4, max: 32)
 max_patterns_per_key = 8
 # Maximum number of macros
@@ -71,6 +77,20 @@ Increasing the number of combos, forks, morses (tap dances), and macros will inc
 - `max_patterns_per_key` : Maximum number of tap/hold patterns a morse key can handle, default value is 8. This value must be between 4 and 32. (Automatically raised to fit the largest `tap_actions` + `hold_actions` + `morse_actions` count among the configured morse keys.)
 - `macro_max_num`: Maximum number of macros, default value is 32. This value must be between 0 and 255.
 - `macro_space_size`: Bytes of memory all macros share, default value is 256. This value must be a multiple of 32 between 32 and 8192, and costs as many bytes of RAM. Saved macros take flash too, so a large value may need more [storage sectors](./storage). See [Keyboard macros](./keymap_configuration/keyboard_macros#limits) for how much a macro takes.
+
+### Sticky Key capacity
+
+These limits reserve RAM for [Sticky Key](./behavior#sticky-key). Omitted profile and ignore-list
+capacities are calculated from `keyboard.toml`:
+
+| Setting                  | Default                       | Limit and behavior                                                                                                     |
+| ------------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `sticky_max_active`      | `8`                           | `0` to `256` simultaneous sticky actions. At capacity, a new sticky does not activate. `0` disables sticky activation. |
+| `sticky_profile_max_num` | `max(8, named profile count)` | `0` to `255` named profiles, in addition to the default profile. `0` permits only the default profile.                 |
+| `sticky_ignore_max`      | `max(4, longest ignore list)` | Maximum entries per ignore list, including the default profile and inherited lists. `0` permits only empty lists.      |
+
+Ignore-list length includes inheritance. Explicit limits stay fixed; exceeding them is a build
+error. Set capacities explicitly when Rust-defined profiles need more room.
 
 ### Matrix Configuration
 

@@ -13,6 +13,7 @@ mod layout;
 mod macros;
 mod morse;
 mod status;
+mod sticky;
 mod system;
 
 /// Fixed-size endpoints: a request → response function. [`serve`] adds the

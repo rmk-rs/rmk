@@ -56,7 +56,7 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                     behavior.morse.prior_idle_time = Duration::from_millis(c.prior_idle_time as u64);
                     behavior.morse.default_profile = c.morse_default_profile;
                     behavior.combo.timeout = Duration::from_millis(c.combo_timeout as u64);
-                    behavior.one_shot.timeout = Duration::from_millis(c.one_shot_timeout as u64);
+                    behavior.sticky_key.default_profile = c.sticky_default_profile;
                     behavior.tap.tap_interval = c.tap_interval;
                     behavior.tap.tap_capslock_interval = c.tap_capslock_interval;
                 }
@@ -76,6 +76,14 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
                     }
                 }
                 _ => continue,
+            }
+        }
+
+        for (idx, profile) in behavior.sticky_key.profiles.iter_mut().enumerate() {
+            if let Some(StorageValue::StickyProfile(Some(stored))) =
+                self.fetch(StorageKey::StickyProfile(idx as u8)).await?
+            {
+                *profile = stored;
             }
         }
 

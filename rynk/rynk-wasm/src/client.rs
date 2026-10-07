@@ -27,6 +27,7 @@ use rynk::rmk_types::protocol::rynk::{
     LockStatus, MatrixState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest, SetKeymapBulkRequest,
     SetMorseBulkRequest, StorageResetMode,
 };
+use rynk::rmk_types::sticky::StickyProfile;
 use rynk::{Client, Driver, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
 use wasm_bindgen::prelude::*;
 
@@ -156,6 +157,8 @@ endpoints! {
     set_combo_bulk(request: SetComboBulkRequest) -> (),
     get_fork(index: u8) -> Fork,
     set_fork(index: u8, config: Fork) -> (),
+    get_sticky_profile(index: u8) -> StickyProfile,
+    set_sticky_profile(index: u8, config: StickyProfile) -> (),
     get_morse(index: u8) -> Morse,
     set_morse(index: u8, config: Morse) -> (),
     get_morse_bulk(start_index: u8) -> GetMorseBulkResponse,

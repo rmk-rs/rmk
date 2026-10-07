@@ -37,6 +37,9 @@ pub struct BuildConstants {
     pub fork_max_num: usize,
     pub morse_max_num: usize,
     pub morse_profile_max_num: usize,
+    pub sticky_profile_max_num: usize,
+    pub sticky_ignore_max: usize,
+    pub sticky_max_active: usize,
     pub max_patterns_per_key: usize,
     pub macro_max_num: usize,
     pub macro_space_size: usize,
@@ -97,7 +100,11 @@ impl crate::KeyboardTomlConfig {
     /// **downstream crate** (e.g. `["split", "_ble"]`). These are matched
     /// against `subscriber_default.toml` to auto-bump event subscriber counts.
     pub fn build_constants(&self, active_features: &[&str]) -> Result<BuildConstants, String> {
+        if self.rmk.sticky_max_active > 256 {
+            return Err("sticky_max_active must be at most 256".into());
+        }
         let rmk = &self.rmk;
+        let (sticky_profile_max_num, sticky_ignore_max) = self.sticky_capacities()?;
 
         // Fix split_peripherals_num: when split feature is enabled, ensure at least 1
         let split_peripherals_num = if active_features.contains(&"split") && rmk.split_peripherals_num < 1 {
@@ -288,6 +295,9 @@ impl crate::KeyboardTomlConfig {
             fork_max_num: rmk.fork_max_num,
             morse_max_num: rmk.morse_max_num,
             morse_profile_max_num: rmk.morse_profile_max_num,
+            sticky_profile_max_num,
+            sticky_ignore_max,
+            sticky_max_active: rmk.sticky_max_active,
             max_patterns_per_key: rmk.max_patterns_per_key,
             macro_max_num: rmk.macro_max_num,
             macro_space_size: rmk.macro_space_size,

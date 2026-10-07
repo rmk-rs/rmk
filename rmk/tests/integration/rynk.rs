@@ -191,3 +191,73 @@ fn set_key_on_failing_flash_replies_storage_fault() {
             .await;
     });
 }
+
+#[cfg(feature = "storage")]
+#[test]
+fn sticky_profiles_survive_restart_and_report_storage_faults() {
+    const NAMED: &str = r#"{"release_on":{"layer_activate":true},"ignore":[{"Hid":"LCtrl"}],"wait_timeout_ms":4321,"hold_timeout_ms":0}"#;
+    const DEFAULT: &str = r#"{"release_on":{"before_next_press":true},"ignore":[{"Hid":"LShift"}],"wait_timeout_ms":0,"hold_timeout_ms":123}"#;
+    const FAILED: &str = r#"{"release_on":{},"ignore":[],"wait_timeout_ms":12,"hold_timeout_ms":34}"#;
+    let behavior = || {
+        let mut b = rmk::config::BehaviorConfig::default();
+        b.sticky_key
+            .profiles
+            .push(rmk_types::sticky::StickyProfile::default())
+            .unwrap();
+        b
+    };
+    test_block_on(async {
+        let flash = crate::simulator::Flash::new();
+        {
+            let mut keyboard = SimKeyboard::builder([[[k!(A)]]])
+                .behavior_config(behavior())
+                .build_with_flash(flash.clone())
+                .await;
+            keyboard
+                .rynk::<command::SetStickyProfile>(&format!(r#"{{"index":0,"config":{NAMED}}}"#), RynkReply::Ok("null"))
+                .rynk::<command::SetStickyProfile>(
+                    &format!(r#"{{"index":255,"config":{DEFAULT}}}"#),
+                    RynkReply::Ok("null"),
+                )
+                .run()
+                .await;
+            flash.fail_writes(true);
+            for idx in [0, 255] {
+                keyboard
+                    .rynk::<command::SetStickyProfile>(
+                        &format!(r#"{{"index":{idx},"config":{FAILED}}}"#),
+                        RynkReply::Err(RynkError::StorageFault),
+                    )
+                    .rynk::<command::GetStickyProfile>(&idx.to_string(), RynkReply::Ok(FAILED))
+                    .run()
+                    .await;
+            }
+            flash.fail_writes(false);
+        }
+        let mut keyboard = SimKeyboard::builder([[[k!(A)]]])
+            .behavior_config(behavior())
+            .build_with_flash(flash)
+            .await;
+        keyboard
+            .rynk::<command::GetStickyProfile>("0", RynkReply::Ok(NAMED))
+            .rynk::<command::GetStickyProfile>("255", RynkReply::Ok(DEFAULT))
+            .run()
+            .await;
+    });
+}
+
+#[test]
+fn oversized_sticky_ignore_list_is_rejected_without_changing_ram() {
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[k!(A)]]]).build().await;
+        let ignore = vec![rmk_types::keycode::KeyCode::Hid(HidKeyCode::A); rmk_types::constants::STICKY_IGNORE_MAX + 1];
+        let oversized = (255u8, (0u8, ignore, 0u16, 0u16));
+        keyboard
+            .host_exchange(
+                frame(Cmd::SetStickyProfile, 1, &oversized),
+                frame(Cmd::SetStickyProfile, 1, &Err::<(), _>(RynkError::Malformed)),
+            )
+            .rynk::<command::GetStickyProfile>("255", RynkReply::Ok(r#"{"release_on":{"after_next_release":true},"ignore":[],"wait_timeout_ms":1000,"hold_timeout_ms":250}"#))
+            .run().await;
+    });
+}

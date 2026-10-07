@@ -9,6 +9,7 @@ use embedded_storage::nor_flash::NorFlash;
 use embedded_storage_async::nor_flash::NorFlash as AsyncNorFlash;
 use rmk_types::connection::ConnectionType;
 use rmk_types::morse::MorseProfile;
+use rmk_types::sticky::StickyProfile;
 use sequential_storage::Error as SSError;
 use sequential_storage::cache::Cache;
 use sequential_storage::cache::key_pointers::ArrayKeyPointers;
@@ -157,6 +158,8 @@ pub(crate) enum StorageKey {
     BondInfo(u8),
     /// A slot the board defines, see [`store_user_data`].
     UserData(u8),
+    #[cfg(feature = "host")]
+    StickyProfile(u8),
 }
 
 /// A Storage item is actually a storage (key, value) pair.
@@ -211,6 +214,11 @@ pub(crate) enum StorageItem {
         slot: u8,
         data: heapless::Vec<u8, USER_DATA_MAX_SIZE>,
     },
+    #[cfg(feature = "host")]
+    StickyProfile {
+        idx: u8,
+        profile: Option<StickyProfile>,
+    },
 }
 
 impl StorageItem {
@@ -247,6 +255,10 @@ impl StorageItem {
             #[cfg(feature = "_ble")]
             Self::ActiveBleProfile(v) => (StorageKey::ActiveBleProfile, StorageValue::ActiveBleProfile(v)),
             Self::UserData { slot, data } => (StorageKey::UserData(slot), StorageValue::UserData(data)),
+            #[cfg(feature = "host")]
+            Self::StickyProfile { idx, profile } => {
+                (StorageKey::StickyProfile(idx), StorageValue::StickyProfile(profile))
+            }
         }
     }
 }
@@ -296,18 +308,20 @@ pub(crate) enum StorageValue {
     #[cfg(feature = "_ble")]
     ActiveBleProfile(u8),
     UserData(heapless::Vec<u8, USER_DATA_MAX_SIZE>),
+    #[cfg(feature = "host")]
+    StickyProfile(Option<StickyProfile>),
 }
 
 impl<'a> PostcardValue<'a> for StorageValue {}
 
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) struct BehaviorConfig {
     // Timeouts and intervals are stored as milliseconds.
     pub(crate) prior_idle_time: u16,
     pub(crate) morse_default_profile: MorseProfile,
     pub(crate) combo_timeout: u16,
-    pub(crate) one_shot_timeout: u16,
+    pub(crate) sticky_default_profile: StickyProfile,
     pub(crate) tap_interval: u16,
     // macOS treats capslock specially, so tapping it needs its own interval
     pub(crate) tap_capslock_interval: u16,
@@ -320,7 +334,7 @@ impl From<&config::BehaviorConfig> for BehaviorConfig {
             prior_idle_time: behavior.morse.prior_idle_time.as_millis() as u16,
             morse_default_profile: behavior.morse.default_profile,
             combo_timeout: behavior.combo.timeout.as_millis() as u16,
-            one_shot_timeout: behavior.one_shot.timeout.as_millis() as u16,
+            sticky_default_profile: behavior.sticky_key.default_profile.clone(),
             tap_interval: behavior.tap.tap_interval,
             tap_capslock_interval: behavior.tap.tap_capslock_interval,
         }
@@ -360,6 +374,7 @@ pub(crate) const SCHEMA_HASH: u32 = {
     hash = fnv_hash(hash, env!("RMK_COMMIT").as_bytes());
     // Features gate variants of the two enums, shifting their postcard tags.
     hash = fnv_hash(hash, env!("RMK_FEATURES").as_bytes());
+    hash = fnv_hash(hash, &(crate::STICKY_IGNORE_MAX as u32).to_le_bytes());
     // `keyboard.toml` sizes decide how a stored value is framed.
     #[cfg(feature = "host")]
     {
@@ -541,6 +556,14 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
             })
             .await;
         }
+        // Clear absent profiles too, so removed defaults cannot reappear on a later boot.
+        for idx in 0..crate::STICKY_PROFILE_MAX_NUM {
+            put(StorageItem::StickyProfile {
+                idx: idx as u8,
+                profile: behavior.sticky_key.profiles.get(idx).cloned(),
+            })
+            .await;
+        }
         // The whole buffer, so a macro the user wrote over the host protocol is
         // replaced by its default or cleared.
         crate::keyboard::macros::encode_defaults(&mut data.macros, behavior.keyboard_macros);
@@ -599,7 +622,17 @@ pub(crate) fn print_storage_error<F: AsyncNorFlash>(e: SSError<F::Error>) {
 
 /// Holds any one item with its key and framing; a multiple of 32 because
 /// `sequential-storage` wants that alignment on some flashes.
-const BUFFER_SIZE: usize = 256;
+const BUFFER_SIZE: usize = {
+    use postcard::experimental::max_size::MaxSize;
+
+    // One profile, including its ignore list, plus the remaining behavior fields and framing.
+    let behavior_size = 64 + StickyProfile::POSTCARD_MAX_SIZE;
+    if behavior_size > 256 {
+        behavior_size.next_multiple_of(32)
+    } else {
+        256
+    }
+};
 
 /// Test-only: forget queued requests and any pending reply, so a test starts clean.
 #[cfg(any(test, feature = "std"))]
@@ -935,6 +968,101 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "host")]
+    #[test]
+    fn sticky_profiles_save_independently_and_clear_layout_removes_old_entries() {
+        use rmk_types::keycode::{HidKeyCode, KeyCode};
+        use rmk_types::sticky::{StickyProfile, StickyReleaseConditions};
+
+        use crate::config::PositionalConfig;
+        use crate::keymap::{KeyMap, KeymapData};
+
+        let mut expected = config::StickyKeyConfig {
+            default_profile: StickyProfile {
+                release_on: StickyReleaseConditions::new()
+                    .with_before_next_press(true)
+                    .with_after_next_press(true)
+                    .with_layer_activate(true)
+                    .with_layer_deactivate(true),
+                ignore: core::iter::repeat_n(KeyCode::Hid(HidKeyCode::RGui), crate::STICKY_IGNORE_MAX).collect(),
+                wait_timeout_ms: u16::MAX,
+                hold_timeout_ms: u16::MAX,
+            },
+            ..config::StickyKeyConfig::default()
+        };
+        for idx in 0..crate::STICKY_PROFILE_MAX_NUM {
+            let mut profile = expected.default_profile.clone();
+            profile.release_on = StickyReleaseConditions::new().with_after_next_release(true);
+            profile.hold_timeout_ms -= idx as u16;
+            expected.profiles.push(profile).unwrap();
+        }
+
+        block_on(async {
+            let mut storage = new_storage(async_flash_wrapper(Part::new())).await;
+            let mut data = KeymapData::new([[[KeyAction::No]]]);
+            let mut behavior = RuntimeBehaviorConfig {
+                sticky_key: expected.clone(),
+                ..RuntimeBehaviorConfig::default()
+            };
+            storage.write_layout(&mut data, &behavior).await;
+            if let Some(profile) = expected.profiles.first_mut() {
+                profile.wait_timeout_ms = 321;
+                profile.hold_timeout_ms = 0;
+                profile.ignore.clear();
+                storage
+                    .put(StorageItem::StickyProfile {
+                        idx: 0,
+                        profile: Some(profile.clone()),
+                    })
+                    .await
+                    .unwrap();
+            }
+            let positional = PositionalConfig::default();
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            // This snapshot still has the old named profile in RAM; it must not overwrite its edit.
+            // The legacy host setting changes only the default waiting timeout.
+            keymap.set_default_sticky_wait_timeout_ms(1234);
+            expected.default_profile.wait_timeout_ms = 1234;
+            storage
+                .put(StorageItem::BehaviorConfig(keymap.behavior_snapshot()))
+                .await
+                .unwrap();
+
+            let (flash, _) = storage.flash.destroy();
+            let mut storage = new_storage(flash).await;
+            let mut restored = RuntimeBehaviorConfig::default();
+            restored.sticky_key.profiles =
+                core::iter::repeat_n(StickyProfile::default(), expected.profiles.len()).collect();
+            storage.read_keymap(&mut data, &mut restored).await.unwrap();
+            assert_eq!(restored.sticky_key, expected);
+
+            let mut compiled = RuntimeBehaviorConfig::default();
+            let (flash, _) = storage.flash.destroy();
+            let mut storage = new_storage_configured(
+                flash,
+                &RuntimeStorageConfig {
+                    clear_layout: true,
+                    ..RuntimeStorageConfig::default()
+                },
+            )
+            .await;
+            let _ = KeyMap::new_from_storage(&mut data, Some(&mut storage), &mut compiled, &positional).await;
+
+            let (flash, _) = storage.flash.destroy();
+            let mut storage = new_storage(flash).await;
+            let mut restored = RuntimeBehaviorConfig::default();
+            storage.read_keymap(&mut data, &mut restored).await.unwrap();
+            assert_eq!(restored.sticky_key, compiled.sticky_key);
+
+            // Reintroducing an index after clear_layout must use its new compiled-in profile.
+            restored.sticky_key.profiles =
+                core::iter::repeat_n(StickyProfile::default(), expected.profiles.len()).collect();
+            let reintroduced = restored.sticky_key.clone();
+            storage.read_keymap(&mut data, &mut restored).await.unwrap();
+            assert_eq!(restored.sticky_key, reintroduced);
+        });
+    }
+
     /// A `clear_layout` boot leaves every macro chunk in flash, so a later save must also
     /// write the chunks it empties, or the next boot loads the defaults' bytes back.
     #[cfg(feature = "host")]
@@ -1025,6 +1153,9 @@ mod tests {
             StorageKey::ActiveBleProfile,
             #[cfg(feature = "_ble")]
             StorageKey::BondInfo(10),
+            StorageKey::UserData(0),
+            #[cfg(feature = "host")]
+            StorageKey::StickyProfile(1),
         ];
         let mut buffer = [0u8; 64];
         for (tag, key) in keys.iter().enumerate() {
@@ -1057,6 +1188,9 @@ mod tests {
             StorageValue::BondInfo(ProfileInfo::default()),
             #[cfg(feature = "_ble")]
             StorageValue::ActiveBleProfile(0),
+            StorageValue::UserData(heapless::Vec::new()),
+            #[cfg(feature = "host")]
+            StorageValue::StickyProfile(Some(StickyProfile::default())),
         ];
         let mut buffer = [0u8; BUFFER_SIZE];
         for (tag, item) in data.iter().enumerate() {
