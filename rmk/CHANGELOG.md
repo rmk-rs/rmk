@@ -13,12 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: `PointingProcessorConfig` gains `acceleration` and `scroll_acceleration`, and `CursorConfig` gains `divisor_x` and `divisor_y`. Struct literals that list every field need the new ones or `..Default::default()`.
 - **BREAKING**: Use bare `#[register_processor]` to run the type's `Runnable`. See [processor migration](https://rmk.rs/docs/migration/v09_v10#processors).
 - **BREAKING**: Keyboard macros are reworked around `MacroOp` lists.
 - **BREAKING**: Bump Rynk protocol version to 0.2: now `GetMacro`/`SetMacro` read and write a whole macro by index, and `BleStatus` gained a `bonded` field, changing its wire format and that of `ConnectionStatus`.
 
 ### Added
 
+- Pointer acceleration in `PointingProcessor` for every pointing device: motion faster than a threshold is scaled up in proportion to its speed, up to a maximum, in cursor mode (`proc_acceleration = { from, max }` in `keyboard.toml`) and scroll mode (`proc_scroll_acceleration`). Off by default.
+- Fractional cursor speed: `CursorConfig::divisor_x`/`divisor_y` divide cursor motion, carrying the remainder between motions, so a cursor slower than the sensor loses no movement and still accelerates.
 - Add timer-only processors and combine polling with resettable deadlines through `#[processor]`. Both TOML and Rust projects implement `DeadlineProcessor::deadline()` and `on_deadline()` directly.
 - Macro operations accept any single action (`WM`, `MO`, `OSM`, ...) without the `vial` feature, and a new `pause_for_release` operation (`MacroOp::PauseForRelease`) runs the rest of the macro when the macro key is released
 - PMW3610 `force_awake` now follows the keyboard's sleep state, ZMK style: the sensor is held in RUN while the keyboard is awake and released to its REST modes when the idle sleep starts. `PointingDriver` gained a default-implemented `set_low_power` hint and `PointingDevice` subscribes to `SleepStateEvent`; each sensor in `keyboard.toml` reserves its subscriber slot automatically.
