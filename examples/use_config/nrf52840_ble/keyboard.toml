@@ -83,11 +83,14 @@ reverse = false
 [ble]
 enabled = true
 # vddh has an internal voltage divider
-battery_adc_pin = "vddh"
 # Or
 # battery_adc_pin = "P0_04"
 # adc_divider_measured = 2000
 # adc_divider_total = 2806
+
+
+[battery]
+battery_adc_pin = "vddh"
 
 [behavior.combo]
 timeout = "150ms"

@@ -8,6 +8,9 @@ use serde_inline_default::serde_inline_default;
 /// Event channel default configuration
 const EVENT_DEFAULT_CONFIG: &str = include_str!("default_config/event_default.toml");
 
+mod battery;
+pub use battery::BatteryTomlConfig;
+
 pub(crate) mod chip;
 pub(crate) mod communication;
 pub mod resolved;
@@ -100,6 +103,8 @@ pub struct KeyboardTomlConfig {
     storage: Option<StorageConfig>,
     /// DFU partition config (embassy-boot)
     dfu: Option<DfuTomlConfig>,
+    /// Battery inputs for a unibody keyboard.
+    pub(crate) battery: Option<BatteryTomlConfig>,
     /// Ble config
     pub(crate) ble: Option<BleConfig>,
     /// Chip-specific configs (e.g., [chip.nrf52840])
@@ -1137,7 +1142,9 @@ pub struct SplitBoardConfig {
     pub input_device: Option<InputDeviceConfig>,
     /// Display config for the split board
     pub display: Option<DisplayConfig>,
-    /// Battery ADC pin for this split board
+    /// Battery inputs local to this split board.
+    pub battery: Option<BatteryTomlConfig>,
+    /// Legacy battery ADC pin for this split board
     pub battery_adc_pin: Option<String>,
     /// User-facing description for this board's Battery Level characteristic
     pub battery_user_description: Option<String>,

@@ -348,16 +348,6 @@ unlock_keys = [[0, 0], [1, 1]]
 [ble]
 # Whether the ble is enabled
 enabled = true
-# BLE related pins, ignore any of them if you don't have
-battery_adc_pin = "vddh"
-# Optional GATT Battery Level name. Defaults to "Central".
-battery_user_description = "Main"
-# If the voltage divider is used for adc, you can use the following two values to define a voltage divider.
-# For example, nice!nano have 806 + 2M resistors, the saadc measures voltage on 2M resistor, so the two values should be set to 2000 and 2806
-# Measured resistance for input adc, it should be less than adc_divider_total
-adc_divider_measured = 2000
-# Total resistance of the full path for input adc
-adc_divider_total = 2806
 # BLE tx power; higher means better signal but more power consumption. nRF52 only, ignored on other chips
 default_tx_power = 0
 # Whether to enable 2M PHY, defaults to true. nRF52 only, ignored on other chips
@@ -366,11 +356,16 @@ use_2m_phy = true
 passkey_entry = false
 # Timeout in seconds for passkey entry, defaults to 120, minimum 30
 passkey_entry_timeout = 120
-# [Deprecated] Pin that reads battery's charging state, `low-active` means the battery is charging when `charge_state.pin` is low
-# Input pin that indicates the charging state
-# charge_state = { pin = "PIN_1", low_active = true }
-# [Deprecated] Output LED pin that blinks when the battery is low
-# charge_led= { pin = "PIN_2", low_active = true }
+# Battery configuration for unibody keyboards; omit this table for split keyboards.
+[battery]
+battery_adc_pin = "P0_05"
+battery_user_description = "Main"
+# Measured resistance to ground / total divider resistance (same units).
+adc_divider_measured = 2000
+adc_divider_total = 2806
+# Optional charging input and LED.
+# charge_state = { pin = "P0_20", low_active = true }
+# charge_led = { pin = "P0_21", low_active = false }
 
 # RMK internal configuration
 [rmk]
@@ -467,8 +462,11 @@ serial = [
 # This address should be a valid BLE random static address, see: https://academy.nordicsemi.com/courses/bluetooth-low-energy-fundamentals/lessons/lesson-2-bluetooth-le-advertising/topic/bluetooth-address/
 ble_addr = [0x18, 0xe2, 0x21, 0x80, 0xc0, 0xc7]
 # Optional battery ADC config for the central (overrides [ble] battery settings)
-battery_adc_pin = "vddh"
 # Optional GATT Battery Level name. Overrides [ble] for the split central.
+
+
+[split.central.battery]
+battery_adc_pin = "vddh"
 battery_user_description = "Left"
 adc_divider_measured = 2000
 adc_divider_total = 2806
@@ -520,16 +518,19 @@ serial = [{ instance = "UART0", tx_pin = "PIN_0", rx_pin = "PIN_1" }]
 # Override the BLE random static address of the peripheral board
 ble_addr = [0x7e, 0xfe, 0x73, 0x9e, 0x66, 0xe3]
 # Optional battery ADC config for this peripheral
-battery_adc_pin = "P0_02"
 # Optional GATT Battery Level name. Defaults to "Peripheral 0", etc.
-battery_user_description = "Right"
-adc_divider_measured = 2000
-adc_divider_total = 2806
 # Peripheral firmware for automatic dfu_split updates (requires the `dfu_split` Cargo feature),
 # path relative to Cargo.toml. See the Bootloader documentation page
 firmware = "./peripheral.bin"
 # "MatchHash" (default) flashes only when the peripheral's firmware differs; "force" flashes at every start
 update_policy = "MatchHash"
+
+
+[split.peripheral.battery]
+battery_adc_pin = "P0_02"
+battery_user_description = "Right"
+adc_divider_measured = 2000
+adc_divider_total = 2806
 
 [split.peripheral.matrix]
 matrix_type = "normal"

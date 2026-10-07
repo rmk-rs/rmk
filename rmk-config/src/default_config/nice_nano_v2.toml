@@ -3,6 +3,9 @@ usb_enable = true
 
 [ble]
 enabled = true
+
+
+[battery]
 battery_adc_pin = "vddh"
 
 [dfu]

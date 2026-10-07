@@ -105,46 +105,27 @@ impl crate::KeyboardTomlConfig {
         } else {
             rmk.split_peripherals_num
         };
+        let central_battery_user_description = self
+            .battery_config(None)?
+            .battery_user_description
+            .unwrap_or_else(|| "Central".into());
+        let mut split_battery_peripheral_ids = Vec::new();
+        let mut split_battery_peripheral_user_descriptions = Vec::new();
         if active_features.contains(&"split")
             && let Some(split) = &self.split
         {
-            for (id, peripheral) in split.peripheral.iter().enumerate() {
-                if peripheral.battery_user_description.is_some() && peripheral.battery_adc_pin.is_none() {
-                    return Err(format!(
-                        "keyboard.toml: [[split.peripheral]] at index {id} requires battery_adc_pin when battery_user_description is set"
-                    ));
+            for id in 0..split.peripheral.len() {
+                let battery = self.battery_config(Some(id))?;
+                if battery.battery_adc_pin.is_some() {
+                    split_battery_peripheral_ids.push(id);
+                    split_battery_peripheral_user_descriptions.push(
+                        battery
+                            .battery_user_description
+                            .unwrap_or_else(|| format!("Peripheral {id}")),
+                    );
                 }
             }
         }
-        let split_battery_peripheral_ids = if active_features.contains(&"split") {
-            match &self.split {
-                Some(split) => split
-                    .peripheral
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(id, peripheral)| peripheral.battery_adc_pin.as_ref().map(|_| id))
-                    .collect(),
-                None => Vec::new(),
-            }
-        } else {
-            Vec::new()
-        };
-        let central_battery_user_description = self
-            .split
-            .as_ref()
-            .and_then(|split| split.central.battery_user_description.clone())
-            .or_else(|| self.ble.as_ref().and_then(|ble| ble.battery_user_description.clone()))
-            .unwrap_or_else(|| "Central".to_string());
-        let split_battery_peripheral_user_descriptions = split_battery_peripheral_ids
-            .iter()
-            .map(|id| {
-                self.split
-                    .as_ref()
-                    .and_then(|split| split.peripheral.get(*id))
-                    .and_then(|peripheral| peripheral.battery_user_description.clone())
-                    .unwrap_or_else(|| format!("Peripheral {id}"))
-            })
-            .collect();
         // Build event channels
         macro_rules! event_channels {
             ($($field:ident),* $(,)?) => {

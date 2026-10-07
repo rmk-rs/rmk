@@ -4,7 +4,7 @@
 
 To enable BLE, add `enabled = true` under the `[ble]` section.
 
-There are several more configs for reading battery level and charging state; they are currently available for nRF52 (SAADC) chips.
+Battery and charging inputs use the same board-local tables across chips. Automatic ADC availability depends on the backend; charging GPIOs and LEDs use the common pipeline.
 
 ```toml
 # Ble configuration
@@ -12,14 +12,6 @@ There are several more configs for reading battery level and charging state; the
 [ble]
 # Whether to enable BLE feature
 enabled = true
-# Optional Battery Level name exposed through GATT. Defaults to "Central".
-battery_user_description = "Main"
-# nRF52 SAADC pin for reading battery level, you can use a pin number or "vddh"
-battery_adc_pin = "vddh"
-# The voltage divider setting for saadc. This setting should be ignored when using "vddh" as the adc pin.
-# For example, nice!nano has 806 + 2M resistors. The saadc measures voltage on the 2M resistor, so the two values should be set to 2000 and 2806
-adc_divider_measured = 2000
-adc_divider_total = 2806
 # Set the BLE tx power; higher means better signal but more power consumption. For nRF52840 the maximum tx power is 8.
 # nRF52 only, ignored on other chips
 default_tx_power = 0
@@ -29,10 +21,15 @@ use_2m_phy = true
 passkey_entry = false
 # Timeout in seconds for passkey entry, defaults to 120
 passkey_entry_timeout = 120
-# [Deprecated] Pin that reads battery's charging state, `low-active` means the battery is charging when `charge_state.pin` is low
-# charge_state = { pin = "PIN_1", low_active = true }
-# [Deprecated] Output LED pin that blinks when the battery is low
-# charge_led= { pin = "PIN_2", low_active = true }
+
+[battery]
+battery_user_description = "Main"
+battery_adc_pin = "P0_05"
+adc_divider_measured = 2000
+adc_divider_total = 2806
+charge_state = { pin = "P0_20", low_active = true }
+charge_led = { pin = "P0_21", low_active = false }
+
 ```
 
 Some legacy BLE adapters cannot connect to devices using 2M PHY at all. For those hosts, enable the `use_1m_phy` Cargo feature of the `rmk` crate, which makes the keyboard use 1M PHY for the host connection.
@@ -70,21 +67,27 @@ For split keyboards, you can configure battery ADC separately for the central an
 
 ```toml
 [split.central]
+
+
+[split.central.battery]
 battery_adc_pin = "P0_01"
 battery_user_description = "Left"
 adc_divider_measured = 2000
 adc_divider_total = 2806
 
 [[split.peripheral]]
+
+[split.peripheral.battery]
 battery_adc_pin = "P0_02"
 battery_user_description = "Right"
 adc_divider_measured = 2000
 adc_divider_total = 2806
+
 ```
 
 Notes:
 
-- If `[split.central]` provides battery ADC settings, they override the top-level `[ble]` battery settings for the central.
+- Each board uses its own battery table; split boards do not inherit `[battery]`.
 - Peripherals do **not** fall back to `[ble]`; to enable peripheral battery reporting, set ADC values per peripheral.
 
 ### Peripheral battery reporting over BLE GATT
@@ -92,11 +95,11 @@ Notes:
 When peripherals are configured to sample their batteries (see above), their levels are forwarded to the central over the split BLE links and re-exposed to the host through standard Battery Service instances (UUID `0x180F`) on the central's GATT server. The host sees one Battery Service instance for:
 
 - the central's own battery level, and
-- each `[[split.peripheral]]` that defines `battery_adc_pin`.
+- each peripheral whose `[split.peripheral.battery]` defines `battery_adc_pin`.
 
 Each peripheral's Battery Service uses its peripheral ID to set the description field in the Characteristic Presentation Format descriptor. Peripheral IDs `0`, `1`, and `2` use the Bluetooth SIG ordinal values `first`, `second`, and `third`, respectively. No host-side configuration is required; any host that already reads the central's Battery Level characteristic can discover the additional instances the same way.
 
-Battery Level characteristics also expose a Characteristic User Description descriptor. The defaults are `Central` for the central and `Peripheral 0`, `Peripheral 1`, and so on for peripherals. Set `battery_user_description` under `[ble]`, `[split.central]`, or an individual `[[split.peripheral]]` to provide a custom name. `[split.central].battery_user_description` overrides `[ble].battery_user_description` for the central.
+Battery Level characteristics also expose a Characteristic User Description descriptor. The defaults are `Central` for the central and `Peripheral 0`, `Peripheral 1`, and so on for peripherals. Set `battery_user_description` in the corresponding battery table to provide a custom name.
 
 The split feature uses trouble-host's default client ATT table size. To reserve more space for client-specific attributes such as CCCDs, set `TROUBLE_HOST_CLIENT_ATT_TABLE_SIZE` in the project environment, for example in `.cargo/config.toml`:
 
@@ -106,3 +109,22 @@ TROUBLE_HOST_CLIENT_ATT_TABLE_SIZE = "128"
 ```
 
 This project-wide override takes precedence over trouble-host Cargo feature settings and can be set to the size required by the enabled services.
+
+## Board battery tables
+
+Use `[battery]` on a unibody keyboard, `[split.central.battery]` on the central,
+and `[split.peripheral.battery]` below the corresponding `[[split.peripheral]]`.
+All three accept `battery_adc_pin`, `adc_divider_measured`, `adc_divider_total`,
+`charge_state`, `charge_led` and `battery_user_description`.
+
+The divider defaults to 1:1; VDDH uses its fixed 1:5 divider. Charger and LED pins
+use `{ pin, low_active }`. An LED requires an ADC or charger input on that board.
+Without ADC input, a charger reports charging state but no percentage.
+Battery inputs run independently of whether BLE is enabled.
+
+A new battery table replaces that board's legacy battery settings as a whole.
+Without one, legacy `[ble]` and flat split battery fields remain accepted.
+Split boards do not inherit the top-level `[battery]` table. Defaults supplied by
+a board preset still apply when a user omits a field; an empty table does not
+erase preset values. Battery names and peripheral Battery Services use the same
+resolved configuration as the devices.

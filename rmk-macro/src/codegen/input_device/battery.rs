@@ -55,7 +55,6 @@ pub(crate) fn expand_battery_devices(
 mod tests {
     use std::path::Path;
 
-    use rmk_config::resolved::hardware::{BoardConfig, CommunicationConfig};
     use rmk_config::{KeyboardTomlConfig, PinConfig};
 
     use crate::codegen::input_device::expand_input_device_config;
@@ -83,25 +82,18 @@ mod tests {
                     pin: "P0_21".into(),
                     low_active: false,
                 });
-                let ble = match &mut hardware.communication {
-                    CommunicationConfig::Ble(ble) | CommunicationConfig::Both(_, ble) => ble,
-                    _ => panic!("expected BLE"),
+                let battery = rmk_config::resolved::hardware::BatteryConfig {
+                    adc: pin.map(|pin| rmk_config::resolved::hardware::BatteryAdcConfig {
+                        pin,
+                        divider_measured: 1,
+                        divider_total: 2,
+                    }),
+                    charge_state: state,
+                    charge_led: led,
                 };
-                ble.battery_adc_pin = None;
-                ble.charge_state = None;
-                ble.charge_led = None;
-                if let BoardConfig::Split(split) = &mut hardware.board {
-                    let board = match side {
-                        Some(id) => &mut split.peripheral[id],
-                        None => &mut split.central,
-                    };
-                    board.battery_adc_pin = pin;
-                    board.charge_state = state;
-                    board.charge_led = led;
-                } else {
-                    ble.battery_adc_pin = pin;
-                    ble.charge_state = state;
-                    ble.charge_led = led;
+                match side {
+                    Some(id) => hardware.peripheral_batteries[id] = battery,
+                    None => hardware.battery = battery,
                 }
                 let (init, devices, processors) = match side {
                     None => expand_input_device_config(&hardware),

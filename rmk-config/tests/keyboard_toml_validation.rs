@@ -555,3 +555,64 @@ charge_led = {{ pin = "P0_21", low_active = false }}
             .contains("charge_led requires battery_adc_pin or charge_state")
     );
 }
+
+#[test]
+fn new_battery_table_replaces_legacy_even_with_ble_disabled() {
+    let path = write_temp_keyboard_toml(
+        "battery-table",
+        &format!(
+            "{MINIMAL_KEYBOARD_TOML}\n{}",
+            r#"
+[ble]
+enabled = false
+battery_adc_pin = "PIN_27"
+adc_divider_total = 9
+charge_state = { pin = "PIN_5", low_active = true }
+[battery]
+battery_adc_pin = "PIN_26"
+adc_divider_total = 2
+"#
+        ),
+    );
+    let config = KeyboardTomlConfig::new_from_toml_path(&path);
+    let hardware = config.hardware().unwrap();
+    let adc = hardware.battery.adc.unwrap();
+    assert_eq!(
+        (adc.pin.as_str(), adc.divider_measured, adc.divider_total),
+        ("PIN_26", 1, 2)
+    );
+    assert!(hardware.battery.charge_state.is_none());
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn split_battery_tables_drive_devices_and_service_ids_together() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy_split_battery.toml");
+    let source = std::fs::read_to_string(fixture).unwrap();
+    let source = format!(
+        "{source}\n[split.central.battery]\ncharge_state = {{ pin = \"P0_20\", low_active = true }}\n[split.peripheral.battery]\nbattery_adc_pin = \"P0_04\"\nadc_divider_total = 2\nbattery_user_description = \"Right\"\n"
+    );
+    let path = write_temp_keyboard_toml("split-battery-table", &source);
+    let config = KeyboardTomlConfig::new_from_toml_path(&path);
+    assert!(config.hardware().unwrap().battery.adc.is_none());
+    let constants = config.build_constants(&["split", "_ble"]).unwrap();
+    assert_eq!(constants.split_battery_peripheral_ids, vec![0]);
+    assert_eq!(constants.split_battery_peripheral_user_descriptions, vec!["Right"]);
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn incomplete_or_ambiguous_battery_tables_are_rejected() {
+    for table in [
+        "adc_divider_total = 2",
+        "charge_led = { pin = \"PIN_5\", low_active = true }",
+        "battery_adc_pin = \"vddh\"",
+    ] {
+        let path = write_temp_keyboard_toml(
+            "bad-battery-table",
+            &format!("{MINIMAL_KEYBOARD_TOML}\n[battery]\n{table}"),
+        );
+        assert!(KeyboardTomlConfig::new_from_toml_path(&path).hardware().is_err());
+        std::fs::remove_file(path).ok();
+    }
+}
