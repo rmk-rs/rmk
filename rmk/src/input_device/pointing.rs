@@ -496,6 +496,39 @@ impl MotionAccumulator {
     }
 }
 
+/// Pointer acceleration for cursor mode. Motion faster than `from_counts_per_s` is
+/// scaled up in proportion to its speed, to at most `max_percent`; slower motion
+/// passes unchanged, so fine positioning keeps its precision while fast moves cover
+/// more ground.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct PointerAcceleration {
+    /// Speed where acceleration starts, in sensor counts per second.
+    pub from_counts_per_s: u16,
+    /// The most motion is scaled up, in percent (250 = 2.5×).
+    pub max_percent: u16,
+}
+
+/// `(dx, dy)`, moved over `dt_ms`, under `accel`. `rest` carries the fractions of a
+/// count between calls.
+fn accelerate(dx: i16, dy: i16, dt_ms: u64, accel: PointerAcceleration, rest: &mut (i64, i64)) -> (i16, i16) {
+    let (dx, dy) = (i64::from(dx), i64::from(dy));
+    let speed = (dx * dx + dy * dy).unsigned_abs().isqrt() * 1000 / dt_ms.max(1);
+    let from = u64::from(accel.from_counts_per_s);
+    let gain = if from == 0 || speed <= from {
+        100
+    } else {
+        (speed * 100 / from).min(u64::from(accel.max_percent.max(100))) as i64
+    };
+    let scale = |d: i64, rest: &mut i64| {
+        let total = d * gain + *rest;
+        let out = total / 100;
+        *rest = total - out * 100;
+        out.clamp(i16::MIN.into(), i16::MAX.into()) as i16
+    };
+    (scale(dx, &mut rest.0), scale(dy, &mut rest.1))
+}
+
 #[derive(Clone)]
 pub struct PointingProcessorConfig {
     /// The id of the PointingDevice this processor handles.
@@ -507,6 +540,8 @@ pub struct PointingProcessorConfig {
     pub invert_y: bool,
     /// Swap X and Y axes (applied to all modes before mode-specific processing)
     pub swap_xy: bool,
+    /// Acceleration in cursor mode, applied before the cursor multiplier. Off when `None`.
+    pub acceleration: Option<PointerAcceleration>,
 }
 
 impl Default for PointingProcessorConfig {
@@ -516,6 +551,7 @@ impl Default for PointingProcessorConfig {
             invert_x: false,
             invert_y: false,
             swap_xy: false,
+            acceleration: None,
         }
     }
 }
@@ -530,6 +566,10 @@ pub struct PointingProcessor<'a> {
     accumulator: MotionAccumulator,
     /// current active mode
     current_mode: PointingMode,
+    /// Fractions of a count that acceleration carries to the next event
+    acceleration_rest: (i64, i64),
+    /// When the previous event arrived, to measure the speed for acceleration
+    last_event_at: Instant,
 }
 
 impl<'a> PointingProcessor<'a> {
@@ -540,6 +580,8 @@ impl<'a> PointingProcessor<'a> {
             config,
             accumulator: MotionAccumulator::default(),
             current_mode: PointingMode::default(),
+            acceleration_rest: (0, 0),
+            last_event_at: Instant::MIN,
         }
     }
 
@@ -586,12 +628,19 @@ impl<'a> PointingProcessor<'a> {
             (x, y) = (y, x);
         }
 
+        let now = Instant::now();
+        let dt_ms = now.saturating_duration_since(self.last_event_at).as_millis();
+        self.last_event_at = now;
+
         let buttons = self.keymap.mouse_buttons();
         match self.current_mode {
             PointingMode::Cursor(_) | PointingMode::Scroll(_) | PointingMode::Sniper(_) => {
                 // modes that generate mouse reports
                 let mouse_report = match self.current_mode {
                     PointingMode::Cursor(cursor_config) => {
+                        if let Some(acceleration) = self.config.acceleration {
+                            (x, y) = accelerate(x, y, dt_ms, acceleration, &mut self.acceleration_rest);
+                        }
                         let out_x = x.saturating_mul(cursor_config.multiplier_x as i16);
                         let out_y = y.saturating_mul(cursor_config.multiplier_y as i16);
                         let out_x = if cursor_config.invert_x { -out_x } else { out_x };
@@ -1448,6 +1497,55 @@ mod tests {
     #[test]
     fn test_pointing_mode_default_is_cursor() {
         assert_eq!(PointingMode::default(), PointingMode::Cursor(CursorConfig::default()));
+    }
+
+    // === Acceleration tests ===
+
+    /// From 1000 counts per second, up to 2.5×.
+    const ACCEL: PointerAcceleration = PointerAcceleration {
+        from_counts_per_s: 1000,
+        max_percent: 250,
+    };
+
+    #[test]
+    fn test_acceleration_leaves_slow_motion_unchanged() {
+        let mut rest = (0, 0);
+        // 5 counts in 10 ms is 500 counts/s, below 1000.
+        assert_eq!(accelerate(5, -3, 10, ACCEL, &mut rest), (5, -3));
+        assert_eq!(rest, (0, 0));
+    }
+
+    #[test]
+    fn test_acceleration_gains_in_proportion_to_speed_up_to_max() {
+        let mut rest = (0, 0);
+        // 2000 counts/s: twice the threshold, twice the motion.
+        assert_eq!(accelerate(20, 0, 10, ACCEL, &mut rest), (40, 0));
+        // 10000 counts/s would be 10×, capped at 2.5×.
+        assert_eq!(accelerate(100, 0, 10, ACCEL, &mut rest), (250, 0));
+    }
+
+    #[test]
+    fn test_acceleration_carries_fractions_over() {
+        let mut rest = (0, 0);
+        // 1500 counts/s: 1.5 × 15 = 22.5, then 22.5 + 0.5 left over = 23.
+        assert_eq!(accelerate(15, 0, 10, ACCEL, &mut rest), (22, 0));
+        assert_eq!(accelerate(15, 0, 10, ACCEL, &mut rest), (23, 0));
+    }
+
+    #[test]
+    fn test_acceleration_after_idle_is_slow() {
+        let mut rest = (0, 0);
+        // The first event after a pause spans the whole pause, so it is not accelerated.
+        assert_eq!(accelerate(30, 0, 5000, ACCEL, &mut rest), (30, 0));
+    }
+
+    #[test]
+    fn test_acceleration_saturates_instead_of_overflowing() {
+        let mut rest = (0, 0);
+        assert_eq!(
+            accelerate(i16::MAX, i16::MIN, 1, ACCEL, &mut rest),
+            (i16::MAX, i16::MIN)
+        );
     }
 
     #[test]

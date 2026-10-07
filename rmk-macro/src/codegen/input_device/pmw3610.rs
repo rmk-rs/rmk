@@ -1,7 +1,7 @@
 use quote::{format_ident, quote};
 use rmk_config::resolved::hardware::{ChipModel, ChipSeries, Pmw3610Config};
 
-use super::Initializer;
+use super::{Initializer, expand_pointing_acceleration};
 
 /// Expand PMW3610 device configuration.
 /// Returns (device initializers, processor initializers)
@@ -71,6 +71,7 @@ pub(crate) fn expand_pmw3610_device(
         let proc_invert_x = sensor.proc_invert_x;
         let proc_invert_y = sensor.proc_invert_y;
         let proc_swap_xy = sensor.proc_swap_xy;
+        let proc_acceleration = expand_pointing_acceleration(&sensor.proc_acceleration);
         let force_awake = sensor.force_awake;
         let smart_mode = sensor.smart_mode;
         let report_hz: u16 = sensor.report_hz;
@@ -167,6 +168,7 @@ pub(crate) fn expand_pmw3610_device(
                 invert_x: #proc_invert_x,
                 invert_y: #proc_invert_y,
                 swap_xy: #proc_swap_xy,
+                acceleration: #proc_acceleration,
                 ..Default::default()
             };
 

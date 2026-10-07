@@ -1311,6 +1311,19 @@ pub struct Pmw3610Config {
     /// Swap X and Y axes
     #[serde(default)]
     pub proc_swap_xy: bool,
+    /// Cursor acceleration in the PointingProcessor. Off unless configured.
+    pub proc_acceleration: Option<PointingAccelerationConfig>,
+}
+
+/// Pointer acceleration for cursor mode: motion faster than `from` is scaled up in
+/// proportion to its speed, up to `max`; slower motion passes unchanged.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PointingAccelerationConfig {
+    /// Speed where acceleration starts, in sensor counts per second.
+    pub from: u16,
+    /// The most motion is scaled up, in percent (250 = 2.5×).
+    pub max: u16,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1349,6 +1362,8 @@ pub struct Pmw33xxConfig {
     // Swap X and Y axes
     #[serde(default)]
     pub proc_swap_xy: bool,
+    /// Cursor acceleration in the PointingProcessor. Off unless configured.
+    pub proc_acceleration: Option<PointingAccelerationConfig>,
     /// Report rate (Hz). Motion will be accumulated and emitted at this rate.
     #[serde(default = "default_pointing_report_hz")]
     pub report_hz: u16,
@@ -1378,6 +1393,8 @@ pub struct Iqs5xxConfig {
     /// Swap X and Y in the PointingProcessor.
     #[serde(default)]
     pub proc_swap_xy: bool,
+    /// Cursor acceleration in the PointingProcessor. Off unless configured.
+    pub proc_acceleration: Option<PointingAccelerationConfig>,
 }
 
 /// I²C bus configuration for the IQS5xx. Distinct from the generic `I2cConfig`

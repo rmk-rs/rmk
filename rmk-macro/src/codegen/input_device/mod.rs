@@ -6,6 +6,7 @@ use pmw33xx::expand_pmw33xx_device;
 use pmw3610::expand_pmw3610_device;
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
+use rmk_config::PointingAccelerationConfig;
 use rmk_config::resolved::Hardware;
 use rmk_config::resolved::hardware::{BoardConfig, InputDeviceConfig, UniBodyConfig};
 
@@ -20,6 +21,21 @@ pub(crate) mod pmw3610;
 pub(crate) struct Initializer {
     pub(crate) initializer: TokenStream,
     pub(crate) var_name: Ident,
+}
+
+/// Expands `proc_acceleration` into the `PointingProcessorConfig::acceleration` value.
+pub(crate) fn expand_pointing_acceleration(
+    acceleration: &Option<PointingAccelerationConfig>,
+) -> TokenStream {
+    match acceleration {
+        Some(PointingAccelerationConfig { from, max }) => quote! {
+            Some(::rmk::input_device::pointing::PointerAcceleration {
+                from_counts_per_s: #from,
+                max_percent: #max,
+            })
+        },
+        None => quote! { None },
+    }
 }
 
 /// Expands the input device configuration.
