@@ -303,6 +303,12 @@ pub struct CursorConfig {
     pub multiplier_x: u8,
     /// Multiplier for Y axis. Higher = more output per unit of motion. 0 disables Y.
     pub multiplier_y: u8,
+    /// Divisor for X axis, so the cursor can be slower than the sensor, e.g. 2/3 with
+    /// `multiplier_x: 2, divisor_x: 3`. Fractions carry over to the next motion. 0
+    /// disables X.
+    pub divisor_x: u8,
+    /// Divisor for Y axis. 0 disables Y.
+    pub divisor_y: u8,
     /// Invert X axis movement.
     pub invert_x: bool,
     /// Invert Y axis movement.
@@ -314,6 +320,8 @@ impl Default for CursorConfig {
         Self {
             multiplier_x: 1,
             multiplier_y: 1,
+            divisor_x: 1,
+            divisor_y: 1,
             invert_x: false,
             invert_y: false,
         }
@@ -415,7 +423,20 @@ impl Default for SniperConfig {
     }
 }
 
-/// Accumulator for sub-unit motion deltas (used in Scroll and Sniper modes)
+/// `d * multiplier / divisor`, saturating, with `remainder` carrying the fraction
+/// to the next call. A divisor of 0 disables the axis.
+fn scale_motion(d: i16, multiplier: u8, divisor: u8, remainder: &mut i16) -> i16 {
+    if divisor == 0 {
+        *remainder = 0;
+        return 0;
+    }
+    let total = i32::from(d) * i32::from(multiplier) + i32::from(*remainder);
+    let out = total / i32::from(divisor);
+    *remainder = (total - out * i32::from(divisor)) as i16;
+    out.clamp(i16::MIN.into(), i16::MAX.into()) as i16
+}
+
+/// Accumulator for sub-unit motion deltas (used in Cursor, Scroll and Sniper modes)
 ///
 /// When dividing motion by a divisor, small movements would be lost.
 /// The accumulator keeps track of the remainder so sub-unit deltas
@@ -648,8 +669,23 @@ impl<'a> PointingProcessor<'a> {
                         if let Some(acceleration) = self.config.acceleration {
                             (x, y) = accelerate(x, y, dt_ms, acceleration, &mut self.acceleration_rest);
                         }
-                        let out_x = x.saturating_mul(cursor_config.multiplier_x as i16);
-                        let out_y = y.saturating_mul(cursor_config.multiplier_y as i16);
+                        let accumulator = &mut self.accumulator;
+                        let out_x = scale_motion(
+                            x,
+                            cursor_config.multiplier_x,
+                            cursor_config.divisor_x,
+                            &mut accumulator.remainder_x,
+                        );
+                        let out_y = scale_motion(
+                            y,
+                            cursor_config.multiplier_y,
+                            cursor_config.divisor_y,
+                            &mut accumulator.remainder_y,
+                        );
+                        // Motion too small to move the cursor yet, as in sniper mode.
+                        if out_x == 0 && out_y == 0 && (x, y) != (0, 0) {
+                            return;
+                        }
                         let out_x = if cursor_config.invert_x { -out_x } else { out_x };
                         let out_y = if cursor_config.invert_y { -out_y } else { out_y };
                         MouseReport {
@@ -1507,6 +1543,24 @@ mod tests {
     #[test]
     fn test_pointing_mode_default_is_cursor() {
         assert_eq!(PointingMode::default(), PointingMode::Cursor(CursorConfig::default()));
+    }
+
+    // === Cursor speed ===
+
+    #[test]
+    fn test_cursor_speed_scales_with_fractions_carried_over() {
+        let mut rest = 0;
+        // 8/27 of 10 is 2.96: 2, then 2.96 + 0.96 = 3.92: 3.
+        assert_eq!(scale_motion(10, 8, 27, &mut rest), 2);
+        assert_eq!(scale_motion(10, 8, 27, &mut rest), 3);
+        // Negative motion carries its own fraction the other way.
+        let mut rest = 0;
+        assert_eq!(scale_motion(-10, 8, 27, &mut rest), -2);
+        // 1/1 passes motion through unchanged, and a divisor of 0 stops the axis.
+        assert_eq!(scale_motion(7, 1, 1, &mut 0), 7);
+        assert_eq!(scale_motion(7, 1, 0, &mut 0), 0);
+        // Large accelerated motion saturates instead of overflowing.
+        assert_eq!(scale_motion(i16::MAX, 8, 1, &mut 0), i16::MAX);
     }
 
     // === Acceleration tests ===

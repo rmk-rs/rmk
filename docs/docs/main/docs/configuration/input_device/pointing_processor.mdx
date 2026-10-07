@@ -21,12 +21,16 @@ Maps X/Y deltas directly to mouse cursor movement with optional scaling.
 rmk::input_device::pointing::CursorConfig {
     multiplier_x: 1, // scales X delta. 0 disables X.
     multiplier_y: 1, // scales Y delta. 0 disables Y.
+    divisor_x: 1,    // divides X motion. 0 disables X.
+    divisor_y: 1,    // divides Y motion. 0 disables Y.
     invert_x: false,
     invert_y: false,
 }
 ```
 
-Each sample produces `output = delta * multiplier`. Set an axis multiplier to `0` to disable that axis.
+Each sample produces `output = delta * multiplier / divisor`, keeping the remainder for the next sample as [scroll mode](#scroll) does, so a cursor slower than the sensor, such as `multiplier: 2, divisor: 3`, loses no movement. Set an axis multiplier or divisor to `0` to disable that axis.
+
+Cursor mode can also accelerate: `PointingProcessorConfig::acceleration`, or `proc_acceleration` in `keyboard.toml`, scales up motion faster than a threshold before the multiplier and divisor apply, so a slow, precise cursor still crosses the screen with a quick move.
 
 ### Scroll
 
