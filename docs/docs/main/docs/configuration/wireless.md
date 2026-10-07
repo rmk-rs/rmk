@@ -123,6 +123,13 @@ battery_user_description = "Right"
 
 For an existing configuration with battery fields under `[ble]` or directly under a split board, see [Migrate battery configuration](../migration/v09_v10#battery-configuration-tables).
 
+### RP2040 battery input
+
+RP2040 accepts an ADC-capable pin such as `PIN_26` in the board's battery table.
+Automatic conversion assumes a 3.3 V ADC reference. Set the external divider
+from your schematic; use a custom Rust millivolt reader for another reference.
+Failed ADC reads are skipped and retried at the next polling interval.
+
 ### Peripheral battery reporting over BLE GATT
 
 When peripherals are configured to sample their batteries (see above), their levels are forwarded to the central over the split BLE links and re-exposed to the host through standard Battery Service instances (UUID `0x180F`) on the central's GATT server. The host sees one Battery Service instance for:

@@ -120,6 +120,31 @@ pub(crate) fn expand_adc_device(
                 (Vec::new(), Vec::new())
             }
         }
+        ChipSeries::Rp2040 => {
+            let Some(adc) = battery_adc else {
+                return (Vec::new(), Vec::new());
+            };
+            let pin = format_ident!("{}", adc.pin);
+            (
+                vec![Initializer {
+                    initializer: quote! {
+                        let mut adc_device = {
+                            use ::embassy_rp::adc::{Adc, Channel, Config, InterruptHandler};
+                            ::embassy_rp::bind_interrupts!(struct BatteryAdcIrqs {
+                                ADC_IRQ_FIFO => InterruptHandler;
+                            });
+                            let mut adc = Adc::new(p.ADC, BatteryAdcIrqs, Config::default());
+                            let mut pin = Channel::new_pin(p.#pin, ::embassy_rp::gpio::Pull::None);
+                            ::rmk::input_device::adc::BatteryAdc::new(async move || {
+                                adc.read(&mut pin).await.ok().map(|raw| (u32::from(raw) * 3300 / 4096) as u16)
+                            }, ::rmk::embassy_time::Duration::from_secs(30))
+                        };
+                    },
+                    var_name: format_ident!("adc_device"),
+                }],
+                Vec::new(),
+            )
+        }
         _ => {
             assert!(
                 battery_adc.is_none(),

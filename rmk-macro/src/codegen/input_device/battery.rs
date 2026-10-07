@@ -64,6 +64,7 @@ mod tests {
     fn every_board_assembles_one_processor_for_either_battery_source() {
         for (example, side) in [
             ("nrf52840_ble", None),
+            ("rp2040", None),
             ("nrf52840_ble_split", None),
             ("nrf52840_ble_split", Some(0)),
         ] {
@@ -73,13 +74,30 @@ mod tests {
                 let mut hardware = KeyboardTomlConfig::new_from_toml_path(&path)
                     .hardware()
                     .unwrap();
-                let pin = adc.then(|| "P0_05".to_string());
+                let pin = adc.then(|| {
+                    if example == "rp2040" {
+                        "PIN_26"
+                    } else {
+                        "P0_05"
+                    }
+                    .to_string()
+                });
                 let state = charging.then(|| PinConfig {
-                    pin: "P0_20".into(),
+                    pin: if example == "rp2040" {
+                        "PIN_10"
+                    } else {
+                        "P0_20"
+                    }
+                    .into(),
                     low_active: true,
                 });
                 let led = (adc || charging).then(|| PinConfig {
-                    pin: "P0_21".into(),
+                    pin: if example == "rp2040" {
+                        "PIN_11"
+                    } else {
+                        "P0_21"
+                    }
+                    .into(),
                     low_active: false,
                 });
                 let battery = rmk_config::resolved::hardware::BatteryConfig {
