@@ -133,11 +133,11 @@ pub(crate) fn expand_adc_device(
                             ::embassy_rp::bind_interrupts!(struct BatteryAdcIrqs {
                                 ADC_IRQ_FIFO => InterruptHandler;
                             });
-                            let mut adc = Adc::new(p.ADC, BatteryAdcIrqs, Config::default());
-                            let mut pin = Channel::new_pin(p.#pin, ::embassy_rp::gpio::Pull::None);
-                            ::rmk::input_device::adc::BatteryAdc::new(async move || {
-                                adc.read(&mut pin).await.ok().map(|raw| (u32::from(raw) * 3300 / 4096) as u16)
-                            }, ::rmk::embassy_time::Duration::from_secs(30))
+                            let adc = Adc::new(p.ADC, BatteryAdcIrqs, Config::default());
+                            let pin = Channel::new_pin(p.#pin, ::embassy_rp::gpio::Pull::None);
+                            ::rmk::input_device::adc::rp2040::Rp2040BatteryAdc::new(
+                                adc, pin, ::rmk::embassy_time::Duration::from_secs(30),
+                            )
                         };
                     },
                     var_name: format_ident!("adc_device"),
