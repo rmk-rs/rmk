@@ -123,6 +123,14 @@ battery_user_description = "Right"
 
 For an existing configuration with battery fields under `[ble]` or directly under a split board, see [Migrate battery configuration](../migration/v09_v10#battery-configuration-tables).
 
+### ESP32 battery input
+
+Supported ESP32 boards use calibrated ADC1 readings. Set an ADC1-capable GPIO
+and the board's divider in its battery table. The radio is initialized before
+RMK uses its RNG; when measuring a battery, ADC1 is reserved for measurement
+rather than the optional SAR-ADC entropy source. This automatic setup uses the
+BLE backend; custom radio shutdown or initialization needs its own entropy policy.
+
 ### Peripheral battery reporting over BLE GATT
 
 When peripherals are configured to sample their batteries (see above), their levels are forwarded to the central over the split BLE links and re-exposed to the host through standard Battery Service instances (UUID `0x180F`) on the central's GATT server. The host sees one Battery Service instance for:
