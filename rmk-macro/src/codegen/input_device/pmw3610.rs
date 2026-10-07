@@ -1,7 +1,7 @@
 use quote::{format_ident, quote};
 use rmk_config::resolved::hardware::{ChipModel, ChipSeries, Pmw3610Config};
 
-use super::{expand_pointing_acceleration, Initializer};
+use super::{Initializer, expand_pointing_acceleration};
 
 /// Expand PMW3610 device configuration.
 /// Returns (device initializers, processor initializers)

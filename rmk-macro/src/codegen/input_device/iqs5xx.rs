@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use rmk_config::resolved::hardware::{ChipModel, ChipSeries, Iqs5xxConfig};
 
-use super::{expand_pointing_acceleration, Initializer};
+use super::{Initializer, expand_pointing_acceleration};
 
 /// Expand IQS5xx device configuration.
 /// Returns (device initializers, processor initializers).
