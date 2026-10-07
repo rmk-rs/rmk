@@ -23,7 +23,7 @@ pub(crate) struct Initializer {
     pub(crate) var_name: Ident,
 }
 
-/// Expands `proc_acceleration` into the `PointingProcessorConfig::acceleration` value.
+/// Expands an `acceleration` or `scroll_acceleration` table from `keyboard.toml` into a `PointerAcceleration`.
 pub(crate) fn expand_pointing_acceleration(
     acceleration: &Option<PointingAccelerationConfig>,
 ) -> TokenStream {

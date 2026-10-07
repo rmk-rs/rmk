@@ -54,9 +54,9 @@ rdy = "PIN_15"
 # sensor counts per second is scaled up in proportion to its speed, to at most
 # `max` percent. Slower motion passes unchanged. Counts depend on the sensor's
 # resolution, so retune `from` after changing it.
-# proc_acceleration = { from = 1500, max = 250 }
+# acceleration = { from = 1500, max = 250 }
 # The same for scroll mode, applied before the scroll divisor.
-# proc_scroll_acceleration = { from = 1500, max = 300 }
+# scroll_acceleration = { from = 1500, max = 300 }
 ```
 
 ### Split

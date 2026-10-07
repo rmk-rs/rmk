@@ -30,7 +30,7 @@ rmk::input_device::pointing::CursorConfig {
 
 Each sample produces `output = delta * multiplier / divisor`, keeping the remainder for the next sample as [scroll mode](#scroll) does, so a cursor slower than the sensor, such as `multiplier: 2, divisor: 3`, loses no movement. Set an axis multiplier or divisor to `0` to disable that axis.
 
-Cursor mode can also accelerate: `PointingProcessorConfig::acceleration`, or `proc_acceleration` in `keyboard.toml`, scales up motion faster than a threshold before the multiplier and divisor apply, so a slow, precise cursor still crosses the screen with a quick move.
+Cursor mode can also accelerate: `PointingProcessorConfig::acceleration`, or `acceleration` in `keyboard.toml`, scales up motion faster than a threshold before the multiplier and divisor apply, so a slow, precise cursor still crosses the screen with a quick move.
 
 ### Scroll
 
