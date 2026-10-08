@@ -125,7 +125,7 @@ For an existing configuration with battery fields under `[ble]` or directly unde
 
 ### ESP32 battery input
 
-Set `battery_adc_pin` to an ADC1-capable GPIO for your chip and set the divider values to match your board. RMK uses calibrated voltage readings and samples every 30 seconds.
+Set `battery_adc_pin` to an ADC1-capable GPIO for your chip and set the divider values to match your board. RMK samples continuously using calibrated voltage readings.
 
 For an ESP32-C3 unibody board with a 1:2 divider:
 
