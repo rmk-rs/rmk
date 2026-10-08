@@ -181,12 +181,7 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitWriter for BleSplitPeripheralDrive
 /// and before any advertising, since the flag only applies to links opened after
 /// it is set.
 #[cfg(feature = "subrating")]
-async fn init_subrating_host_feature<
-    C: Controller
-        + ControllerCmdSync<LeSetHostFeature>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetDefaultPhy>,
->(
+async fn init_subrating_host_feature<C: Controller + ControllerCmdSync<LeSetHostFeature>>(
     stack: &Stack<'_, C, impl PacketPool>,
 ) {
     const CONN_SUBRATING_HOST_BIT: u8 = 38;

@@ -1,4 +1,3 @@
-#[cfg(feature = "_ble")]
 #[cfg(all(feature = "_ble", feature = "subrating"))]
 use bt_hci::cmd::le::LeSetHostFeature;
 #[cfg(feature = "_ble")]

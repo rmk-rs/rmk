@@ -35,8 +35,18 @@ passkey_entry_timeout = 120
 # charge_led= { pin = "PIN_2", low_active = true }
 ```
 
-Some legacy BLE adapters cannot connect to devices using 2M PHY at all. For those hosts, enable the `use_1m_phy` Cargo feature of the `rmk` crate, which makes the keyboard use 1M PHY for the host connection.
-This only affects host connections. Split and dongle links follow `[ble].use_2m_phy`. Setting it to false selects 1M for every role. Both peers must support 2M to negotiate it.
+### PHY preference
+
+`use_2m_phy` controls the preferred BLE data rate for host, split, and dongle connections on every BLE backend. It defaults to `true`. A connection can use 2M only when both devices support it; controllers without 2M support use 1M.
+
+To request 1M for all connections:
+
+```toml
+[ble]
+use_2m_phy = false
+```
+
+For a legacy host adapter that cannot connect with 2M enabled, use the `use_1m_phy` Cargo feature to request 1M for host connections only. Split and dongle connections still follow `use_2m_phy`.
 
 ### Passkey entry
 

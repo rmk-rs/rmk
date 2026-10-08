@@ -786,7 +786,7 @@ async fn disconnect(conn: &GattConnection<'_, '_, DefaultPacketPool>) {
 pub(crate) async fn set_conn_params<
     'a,
     'b,
-    C: Controller + ControllerCmdSync<LeReadLocalSupportedFeatures> + ControllerCmdSync<LeSetDefaultPhy>,
+    C: Controller + ControllerCmdSync<LeReadLocalSupportedFeatures>,
     P: PacketPool,
 >(
     stack: &Stack<'_, C, P>,

@@ -405,17 +405,12 @@ async fn run_central_manager_task<
 ) -> Result<(), BleHostError<C::Error>> {
     let client = GattClient::<C, P, 10>::new(stack, conn).await?;
 
-    // Apply the same preference used for host and dongle links.
-    update_ble_phy(
-        stack,
-        conn,
-        if crate::BLE_USE_2M_PHY {
-            PhyKind::Le2M
-        } else {
-            PhyKind::Le1M
-        },
-    )
-    .await;
+    let phy = if crate::BLE_USE_2M_PHY {
+        PhyKind::Le2M
+    } else {
+        PhyKind::Le1M
+    };
+    update_ble_phy(stack, conn, phy).await;
 
     info!("Updating connection parameters for peripheral");
     update_conn_params(stack, conn, &default_split_conn_params()).await;
