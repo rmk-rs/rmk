@@ -11,25 +11,18 @@ use crate::event::BatteryAdcEvent;
 pub struct Rp2040BatteryAdc<'d> {
     adc: Adc<'d, Async>,
     channel: Channel<'d>,
-    retry_interval: Duration,
+    interval: Duration,
 }
 
 impl<'d> Rp2040BatteryAdc<'d> {
-    /// Creates an input device that waits `retry_interval` before retrying a failed read.
+    /// Creates an input device that waits `interval` before retrying a failed read.
     ///
     /// # Panics
     ///
-    /// Panics if `retry_interval` is zero.
-    pub fn new(adc: Adc<'d, Async>, channel: Channel<'d>, retry_interval: Duration) -> Self {
-        assert!(
-            retry_interval.as_ticks() > 0,
-            "battery ADC retry interval must be nonzero"
-        );
-        Self {
-            adc,
-            channel,
-            retry_interval,
-        }
+    /// Panics if `interval` is zero.
+    pub fn new(adc: Adc<'d, Async>, channel: Channel<'d>, interval: Duration) -> Self {
+        assert!(interval.as_ticks() > 0, "battery ADC retry interval must be nonzero");
+        Self { adc, channel, interval }
     }
 
     async fn read_battery_adc_event(&mut self) -> BatteryAdcEvent {
@@ -41,7 +34,7 @@ impl<'d> Rp2040BatteryAdc<'d> {
                 }
                 Err(_) => {
                     warn!("Battery ADC read failed");
-                    Timer::after(self.retry_interval).await;
+                    Timer::after(self.interval).await;
                 }
             }
         }
