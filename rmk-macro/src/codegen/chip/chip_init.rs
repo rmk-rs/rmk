@@ -230,15 +230,15 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
         }
         ChipSeries::Esp32 => {
             let ble_addr = get_ble_addr(hardware, peripheral_id);
-            let battery_adc = hardware
-                .battery_config(peripheral_id)
-                .expect("invalid battery config")
-                .adc
-                .is_some();
-            let entropy_source = if battery_adc {
-                quote! { let battery_adc1 = p.ADC1; }
-            } else {
+            let battery = match peripheral_id {
+                Some(id) => &hardware.peripheral_batteries[id],
+                None => &hardware.battery,
+            };
+            // Battery measurement and the optional ADC entropy source both need ADC1.
+            let adc_entropy_init = if battery.adc.is_none() {
                 quote! { let _trng_source = ::esp_hal::rng::TrngSource::new(p.RNG, p.ADC1); }
+            } else {
+                quote! {}
             };
             quote! {
                 ::esp_println::logger::init_logger_from_env();
@@ -246,7 +246,7 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                 ::esp_alloc::heap_allocator!(size: 72 * 1024);
                 let timg0 = ::esp_hal::timer::timg::TimerGroup::new(p.TIMG0);
                 ::esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
-                #entropy_source
+                #adc_entropy_init
                 let connector = ::esp_radio::ble::controller::BleConnector::new(p.BT, Default::default()).unwrap();
                 let ble_controller: ::bt_hci::controller::ExternalController<_, 64> = ::bt_hci::controller::ExternalController::new(connector);
                 let ble_addr = #ble_addr;

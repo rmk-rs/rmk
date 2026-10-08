@@ -125,11 +125,20 @@ For an existing configuration with battery fields under `[ble]` or directly unde
 
 ### ESP32 battery input
 
-Supported ESP32 boards use calibrated ADC1 readings. Set an ADC1-capable GPIO
-and the board's divider in its battery table. The radio is initialized before
-RMK uses its RNG; when measuring a battery, ADC1 is reserved for measurement
-rather than the optional SAR-ADC entropy source. This automatic setup uses the
-BLE backend; custom radio shutdown or initialization needs its own entropy policy.
+Set `battery_adc_pin` to an ADC1-capable GPIO for your chip and set the divider values to match your board. RMK uses calibrated voltage readings and samples every 30 seconds.
+
+For an ESP32-C3 unibody board with a 1:2 divider:
+
+```toml
+[battery]
+battery_adc_pin = "GPIO0"
+adc_divider_measured = 1
+adc_divider_total = 2
+```
+
+For a split board, put these fields in its central or peripheral battery table. GPIO numbering and ADC support vary by chip; the pin in this example is for ESP32-C3.
+
+Battery measurement reserves ADC1. This configuration requires RMK's ESP32 BLE initialization, which enables the radio before using the hardware random-number generator.
 
 ### Peripheral battery reporting over BLE GATT
 
