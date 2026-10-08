@@ -264,8 +264,7 @@ fn draw_battery_icon<D: DrawTarget<Color = BinaryColor>>(
     // Fill bars (bottom-up)
     let bars: i32 = match *battery {
         BatteryStatus::Available { level: Some(pct), .. } => ((pct as i32 * NUM_BARS) + 99) / 100,
-        BatteryStatus::Available { level: None, .. } => NUM_BARS,
-        BatteryStatus::Unavailable => 0,
+        _ => 0,
     };
 
     for i in 0..bars {
@@ -296,7 +295,7 @@ fn draw_battery_icon<D: DrawTarget<Color = BinaryColor>>(
                 level: None,
             } => write!(label, "CHG").ok(),
             BatteryStatus::Available { level: Some(pct), .. } => write!(label, "{}%", pct).ok(),
-            BatteryStatus::Available { level: None, .. } => write!(label, "FULL").ok(),
+            BatteryStatus::Available { level: None, .. } => write!(label, "UNK").ok(),
             BatteryStatus::Unavailable => write!(label, "N/A").ok(),
         };
 
