@@ -125,10 +125,18 @@ For an existing configuration with battery fields under `[ble]` or directly unde
 
 ### RP2040 battery input
 
-RP2040 accepts an ADC-capable pin such as `PIN_26` in the board's battery table.
-Automatic conversion assumes a 3.3 V ADC reference. Set the external divider
-from your schematic; use a custom Rust millivolt reader for another reference.
-Failed ADC reads are skipped and retried at the next polling interval.
+Set `battery_adc_pin` to an ADC-capable pin, such as `PIN_26`, and set the divider values to match your board. RP2040 voltage measurement assumes a 3.3 V ADC reference.
+
+For a unibody board with a 1:2 divider:
+
+```toml
+[battery]
+battery_adc_pin = "PIN_26"
+adc_divider_measured = 1
+adc_divider_total = 2
+```
+
+For a split board, put these fields in its central or peripheral battery table. RMK samples every 30 seconds. If a read fails, it keeps the previous reading and tries again at the next interval. Boards with a different ADC reference need a custom Rust reader that publishes ADC input millivolts.
 
 ### Peripheral battery reporting over BLE GATT
 
