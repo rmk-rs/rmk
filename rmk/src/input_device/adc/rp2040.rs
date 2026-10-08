@@ -11,39 +11,38 @@ use crate::event::BatteryAdcEvent;
 pub struct Rp2040BatteryAdc<'d> {
     adc: Adc<'d, Async>,
     channel: Channel<'d>,
-    interval: Duration,
-    first_read: bool,
+    retry_interval: Duration,
 }
 
 impl<'d> Rp2040BatteryAdc<'d> {
-    /// Creates an input device that samples immediately, then waits `interval` between attempts.
+    /// Creates an input device that waits `retry_interval` before retrying a failed read.
     ///
     /// # Panics
     ///
-    /// Panics if `interval` is zero.
-    pub fn new(adc: Adc<'d, Async>, channel: Channel<'d>, interval: Duration) -> Self {
-        assert!(interval.as_ticks() > 0, "battery ADC interval must be nonzero");
+    /// Panics if `retry_interval` is zero.
+    pub fn new(adc: Adc<'d, Async>, channel: Channel<'d>, retry_interval: Duration) -> Self {
+        assert!(
+            retry_interval.as_ticks() > 0,
+            "battery ADC retry interval must be nonzero"
+        );
         Self {
             adc,
             channel,
-            interval,
-            first_read: true,
+            retry_interval,
         }
     }
 
     async fn read_battery_adc_event(&mut self) -> BatteryAdcEvent {
         loop {
-            if self.first_read {
-                self.first_read = false;
-            } else {
-                Timer::after(self.interval).await;
-            }
             match self.adc.read(&mut self.channel).await {
                 Ok(raw) => {
                     let input_mv = (u32::from(raw) * 3300 / 4096) as u16;
                     return BatteryAdcEvent(input_mv);
                 }
-                Err(_) => warn!("Battery ADC read failed"),
+                Err(_) => {
+                    warn!("Battery ADC read failed");
+                    Timer::after(self.retry_interval).await;
+                }
             }
         }
     }
