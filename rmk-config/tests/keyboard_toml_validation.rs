@@ -587,12 +587,54 @@ adc_divider_total = 2
 
 #[test]
 fn split_battery_tables_drive_devices_and_service_ids_together() {
-    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy_split_battery.toml");
-    let source = std::fs::read_to_string(fixture).unwrap();
-    let source = format!(
-        "{source}\n[split.central.battery]\ncharge_state = {{ pin = \"P0_20\", low_active = true }}\n[split.peripheral.battery]\nbattery_adc_pin = \"P0_04\"\nadc_divider_total = 2\nbattery_user_description = \"Right\"\n"
+    let path = write_temp_keyboard_toml(
+        "split-battery-table",
+        r#"
+[keyboard]
+name = "Legacy battery fixture"
+vendor_id = 1
+product_id = 1
+chip = "nrf52840"
+
+[ble]
+enabled = true
+
+[layout]
+rows = 1
+cols = 2
+
+[split]
+connection = "ble"
+
+[split.central]
+rows = 1
+cols = 1
+row_offset = 0
+col_offset = 0
+battery_adc_pin = "P0_05"
+adc_divider_measured = 2000
+adc_divider_total = 2806
+matrix = { row_pins = ["P0_01"], col_pins = ["P0_02"] }
+
+[[split.peripheral]]
+rows = 1
+cols = 1
+row_offset = 0
+col_offset = 1
+battery_adc_pin = "P0_05"
+adc_divider_measured = 2000
+adc_divider_total = 2806
+matrix = { row_pins = ["P0_01"], col_pins = ["P0_02"] }
+
+[split.central.battery]
+charge_state = { pin = "P0_20", low_active = true }
+
+[split.peripheral.battery]
+battery_adc_pin = "P0_04"
+adc_divider_total = 2
+battery_user_description = "Right"
+"#,
     );
-    let path = write_temp_keyboard_toml("split-battery-table", &source);
     let config = KeyboardTomlConfig::new_from_toml_path(&path);
     assert!(config.hardware().unwrap().battery.adc.is_none());
     let constants = config.build_constants(&["split", "_ble"]).unwrap();
