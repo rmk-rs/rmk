@@ -184,7 +184,7 @@ steps = [
   { tap = { pos = [1, 1], duration = 10 } },
   { tap = { pos = [0, 2], duration = 10 } },
 ]
-expect = [["LAlt", "Tab"], ["Tab", "B"], ["Tab"], []]
+expect = [["LAlt", "Tab"], ["Tab"], ["Tab", "B"], ["Tab"], []]
 
 [[test]]
 name = "system_key_consumes_sticky_modifier"
