@@ -767,13 +767,6 @@ pub struct ExternalFlashTomlConfig {
 #[serde(deny_unknown_fields)]
 pub struct BleConfig {
     pub enabled: bool,
-    pub battery_adc_pin: Option<String>,
-    /// User-facing description for the Battery Level characteristic.
-    pub battery_user_description: Option<String>,
-    pub charge_state: Option<PinConfig>,
-    pub charge_led: Option<PinConfig>,
-    pub adc_divider_measured: Option<u32>,
-    pub adc_divider_total: Option<u32>,
     pub default_tx_power: Option<i8>,
     pub use_2m_phy: Option<bool>,
     pub passkey_entry: Option<bool>,
@@ -1144,18 +1137,6 @@ pub struct SplitBoardConfig {
     pub display: Option<DisplayConfig>,
     /// Battery inputs local to this split board.
     pub battery: Option<BatteryTomlConfig>,
-    /// Legacy battery ADC pin for this split board
-    pub battery_adc_pin: Option<String>,
-    /// User-facing description for this board's Battery Level characteristic
-    pub battery_user_description: Option<String>,
-    /// ADC divider measured value for battery
-    pub adc_divider_measured: Option<u32>,
-    /// ADC divider total value for battery
-    pub adc_divider_total: Option<u32>,
-    /// Charger status pin of this split board, as `charge_state` under `[ble]`
-    pub charge_state: Option<PinConfig>,
-    /// Charging LED of this split board, as `charge_led` under `[ble]`
-    pub charge_led: Option<PinConfig>,
     /// Output Pin config for the split
     pub output: Option<Vec<OutputConfig>>,
     /// DFU config for this split board.

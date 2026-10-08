@@ -350,6 +350,7 @@ fn resolve_passkey_enabled(ble: &crate::BleConfig) -> Result<Passkey, String> {
 #[cfg(test)]
 mod tests {
     use super::{BuildConstants, resolve_passkey_enabled, validate_u8_capability, validate_u16_capability};
+    use crate::battery::BatteryTomlConfig;
     use crate::{
         BleConfig, DEFAULT_PASSKEY_ENTRY_TIMEOUT_SECS, KeyboardTomlConfig, MIN_PASSKEY_ENTRY_TIMEOUT_SECS,
         SplitBoardConfig, SplitConfig,
@@ -443,7 +444,10 @@ mod tests {
         let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
         config.split = Some(SplitConfig {
             peripheral: vec![SplitBoardConfig {
-                battery_adc_pin: Some("P0_02".to_string()),
+                battery: Some(BatteryTomlConfig {
+                    battery_adc_pin: Some("P0_02".to_string()),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }],
             ..Default::default()
@@ -470,12 +474,18 @@ mod tests {
         config.split = Some(SplitConfig {
             peripheral: vec![
                 SplitBoardConfig {
-                    battery_adc_pin: Some("P0_02".to_string()),
+                    battery: Some(BatteryTomlConfig {
+                        battery_adc_pin: Some("P0_02".to_string()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 },
                 SplitBoardConfig::default(),
                 SplitBoardConfig {
-                    battery_adc_pin: Some("P0_04".to_string()),
+                    battery: Some(BatteryTomlConfig {
+                        battery_adc_pin: Some("P0_04".to_string()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 },
             ],
@@ -495,7 +505,10 @@ mod tests {
             peripheral: vec![
                 SplitBoardConfig::default(),
                 SplitBoardConfig {
-                    battery_adc_pin: Some("P0_02".to_string()),
+                    battery: Some(BatteryTomlConfig {
+                        battery_adc_pin: Some("P0_02".to_string()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 },
             ],
@@ -556,7 +569,10 @@ mod tests {
         let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
         config.split = Some(SplitConfig {
             peripheral: vec![SplitBoardConfig {
-                battery_user_description: Some("Right".to_string()),
+                battery: Some(BatteryTomlConfig {
+                    battery_user_description: Some("Right".to_string()),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }],
             ..Default::default()
@@ -578,24 +594,28 @@ mod tests {
     #[test]
     fn resolves_custom_battery_user_descriptions() {
         let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
-        config.ble = Some(BleConfig {
-            enabled: true,
-            battery_user_description: Some("Fallback Central".to_string()),
-            ..Default::default()
-        });
         config.split = Some(SplitConfig {
             central: SplitBoardConfig {
-                battery_user_description: Some("Left".to_string()),
+                battery: Some(BatteryTomlConfig {
+                    battery_user_description: Some("Left".to_string()),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             peripheral: vec![
                 SplitBoardConfig {
-                    battery_adc_pin: Some("P0_02".to_string()),
-                    battery_user_description: Some("Right".to_string()),
+                    battery: Some(BatteryTomlConfig {
+                        battery_adc_pin: Some("P0_02".to_string()),
+                        battery_user_description: Some("Right".to_string()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 },
                 SplitBoardConfig {
-                    battery_adc_pin: Some("P0_04".to_string()),
+                    battery: Some(BatteryTomlConfig {
+                        battery_adc_pin: Some("P0_04".to_string()),
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 },
             ],

@@ -177,8 +177,7 @@ fn battery_adc_rejects_zero_divider_total() {
         "battery-zero-divider-total",
         &format!(
             r#"{}
-[ble]
-enabled = true
+[battery]
 battery_adc_pin = "P0_02"
 adc_divider_total = 0
 "#,
@@ -505,6 +504,7 @@ cols = 1
 row_offset = 0
 col_offset = 0
 matrix = { row_pins = ["P0_01"], col_pins = ["P0_02"] }
+[split.central.battery]
 charge_state = { pin = "P1_08", low_active = true }
 charge_led = { pin = "P0_13", low_active = false }
 [[split.peripheral]]
@@ -513,6 +513,7 @@ cols = 1
 row_offset = 0
 col_offset = 1
 matrix = { row_pins = ["P0_01"], col_pins = ["P0_02"] }
+[split.peripheral.battery]
 charge_state = { pin = "P0_07", low_active = false }
 charge_led = { pin = "P0_14", low_active = true }
 "#,
@@ -539,8 +540,7 @@ fn charge_led_requires_a_local_battery_source() {
         "led-without-source",
         &format!(
             r#"{}
-[ble]
-enabled = true
+[battery]
 charge_led = {{ pin = "P0_21", low_active = false }}
 "#,
             MINIMAL_KEYBOARD_TOML.replace("rp2040", "nrf52840")
@@ -554,93 +554,6 @@ charge_led = {{ pin = "P0_21", low_active = false }}
             .unwrap()
             .contains("charge_led requires battery_adc_pin or charge_state")
     );
-}
-
-#[test]
-fn new_battery_table_replaces_legacy_even_with_ble_disabled() {
-    let path = write_temp_keyboard_toml(
-        "battery-table",
-        &format!(
-            "{MINIMAL_KEYBOARD_TOML}\n{}",
-            r#"
-[ble]
-enabled = false
-battery_adc_pin = "PIN_27"
-adc_divider_total = 9
-charge_state = { pin = "PIN_5", low_active = true }
-[battery]
-battery_adc_pin = "PIN_26"
-adc_divider_total = 2
-"#
-        ),
-    );
-    let config = KeyboardTomlConfig::new_from_toml_path(&path);
-    let hardware = config.hardware().unwrap();
-    let adc = hardware.battery.adc.unwrap();
-    assert_eq!(
-        (adc.pin.as_str(), adc.divider_measured, adc.divider_total),
-        ("PIN_26", 1, 2)
-    );
-    assert!(hardware.battery.charge_state.is_none());
-    std::fs::remove_file(path).ok();
-}
-
-#[test]
-fn split_battery_tables_drive_devices_and_service_ids_together() {
-    let path = write_temp_keyboard_toml(
-        "split-battery-table",
-        r#"
-[keyboard]
-name = "Legacy battery fixture"
-vendor_id = 1
-product_id = 1
-chip = "nrf52840"
-
-[ble]
-enabled = true
-
-[layout]
-rows = 1
-cols = 2
-
-[split]
-connection = "ble"
-
-[split.central]
-rows = 1
-cols = 1
-row_offset = 0
-col_offset = 0
-battery_adc_pin = "P0_05"
-adc_divider_measured = 2000
-adc_divider_total = 2806
-matrix = { row_pins = ["P0_01"], col_pins = ["P0_02"] }
-
-[[split.peripheral]]
-rows = 1
-cols = 1
-row_offset = 0
-col_offset = 1
-battery_adc_pin = "P0_05"
-adc_divider_measured = 2000
-adc_divider_total = 2806
-matrix = { row_pins = ["P0_01"], col_pins = ["P0_02"] }
-
-[split.central.battery]
-charge_state = { pin = "P0_20", low_active = true }
-
-[split.peripheral.battery]
-battery_adc_pin = "P0_04"
-adc_divider_total = 2
-battery_user_description = "Right"
-"#,
-    );
-    let config = KeyboardTomlConfig::new_from_toml_path(&path);
-    assert!(config.hardware().unwrap().battery.adc.is_none());
-    let constants = config.build_constants(&["split", "_ble"]).unwrap();
-    assert_eq!(constants.split_battery_peripheral_ids, vec![0]);
-    assert_eq!(constants.split_battery_peripheral_user_descriptions, vec!["Right"]);
-    std::fs::remove_file(path).ok();
 }
 
 #[test]
