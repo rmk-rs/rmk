@@ -360,7 +360,7 @@ adc_divider_measured = 2000
 adc_divider_total = 2806
 # BLE tx power; higher means better signal but more power consumption. nRF52 only, ignored on other chips
 default_tx_power = 0
-# Whether to use 2M PHY for host connections, defaults to true; applies to every BLE backend
+# Host connection PHY: true = 2M (default), false = 1M. Applies to all supported BLE chips.
 use_2m_phy = true
 # Enable passkey entry during BLE pairing, defaults to false
 passkey_entry = false
