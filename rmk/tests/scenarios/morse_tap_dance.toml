@@ -378,3 +378,20 @@ steps = [
   { tap = { pos = [1, 2], duration = 400 } },
 ]
 expect = [["A"], [], ["Backspace"], [], ["Backspace"], []]
+
+# Re-pressing the dance key makes the still-held mod-tap the earlier key.
+[[test]]
+name = "repressed_tap_dance_moves_after_held_mod_tap"
+behavior.morse = {
+  normal_mode = true, hold_on_other_press = false, permissive_hold = false, enable_flow_tap = false,
+  profiles = { p0 = { normal_mode = false, hold_on_other_press = false, permissive_hold = true } },
+}
+steps = [
+  { press = [1, 2] },   # TD(0): first tap starts before the mod-tap
+  { press = [3, 6] },   # MT(B, LShift, p0): remains held through both taps
+  { release = [1, 2] },
+  { press = [1, 2] },   # The dance's second press now follows the mod-tap
+  { release = [1, 2] }, # Permissive hold must shift the double-tap D
+  { release = [3, 6] },
+]
+expect = [["LShift"], ["LShift", "D"], ["LShift"], []]

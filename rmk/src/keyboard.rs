@@ -362,7 +362,7 @@ impl<'a> Keyboard<'a> {
                             .filter(|combo| !combo.is_triggered() && combo.config.contains(&key.action))
                             .for_each(Combo::reset);
                     });
-                    self.process_key_action(&key.action, key.event, key.press_time).await;
+                    self.process_key_action(&key.action, key.event, key.press_time()).await;
                 }
             }
             _ => {
@@ -393,8 +393,7 @@ impl<'a> Keyboard<'a> {
         report_activity();
 
         if let KeyboardEventSource::KeyCode(keycode) = event.source {
-            self.process_action(Action::Key(KeyCode::Hid(keycode)), event)
-                .await;
+            self.process_action(Action::Key(KeyCode::Hid(keycode)), event).await;
             return;
         }
 
@@ -670,7 +669,7 @@ impl<'a> Keyboard<'a> {
                         // Note: Morse like actions are not expected here.
                         assert!(!action.is_morse());
                         debug!("Tap Key {:?} now press down, action: {:?}", held_key.event, action);
-                        self.process_key_action_inner(&action, held_key.event, held_key.press_time)
+                        self.process_key_action_inner(&action, held_key.event, held_key.press_time())
                             .await;
                     }
                 }
@@ -715,9 +714,6 @@ impl<'a> Keyboard<'a> {
                 .is_some_and(|k| matches!(k.state, KeyState::Pressed(_) | KeyState::Released(_)));
 
         if check_held_buffer {
-            // First, sort by press time
-            self.held_buffer.keys.sort_unstable_by_key(|k| k.press_time);
-
             // Check all unresolved held keys, calculate their decision one-by-one
             for held_key in self
                 .held_buffer
@@ -984,7 +980,7 @@ impl<'a> Keyboard<'a> {
             KeyAction::Single(Action::KeyWithModifier(_, modifiers)) => modifiers,
             _ => ModifierCombination::default(),
         };
-        let held = self.resolve_explicit_modifiers(event.pressed);
+        let held = self.held_modifiers();
         let dropped = held & combined_suppress & !self.fork_keep_mask & !readded;
 
         // No (or no more) forks were triggered, so we are done
@@ -1205,21 +1201,10 @@ impl<'a> Keyboard<'a> {
     async fn dispatch_combos(&mut self, key_action: &KeyAction, event: KeyboardEvent) {
         self.trigger_delayed_combo(key_action, event).await;
 
-        // Dispatch every waiting key, earliest press first. Dispatching one key can
-        // remove and re-push others, so look the next one up again instead of
-        // reusing an index.
-        while let Some(i) = self
-            .held_buffer
-            .keys
-            .iter()
-            .enumerate()
-            .filter(|(_, k)| k.state == KeyState::WaitingCombo)
-            .min_by_key(|(_, k)| k.press_time)
-            .map(|(i, _)| i)
-        {
-            let key = self.held_buffer.keys.remove(i);
+        // Removing and reinserting keys preserves time order.
+        while let Some(key) = self.held_buffer.remove_if(|key| key.state == KeyState::WaitingCombo) {
             debug!("[Combo] Dispatching combo: {:?}", key);
-            self.process_key_action(&key.action, key.event, key.press_time).await;
+            self.process_key_action(&key.action, key.event, key.press_time()).await;
         }
 
         // Keep triggered combos intact so their releases can still be matched.
@@ -2172,7 +2157,7 @@ mod test {
 
     #[cfg(not(feature = "_no_usb"))]
     #[test]
-    fn direct_keycodes_use_normal_oneshot_and_consumer_execution() {
+    fn direct_keycodes_use_normal_sticky_and_consumer_execution() {
         use rmk_types::connection::UsbState;
         use rmk_types::keycode::ConsumerKey;
 
@@ -2181,8 +2166,14 @@ mod test {
         block_on(async {
             let mut keyboard = create_test_keyboard();
             crate::state::set_usb_state(UsbState::Configured);
+            keyboard.keymap.set_action_at(
+                KeyboardEventSource::key_pos(0, 0),
+                0,
+                KeyAction::Sticky(Action::Modifier(ModifierCombination::new().with_left_shift(true)), 0),
+            );
+            keyboard.process_inner(KeyboardEvent::key(0, 0, true)).await;
+            keyboard.process_inner(KeyboardEvent::key(0, 0, false)).await;
             USB_REPORT_CHANNEL.clear();
-            keyboard.osm_state = OneShotState::Single(ModifierCombination::new().with_left_shift(true));
             keyboard
                 .process_inner(KeyboardEvent::keycode(HidKeyCode::Right, true))
                 .await;
@@ -2191,15 +2182,20 @@ mod test {
             };
             assert_eq!(report.modifier, 2);
             assert_eq!(report.keycodes[0], HidKeyCode::Right as u8);
-            assert!(matches!(keyboard.osm_state, OneShotState::None));
             keyboard
                 .process_inner(KeyboardEvent::keycode(HidKeyCode::Right, false))
                 .await;
             let Report::KeyboardReport(report) = USB_REPORT_CHANNEL.try_receive().unwrap() else {
                 panic!()
             };
+            assert_eq!(report.modifier, 2);
+            assert_eq!(report.keycodes, [0; 6]);
+            let Report::KeyboardReport(report) = USB_REPORT_CHANNEL.try_receive().unwrap() else {
+                panic!()
+            };
             assert_eq!(report.modifier, 0);
             assert_eq!(report.keycodes, [0; 6]);
+            assert!(keyboard.registered.is_empty());
 
             keyboard
                 .process_inner(KeyboardEvent::keycode(HidKeyCode::AudioVolUp, true))
