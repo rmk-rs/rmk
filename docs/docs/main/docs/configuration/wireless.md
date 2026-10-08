@@ -123,6 +123,23 @@ battery_user_description = "Right"
 
 For an existing configuration with battery fields under `[ble]` or directly under a split board, see [Migrate battery configuration](../migration/v09_v10#battery-configuration-tables).
 
+### ESP32 battery input
+
+Set `battery_adc_pin` to an ADC1-capable GPIO for your chip and set the divider values to match your board. RMK uses calibrated voltage readings and waits 30 seconds before each sample, including the first.
+
+For an ESP32-C3 unibody board with a 1:2 divider:
+
+```toml
+[battery]
+battery_adc_pin = "GPIO0"
+adc_divider_measured = 1
+adc_divider_total = 2
+```
+
+For a split board, put these fields in its central or peripheral battery table. GPIO numbering and ADC support vary by chip; the pin in this example is for ESP32-C3.
+
+Battery measurement reserves ADC1. This configuration requires RMK's ESP32 BLE initialization, which enables the radio before using the hardware random-number generator.
+
 ### Peripheral battery reporting over BLE GATT
 
 When peripherals are configured to sample their batteries (see above), their levels are forwarded to the central over the split BLE links and re-exposed to the host through standard Battery Service instances (UUID `0x180F`) on the central's GATT server. The host sees one Battery Service instance for:
