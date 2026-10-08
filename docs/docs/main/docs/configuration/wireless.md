@@ -23,7 +23,7 @@ adc_divider_total = 2806
 # Set the BLE tx power; higher means better signal but more power consumption. For nRF52840 the maximum tx power is 8.
 # nRF52 only, ignored on other chips
 default_tx_power = 0
-# Host connection PHY: true = 2M (default), false = 1M. Applies to all supported BLE chips.
+# Host connection PHY: true = 2M (default), false = 1M.
 use_2m_phy = true
 # Enable or disable passkey entry, defaults to false
 passkey_entry = false
@@ -37,9 +37,9 @@ passkey_entry_timeout = 120
 
 ### Host connection PHY
 
-`[ble].use_2m_phy` selects the PHY requested after a host connection is established. It applies to all supported BLE chips, including Nordic nRF and Espressif ESP32. The default is `true` (2M); `false` requests 1M. Using 2M requires support from both devices.
+`[ble].use_2m_phy` requests 2M (`true`, default) or 1M (`false`) for host connections on all supported BLE chips.
 
-To request 1M for a legacy host adapter, update the `[ble]` section in `keyboard.toml`, then rebuild and flash the firmware:
+To request 1M:
 
 ```toml
 [ble]
@@ -47,7 +47,7 @@ enabled = true
 use_2m_phy = false
 ```
 
-The `use_1m_phy` Cargo feature overrides this setting and requests 1M for host connections. Dongle and split links always request 2M, regardless of either setting.
+The `use_1m_phy` Cargo feature overrides this setting to request 1M. Dongle and split links always request 2M.
 
 ### Passkey entry
 
