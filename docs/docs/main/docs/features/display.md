@@ -33,6 +33,8 @@ RMK ships two renderers out of the box (both monochrome, for `BinaryColor` displ
 
 Color LCDs (`lcd_async`) use the `Rgb565` color type, so they need a [custom renderer](#custom-renderers).
 
+The OLED battery icon fills only when a percentage is available. An unknown level has no filled bars and shows `?`, or `CHG` while charging. `N/A` means battery status is unavailable.
+
 ## Configuration
 
 For `keyboard.toml` users, see the [Display Configuration](../configuration/display) reference for all available options.

@@ -401,58 +401,48 @@ mod tests {
 
     use super::*;
 
-    fn assert_battery_render(battery: BatteryStatusEvent, label: &str, filled_pixels: usize) {
-        let mut actual = MockDisplay::<BinaryColor>::new();
-        actual.set_allow_overdraw(true);
-        OledRenderer.render(
-            &RenderContext {
-                battery,
-                ..Default::default()
-            },
-            &mut actual,
-        );
-
-        // Battery interior on the 64x64 mock display: six rows of three pixels.
-        let filled = (57..63)
-            .flat_map(|y| (60..63).map(move |x| Point::new(x, y)))
-            .filter(|p| actual.get_pixel(*p) == Some(BinaryColor::On))
-            .count();
-        assert_eq!(filled, filled_pixels, "{battery:?}");
-
-        let mut expected = MockDisplay::<BinaryColor>::new();
-        expected.set_allow_overdraw(true);
-        expected.clear(BinaryColor::Off).unwrap();
-        Text::new(
-            label,
-            Point::new(56 - label.len() as i32 * 6, 62),
-            MonoTextStyle::new(&FONT_6X9, BinaryColor::On),
-        )
-        .draw(&mut expected)
-        .unwrap();
-        for pixel in (52..64).flat_map(|y| (32..59).map(move |x| Point::new(x, y))) {
-            assert_eq!(
-                actual.get_pixel(pixel),
-                expected.get_pixel(pixel),
-                "label {label}, pixel {pixel:?}"
-            );
-        }
-    }
-
     #[test]
     fn unknown_battery_levels_have_no_full_bars() {
-        for (level, charging, label, pixels) in [
-            (None, false, "?", 0),
-            (None, true, "CHG", 0),
-            (Some(100), false, "100%", 18),
+        for (level, charge_state, label, filled_pixels) in [
+            (None, ChargeState::Discharging, "?", 0),
+            (None, ChargeState::Charging, "CHG", 0),
+            (Some(100), ChargeState::Discharging, "100%", 18),
         ] {
-            assert_battery_render(
-                BatteryStatusEvent(BatteryStatus::Available {
-                    charge_state: charging.into(),
-                    level,
-                }),
-                label,
-                pixels,
+            let battery = BatteryStatusEvent(BatteryStatus::Available { charge_state, level });
+            let mut actual = MockDisplay::<BinaryColor>::new();
+            actual.set_allow_overdraw(true);
+            OledRenderer.render(
+                &RenderContext {
+                    battery,
+                    ..Default::default()
+                },
+                &mut actual,
             );
+
+            // Battery interior on the 64x64 mock display: six rows of three pixels.
+            let filled = (57..63)
+                .flat_map(|y| (60..63).map(move |x| Point::new(x, y)))
+                .filter(|p| actual.get_pixel(*p) == Some(BinaryColor::On))
+                .count();
+            assert_eq!(filled, filled_pixels, "{battery:?}");
+
+            let mut expected = MockDisplay::<BinaryColor>::new();
+            expected.set_allow_overdraw(true);
+            expected.clear(BinaryColor::Off).unwrap();
+            Text::new(
+                label,
+                Point::new(56 - label.len() as i32 * 6, 62),
+                MonoTextStyle::new(&FONT_6X9, BinaryColor::On),
+            )
+            .draw(&mut expected)
+            .unwrap();
+            for pixel in (52..64).flat_map(|y| (32..59).map(move |x| Point::new(x, y))) {
+                assert_eq!(
+                    actual.get_pixel(pixel),
+                    expected.get_pixel(pixel),
+                    "label {label}, pixel {pixel:?}"
+                );
+            }
         }
     }
 }
