@@ -33,7 +33,7 @@ RMK ships two renderers out of the box (both monochrome, for `BinaryColor` displ
 
 Color LCDs (`lcd_async`) use the `Rgb565` color type, so they need a [custom renderer](#custom-renderers).
 
-The OLED battery icon fills only when a percentage is available. An unknown level has no filled bars and shows `?`, or `CHG` while charging. `N/A` means battery status is unavailable.
+The OLED battery icon fills only when a percentage is available. An unknown level has no filled bars and shows `UNK` (unknown), or `CHG` while charging. `N/A` means battery status is unavailable.
 
 ## Configuration
 

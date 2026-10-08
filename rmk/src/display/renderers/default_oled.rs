@@ -295,7 +295,7 @@ fn draw_battery_icon<D: DrawTarget<Color = BinaryColor>>(
                 level: None,
             } => write!(label, "CHG").ok(),
             BatteryStatus::Available { level: Some(pct), .. } => write!(label, "{}%", pct).ok(),
-            BatteryStatus::Available { level: None, .. } => write!(label, "?").ok(),
+            BatteryStatus::Available { level: None, .. } => write!(label, "UNK").ok(),
             BatteryStatus::Unavailable => write!(label, "N/A").ok(),
         };
 
