@@ -4,8 +4,6 @@
 
 To enable BLE, add `enabled = true` under the `[ble]` section.
 
-Battery and charging inputs use the same board-local tables across chips. Automatic ADC availability depends on the backend; charging GPIOs and LEDs use the common pipeline.
-
 ```toml
 # Ble configuration
 # To use the default configuration, ignore this section completely
@@ -21,15 +19,6 @@ use_2m_phy = true
 passkey_entry = false
 # Timeout in seconds for passkey entry, defaults to 120
 passkey_entry_timeout = 120
-
-[battery]
-battery_user_description = "Main"
-battery_adc_pin = "P0_05"
-adc_divider_measured = 2000
-adc_divider_total = 2806
-charge_state = { pin = "P0_20", low_active = true }
-charge_led = { pin = "P0_21", low_active = false }
-
 ```
 
 Some legacy BLE adapters cannot connect to devices using 2M PHY at all. For those hosts, enable the `use_1m_phy` Cargo feature of the `rmk` crate, which makes the keyboard use 1M PHY for the host connection.
@@ -61,34 +50,78 @@ During passkey mode, the keyboard intercepts all keypresses. Only the following 
 
 All other keys are silently discarded while passkey mode is active.
 
-### Split battery ADC configuration
+## Battery configuration
 
-For split keyboards, you can configure battery ADC separately for the central and each peripheral:
+Battery configuration controls voltage measurement, charging-state detection, and an optional indicator LED. These features also work with BLE disabled.
+
+Choose the table for the board you are configuring:
+
+| Board            | Table                                                                |
+| ---------------- | -------------------------------------------------------------------- |
+| Unibody keyboard | `[battery]`                                                          |
+| Split central    | `[split.central.battery]`                                            |
+| Split peripheral | `[split.peripheral.battery]`, below its `[[split.peripheral]]` entry |
+
+Configure each split board separately. Use only the split battery tables for a split keyboard; the top-level `[battery]` table is not accepted.
+
+### Battery fields
+
+All three tables accept the same fields. Omit inputs and outputs that your board does not have.
+
+| Field                      | Description                                                                                                                                                             | Default                                                  |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `battery_adc_pin`          | ADC pin connected to the battery voltage divider, or `"vddh"` for the internal VDDH input on nRF52840/nRF52833.                                                         | No voltage measurement                                   |
+| `adc_divider_measured`     | Resistance between the ADC input and ground. Requires `battery_adc_pin`.                                                                                                | `1`                                                      |
+| `adc_divider_total`        | Total resistance of the voltage divider. Requires `battery_adc_pin`.                                                                                                    | `1`                                                      |
+| `charge_state`             | Charging-status input as `{ pin, low_active }`. Set `low_active = true` if the charger drives the pin low while charging.                                               | No charging-status input                                 |
+| `charge_led`               | Indicator output as `{ pin, low_active }`. Set `low_active = true` if driving the pin low turns the LED on. Requires an ADC or charging-status input on the same board. | No indicator LED                                         |
+| `battery_user_description` | Battery name exposed over BLE. A peripheral requires `battery_adc_pin` to expose its battery service.                                                                   | `"Central"` or `"Peripheral N"`, where `N` starts at `0` |
+
+A board preset can supply values for omitted fields. An empty battery table does not clear preset values.
+
+Set both divider values in the same units. For example, a divider with 806 kΩ between the battery and ADC input and 2 MΩ between the input and ground uses `2000` and `2806`. Both values must be greater than zero. With `battery_adc_pin = "vddh"`, RMK uses the internal 1:5 divider and ignores these two fields.
+
+On nRF52 chips with an ADC, RMK sets up voltage measurement automatically. The examples below use nRF52840 pins; replace them and the divider values to match your board.
+
+With only `charge_state` configured, RMK reports charging state without a battery percentage. The indicator LED stays on while charging, blinks below 10% when not charging, and stays off otherwise.
+
+### Unibody keyboard
+
+Add `[battery]` to `keyboard.toml`. This example measures voltage through an external divider and reads a charging-status pin:
 
 ```toml
-[split.central]
-
-
-[split.central.battery]
-battery_adc_pin = "P0_01"
-battery_user_description = "Left"
+[battery]
+battery_adc_pin = "P0_05"
 adc_divider_measured = 2000
 adc_divider_total = 2806
+charge_state = { pin = "P0_20", low_active = true }
+# Optional indicator LED
+charge_led = { pin = "P0_21", low_active = false }
+battery_user_description = "Main"
+```
+
+### Split battery ADC configuration
+
+Add a battery table to the central and to each peripheral that measures its battery. Place each `[split.peripheral.battery]` table after the corresponding `[[split.peripheral]]` entry and before the next peripheral entry. Keep each board's existing matrix and connection settings.
+
+```toml
+[split.central.battery]
+battery_adc_pin = "P0_01"
+adc_divider_measured = 2000
+adc_divider_total = 2806
+battery_user_description = "Left"
 
 [[split.peripheral]]
+# Keep this peripheral's existing board settings here.
 
 [split.peripheral.battery]
 battery_adc_pin = "P0_02"
-battery_user_description = "Right"
 adc_divider_measured = 2000
 adc_divider_total = 2806
-
+battery_user_description = "Right"
 ```
 
-Notes:
-
-- Each board uses its own battery table; split boards do not inherit `[battery]`.
-- Peripherals do **not** fall back to `[ble]`; to enable peripheral battery reporting, set ADC values per peripheral.
+For an existing configuration with battery fields under `[ble]` or directly under a split board, see [Migrate battery configuration](../migration/v09_v10#battery-configuration-tables).
 
 ### Peripheral battery reporting over BLE GATT
 
@@ -97,9 +130,7 @@ When peripherals are configured to sample their batteries (see above), their lev
 - the central's own battery level, and
 - each peripheral whose `[split.peripheral.battery]` defines `battery_adc_pin`.
 
-Each peripheral's Battery Service uses its peripheral ID to set the description field in the Characteristic Presentation Format descriptor. Peripheral IDs `0`, `1`, and `2` use the Bluetooth SIG ordinal values `first`, `second`, and `third`, respectively. No host-side configuration is required; any host that already reads the central's Battery Level characteristic can discover the additional instances the same way.
-
-Battery Level characteristics also expose a Characteristic User Description descriptor. The defaults are `Central` for the central and `Peripheral 0`, `Peripheral 1`, and so on for peripherals. Set `battery_user_description` in the corresponding battery table to provide a custom name.
+Set `battery_user_description` in each board's battery table to give its battery a name such as `"Left"` or `"Right"`. The host determines whether these names and separate battery levels appear in its interface.
 
 The split feature uses trouble-host's default client ATT table size. To reserve more space for client-specific attributes such as CCCDs, set `TROUBLE_HOST_CLIENT_ATT_TABLE_SIZE` in the project environment, for example in `.cargo/config.toml`:
 
@@ -109,22 +140,3 @@ TROUBLE_HOST_CLIENT_ATT_TABLE_SIZE = "128"
 ```
 
 This project-wide override takes precedence over trouble-host Cargo feature settings and can be set to the size required by the enabled services.
-
-## Board battery tables
-
-Use `[battery]` on a unibody keyboard, `[split.central.battery]` on the central,
-and `[split.peripheral.battery]` below the corresponding `[[split.peripheral]]`.
-All three accept `battery_adc_pin`, `adc_divider_measured`, `adc_divider_total`,
-`charge_state`, `charge_led` and `battery_user_description`.
-
-The divider defaults to 1:1; VDDH uses its fixed 1:5 divider. Charger and LED pins
-use `{ pin, low_active }`. An LED requires an ADC or charger input on that board.
-Without ADC input, a charger reports charging state but no percentage.
-Battery inputs run independently of whether BLE is enabled.
-
-A new battery table replaces that board's legacy battery settings as a whole.
-Without one, legacy `[ble]` and flat split battery fields remain accepted.
-Split boards do not inherit the top-level `[battery]` table. Defaults supplied by
-a board preset still apply when a user omits a field; an empty table does not
-erase preset values. Battery names and peripheral Battery Services use the same
-resolved configuration as the devices.
