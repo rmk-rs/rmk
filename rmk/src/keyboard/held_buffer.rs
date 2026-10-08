@@ -4,7 +4,7 @@ use rmk_types::morse::MorsePattern;
 
 use crate::event::{KeyboardEvent, KeyboardEventPos};
 
-/// The buffer of held keys.
+/// Held keys ordered by their current press or Morse transition time.
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct HeldBuffer {
@@ -20,11 +20,34 @@ impl HeldBuffer {
         }
     }
 
-    /// Push a new held key into the buffer
+    /// Insert a held key in time order, retaining the order of equal timestamps.
     pub fn push(&mut self, key: HeldKey) {
         if let Err(e) = self.keys.push(key) {
             error!("Held buffer overflowed, cannot save: {:?}", e);
+            return;
         }
+        self.reposition(self.keys.len() - 1);
+    }
+
+    pub(crate) fn update_press_time(&mut self, pos: KeyboardEventPos, at: Instant) {
+        if let Some(index) = self.keys.iter().position(|key| key.event.pos == pos) {
+            self.keys[index].press_time = at;
+            self.reposition(index);
+        }
+    }
+
+    /// Only the inserted or updated entry can be out of order.
+    fn reposition(&mut self, mut index: usize) {
+        let key = self.keys[index];
+        while index > 0 && self.keys[index - 1].press_time > key.press_time {
+            self.keys[index] = self.keys[index - 1];
+            index -= 1;
+        }
+        while index + 1 < self.keys.len() && self.keys[index + 1].press_time < key.press_time {
+            self.keys[index] = self.keys[index + 1];
+            index += 1;
+        }
+        self.keys[index] = key;
     }
 
     /// Find a held key by the key action
@@ -114,13 +137,17 @@ pub struct HeldKey {
     pub action: KeyAction,
     /// Current state of the held key
     pub state: KeyState,
-    /// The press time for the key
-    pub press_time: Instant,
+    /// Press time, or release time while waiting for another Morse tap.
+    press_time: Instant,
     /// The timeout time for the key
     pub timeout_time: Instant,
 }
 
 impl HeldKey {
+    pub fn press_time(&self) -> Instant {
+        self.press_time
+    }
+
     pub fn new(
         event: KeyboardEvent,
         action: KeyAction,
@@ -134,6 +161,84 @@ impl HeldKey {
             state,
             press_time,
             timeout_time,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_matches_reference(buffer: &HeldBuffer, expected: &[HeldKey]) {
+        assert_eq!(buffer.keys.len(), expected.len());
+        for (actual, expected) in buffer.keys.iter().zip(expected) {
+            assert_eq!(
+                (
+                    actual.event,
+                    actual.action,
+                    actual.state,
+                    actual.press_time,
+                    actual.timeout_time
+                ),
+                (
+                    expected.event,
+                    expected.action,
+                    expected.state,
+                    expected.press_time,
+                    expected.timeout_time
+                ),
+            );
+        }
+        assert_eq!(
+            buffer.next_timeout(|_| true).map(|key| key.event),
+            expected.iter().min_by_key(|key| key.timeout_time).map(|key| key.event),
+        );
+    }
+
+    #[test]
+    fn ordered_buffer_keeps_order_through_insert_update_remove() {
+        for seed in 0..256 {
+            let mut buffer = HeldBuffer::new();
+            let mut expected: heapless::Vec<HeldKey, 16> = heapless::Vec::new();
+            for id in 0..16 {
+                let key = HeldKey::new(
+                    KeyboardEvent::key(0, id, true),
+                    KeyAction::Single(Action::LayerOn(id)),
+                    KeyState::WaitingCombo,
+                    Instant::from_ticks(((seed >> (id % 8)) & 3) as u64),
+                    Instant::from_ticks(100 - id as u64),
+                );
+                buffer.push(key);
+                expected.push(key).unwrap();
+                expected.sort_by_key(|key| key.press_time);
+                assert_matches_reference(&buffer, &expected);
+            }
+            let overflow = HeldKey::new(
+                KeyboardEvent::key(0, 255, true),
+                KeyAction::No,
+                KeyState::WaitingCombo,
+                Instant::MIN,
+                Instant::MIN,
+            );
+            buffer.push(overflow);
+            buffer.update_press_time(overflow.event.pos, Instant::MAX);
+            assert_matches_reference(&buffer, &expected);
+            for id in 0..16 {
+                let pos = KeyboardEvent::key(0, id, true).pos;
+                for ticks in [0, 1, 3, 17, u64::MAX] {
+                    let at = Instant::from_ticks(ticks);
+                    buffer.update_press_time(pos, at);
+                    expected.iter_mut().find(|key| key.event.pos == pos).unwrap().press_time = at;
+                    expected.sort_by_key(|key| key.press_time);
+                    assert_matches_reference(&buffer, &expected);
+                }
+            }
+            for id in 0..16 {
+                let pos = KeyboardEvent::key(0, id, true).pos;
+                assert!(buffer.remove_if(|key| key.event.pos == pos).is_some());
+                expected.retain(|key| key.event.pos != pos);
+                assert_matches_reference(&buffer, &expected);
+            }
         }
     }
 }

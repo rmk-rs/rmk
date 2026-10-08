@@ -362,7 +362,7 @@ impl<'a> Keyboard<'a> {
                             .filter(|combo| !combo.is_triggered() && combo.config.contains(&key.action))
                             .for_each(Combo::reset);
                     });
-                    self.process_key_action(&key.action, key.event, key.press_time).await;
+                    self.process_key_action(&key.action, key.event, key.press_time()).await;
                 }
             }
             _ => {
@@ -672,7 +672,7 @@ impl<'a> Keyboard<'a> {
                         // Note: Morse like actions are not expected here.
                         assert!(!action.is_morse());
                         debug!("Tap Key {:?} now press down, action: {:?}", held_key.event, action);
-                        self.process_key_action_inner(&action, held_key.event, held_key.press_time)
+                        self.process_key_action_inner(&action, held_key.event, held_key.press_time())
                             .await;
                     }
                 }
@@ -717,9 +717,6 @@ impl<'a> Keyboard<'a> {
                 .is_some_and(|k| matches!(k.state, KeyState::Pressed(_) | KeyState::Released(_)));
 
         if check_held_buffer {
-            // First, sort by press time
-            self.held_buffer.keys.sort_unstable_by_key(|k| k.press_time);
-
             // Check all unresolved held keys, calculate their decision one-by-one
             for held_key in self
                 .held_buffer
@@ -1185,21 +1182,10 @@ impl<'a> Keyboard<'a> {
     async fn dispatch_combos(&mut self, key_action: &KeyAction, event: KeyboardEvent) {
         self.trigger_delayed_combo(key_action, event).await;
 
-        // Dispatch every waiting key, earliest press first. Dispatching one key can
-        // remove and re-push others, so look the next one up again instead of
-        // reusing an index.
-        while let Some(i) = self
-            .held_buffer
-            .keys
-            .iter()
-            .enumerate()
-            .filter(|(_, k)| k.state == KeyState::WaitingCombo)
-            .min_by_key(|(_, k)| k.press_time)
-            .map(|(i, _)| i)
-        {
-            let key = self.held_buffer.keys.remove(i);
+        // Removing and reinserting keys preserves time order.
+        while let Some(key) = self.held_buffer.remove_if(|key| key.state == KeyState::WaitingCombo) {
             debug!("[Combo] Dispatching combo: {:?}", key);
-            self.process_key_action(&key.action, key.event, key.press_time).await;
+            self.process_key_action(&key.action, key.event, key.press_time()).await;
         }
 
         // Reset triggered combo states

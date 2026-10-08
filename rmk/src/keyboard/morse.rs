@@ -78,22 +78,22 @@ impl<'a> Keyboard<'a> {
                             if !pattern.is_empty()
                                 && pattern.is_all_taps()
                                 && let Some(window) = Self::quick_tap_window(self.keymap, key_action)
-                                && event_time.saturating_duration_since(k.press_time) <= window
+                                && event_time.saturating_duration_since(k.press_time()) <= window
                             {
                                 let tap_action = Self::action_from_pattern(self.keymap, key_action, TAP);
                                 if tap_action != Action::No {
                                     debug!("Quick-tap fire: {:?}", tap_action);
                                     k.state = KeyState::ProcessedButReleaseNotReportedYet(tap_action);
-                                    k.press_time = event_time;
                                     k.timeout_time = timeout_time;
+                                    self.held_buffer.update_press_time(event.pos, event_time);
                                     self.process_action(tap_action, event).await;
                                     return;
                                 }
                             }
 
                             k.state = KeyState::Pressed(pattern);
-                            k.press_time = event_time;
                             k.timeout_time = timeout_time;
+                            self.held_buffer.update_press_time(event.pos, event_time);
                         }
                         _ => {}
                     }
@@ -165,8 +165,8 @@ impl<'a> Keyboard<'a> {
                             let keep_alive = gap.max(window);
                             if let Some(k) = self.held_buffer.find_pos_mut(event.pos) {
                                 k.state = KeyState::EarlyFired(pattern);
-                                k.press_time = released_time;
                                 k.timeout_time = released_time + keep_alive;
+                                self.held_buffer.update_press_time(event.pos, released_time);
                             }
                             if !self.has_unresolved_morse_key() {
                                 self.fire_held_non_morse_keys().await;
@@ -192,9 +192,9 @@ impl<'a> Keyboard<'a> {
 
                             k.state = KeyState::Released(pattern);
                             // Use current release time for `IdleAfterTap` state
-                            k.press_time = released_time; // Use release time as the "press_time"
                             let timeout = Self::morse_timeout(self.keymap, &k.action, false);
-                            k.timeout_time = k.press_time + timeout;
+                            k.timeout_time = released_time + timeout;
+                            self.held_buffer.update_press_time(event.pos, released_time);
 
                             // Fire the tap immediately if the hold continuation has the same action
                             if let Some(action) = early_action {
@@ -219,8 +219,8 @@ impl<'a> Keyboard<'a> {
                         let released_time = Instant::now(); // TODO? It would be better if the event would carry the real timestamp of the release event!
                         k.state = KeyState::Released(pattern);
                         // Use current release time for `IdleAfterTap` state
-                        k.press_time = released_time; // Use release time as the "press_time"
-                        k.timeout_time = k.press_time + Self::morse_timeout(self.keymap, &k.action, false);
+                        k.timeout_time = released_time + Self::morse_timeout(self.keymap, &k.action, false);
+                        self.held_buffer.update_press_time(event.pos, released_time);
                     }
                     KeyState::ProcessedButReleaseNotReportedYet(action) => {
                         // Releasing a tap-hold action whose pressed HID report is already sent
@@ -243,8 +243,8 @@ impl<'a> Keyboard<'a> {
                             let timeout = Self::morse_timeout(self.keymap, key_action, false);
                             if let Some(k) = self.held_buffer.find_pos_mut(event.pos) {
                                 k.state = KeyState::EarlyFired(TAP);
-                                k.press_time = now;
                                 k.timeout_time = now + timeout;
+                                self.held_buffer.update_press_time(event.pos, now);
                             }
                         } else {
                             let _ = self.held_buffer.remove_if(|k| k.event.pos == event.pos);
@@ -257,8 +257,6 @@ impl<'a> Keyboard<'a> {
     }
 
     pub(crate) async fn fire_held_non_morse_keys(&mut self) {
-        self.held_buffer.keys.sort_unstable_by_key(|k| k.press_time);
-
         // Trigger all non morse keys in the buffer
         while let Some(key) = self.held_buffer.remove_if(|k| !k.action.is_morse()) {
             debug!("Trigger non-morse key: {:?}", key);
