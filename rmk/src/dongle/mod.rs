@@ -19,7 +19,7 @@ mod vial_router;
 use core::cell::Cell;
 use core::ops::ControlFlow;
 
-use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetDefaultPhy, LeSetPhy, LeSetScanParams};
+use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::{AddrKind, BdAddr, LeAdvEventKind, Status};
 use embassy_futures::join::join;
@@ -160,7 +160,6 @@ where
     C: Controller
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetDefaultPhy>
         + ControllerCmdSync<LeSetScanParams>,
 {
     async fn run(&mut self) -> ! {
@@ -200,7 +199,6 @@ where
     C: Controller
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetDefaultPhy>
         + ControllerCmdSync<LeSetScanParams>,
 {
     /// Publish current `DongleState` if it is a change.
@@ -212,7 +210,6 @@ where
 
     async fn run(&mut self) -> ! {
         wait_for_stack_started().await;
-        crate::ble::configure_default_phy(self.stack).await;
         self.profiles.load_bonded_devices().await;
         self.profiles.update_stack_bonds();
 

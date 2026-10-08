@@ -207,11 +207,6 @@ pub(crate) fn bind_interrupt_default(
             } else {
                 quote! {}
             };
-            let use_2m_phy = if ble_config.use_2m_phy.unwrap_or(true) {
-                quote! { .support_le_2m_phy() }
-            } else {
-                quote! {}
-            };
 
             // nrf-sdc interrupt config
             let nrf_sdc_config = match &board {
@@ -234,7 +229,7 @@ pub(crate) fn bind_interrupt_default(
                         .support_phy_update_central()
                         .support_phy_update_peripheral()
                         #support_subrating
-                        #use_2m_phy
+                        .support_le_2m_phy()
                         #tx_power
                         .central_count(#num_peri)?
                         .peripheral_count(1)?
@@ -248,7 +243,7 @@ pub(crate) fn bind_interrupt_default(
                     .support_peripheral()
                     .support_dle_peripheral()
                     .support_phy_update_peripheral()
-                    #use_2m_phy
+                    .support_le_2m_phy()
                     #tx_power
                     .peripheral_count(1)?
                     .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?

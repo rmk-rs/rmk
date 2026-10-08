@@ -1,6 +1,6 @@
 #[cfg(feature = "subrating")]
 use bt_hci::cmd::le::LeSubrateRequest;
-use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetDefaultPhy, LeSetPhy};
+use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
 use embassy_futures::join::{join3, join4};
@@ -87,10 +87,7 @@ const GATT_WRITE_BUFFER_SIZE: usize = {
 /// radio and per-peripheral session tasks on the same stack.
 pub struct BleTransport<'a, C>
 where
-    C: Controller
-        + ControllerCmdAsync<LeSetPhy>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetDefaultPhy>,
+    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 {
     /// Taken by `run`: the stack it builds consumes the controller.
     /// The option can be removed by changing to `run(self)`, but it requires
@@ -111,10 +108,7 @@ where
 
 impl<'a, C> BleTransport<'a, C>
 where
-    C: Controller
-        + ControllerCmdAsync<LeSetPhy>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetDefaultPhy>,
+    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 {
     pub fn new(
         controller: C,
@@ -149,10 +143,7 @@ where
 #[cfg(not(feature = "split"))]
 impl<'a, C> Runnable for BleTransport<'a, C>
 where
-    C: Controller
-        + ControllerCmdAsync<LeSetPhy>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetDefaultPhy>,
+    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 {
     async fn run(&mut self) -> ! {
         // Load the preferred connection from storage
@@ -182,12 +173,10 @@ impl<
     #[cfg(not(feature = "subrating"))] C: Controller
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetDefaultPhy>
         + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>,
     #[cfg(feature = "subrating")] C: Controller
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetDefaultPhy>
         + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>
         + ControllerCmdAsync<LeSubrateRequest>,
 > Runnable for BleTransport<'a, C>
@@ -234,10 +223,7 @@ impl<
 /// serves forever, joined with the stack runner and the sleep manager.
 async fn run_ble_keyboard<
     #[cfg(feature = "host")] 'r,
-    C: Controller
-        + ControllerCmdAsync<LeSetPhy>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetDefaultPhy>,
+    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 >(
     stack: &Stack<'_, C, DefaultPacketPool>,
     device_config: &DeviceConfig<'static>,
@@ -296,7 +282,6 @@ async fn run_ble_keyboard<
     let profile_manager = &mut profile_manager;
 
     let connection_loop = async {
-        configure_default_phy(stack).await;
         // Deadline at which the current advertising session stops; `None` until
         // the first advertise below sets it.
         let mut adv_deadline: Option<Instant> = None;
@@ -828,10 +813,7 @@ async fn serve_keyboard_connection<
     'a,
     'b,
     #[cfg(feature = "host")] 'r,
-    C: Controller
-        + ControllerCmdAsync<LeSetPhy>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetDefaultPhy>,
+    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 >(
     server: &'b Server<'_>,
     conn: &GattConnection<'a, 'b, DefaultPacketPool>,
@@ -861,12 +843,12 @@ async fn serve_keyboard_connection<
     }
 
     // `use_1m_phy` exists for legacy host adapters that cannot do 2M.
-    // Split and dongle links follow the board-wide PHY preference.
+    // Always use 2M for the dongle link.
     #[cfg(feature = "dongle")]
     let dongle_link = crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE;
     #[cfg(not(feature = "dongle"))]
     let dongle_link = false;
-    let host_phy = if !crate::BLE_USE_2M_PHY || (cfg!(feature = "use_1m_phy") && !dongle_link) {
+    let host_phy = if !dongle_link && (!crate::BLE_USE_2M_PHY || cfg!(feature = "use_1m_phy")) {
         PhyKind::Le1M
     } else {
         PhyKind::Le2M
@@ -931,51 +913,12 @@ async fn serve_keyboard_connection<
     select(communication_task, inner).await;
 }
 
-/// Apply the board preference before advertising so incoming links use it too.
-pub(crate) async fn configure_default_phy<C, P>(stack: &Stack<'_, C, P>)
-where
-    C: Controller + ControllerCmdSync<LeReadLocalSupportedFeatures> + ControllerCmdSync<LeSetDefaultPhy>,
-    P: PacketPool,
-{
-    let features = match stack.command(LeReadLocalSupportedFeatures::new()).await {
-        Ok(features) => features,
-        Err(e) => {
-            warn!("Cannot read controller PHY support: {:?}", e);
-            return;
-        }
-    };
-    if !features.supports_le_2m_phy() {
-        return;
-    }
-    let phys = bt_hci::param::PhyMask::default()
-        .set_le_1m_phy(true)
-        .set_le_2m_phy(crate::BLE_USE_2M_PHY);
-    if let Err(e) = stack
-        .command(LeSetDefaultPhy::new(bt_hci::param::AllPhys::default(), phys, phys))
-        .await
-    {
-        error!("Cannot configure controller PHY preference: {:?}", e);
-    }
-}
-
 // Set the connection PHY.
 pub(crate) async fn update_ble_phy<P: PacketPool>(
-    stack: &Stack<
-        '_,
-        impl Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
-        P,
-    >,
+    stack: &Stack<'_, impl Controller + ControllerCmdAsync<LeSetPhy>, P>,
     conn: &Connection<'_, P>,
     phy: PhyKind,
 ) {
-    let phy = if phy == PhyKind::Le2M {
-        match stack.command(LeReadLocalSupportedFeatures::new()).await {
-            Ok(features) if features.supports_le_2m_phy() => PhyKind::Le2M,
-            _ => PhyKind::Le1M,
-        }
-    } else {
-        phy
-    };
     // Retry 10 times
     for _ in 0..10 {
         match conn.set_phy(stack, phy).await {
@@ -995,7 +938,7 @@ pub(crate) async fn update_ble_phy<P: PacketPool>(
                 error!("[update_ble_phy] error: {:?}", e);
             }
             Ok(_) => {
-                info!("[update_ble_phy] PHY procedure completed");
+                info!("[update_ble_phy] PHY updated");
             }
         }
         return;
@@ -1161,6 +1104,3 @@ mod tests {
         });
     }
 }
-
-#[cfg(test)]
-mod phy_tests;

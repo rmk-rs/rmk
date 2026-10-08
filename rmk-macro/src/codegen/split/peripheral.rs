@@ -205,11 +205,6 @@ fn expand_bind_interrupt_for_split_peripheral(
             } else {
                 quote! {}
             };
-            let use_2m_phy = if ble_config.use_2m_phy.unwrap_or(true) {
-                quote! { .support_le_2m_phy() }
-            } else {
-                quote! {}
-            };
 
             // Extract PMW33xx configuration
             let split_config = match &hardware.board {
@@ -304,7 +299,7 @@ fn expand_bind_interrupt_for_split_peripheral(
                         .support_phy_update_central()
                         .support_phy_update_peripheral()
                         #support_subrating
-                        #use_2m_phy
+                        .support_le_2m_phy()
                         #tx_power
                         .peripheral_count(1)?
                         .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
@@ -847,4 +842,42 @@ pub(crate) fn expand_peripheral_input_device_config(
     }
 
     (initializations, devices, processors)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_1m_preference_preserves_nrf_2m_capability() {
+        let item_mod = syn::parse_quote!(
+            mod keyboard {}
+        );
+        for example in ["nrf52840_ble", "nrf52840_ble_split"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../examples/use_config/{example}/keyboard.toml"));
+            let config = rmk_config::KeyboardTomlConfig::new_from_toml_path(path);
+            let mut hardware = config.hardware().unwrap();
+            match &mut hardware.communication {
+                CommunicationConfig::Ble(ble) | CommunicationConfig::Both(_, ble) => {
+                    ble.use_2m_phy = Some(false);
+                }
+                _ => panic!("expected a BLE example"),
+            }
+            let central = crate::codegen::chip::bind_interrupt::bind_interrupt_default(
+                &hardware, &item_mod, None,
+            );
+            assert!(central.to_string().contains("support_le_2m_phy"));
+            if matches!(hardware.board, BoardConfig::Split(_)) {
+                let peripheral = expand_bind_interrupt_for_split_peripheral(
+                    &hardware.chip,
+                    &hardware,
+                    0,
+                    &None,
+                    None,
+                );
+                assert!(peripheral.to_string().contains("support_le_2m_phy"));
+            }
+        }
+    }
 }

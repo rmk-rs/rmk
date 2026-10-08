@@ -23,7 +23,7 @@ adc_divider_total = 2806
 # Set the BLE tx power; higher means better signal but more power consumption. For nRF52840 the maximum tx power is 8.
 # nRF52 only, ignored on other chips
 default_tx_power = 0
-# Whether to prefer 2M PHY, defaults to true; applies to every BLE backend
+# Whether to use 2M PHY for host connections, defaults to true; applies to every BLE backend
 use_2m_phy = true
 # Enable or disable passkey entry, defaults to false
 passkey_entry = false
@@ -37,16 +37,14 @@ passkey_entry_timeout = 120
 
 ### PHY preference
 
-`use_2m_phy` controls the preferred BLE data rate for host, split, and dongle connections on every BLE backend. It defaults to `true`. A connection can use 2M only when both devices support it; controllers without 2M support use 1M.
-
-To request 1M for all connections:
+`use_2m_phy` controls the PHY requested for host connections on every BLE backend. It defaults to `true` (2M). Set it to `false` to request 1M for a legacy host adapter:
 
 ```toml
 [ble]
 use_2m_phy = false
 ```
 
-For a legacy host adapter that cannot connect with 2M enabled, use the `use_1m_phy` Cargo feature to request 1M for host connections only. Split and dongle connections still follow `use_2m_phy`.
+The `use_1m_phy` Cargo feature also forces host connections to use 1M, regardless of `use_2m_phy`. Neither setting affects dongle or split links, which always request 2M. The negotiated PHY depends on both devices' capabilities.
 
 ### Passkey entry
 
