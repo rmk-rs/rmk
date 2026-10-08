@@ -1,3 +1,4 @@
+use embassy_time::{Duration, Timer};
 use esp_hal::Async;
 use esp_hal::analog::adc::{Adc, AdcCalLine, AdcChannel, AdcPin};
 use esp_hal::peripherals::ADC1;
@@ -12,15 +13,26 @@ use crate::event::BatteryAdcEvent;
 pub struct Esp32BatteryAdc<'d, P: AdcChannel> {
     adc: Adc<'d, ADC1<'d>, Async>,
     pin: AdcPin<P, ADC1<'d>, AdcCalLine<ADC1<'d>>>,
+    interval: Duration,
 }
 
 impl<'d, P: AdcChannel> Esp32BatteryAdc<'d, P> {
-    /// Creates an input device that returns calibrated ADC input millivolts.
-    pub fn new(adc: Adc<'d, ADC1<'d>, Async>, pin: AdcPin<P, ADC1<'d>, AdcCalLine<ADC1<'d>>>) -> Self {
-        Self { adc, pin }
+    /// Creates an input device that waits `interval` before each reading.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `interval` is zero.
+    pub fn new(
+        adc: Adc<'d, ADC1<'d>, Async>,
+        pin: AdcPin<P, ADC1<'d>, AdcCalLine<ADC1<'d>>>,
+        interval: Duration,
+    ) -> Self {
+        assert!(interval.as_ticks() > 0, "battery ADC interval must be nonzero");
+        Self { adc, pin, interval }
     }
 
     async fn read_battery_adc_event(&mut self) -> BatteryAdcEvent {
+        Timer::after(self.interval).await;
         let input_mv = self.adc.read_oneshot(&mut self.pin).await;
         BatteryAdcEvent(input_mv)
     }

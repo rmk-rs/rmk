@@ -134,7 +134,7 @@ pub(crate) fn expand_adc_device(
                             let pin = config.enable_pin_with_cal::<_, AdcCalLine<_>>(p.#pin, Attenuation::_11dB);
                             let adc = Adc::new(p.ADC1, config).into_async();
                             ::rmk::input_device::adc::esp32::Esp32BatteryAdc::new(
-                                adc, pin,
+                                adc, pin, ::rmk::embassy_time::Duration::from_secs(30),
                             )
                         };
                     },
