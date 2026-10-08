@@ -522,13 +522,12 @@ charge_led = { pin = "P0_14", low_active = true }
     std::fs::remove_file(path).ok();
     let hardware = hardware.unwrap();
 
-    for (board, state_pin, state_low, led_pin, led_low) in [
-        (None, "P1_08", true, "P0_13", false),
-        (Some(0), "P0_07", false, "P0_14", true),
+    for (battery, state_pin, state_low, led_pin, led_low) in [
+        (&hardware.battery, "P1_08", true, "P0_13", false),
+        (&hardware.peripheral_batteries[0], "P0_07", false, "P0_14", true),
     ] {
-        let battery = hardware.battery_config(board).unwrap();
-        let state = battery.charge_state.unwrap();
-        let led = battery.charge_led.unwrap();
+        let state = battery.charge_state.as_ref().unwrap();
+        let led = battery.charge_led.as_ref().unwrap();
         assert_eq!((state.pin.as_str(), state.low_active), (state_pin, state_low));
         assert_eq!((led.pin.as_str(), led.low_active), (led_pin, led_low));
     }

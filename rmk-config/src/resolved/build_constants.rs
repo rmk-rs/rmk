@@ -106,7 +106,7 @@ impl crate::KeyboardTomlConfig {
             rmk.split_peripherals_num
         };
         let central_battery_user_description = self
-            .battery_config(None)?
+            .resolve_battery_config(None)?
             .battery_user_description
             .unwrap_or_else(|| "Central".into());
         let mut split_battery_peripheral_ids = Vec::new();
@@ -115,7 +115,7 @@ impl crate::KeyboardTomlConfig {
             && let Some(split) = &self.split
         {
             for id in 0..split.peripheral.len() {
-                let battery = self.battery_config(Some(id))?;
+                let battery = self.resolve_battery_config(Some(id))?;
                 if battery.battery_adc_pin.is_some() {
                     split_battery_peripheral_ids.push(id);
                     split_battery_peripheral_user_descriptions.push(

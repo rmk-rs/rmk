@@ -16,7 +16,7 @@ pub struct BatteryTomlConfig {
 
 impl KeyboardTomlConfig {
     /// Resolve the battery table for a unibody/central board or a peripheral.
-    pub fn battery_config(&self, peripheral: Option<usize>) -> Result<BatteryTomlConfig, String> {
+    pub fn resolve_battery_config(&self, peripheral: Option<usize>) -> Result<BatteryTomlConfig, String> {
         if self.split.is_some() && self.battery.is_some() {
             return Err("Use [split.central.battery] and [split.peripheral.battery] for split keyboards".into());
         }

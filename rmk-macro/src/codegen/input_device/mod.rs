@@ -33,9 +33,7 @@ pub(crate) fn expand_input_device_config(
 
     let board = &hardware.board;
     let chip = &hardware.chip;
-    let battery = hardware
-        .battery_config(None)
-        .expect("invalid battery config");
+    let battery = &hardware.battery;
     let input_device = match board {
         BoardConfig::UniBody(board) => board.input_device.clone(),
         BoardConfig::Split(split) => split.central.input_device.clone().unwrap_or_default(),
@@ -45,7 +43,7 @@ pub(crate) fn expand_input_device_config(
         battery.adc.as_ref(),
         chip.series.clone(),
     );
-    let (battery_devices, battery_processors) = expand_battery_devices(chip, &battery);
+    let (battery_devices, battery_processors) = expand_battery_devices(chip, battery);
 
     for initializer in adc_initializers.into_iter().chain(battery_devices) {
         initialization.extend(initializer.initializer);

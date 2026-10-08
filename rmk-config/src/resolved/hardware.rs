@@ -72,19 +72,6 @@ pub struct BatteryAdcConfig {
     pub divider_total: u32,
 }
 
-impl Hardware {
-    pub fn battery_config(&self, peripheral: Option<usize>) -> Result<BatteryConfig, String> {
-        match peripheral {
-            None => Ok(self.battery.clone()),
-            Some(id) => self
-                .peripheral_batteries
-                .get(id)
-                .cloned()
-                .ok_or_else(|| "Invalid battery peripheral index".into()),
-        }
-    }
-}
-
 impl BatteryConfig {
     fn resolve(config: crate::BatteryTomlConfig, chip: &ChipModel) -> Result<Self, String> {
         let adc = if let Some(pin) = config.battery_adc_pin {
@@ -152,14 +139,14 @@ impl crate::KeyboardTomlConfig {
         let display = self.get_display_config();
         let output = self.get_output_config()?;
         let dependency = self.get_dependency_config();
-        let battery = BatteryConfig::resolve(self.battery_config(None)?, &chip)?;
+        let battery = BatteryConfig::resolve(self.resolve_battery_config(None)?, &chip)?;
         let peripheral_batteries = match &board {
             BoardConfig::Split(split) => (0..split.peripheral.len())
-                .map(|id| BatteryConfig::resolve(self.battery_config(Some(id))?, &chip))
+                .map(|id| BatteryConfig::resolve(self.resolve_battery_config(Some(id))?, &chip))
                 .collect::<Result<Vec<_>, _>>()?,
             _ => Vec::new(),
         };
-        let hardware = Hardware {
+        Ok(Hardware {
             chip,
             chip_config,
             communication,
@@ -172,8 +159,7 @@ impl crate::KeyboardTomlConfig {
             dependency,
             battery,
             peripheral_batteries,
-        };
-        Ok(hardware)
+        })
     }
 
     /// Resolve a raw TOML DFU section into the resolved [`DfuConfig`].
