@@ -848,7 +848,7 @@ async fn serve_keyboard_connection<
     let dongle_link = crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE;
     #[cfg(not(feature = "dongle"))]
     let dongle_link = false;
-    let host_phy = if cfg!(feature = "use_1m_phy") && !dongle_link {
+    let host_phy = if !dongle_link && (!crate::BLE_USE_2M_PHY || cfg!(feature = "use_1m_phy")) {
         PhyKind::Le1M
     } else {
         PhyKind::Le2M

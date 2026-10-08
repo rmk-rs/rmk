@@ -205,11 +205,6 @@ fn expand_bind_interrupt_for_split_peripheral(
             } else {
                 quote! {}
             };
-            let use_2m_phy = if ble_config.use_2m_phy.unwrap_or(true) {
-                quote! { .support_le_2m_phy() }
-            } else {
-                quote! {}
-            };
 
             // Extract PMW33xx configuration
             let split_config = match &hardware.board {
@@ -304,7 +299,7 @@ fn expand_bind_interrupt_for_split_peripheral(
                         .support_phy_update_central()
                         .support_phy_update_peripheral()
                         #support_subrating
-                        #use_2m_phy
+                        .support_le_2m_phy()
                         #tx_power
                         .peripheral_count(1)?
                         .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
