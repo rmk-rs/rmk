@@ -55,7 +55,6 @@ pub(crate) fn expand_battery_devices(
 mod tests {
     use std::path::Path;
 
-    use rmk_config::resolved::hardware::{BoardConfig, CommunicationConfig};
     use rmk_config::{KeyboardTomlConfig, PinConfig};
 
     use crate::codegen::input_device::expand_input_device_config;
@@ -63,10 +62,11 @@ mod tests {
 
     #[test]
     fn every_board_assembles_one_processor_for_either_battery_source() {
-        for (example, side) in [
-            ("nrf52840_ble", None),
-            ("nrf52840_ble_split", None),
-            ("nrf52840_ble_split", Some(0)),
+        for (example, side, adc_pin, charge_pin, led_pin) in [
+            ("nrf52840_ble", None, "P0_05", "P0_20", "P0_21"),
+            ("rp2040", None, "PIN_26", "PIN_10", "PIN_11"),
+            ("nrf52840_ble_split", None, "P0_05", "P0_20", "P0_21"),
+            ("nrf52840_ble_split", Some(0), "P0_05", "P0_20", "P0_21"),
         ] {
             for (adc, charging) in [(false, false), (false, true), (true, false), (true, true)] {
                 let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -74,34 +74,27 @@ mod tests {
                 let mut hardware = KeyboardTomlConfig::new_from_toml_path(&path)
                     .hardware()
                     .unwrap();
-                let pin = adc.then(|| "P0_05".to_string());
+                let pin = adc.then(|| adc_pin.to_string());
                 let state = charging.then(|| PinConfig {
-                    pin: "P0_20".into(),
+                    pin: charge_pin.into(),
                     low_active: true,
                 });
                 let led = (adc || charging).then(|| PinConfig {
-                    pin: "P0_21".into(),
+                    pin: led_pin.into(),
                     low_active: false,
                 });
-                let ble = match &mut hardware.communication {
-                    CommunicationConfig::Ble(ble) | CommunicationConfig::Both(_, ble) => ble,
-                    _ => panic!("expected BLE"),
+                let battery = rmk_config::resolved::hardware::BatteryConfig {
+                    adc: pin.map(|pin| rmk_config::resolved::hardware::BatteryAdcConfig {
+                        pin,
+                        divider_measured: 1,
+                        divider_total: 2,
+                    }),
+                    charge_state: state,
+                    charge_led: led,
                 };
-                ble.battery_adc_pin = None;
-                ble.charge_state = None;
-                ble.charge_led = None;
-                if let BoardConfig::Split(split) = &mut hardware.board {
-                    let board = match side {
-                        Some(id) => &mut split.peripheral[id],
-                        None => &mut split.central,
-                    };
-                    board.battery_adc_pin = pin;
-                    board.charge_state = state;
-                    board.charge_led = led;
-                } else {
-                    ble.battery_adc_pin = pin;
-                    ble.charge_state = state;
-                    ble.charge_led = led;
+                match side {
+                    Some(id) => hardware.peripheral_batteries[id] = battery,
+                    None => hardware.battery = battery,
                 }
                 let (init, devices, processors) = match side {
                     None => expand_input_device_config(&hardware),

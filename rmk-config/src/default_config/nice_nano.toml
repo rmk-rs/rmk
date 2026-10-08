@@ -3,6 +3,9 @@ usb_enable = true
 
 [ble]
 enabled = true
+
+
+[battery]
 battery_adc_pin = "P0_04"
 adc_divider_measured = 2000
 adc_divider_total = 2806

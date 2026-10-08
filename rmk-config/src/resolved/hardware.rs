@@ -52,6 +52,8 @@ pub struct Hardware {
     pub display: Option<DisplayConfig>,
     pub output: Vec<OutputConfig>,
     pub dependency: DependencyConfig,
+    pub battery: BatteryConfig,
+    pub peripheral_batteries: Vec<BatteryConfig>,
 }
 
 /// Battery inputs and indicator resolved for a single board.
@@ -70,86 +72,38 @@ pub struct BatteryAdcConfig {
     pub divider_total: u32,
 }
 
-impl Hardware {
-    /// Resolves battery hardware for a unibody/central (`None`) or peripheral (`Some(id)`).
-    ///
-    /// A central ADC pin overrides the whole `[ble]` ADC group. Unset central
-    /// charger pins inherit independently; peripherals use only their own settings.
-    pub fn battery_config(&self, peripheral: Option<usize>) -> Result<BatteryConfig, String> {
-        let ble = self.communication.get_ble_config().unwrap_or_default();
-        let (side, fallback, section) = match (&self.board, peripheral) {
-            (BoardConfig::Split(split), Some(id)) => {
-                let board = split
-                    .peripheral
-                    .get(id)
-                    .ok_or_else(|| format!("Invalid peripheral index {id}"))?;
-                (Some(board), None, format!("[[split.peripheral]] #{id}"))
+impl BatteryConfig {
+    fn resolve(config: crate::BatteryTomlConfig, chip: &ChipModel) -> Result<Self, String> {
+        let adc = if let Some(pin) = config.battery_adc_pin {
+            if pin == "vddh" && !matches!(chip.chip.as_str(), "nrf52840" | "nrf52833") {
+                return Err("battery_adc_pin = vddh requires a chip with a VDDH ADC input".into());
             }
-            (BoardConfig::Split(split), None) => (Some(&split.central), Some(&ble), "[split.central]".into()),
-            (BoardConfig::UniBody(_), None) => (None, Some(&ble), "[ble]".into()),
-            (BoardConfig::UniBody(_), Some(_)) => return Err("Unibody keyboard has no peripherals".into()),
-        };
-        if fallback.is_some() && !ble.enabled {
-            return Ok(BatteryConfig::default());
-        }
-
-        let (pin, measured, total, adc_section) =
-            if let Some(board) = side.filter(|board| board.battery_adc_pin.is_some()) {
-                (
-                    board.battery_adc_pin.as_ref(),
-                    board.adc_divider_measured,
-                    board.adc_divider_total,
-                    section.as_str(),
-                )
-            } else if let Some(ble) = fallback {
-                (
-                    ble.battery_adc_pin.as_ref(),
-                    ble.adc_divider_measured,
-                    ble.adc_divider_total,
-                    "[ble]",
-                )
-            } else {
-                (None, None, None, section.as_str())
-            };
-        let charge_state = side
-            .and_then(|board| board.charge_state.as_ref())
-            .or(fallback.and_then(|ble| ble.charge_state.as_ref()));
-        let charge_led = side
-            .and_then(|board| board.charge_led.as_ref())
-            .or(fallback.and_then(|ble| ble.charge_led.as_ref()));
-        if charge_led.is_some() && pin.is_none() && charge_state.is_none() {
-            return Err(format!(
-                "keyboard.toml: {section}.charge_led requires battery_adc_pin or charge_state on the same board"
-            ));
-        }
-        let adc = if let Some(pin) = pin {
+            if chip.chip == "nrf52820" {
+                return Err("nrf52820 has no ADC for battery_adc_pin".into());
+            }
+            if chip.series == ChipSeries::Stm32 {
+                return Err("Automatic battery ADC setup is unavailable for STM32; use a custom Rust reader".into());
+            }
             let (divider_measured, divider_total) = if pin == "vddh" {
                 (1, 5)
             } else {
-                (measured.unwrap_or(1), total.unwrap_or(1))
+                (
+                    config.adc_divider_measured.unwrap_or(1),
+                    config.adc_divider_total.unwrap_or(1),
+                )
             };
-            for (field, value) in [
-                ("adc_divider_measured", divider_measured),
-                ("adc_divider_total", divider_total),
-            ] {
-                if value == 0 {
-                    return Err(format!(
-                        "keyboard.toml: {adc_section}.{field} must be greater than zero"
-                    ));
-                }
-            }
             Some(BatteryAdcConfig {
-                pin: pin.clone(),
+                pin,
                 divider_measured,
                 divider_total,
             })
         } else {
             None
         };
-        Ok(BatteryConfig {
+        Ok(Self {
             adc,
-            charge_state: charge_state.cloned(),
-            charge_led: charge_led.cloned(),
+            charge_state: config.charge_state,
+            charge_led: config.charge_led,
         })
     }
 }
@@ -185,7 +139,14 @@ impl crate::KeyboardTomlConfig {
         let display = self.get_display_config();
         let output = self.get_output_config()?;
         let dependency = self.get_dependency_config();
-        let hardware = Hardware {
+        let battery = BatteryConfig::resolve(self.resolve_battery_config(None)?, &chip)?;
+        let peripheral_batteries = match &board {
+            BoardConfig::Split(split) => (0..split.peripheral.len())
+                .map(|id| BatteryConfig::resolve(self.resolve_battery_config(Some(id))?, &chip))
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => Vec::new(),
+        };
+        Ok(Hardware {
             chip,
             chip_config,
             communication,
@@ -196,14 +157,9 @@ impl crate::KeyboardTomlConfig {
             display,
             output,
             dependency,
-        };
-        hardware.battery_config(None)?;
-        if let BoardConfig::Split(split) = &hardware.board {
-            for id in 0..split.peripheral.len() {
-                hardware.battery_config(Some(id))?;
-            }
-        }
-        Ok(hardware)
+            battery,
+            peripheral_batteries,
+        })
     }
 
     /// Resolve a raw TOML DFU section into the resolved [`DfuConfig`].

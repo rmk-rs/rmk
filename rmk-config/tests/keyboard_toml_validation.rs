@@ -177,8 +177,7 @@ fn battery_adc_rejects_zero_divider_total() {
         "battery-zero-divider-total",
         &format!(
             r#"{}
-[ble]
-enabled = true
+[battery]
 battery_adc_pin = "P0_02"
 adc_divider_total = 0
 "#,
@@ -505,6 +504,7 @@ cols = 1
 row_offset = 0
 col_offset = 0
 matrix = { row_pins = ["P0_01"], col_pins = ["P0_02"] }
+[split.central.battery]
 charge_state = { pin = "P1_08", low_active = true }
 charge_led = { pin = "P0_13", low_active = false }
 [[split.peripheral]]
@@ -513,6 +513,7 @@ cols = 1
 row_offset = 0
 col_offset = 1
 matrix = { row_pins = ["P0_01"], col_pins = ["P0_02"] }
+[split.peripheral.battery]
 charge_state = { pin = "P0_07", low_active = false }
 charge_led = { pin = "P0_14", low_active = true }
 "#,
@@ -521,13 +522,12 @@ charge_led = { pin = "P0_14", low_active = true }
     std::fs::remove_file(path).ok();
     let hardware = hardware.unwrap();
 
-    for (board, state_pin, state_low, led_pin, led_low) in [
-        (None, "P1_08", true, "P0_13", false),
-        (Some(0), "P0_07", false, "P0_14", true),
+    for (battery, state_pin, state_low, led_pin, led_low) in [
+        (&hardware.battery, "P1_08", true, "P0_13", false),
+        (&hardware.peripheral_batteries[0], "P0_07", false, "P0_14", true),
     ] {
-        let battery = hardware.battery_config(board).unwrap();
-        let state = battery.charge_state.unwrap();
-        let led = battery.charge_led.unwrap();
+        let state = battery.charge_state.as_ref().unwrap();
+        let led = battery.charge_led.as_ref().unwrap();
         assert_eq!((state.pin.as_str(), state.low_active), (state_pin, state_low));
         assert_eq!((led.pin.as_str(), led.low_active), (led_pin, led_low));
     }
@@ -539,8 +539,7 @@ fn charge_led_requires_a_local_battery_source() {
         "led-without-source",
         &format!(
             r#"{}
-[ble]
-enabled = true
+[battery]
 charge_led = {{ pin = "P0_21", low_active = false }}
 "#,
             MINIMAL_KEYBOARD_TOML.replace("rp2040", "nrf52840")
@@ -554,4 +553,20 @@ charge_led = {{ pin = "P0_21", low_active = false }}
             .unwrap()
             .contains("charge_led requires battery_adc_pin or charge_state")
     );
+}
+
+#[test]
+fn incomplete_or_ambiguous_battery_tables_are_rejected() {
+    for table in [
+        "adc_divider_total = 2",
+        "charge_led = { pin = \"PIN_5\", low_active = true }",
+        "battery_adc_pin = \"vddh\"",
+    ] {
+        let path = write_temp_keyboard_toml(
+            "bad-battery-table",
+            &format!("{MINIMAL_KEYBOARD_TOML}\n[battery]\n{table}"),
+        );
+        assert!(KeyboardTomlConfig::new_from_toml_path(&path).hardware().is_err());
+        std::fs::remove_file(path).ok();
+    }
 }

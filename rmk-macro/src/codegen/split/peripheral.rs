@@ -707,9 +707,7 @@ pub(crate) fn expand_peripheral_input_device_config(
 
     let board = &hardware.board;
     let chip = &hardware.chip;
-    let battery = hardware
-        .battery_config(Some(id))
-        .expect("invalid peripheral battery config");
+    let battery = &hardware.peripheral_batteries[id];
     let joystick = match board {
         BoardConfig::Split(split) => split.peripheral[id]
             .input_device
@@ -721,7 +719,7 @@ pub(crate) fn expand_peripheral_input_device_config(
     };
     let (adc_devices, adc_processors) =
         expand_adc_device(joystick, battery.adc.as_ref(), chip.series.clone());
-    let (battery_devices, battery_processors) = expand_battery_devices(chip, &battery);
+    let (battery_devices, battery_processors) = expand_battery_devices(chip, battery);
 
     for initializer in adc_devices.into_iter().chain(battery_devices) {
         initializations.extend(initializer.initializer);

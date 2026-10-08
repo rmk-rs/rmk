@@ -100,7 +100,9 @@ cols = 2
 row_offset = 0
 col_offset = 0
 ble_addr = [0x18, 0xe2, 0x21, 0x80, 0xc0, 0xc7]
-# Battery monitoring configuration for central device
+
+# Battery measurement for the central board.
+[split.central.battery]
 battery_adc_pin = "P0_05"
 adc_divider_measured = 2000
 adc_divider_total = 2806
@@ -118,10 +120,13 @@ cols = 1
 row_offset = 2
 col_offset = 2
 ble_addr = [0x7e, 0xfe, 0x73, 0x9e, 0x66, 0xe3]
-# Battery monitoring for peripheral
+
+# Battery measurement for this peripheral.
+[split.peripheral.battery]
 battery_adc_pin = "P0_05"
 adc_divider_measured = 2000
 adc_divider_total = 2806
+
 [split.peripheral.matrix]
 matrix_type = "normal"
 row_pins = ["P1_11", "P1_10"]
