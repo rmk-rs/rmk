@@ -15,27 +15,25 @@ pub struct Rp2040BatteryAdc<'d> {
 }
 
 impl<'d> Rp2040BatteryAdc<'d> {
-    /// Creates an input device that waits `interval` before retrying a failed read.
+    /// Creates an input device that waits `interval` before each sampling attempt.
     ///
     /// # Panics
     ///
     /// Panics if `interval` is zero.
     pub fn new(adc: Adc<'d, Async>, channel: Channel<'d>, interval: Duration) -> Self {
-        assert!(interval.as_ticks() > 0, "battery ADC retry interval must be nonzero");
+        assert!(interval.as_ticks() > 0, "battery ADC interval must be nonzero");
         Self { adc, channel, interval }
     }
 
     async fn read_battery_adc_event(&mut self) -> BatteryAdcEvent {
         loop {
+            Timer::after(self.interval).await;
             match self.adc.read(&mut self.channel).await {
                 Ok(raw) => {
                     let input_mv = (u32::from(raw) * 3300 / 4096) as u16;
                     return BatteryAdcEvent(input_mv);
                 }
-                Err(_) => {
-                    warn!("Battery ADC read failed");
-                    Timer::after(self.interval).await;
-                }
+                Err(_) => warn!("Battery ADC read failed"),
             }
         }
     }

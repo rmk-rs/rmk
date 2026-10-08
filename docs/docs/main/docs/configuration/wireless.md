@@ -136,7 +136,7 @@ adc_divider_measured = 1
 adc_divider_total = 2
 ```
 
-For a split board, put these fields in its central or peripheral battery table. RMK samples continuously. If a read fails, it keeps the previous reading and waits 30 seconds before retrying. Boards with a different ADC reference need a custom Rust reader that publishes ADC input millivolts.
+For a split board, put these fields in its central or peripheral battery table. RMK waits 30 seconds before each sample, including the first. If a read fails, it keeps the previous reading and retries at the next sampling interval. Boards with a different ADC reference need a custom Rust reader that publishes ADC input millivolts.
 
 ### Peripheral battery reporting over BLE GATT
 
