@@ -67,7 +67,7 @@ pub use dongle::{DongleState, DongleStateEvent};
 pub use input::{
     Axis, AxisEvent, AxisValType, KeyPos, KeyboardEvent, KeyboardEventPos, ModifierEvent, PointingEvent,
     PointingProcessorEvent, PointingSetCpiEvent, RotaryEncoderPos, TOUCH_MAX_CONTACTS, TouchContact, TouchEvent,
-    TouchpadEvent,
+    TouchPos, TouchpadEvent,
 };
 #[cfg(all(feature = "split", feature = "_ble"))]
 pub use split::ClearPeerEvent;

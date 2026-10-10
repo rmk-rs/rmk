@@ -1967,14 +1967,14 @@ pub enum HeldKeyDecision {
 mod test {
 
     use embassy_time::Duration;
-    use rmk_types::action::KeyAction;
+    use rmk_types::action::{KeyAction, TouchAction, TouchGesture};
     use rmk_types::fork::Fork;
     use rmk_types::modifier::ModifierCombination;
     use rmk_types::morse::{MorseMode, MorseProfile};
 
     use super::*;
     use crate::config::{BehaviorConfig, ForksConfig, PositionalConfig};
-    use crate::event::{KeyPos, KeyboardEvent, KeyboardEventPos};
+    use crate::event::{KeyPos, KeyboardEvent, KeyboardEventPos, TouchPos};
     use crate::test_support::test_block_on as block_on;
     use crate::{a, k, layer, mo, th, thp};
 
@@ -2038,6 +2038,83 @@ mod test {
             fork: cfg,
             ..BehaviorConfig::default()
         })
+    }
+
+    /// A test keyboard with one touchpad, whose actions per layer come from `touch_map`.
+    fn create_test_keyboard_with_touch(touch_map: [[TouchAction; 1]; 2]) -> Keyboard<'static> {
+        let mut config = BehaviorConfig::default();
+        // `get_keymap`'s tap-hold at (row 2, col 1) references profile index 0.
+        let _ = config.morse.profiles.push(MorseProfile::new(
+            Some(true),
+            Some(MorseMode::PermissiveHold),
+            None,
+            None,
+        ));
+        let behavior_config: &'static mut BehaviorConfig = Box::leak(Box::new(config));
+        let per_key_config: &'static PositionalConfig<5, 14> = Box::leak(Box::new(PositionalConfig::default()));
+        let data = Box::leak(Box::new(
+            crate::keymap::KeymapData::new(get_keymap()).with_touch(touch_map),
+        ));
+        let keymap = Box::leak(Box::new(block_on(KeyMap::new(data, behavior_config, per_key_config))));
+        Keyboard::new(keymap)
+    }
+
+    /// A press or release of touchpad 0's tap.
+    fn tap(pressed: bool) -> KeyboardEvent {
+        KeyboardEvent {
+            pressed,
+            pos: KeyboardEventPos::Touch(TouchPos {
+                id: 0,
+                gesture: TouchGesture::Tap,
+            }),
+        }
+    }
+
+    #[test]
+    fn touch_gesture_runs_its_action_on_the_active_layer() {
+        let main = async {
+            let mut keyboard = create_test_keyboard_with_touch([
+                [TouchAction::new().with(TouchGesture::Tap, k!(B))],
+                [TouchAction::new().with(TouchGesture::Tap, k!(C))],
+            ]);
+
+            keyboard.process_inner(tap(true)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::B);
+            keyboard.process_inner(tap(false)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
+
+            // A tap started on layer 0 releases its layer 0 action after layer 1 turns on.
+            keyboard.process_inner(tap(true)).await;
+            keyboard.process_inner(KeyboardEvent::key(4, 9, true)).await;
+            keyboard.process_inner(tap(false)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
+
+            // With layer 1 on, the tap runs layer 1's action.
+            keyboard.process_inner(tap(true)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::C);
+            keyboard.process_inner(tap(false)).await;
+            keyboard.process_inner(KeyboardEvent::key(4, 9, false)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
+        };
+        block_on(main);
+    }
+
+    #[test]
+    fn a_transparent_touch_gesture_takes_the_action_below() {
+        let main = async {
+            let mut keyboard = create_test_keyboard_with_touch([
+                [TouchAction::new().with(TouchGesture::Tap, k!(B))],
+                [TouchAction::transparent()],
+            ]);
+
+            keyboard.process_inner(KeyboardEvent::key(4, 9, true)).await;
+            keyboard.process_inner(tap(true)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::B);
+            keyboard.process_inner(tap(false)).await;
+            keyboard.process_inner(KeyboardEvent::key(4, 9, false)).await;
+            assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
+        };
+        block_on(main);
     }
 
     #[test]

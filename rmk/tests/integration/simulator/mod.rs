@@ -625,6 +625,7 @@ fn input(pos: KeyboardEventPos) -> String {
     match pos {
         KeyboardEventPos::Key(key) => format!("key [{}, {}]", key.row, key.col),
         KeyboardEventPos::RotaryEncoder(pos) => format!("encoder {} {:?}", pos.id, pos.direction),
+        KeyboardEventPos::Touch(pos) => format!("touchpad {} {:?}", pos.id, pos.gesture),
         KeyboardEventPos::Combo(idx) => format!("combo {idx}"),
         KeyboardEventPos::Macro => "macro".to_string(),
         KeyboardEventPos::Virtual(idx) => format!("virtual {idx}"),

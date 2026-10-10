@@ -11,9 +11,10 @@ impl<F: AsyncNorFlash> Storage<F> {
         const COL: usize,
         const NUM_LAYER: usize,
         const NUM_ENCODER: usize,
+        const NUM_TOUCHPAD: usize,
     >(
         &mut self,
-        data: &mut crate::keymap::KeymapData<ROW, COL, NUM_LAYER, NUM_ENCODER>,
+        data: &mut crate::keymap::KeymapData<ROW, COL, NUM_LAYER, NUM_ENCODER, NUM_TOUCHPAD>,
         behavior: &mut crate::config::BehaviorConfig,
     ) -> Result<(), ()> {
         // Use fetch_all_items to speed up the keymap reading
