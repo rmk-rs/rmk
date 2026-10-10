@@ -35,38 +35,19 @@ impl BoardConfig {
     /// - If the board is the split board, the number of elements is the number of peripherals + 1 (central),
     ///   where the first element is the number of encoders on the central.
     pub fn get_num_encoder(&self) -> Vec<usize> {
-        let mut num_encoder = Vec::new();
         match self {
-            BoardConfig::Split(split) => {
-                // Central's encoders
-                num_encoder.push(
-                    split
-                        .central
+            BoardConfig::Split(split) => std::iter::once(&split.central)
+                .chain(&split.peripheral)
+                .map(|board| {
+                    board
                         .input_device
-                        .clone()
-                        .unwrap_or_default()
-                        .encoder
-                        .unwrap_or(Vec::new())
-                        .len(),
-                );
-
-                // Peripheral's encoders
-                for peri in &split.peripheral {
-                    num_encoder.push(
-                        peri.input_device
-                            .clone()
-                            .unwrap_or_default()
-                            .encoder
-                            .unwrap_or(Vec::new())
-                            .len(),
-                    );
-                }
-            }
-            BoardConfig::UniBody(uni_body_config) => {
-                num_encoder.push(uni_body_config.input_device.encoder.clone().unwrap_or(Vec::new()).len());
-            }
-        };
-        num_encoder
+                        .as_ref()
+                        .and_then(|device| device.encoder.as_ref())
+                        .map_or(0, Vec::len)
+                })
+                .collect(),
+            BoardConfig::UniBody(board) => vec![board.input_device.encoder.as_ref().map_or(0, Vec::len)],
+        }
     }
 }
 
