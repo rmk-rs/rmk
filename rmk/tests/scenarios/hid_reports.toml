@@ -65,9 +65,9 @@ steps = [
 ]
 expect = [["LCtrl"], { mouse = { buttons = 1 } }, { mouse = {} }, []]
 
-# `]` and its `SHIFTED()` twin `}` share one HID usage. The report
-# deduplicates held keycodes so the shared usage stays down until the
-# last holder releases it; the second key no longer vanishes on a roll.
+# `]` and its `SHIFTED()` twin `}` share one HID usage. Keep it down until
+# the last owner releases, but insert one report without it when another
+# position re-strikes it so the host sees the second make transition.
 [[test]]
 name = "shared_keycode_roll_keeps_second_key"
 steps = [
@@ -86,6 +86,7 @@ expect = [
   ["LShift", "Dot"],
   ["Dot", "RightBracket"],
   ["RightBracket"],
+  ["LShift"],
   ["LShift", "RightBracket"],
   ["LShift", "RightBracket"],
   ["LShift", "RightBracket", "Kc0"],
