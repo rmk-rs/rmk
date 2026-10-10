@@ -322,6 +322,7 @@ mod tests {
             rows: 4,
             cols: 3,
             map: None,
+            regions: None,
             default_variant: None,
             shapes: None,
             variant: None,

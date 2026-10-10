@@ -17,6 +17,7 @@ use sequential_storage::cache::page_states::CalculatedPageStates;
 use sequential_storage::map::{Key as MapKey, MapConfig, MapStorage, PostcardValue, SerializationError};
 #[cfg(feature = "host")]
 use {
+    crate::config::HoldTriggerPositions,
     crate::keyboard::combo::ComboConfig,
     rmk_types::action::{EncoderAction, KeyAction},
     rmk_types::constants::MACRO_CHUNK_SIZE,
@@ -157,6 +158,8 @@ pub(crate) enum StorageKey {
     BondInfo(u8),
     /// A slot the board defines, see [`store_user_data`].
     UserData(u8),
+    #[cfg(feature = "host")]
+    MorseHoldTriggerPositions,
 }
 
 /// A Storage item is actually a storage (key, value) pair.
@@ -211,6 +214,8 @@ pub(crate) enum StorageItem {
         slot: u8,
         data: heapless::Vec<u8, USER_DATA_MAX_SIZE>,
     },
+    #[cfg(feature = "host")]
+    MorseHoldTriggerPositions(HoldTriggerPositions),
 }
 
 impl StorageItem {
@@ -247,6 +252,11 @@ impl StorageItem {
             #[cfg(feature = "_ble")]
             Self::ActiveBleProfile(v) => (StorageKey::ActiveBleProfile, StorageValue::ActiveBleProfile(v)),
             Self::UserData { slot, data } => (StorageKey::UserData(slot), StorageValue::UserData(data)),
+            #[cfg(feature = "host")]
+            Self::MorseHoldTriggerPositions(v) => (
+                StorageKey::MorseHoldTriggerPositions,
+                StorageValue::MorseHoldTriggerPositions(v),
+            ),
         }
     }
 }
@@ -296,6 +306,8 @@ pub(crate) enum StorageValue {
     #[cfg(feature = "_ble")]
     ActiveBleProfile(u8),
     UserData(heapless::Vec<u8, USER_DATA_MAX_SIZE>),
+    #[cfg(feature = "host")]
+    MorseHoldTriggerPositions(HoldTriggerPositions),
 }
 
 impl<'a> PostcardValue<'a> for StorageValue {}
@@ -366,6 +378,7 @@ pub(crate) const SCHEMA_HASH: u32 = {
         hash = fnv_hash(hash, &(crate::MACRO_SPACE_SIZE as u32).to_le_bytes());
         hash = fnv_hash(hash, &(crate::COMBO_SIZE as u32).to_le_bytes());
         hash = fnv_hash(hash, &(crate::MORSE_SIZE as u32).to_le_bytes());
+        hash = fnv_hash(hash, &(crate::HOLD_TRIGGER_KEY_POSITION_MAX_NUM as u32).to_le_bytes());
     }
     hash
 };
@@ -493,6 +506,10 @@ impl<F: AsyncNorFlash, const ROW: usize, const COL: usize, const NUM_LAYER: usiz
             }
         };
         put(StorageItem::BehaviorConfig(behavior.into())).await;
+        put(StorageItem::MorseHoldTriggerPositions(
+            behavior.morse.hold_trigger_positions.clone(),
+        ))
+        .await;
         put(StorageItem::DefaultLayer(0)).await;
         put(StorageItem::LayoutOption(0)).await;
 
@@ -1025,6 +1042,9 @@ mod tests {
             StorageKey::ActiveBleProfile,
             #[cfg(feature = "_ble")]
             StorageKey::BondInfo(10),
+            StorageKey::UserData(11),
+            #[cfg(feature = "host")]
+            StorageKey::MorseHoldTriggerPositions,
         ];
         let mut buffer = [0u8; 64];
         for (tag, key) in keys.iter().enumerate() {
@@ -1057,6 +1077,9 @@ mod tests {
             StorageValue::BondInfo(ProfileInfo::default()),
             #[cfg(feature = "_ble")]
             StorageValue::ActiveBleProfile(0),
+            StorageValue::UserData(heapless::Vec::new()),
+            #[cfg(feature = "host")]
+            StorageValue::MorseHoldTriggerPositions(HoldTriggerPositions::new()),
         ];
         let mut buffer = [0u8; BUFFER_SIZE];
         for (tag, item) in data.iter().enumerate() {
