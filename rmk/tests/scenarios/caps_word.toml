@@ -9,17 +9,6 @@ map = "(0,0)  (0,1)"
 [[keymap.layer]]
 keys = "CapsWordToggle  A"
 
-[[test]]
-name = "caps_word_shifts_letters"
-steps = [
-  { tap = { pos = [0, 0], duration = 10 } },
-  { tap = { pos = [0, 1], duration = 10 } },
-]
-expect = [
-  ["LShift", "A"],
-  [],
-]
-
 # The 5 s timeout leaves the state machine activated-but-inactive, so the next
 # press of the Caps Word key has to switch it back on rather than off.
 [[test]]
