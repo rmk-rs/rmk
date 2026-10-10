@@ -153,6 +153,7 @@ where
             }
         }
         debug!("Loaded {} bond info", self.bonded_devices.len());
+        self.sync_bonded_slots();
 
         let profile =
             if let Ok(Some(StorageValue::ActiveBleProfile(profile))) = read(StorageKey::ActiveBleProfile).await {
@@ -167,6 +168,24 @@ where
 
     fn is_bonded(&self, slot_num: u8) -> bool {
         bond_info_of(&self.bonded_devices, slot_num).is_some()
+    }
+
+    /// Recompute the bitmap of slots holding a bond and publish it for
+    /// lighting. Called from every point that mutates `bonded_devices`, so a
+    /// rule gated on "slot N is paired" is never left reading a stale mask.
+    ///
+    /// Slots at or beyond the mask's width are dropped rather than wrapped: a
+    /// board configured with more profiles than the mask can carry loses the
+    /// high slots' observability, which is preferable to reporting them under
+    /// some other slot's bit.
+    fn sync_bonded_slots(&self) {
+        let mut mask = 0u8;
+        for info in self.bonded_devices.iter() {
+            if !info.removed && info.slot_num < u8::BITS as u8 {
+                mask |= 1 << info.slot_num;
+            }
+        }
+        crate::state::set_bonded_slots(mask);
     }
 
     /// Cached bond info for the currently active profile, cloned to free the
@@ -241,6 +260,7 @@ where
         }
 
         self.update_stack_bonds();
+        self.sync_bonded_slots();
 
         #[cfg(feature = "storage")]
         if store(StorageItem::BondInfo(profile_info)).await.is_err() {
@@ -292,6 +312,7 @@ where
 
         // Update the active bonding information in the stack
         self.update_stack_bonds();
+        self.sync_bonded_slots();
 
         // Mark the profile removed, instead of deleting it from storage
         #[cfg(feature = "storage")]

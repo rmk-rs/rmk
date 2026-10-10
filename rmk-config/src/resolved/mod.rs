@@ -32,6 +32,7 @@ pub mod host;
 pub mod identity;
 pub mod keymap;
 pub mod layout;
+pub mod lighting;
 
 pub use behavior::Behavior;
 pub use build_constants::BuildConstants;
@@ -39,7 +40,8 @@ pub use hardware::Hardware;
 pub use host::Host;
 pub use identity::Identity;
 pub use keymap::Keymap;
-pub use layout::Layout;
+pub use layout::{FixedPoint3, FixedSize2, Layout, PhysicalKey, PhysicalLayout};
+pub use lighting::Lighting;
 
 // Re-export constants used by codegen
 pub use crate::keycode_alias::KEYCODE_ALIAS;

@@ -167,6 +167,9 @@ impl KeyMapInner<'_> {
             return;
         }
         let before = self.get_activated_layer();
+        if self.behavior.default_layer == layer_num {
+            return;
+        }
         self.behavior.default_layer = layer_num;
         let after = self.get_activated_layer();
         // With no layer key held, the activated layer follows the default; a
@@ -174,6 +177,7 @@ impl KeyMapInner<'_> {
         if before != after {
             publish_event(LayerChangeEvent::new(after));
         }
+        publish_event(LayerChangeEvent::new(self.get_activated_layer()));
     }
 
     fn get_action_at(&self, pos: KeyboardEventPos, layer_num: usize) -> KeyAction {
@@ -810,6 +814,7 @@ mod test {
     use rmk_types::fork::{Fork, StateBits};
     use rmk_types::modifier::ModifierCombination;
 
+    use crate::event::{LayerChangeEvent, SubscribableEvent};
     use crate::keyboard::combo::{Combo, ComboConfig};
     use crate::keymap::fill_vec;
     use crate::{COMBO_MAX_NUM, FORK_MAX_NUM, k};
@@ -964,5 +969,21 @@ mod test {
             keymap.get_action_with_layer_cache(KeyboardEvent::key(0, 0, false)),
             k!(A)
         );
+    }
+
+    #[test]
+    fn changing_default_layer_publishes_layer_change() {
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::keymap::{KeyMap, KeymapData};
+
+        let mut data = KeymapData::<1, 1, 2>::new([[[k!(A)]], [[k!(B)]]]);
+        let mut behavior = BehaviorConfig::default();
+        let positional = PositionalConfig::<1, 1>::default();
+        let keymap = KeyMap::build(&mut data, &mut behavior, &positional);
+        let mut subscriber = LayerChangeEvent::subscriber();
+
+        keymap.set_default_layer(1);
+
+        assert_eq!(subscriber.try_next_message_pure(), Some(LayerChangeEvent::new(1)));
     }
 }

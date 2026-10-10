@@ -7,9 +7,46 @@ use rmk_types::protocol::rynk::RynkError;
 #[cfg(feature = "_ble")]
 use rmk_types::protocol::rynk::command::{ClearBleProfile, GetBleStatus, SwitchBleProfile};
 use rmk_types::protocol::rynk::command::{GetConnectionStatus, GetConnectionType};
+#[cfg(all(feature = "_ble", feature = "split"))]
+use rmk_types::protocol::rynk::command::{GetSplitCentralLatency, SetSplitCentralLatency};
+#[cfg(all(feature = "_ble", feature = "split"))]
+use rmk_types::protocol::rynk::{SplitCentralLatencyPolicy, SplitCentralLatencyState};
 
 use super::super::RynkService;
 use super::Handle;
+
+#[cfg(all(feature = "_ble", feature = "split"))]
+impl From<crate::split::ble::central::LatencyPolicy> for SplitCentralLatencyPolicy {
+    fn from(value: crate::split::ble::central::LatencyPolicy) -> Self {
+        Self {
+            powered: value.powered,
+            battery: value.battery,
+            override_latency: value.override_latency,
+        }
+    }
+}
+
+#[cfg(all(feature = "_ble", feature = "split"))]
+impl From<SplitCentralLatencyPolicy> for crate::split::ble::central::LatencyPolicy {
+    fn from(value: SplitCentralLatencyPolicy) -> Self {
+        Self {
+            powered: value.powered,
+            battery: value.battery,
+            override_latency: value.override_latency,
+        }
+    }
+}
+
+#[cfg(all(feature = "_ble", feature = "split"))]
+impl From<crate::split::ble::central::LatencyState> for SplitCentralLatencyState {
+    fn from(value: crate::split::ble::central::LatencyState) -> Self {
+        Self {
+            policy: value.policy.into(),
+            powered: value.powered,
+            effective: value.effective,
+        }
+    }
+}
 
 impl Handle<GetConnectionType> for RynkService<'_> {
     async fn handle(&self, _: ()) -> Result<ConnectionType, RynkError> {
@@ -22,6 +59,21 @@ impl Handle<GetConnectionType> for RynkService<'_> {
 impl Handle<GetConnectionStatus> for RynkService<'_> {
     async fn handle(&self, _: ()) -> Result<ConnectionStatus, RynkError> {
         Ok(self.ctx.connection_status())
+    }
+}
+
+#[cfg(all(feature = "_ble", feature = "split"))]
+impl Handle<GetSplitCentralLatency> for RynkService<'_> {
+    async fn handle(&self, _: ()) -> Result<SplitCentralLatencyState, RynkError> {
+        Ok(crate::split::ble::central::latency_state().into())
+    }
+}
+
+#[cfg(all(feature = "_ble", feature = "split"))]
+impl Handle<SetSplitCentralLatency> for RynkService<'_> {
+    async fn handle(&self, policy: SplitCentralLatencyPolicy) -> Result<SplitCentralLatencyState, RynkError> {
+        crate::split::ble::central::set_latency_policy(policy.into()).map_err(|_| RynkError::Invalid)?;
+        Ok(crate::split::ble::central::latency_state().into())
     }
 }
 

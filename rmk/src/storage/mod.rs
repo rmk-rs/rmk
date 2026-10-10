@@ -9,6 +9,12 @@ use embedded_storage::nor_flash::NorFlash;
 use embedded_storage_async::nor_flash::NorFlash as AsyncNorFlash;
 use rmk_types::connection::ConnectionType;
 use rmk_types::morse::MorseProfile;
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+use rmk_types::protocol::rynk::{
+    LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE, LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE,
+    LIGHTING_EXTENSION_PARAM_CHUNK, LIGHTING_SCENE_CHUNK_SIZE, LightingConditionalSceneCell,
+    LightingExtendedConditionalSceneCell, LightingLayerPolicy, LightingSceneCell,
+};
 use sequential_storage::Error as SSError;
 use sequential_storage::cache::Cache;
 use sequential_storage::cache::key_pointers::ArrayKeyPointers;
@@ -42,6 +48,29 @@ pub(crate) enum FlashOperationMessage {
     Read(StorageKey),
     /// Fully erase and reset the storage.
     Reset,
+    /// One shard of the lighting scene table, in wire (stable LED id) form.
+    /// Index 0 starts a new generation.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneShard {
+        index: u8,
+        cells: heapless::Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+    },
+    /// Commit the lighting scene table written by the preceding shards:
+    /// authoritative cell count and layer policy.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneCommit { len: u16, policy: LightingLayerPolicy },
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneShard {
+        index: u8,
+        cells: heapless::Vec<LightingExtendedConditionalSceneCell, LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE>,
+    },
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneCommit { len: u16 },
+    /// Animated extension-band selection and the selected effect's parameters.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionState(LightingExtensionRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionOverlay(LightingExtensionOverlayRecord),
 }
 
 // Requests to the storage task, handled in order (FIFO). Each carries the id `REPLY` answers it
@@ -96,6 +125,12 @@ pub(crate) fn read(key: StorageKey) -> impl Future<Output = Result<Option<Storag
 /// Erase everything and reboot. Fire and forget.
 pub(crate) fn reset() -> impl Future<Output = ()> {
     FLASH_CHANNEL.send((FlashOperationMessage::Reset, None))
+}
+
+/// Queue a lighting storage operation without waiting for the result.
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+pub(crate) fn send_unchecked(message: FlashOperationMessage) -> impl Future<Output = ()> {
+    FLASH_CHANNEL.send((message, None))
 }
 
 /// The most one user slot holds. Changing it reframes stored values, but the new
@@ -157,6 +192,30 @@ pub(crate) enum StorageKey {
     BondInfo(u8),
     /// A slot the board defines, see [`store_user_data`].
     UserData(u8),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneTable,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneShard(u8),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneTable,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneShard(u8),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionState,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionOverlay,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneTableV2,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneShardV2(u8),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneCommit,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneShardB(u8),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneCommit,
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneShardB(u8),
 }
 
 /// A Storage item is actually a storage (key, value) pair.
@@ -211,6 +270,32 @@ pub(crate) enum StorageItem {
         slot: u8,
         data: heapless::Vec<u8, USER_DATA_MAX_SIZE>,
     },
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneTable(LightingSceneTableRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneShard {
+        generation: LightingGeneration,
+        index: u8,
+        cells: heapless::Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+    },
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneTable(u16),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionState(LightingExtensionRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionOverlay(LightingExtensionOverlayRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneTableV2(u16),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneShard {
+        generation: LightingGeneration,
+        index: u8,
+        cells: heapless::Vec<LightingExtendedConditionalSceneCell, LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE>,
+    },
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneCommit(LightingSceneCommitRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneCommit(LightingRuntimeConditionalSceneCommitRecord),
 }
 
 impl StorageItem {
@@ -247,6 +332,53 @@ impl StorageItem {
             #[cfg(feature = "_ble")]
             Self::ActiveBleProfile(v) => (StorageKey::ActiveBleProfile, StorageValue::ActiveBleProfile(v)),
             Self::UserData { slot, data } => (StorageKey::UserData(slot), StorageValue::UserData(data)),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            Self::LightingSceneTable(v) => (StorageKey::LightingSceneTable, StorageValue::LightingSceneTable(v)),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            Self::LightingSceneShard {
+                generation,
+                index,
+                cells,
+            } => (
+                generation.scene_shard_key(index),
+                StorageValue::LightingSceneShard(cells),
+            ),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            Self::LightingRuntimeConditionalSceneTable(v) => (
+                StorageKey::LightingRuntimeConditionalSceneTable,
+                StorageValue::LightingRuntimeConditionalSceneTable(v),
+            ),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            Self::LightingExtensionState(v) => (
+                StorageKey::LightingExtensionState,
+                StorageValue::LightingExtensionState(v),
+            ),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            Self::LightingExtensionOverlay(v) => (
+                StorageKey::LightingExtensionOverlay,
+                StorageValue::LightingExtensionOverlay(v),
+            ),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            Self::LightingRuntimeConditionalSceneTableV2(v) => (
+                StorageKey::LightingRuntimeConditionalSceneTableV2,
+                StorageValue::LightingRuntimeConditionalSceneTableV2(v),
+            ),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            Self::LightingRuntimeConditionalSceneShard {
+                generation,
+                index,
+                cells,
+            } => (
+                generation.runtime_conditional_shard_key(index),
+                StorageValue::LightingRuntimeConditionalSceneShardV2(cells),
+            ),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            Self::LightingSceneCommit(v) => (StorageKey::LightingSceneCommit, StorageValue::LightingSceneCommit(v)),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            Self::LightingRuntimeConditionalSceneCommit(v) => (
+                StorageKey::LightingRuntimeConditionalSceneCommit,
+                StorageValue::LightingRuntimeConditionalSceneCommit(v),
+            ),
         }
     }
 }
@@ -296,9 +428,224 @@ pub(crate) enum StorageValue {
     #[cfg(feature = "_ble")]
     ActiveBleProfile(u8),
     UserData(heapless::Vec<u8, USER_DATA_MAX_SIZE>),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneTable(LightingSceneTableRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneShard(heapless::Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneTable(u16),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneShard(
+        heapless::Vec<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>,
+    ),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionState(LightingExtensionRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingExtensionOverlay(LightingExtensionOverlayRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneTableV2(u16),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneShardV2(
+        heapless::Vec<LightingExtendedConditionalSceneCell, LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE>,
+    ),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingSceneCommit(LightingSceneCommitRecord),
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    LightingRuntimeConditionalSceneCommit(LightingRuntimeConditionalSceneCommitRecord),
 }
 
 impl<'a> PostcardValue<'a> for StorageValue {}
+
+/// Persisted animated-extension selection, plus the parameter values of the
+/// effect it names. Only the selected effect's parameters are kept: they are
+/// what a reboot has to reproduce, and a fixed-size record keeps the write
+/// cost of a single flash entry predictable.
+///
+/// Every index here is validated against the running firmware before it is
+/// applied. Effect and palette lists are compiled in, so inserting one effect
+/// shifts every later index; a record written by an older build would
+/// otherwise resurrect a selection that now names something else.
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct LightingExtensionRecord {
+    pub effect: u8,
+    pub palette: u8,
+    pub value: u8,
+    pub speed: u8,
+    /// Valid entries in `params`; the remainder is padding.
+    pub param_len: u8,
+    pub params: [u8; LIGHTING_EXTENSION_PARAM_CHUNK],
+}
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+impl LightingExtensionRecord {
+    /// The parameter values that belong to [`Self::effect`].
+    pub fn params(&self) -> &[u8] {
+        &self.params[..(self.param_len as usize).min(LIGHTING_EXTENSION_PARAM_CHUNK)]
+    }
+}
+
+/// Persisted optional second effect and the parameter row it uses. This is a
+/// separate key so the established primary-extension record remains readable
+/// across firmware upgrades.
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct LightingExtensionOverlayRecord {
+    pub effect: Option<u8>,
+    pub param_len: u8,
+    pub params: [u8; LIGHTING_EXTENSION_PARAM_CHUNK],
+}
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+impl LightingExtensionOverlayRecord {
+    pub fn params(&self) -> &[u8] {
+        &self.params[..(self.param_len as usize).min(LIGHTING_EXTENSION_PARAM_CHUNK)]
+    }
+}
+
+/// Persisted lighting scene-table header. Shards beyond `len` are stale
+/// leftovers from a larger previous table and are ignored at load.
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub(crate) struct LightingSceneTableRecord {
+    pub(crate) len: u16,
+    pub(crate) policy: LightingLayerPolicy,
+}
+
+/// Which of two shard key sets a lighting table generation occupies.
+///
+/// A rewrite lands in the generation the commit record does not name, then
+/// the commit record moves. Boot reads only the committed generation, so a
+/// rewrite cut short by power loss leaves the previous table intact instead
+/// of a mix of old and new shards. Generation A is the original key set, so
+/// tables written before commit records existed load as A.
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub(crate) enum LightingGeneration {
+    A,
+    B,
+}
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+impl LightingGeneration {
+    const fn alternate(self) -> Self {
+        match self {
+            Self::A => Self::B,
+            Self::B => Self::A,
+        }
+    }
+
+    const fn scene_shard_key(self, index: u8) -> StorageKey {
+        match self {
+            Self::A => StorageKey::LightingSceneShard(index),
+            Self::B => StorageKey::LightingSceneShardB(index),
+        }
+    }
+
+    const fn runtime_conditional_shard_key(self, index: u8) -> StorageKey {
+        match self {
+            Self::A => StorageKey::LightingRuntimeConditionalSceneShardV2(index),
+            Self::B => StorageKey::LightingRuntimeConditionalSceneShardB(index),
+        }
+    }
+}
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub(crate) struct LightingSceneCommitRecord {
+    pub(crate) generation: LightingGeneration,
+    pub(crate) len: u16,
+    pub(crate) policy: LightingLayerPolicy,
+    pub(crate) digest: u32,
+}
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub(crate) struct LightingRuntimeConditionalSceneCommitRecord {
+    pub(crate) generation: LightingGeneration,
+    pub(crate) len: u16,
+    pub(crate) digest: u32,
+}
+
+/// FNV-1a over the postcard encoding of each cell, in table order. It tells a
+/// committed generation's shards from a stale or torn set without buffering.
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LightingTableDigest(u32);
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+impl LightingTableDigest {
+    const fn new() -> Self {
+        Self(FNV_OFFSET)
+    }
+
+    fn fold<T: serde::Serialize>(&mut self, cell: &T) {
+        if let Ok(digest) = postcard::serialize_with_flavor(cell, *self) {
+            *self = digest;
+        }
+    }
+
+    const fn value(self) -> u32 {
+        self.0
+    }
+}
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+impl postcard::ser_flavors::Flavor for LightingTableDigest {
+    type Output = Self;
+
+    fn try_push(&mut self, data: u8) -> postcard::Result<()> {
+        self.0 = fnv_hash(self.0, &[data]);
+        Ok(())
+    }
+
+    fn finalize(self) -> postcard::Result<Self> {
+        Ok(self)
+    }
+}
+
+/// One in-progress table rewrite on the storage task: the generation its
+/// shards go to and the digest of the cells written so far.
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LightingTableWrite {
+    generation: Option<LightingGeneration>,
+    digest: LightingTableDigest,
+}
+
+#[cfg(all(feature = "lighting", feature = "rynk"))]
+impl LightingTableWrite {
+    pub(crate) const fn new() -> Self {
+        Self {
+            generation: None,
+            digest: LightingTableDigest::new(),
+        }
+    }
+
+    fn begin(&mut self, generation: LightingGeneration) {
+        self.generation = Some(generation);
+        self.digest = LightingTableDigest::new();
+    }
+
+    fn fold<T: serde::Serialize>(&mut self, cells: &[T]) {
+        for cell in cells {
+            self.digest.fold(cell);
+        }
+    }
+
+    fn finish(&mut self, fallback: LightingGeneration) -> (LightingGeneration, u32) {
+        let generation = self.generation.take().unwrap_or(fallback);
+        let digest = self.digest.value();
+        self.digest = LightingTableDigest::new();
+        (generation, digest)
+    }
+}
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -548,10 +895,358 @@ impl<F: AsyncNorFlash> Storage<F> {
         // Flash now has every chunk, so the next save writes only what changed, zeros included.
         data.macros_stored = true;
     }
+
+    /// Read the persisted animated-extension selection at startup, before the
+    /// storage task takes ownership. The caller validates every index against
+    /// its own compiled effect/palette lists before applying it.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub async fn read_lighting_extension_state(&mut self) -> Option<LightingExtensionRecord> {
+        match self.fetch(StorageKey::LightingExtensionState).await {
+            Ok(Some(StorageValue::LightingExtensionState(record))) => Some(record),
+            _ => None,
+        }
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub async fn read_lighting_extension_overlay(&mut self) -> Option<LightingExtensionOverlayRecord> {
+        match self.fetch(StorageKey::LightingExtensionOverlay).await {
+            Ok(Some(StorageValue::LightingExtensionOverlay(record))) => Some(record),
+            _ => None,
+        }
+    }
+
+    /// Read the persisted lighting scene configuration at startup, before the
+    /// storage task takes ownership. Returns the persisted layer policy, if
+    /// any, and appends up to `CAP` stored cells to `cells`.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub async fn read_lighting_scenes<const CAP: usize>(
+        &mut self,
+        cells: &mut heapless::Vec<LightingSceneCell, CAP>,
+    ) -> Option<LightingLayerPolicy> {
+        if let Ok(Some(StorageValue::LightingSceneCommit(commit))) = self.fetch(StorageKey::LightingSceneCommit).await {
+            let start = cells.len();
+            let mut digest = LightingTableDigest::new();
+            let mut seen: u16 = 0;
+            let mut index: u8 = 0;
+            while seen < commit.len {
+                let Ok(Some(StorageValue::LightingSceneShard(shard))) =
+                    self.fetch(commit.generation.scene_shard_key(index)).await
+                else {
+                    break;
+                };
+                if shard.is_empty() {
+                    break;
+                }
+                for cell in shard {
+                    if seen == commit.len {
+                        break;
+                    }
+                    digest.fold(&cell);
+                    seen += 1;
+                    let _ = cells.push(cell);
+                }
+                let Some(next) = index.checked_add(1) else {
+                    break;
+                };
+                index = next;
+            }
+            if seen != commit.len || digest.value() != commit.digest {
+                cells.truncate(start);
+                return None;
+            }
+            return Some(commit.policy);
+        }
+
+        let Ok(Some(StorageValue::LightingSceneTable(record))) = self.fetch(StorageKey::LightingSceneTable).await
+        else {
+            return None;
+        };
+        let len = (record.len as usize).min(CAP);
+        let mut index: u8 = 0;
+        'shards: while cells.len() < len {
+            let Ok(Some(StorageValue::LightingSceneShard(shard))) =
+                self.fetch(StorageKey::LightingSceneShard(index)).await
+            else {
+                break;
+            };
+            if shard.is_empty() {
+                break;
+            }
+            for cell in shard {
+                if cells.len() == len || cells.push(cell).is_err() {
+                    break 'shards;
+                }
+            }
+            let Some(next) = index.checked_add(1) else {
+                break;
+            };
+            index = next;
+        }
+        Some(record.policy)
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    async fn committed_lighting_scene_generation(&mut self) -> Option<LightingGeneration> {
+        match self.fetch(StorageKey::LightingSceneCommit).await {
+            Ok(Some(StorageValue::LightingSceneCommit(commit))) => Some(commit.generation),
+            _ => None,
+        }
+    }
+
+    /// Write one shard of a scene-table rewrite. Index 0 opens a generation:
+    /// the one the current commit does not name, so the committed table stays
+    /// readable until the rewrite commits.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub(crate) async fn store_lighting_scene_shard(
+        &mut self,
+        write: &mut LightingTableWrite,
+        index: u8,
+        cells: heapless::Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE>,
+    ) -> Result<(), SSError<F::Error>> {
+        if index == 0 || write.generation.is_none() {
+            let committed = self.committed_lighting_scene_generation().await;
+            write.begin(committed.map_or(LightingGeneration::B, LightingGeneration::alternate));
+        }
+        let generation = write.generation.expect("begun above");
+        write.fold(cells.as_slice());
+        // Rewrites cover the whole table on every mutation; comparing before
+        // writing keeps unchanged shards from consuming flash.
+        match self.fetch(generation.scene_shard_key(index)).await {
+            Ok(Some(StorageValue::LightingSceneShard(saved))) if saved == cells => Ok(()),
+            _ => {
+                self.put(StorageItem::LightingSceneShard {
+                    generation,
+                    index,
+                    cells,
+                })
+                .await
+            }
+        }
+    }
+
+    /// Commit the generation the preceding shards were written to. An
+    /// identical table is already committed under the other generation when
+    /// the length, policy, and digest match, so nothing moves.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub(crate) async fn commit_lighting_scenes(
+        &mut self,
+        write: &mut LightingTableWrite,
+        len: u16,
+        policy: LightingLayerPolicy,
+    ) -> Result<(), SSError<F::Error>> {
+        let committed = self.committed_lighting_scene_generation().await;
+        let (generation, digest) = write.finish(committed.map_or(LightingGeneration::B, LightingGeneration::alternate));
+        let record = LightingSceneCommitRecord {
+            generation,
+            len,
+            policy,
+            digest,
+        };
+        match self.fetch(StorageKey::LightingSceneCommit).await {
+            Ok(Some(StorageValue::LightingSceneCommit(saved)))
+                if (saved.len, saved.policy, saved.digest) == (record.len, record.policy, record.digest) => {}
+            _ => self.put(StorageItem::LightingSceneCommit(record)).await?,
+        }
+        // A downgrade reads the legacy header against generation A, which
+        // later rewrites overwrite in place; leave it describing no cells.
+        if let Ok(Some(StorageValue::LightingSceneTable(saved))) = self.fetch(StorageKey::LightingSceneTable).await
+            && saved.len != 0
+        {
+            self.put(StorageItem::LightingSceneTable(LightingSceneTableRecord {
+                len: 0,
+                ..saved
+            }))
+            .await?
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    async fn committed_lighting_runtime_conditional_generation(&mut self) -> Option<LightingGeneration> {
+        match self.fetch(StorageKey::LightingRuntimeConditionalSceneCommit).await {
+            Ok(Some(StorageValue::LightingRuntimeConditionalSceneCommit(commit))) => Some(commit.generation),
+            _ => None,
+        }
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub(crate) async fn store_lighting_runtime_conditional_shard(
+        &mut self,
+        write: &mut LightingTableWrite,
+        index: u8,
+        cells: heapless::Vec<LightingExtendedConditionalSceneCell, LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE>,
+    ) -> Result<(), SSError<F::Error>> {
+        if index == 0 || write.generation.is_none() {
+            let committed = self.committed_lighting_runtime_conditional_generation().await;
+            write.begin(committed.map_or(LightingGeneration::B, LightingGeneration::alternate));
+        }
+        let generation = write.generation.expect("begun above");
+        write.fold(cells.as_slice());
+        match self.fetch(generation.runtime_conditional_shard_key(index)).await {
+            Ok(Some(StorageValue::LightingRuntimeConditionalSceneShardV2(saved))) if saved == cells => Ok(()),
+            _ => {
+                self.put(StorageItem::LightingRuntimeConditionalSceneShard {
+                    generation,
+                    index,
+                    cells,
+                })
+                .await
+            }
+        }
+    }
+
+    /// Commit the runtime conditional generation, and empty both legacy
+    /// headers so a firmware downgrade sees no rules rather than stale cells
+    /// that were edited or deleted since.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub(crate) async fn commit_lighting_runtime_conditional_scenes(
+        &mut self,
+        write: &mut LightingTableWrite,
+        len: u16,
+    ) -> Result<(), SSError<F::Error>> {
+        let committed = self.committed_lighting_runtime_conditional_generation().await;
+        let (generation, digest) = write.finish(committed.map_or(LightingGeneration::B, LightingGeneration::alternate));
+        let record = LightingRuntimeConditionalSceneCommitRecord {
+            generation,
+            len,
+            digest,
+        };
+        match self.fetch(StorageKey::LightingRuntimeConditionalSceneCommit).await {
+            Ok(Some(StorageValue::LightingRuntimeConditionalSceneCommit(saved)))
+                if (saved.len, saved.digest) == (record.len, record.digest) => {}
+            _ => {
+                self.put(StorageItem::LightingRuntimeConditionalSceneCommit(record))
+                    .await?
+            }
+        }
+        if let Ok(Some(StorageValue::LightingRuntimeConditionalSceneTableV2(saved))) =
+            self.fetch(StorageKey::LightingRuntimeConditionalSceneTableV2).await
+            && saved != 0
+        {
+            self.put(StorageItem::LightingRuntimeConditionalSceneTableV2(0)).await?
+        }
+        if let Ok(Some(StorageValue::LightingRuntimeConditionalSceneTable(saved))) =
+            self.fetch(StorageKey::LightingRuntimeConditionalSceneTable).await
+            && saved != 0
+        {
+            self.put(StorageItem::LightingRuntimeConditionalSceneTable(0)).await?
+        }
+        Ok(())
+    }
+
+    /// Read the persisted ordered runtime conditional table at startup.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    pub async fn read_lighting_runtime_conditional_scenes<const CAP: usize>(
+        &mut self,
+        cells: &mut heapless::Vec<LightingExtendedConditionalSceneCell, CAP>,
+    ) {
+        if let Ok(Some(StorageValue::LightingRuntimeConditionalSceneCommit(commit))) =
+            self.fetch(StorageKey::LightingRuntimeConditionalSceneCommit).await
+        {
+            let start = cells.len();
+            let mut digest = LightingTableDigest::new();
+            let mut seen: u16 = 0;
+            let mut index: u8 = 0;
+            while seen < commit.len {
+                let Ok(Some(StorageValue::LightingRuntimeConditionalSceneShardV2(shard))) =
+                    self.fetch(commit.generation.runtime_conditional_shard_key(index)).await
+                else {
+                    break;
+                };
+                if shard.is_empty() {
+                    break;
+                }
+                for cell in shard {
+                    if seen == commit.len {
+                        break;
+                    }
+                    digest.fold(&cell);
+                    seen += 1;
+                    let _ = cells.push(cell);
+                }
+                let Some(next) = index.checked_add(1) else {
+                    break;
+                };
+                index = next;
+            }
+            if seen != commit.len || digest.value() != commit.digest {
+                cells.truncate(start);
+            }
+            return;
+        }
+
+        if let Ok(Some(StorageValue::LightingRuntimeConditionalSceneTableV2(saved_len))) =
+            self.fetch(StorageKey::LightingRuntimeConditionalSceneTableV2).await
+        {
+            let len = (saved_len as usize).min(CAP);
+            let mut index: u8 = 0;
+            'shards: while cells.len() < len {
+                let Ok(Some(StorageValue::LightingRuntimeConditionalSceneShardV2(shard))) = self
+                    .fetch(StorageKey::LightingRuntimeConditionalSceneShardV2(index))
+                    .await
+                else {
+                    break;
+                };
+                if shard.is_empty() {
+                    break;
+                }
+                for cell in shard {
+                    if cells.len() == len || cells.push(cell).is_err() {
+                        break 'shards;
+                    }
+                }
+                let Some(next) = index.checked_add(1) else {
+                    break;
+                };
+                index = next;
+            }
+            return;
+        }
+
+        let Ok(Some(StorageValue::LightingRuntimeConditionalSceneTable(saved_len))) =
+            self.fetch(StorageKey::LightingRuntimeConditionalSceneTable).await
+        else {
+            return;
+        };
+        let len = (saved_len as usize).min(CAP);
+        let mut index: u8 = 0;
+        'legacy_shards: while cells.len() < len {
+            let Ok(Some(StorageValue::LightingRuntimeConditionalSceneShard(shard))) = self
+                .fetch(StorageKey::LightingRuntimeConditionalSceneShard(index))
+                .await
+            else {
+                break;
+            };
+            if shard.is_empty() {
+                break;
+            }
+            for cell in shard {
+                if cells.len() == len
+                    || cells
+                        .push(LightingExtendedConditionalSceneCell {
+                            cell,
+                            connection: None,
+                            effects: None,
+                        })
+                        .is_err()
+                {
+                    break 'legacy_shards;
+                }
+            }
+            let Some(next) = index.checked_add(1) else {
+                break;
+            };
+            index = next;
+        }
+    }
 }
 
 impl<F: AsyncNorFlash> crate::core_traits::Runnable for Storage<F> {
     async fn run(&mut self) -> ! {
+        #[cfg(all(feature = "lighting", feature = "rynk"))]
+        let mut scene_write = LightingTableWrite::new();
+        #[cfg(all(feature = "lighting", feature = "rynk"))]
+        let mut runtime_conditional_write = LightingTableWrite::new();
         loop {
             let (message, reply_id) = FLASH_CHANNEL.receive().await;
             let result = match message {
@@ -564,6 +1259,55 @@ impl<F: AsyncNorFlash> crate::core_traits::Runnable for Storage<F> {
                     reboot_keyboard();
                     // Only `std` returns from reboot; the cache no longer describes the flash, so serve nothing.
                     core::future::pending().await
+                }
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingSceneShard { index, cells } => self
+                    .store_lighting_scene_shard(&mut scene_write, index, cells)
+                    .await
+                    .map(|_| None)
+                    .map_err(print_storage_error::<F>),
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingSceneCommit { len, policy } => self
+                    .commit_lighting_scenes(&mut scene_write, len, policy)
+                    .await
+                    .map(|_| None)
+                    .map_err(print_storage_error::<F>),
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingRuntimeConditionalSceneShard { index, cells } => self
+                    .store_lighting_runtime_conditional_shard(&mut runtime_conditional_write, index, cells)
+                    .await
+                    .map(|_| None)
+                    .map_err(print_storage_error::<F>),
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingRuntimeConditionalSceneCommit { len } => self
+                    .commit_lighting_runtime_conditional_scenes(&mut runtime_conditional_write, len)
+                    .await
+                    .map(|_| None)
+                    .map_err(print_storage_error::<F>),
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingExtensionState(record) => {
+                    // The selection changes on every RGB key press and every
+                    // host edit, so skip writes that would store what is
+                    // already there rather than spending a flash entry.
+                    match self.fetch(StorageKey::LightingExtensionState).await {
+                        Ok(Some(StorageValue::LightingExtensionState(saved))) if saved == record => Ok(None),
+                        _ => self
+                            .put(StorageItem::LightingExtensionState(record))
+                            .await
+                            .map(|_| None)
+                            .map_err(print_storage_error::<F>),
+                    }
+                }
+                #[cfg(all(feature = "lighting", feature = "rynk"))]
+                FlashOperationMessage::LightingExtensionOverlay(record) => {
+                    match self.fetch(StorageKey::LightingExtensionOverlay).await {
+                        Ok(Some(StorageValue::LightingExtensionOverlay(saved))) if saved == record => Ok(None),
+                        _ => self
+                            .put(StorageItem::LightingExtensionOverlay(record))
+                            .await
+                            .map(|_| None)
+                            .map_err(print_storage_error::<F>),
+                    }
                 }
             };
             if let Some(id) = reply_id {
@@ -609,6 +1353,26 @@ pub(crate) async fn drain_flash_channel() {
             REPLY.signal((id, Ok(None)))
         }
     }
+}
+
+/// Test-only: take the next queued request, answering it like `drain_flash_channel`.
+#[cfg(test)]
+pub(crate) async fn receive_flash_message() -> FlashOperationMessage {
+    let (message, reply_id) = FLASH_CHANNEL.receive().await;
+    if let Some(id) = reply_id {
+        REPLY.signal((id, Ok(None)));
+    }
+    message
+}
+
+/// Test-only: like [`receive_flash_message`], `None` when nothing is queued.
+#[cfg(test)]
+pub(crate) fn try_receive_flash_message() -> Option<FlashOperationMessage> {
+    let (message, reply_id) = FLASH_CHANNEL.try_receive().ok()?;
+    if let Some(id) = reply_id {
+        REPLY.signal((id, Ok(None)));
+    }
+    Some(message)
 }
 
 #[cfg(test)]
@@ -1014,6 +1778,31 @@ mod tests {
             StorageKey::ActiveBleProfile,
             #[cfg(feature = "_ble")]
             StorageKey::BondInfo(10),
+            StorageKey::UserData(11),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingSceneTable,
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingSceneShard(0),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingRuntimeConditionalSceneTable,
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingRuntimeConditionalSceneShard(0),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingExtensionState,
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingExtensionOverlay,
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingRuntimeConditionalSceneTableV2,
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingRuntimeConditionalSceneShardV2(0),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingSceneCommit,
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingSceneShardB(0),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingRuntimeConditionalSceneCommit,
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageKey::LightingRuntimeConditionalSceneShardB(0),
         ];
         let mut buffer = [0u8; 64];
         for (tag, key) in keys.iter().enumerate() {
@@ -1046,6 +1835,50 @@ mod tests {
             StorageValue::BondInfo(ProfileInfo::default()),
             #[cfg(feature = "_ble")]
             StorageValue::ActiveBleProfile(0),
+            StorageValue::UserData(heapless::Vec::new()),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageValue::LightingSceneTable(LightingSceneTableRecord {
+                len: 0,
+                policy: LightingLayerPolicy::EffectiveOnly,
+            }),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageValue::LightingSceneShard(heapless::Vec::new()),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageValue::LightingRuntimeConditionalSceneTable(0),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageValue::LightingRuntimeConditionalSceneShard(heapless::Vec::new()),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageValue::LightingExtensionState(LightingExtensionRecord {
+                effect: 0,
+                palette: 0,
+                value: 0,
+                speed: 0,
+                param_len: 0,
+                params: [0; LIGHTING_EXTENSION_PARAM_CHUNK],
+            }),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageValue::LightingExtensionOverlay(LightingExtensionOverlayRecord {
+                effect: None,
+                param_len: 0,
+                params: [0; LIGHTING_EXTENSION_PARAM_CHUNK],
+            }),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageValue::LightingRuntimeConditionalSceneTableV2(0),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageValue::LightingRuntimeConditionalSceneShardV2(heapless::Vec::new()),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageValue::LightingSceneCommit(LightingSceneCommitRecord {
+                generation: LightingGeneration::A,
+                len: 0,
+                policy: LightingLayerPolicy::EffectiveOnly,
+                digest: 0,
+            }),
+            #[cfg(all(feature = "lighting", feature = "rynk"))]
+            StorageValue::LightingRuntimeConditionalSceneCommit(LightingRuntimeConditionalSceneCommitRecord {
+                generation: LightingGeneration::A,
+                len: 0,
+                digest: 0,
+            }),
         ];
         let mut buffer = [0u8; BUFFER_SIZE];
         for (tag, item) in data.iter().enumerate() {
@@ -1079,6 +1912,326 @@ mod tests {
             let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
 
             assert_eq!(keymap.layout_option(), 42);
+        });
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    #[test]
+    fn legacy_runtime_conditional_records_load_without_connection_condition() {
+        block_on(async {
+            let legacy = LightingConditionalSceneCell {
+                conditions: rmk_types::protocol::rynk::LightingConditionSet {
+                    layer: Some(rmk_types::protocol::rynk::LightingLayerCondition { layer: 2, active: true }),
+                    battery: None,
+                    output_mode: None,
+                },
+                led_id: rmk_types::protocol::rynk::LightingLedId(42),
+                effect: rmk_types::protocol::rynk::LightingEffect::Solid {
+                    color: rmk_types::protocol::rynk::LightingRgb8 { r: 1, g: 2, b: 3 },
+                },
+            };
+            let mut shard = heapless::Vec::<LightingConditionalSceneCell, LIGHTING_CONDITIONAL_SCENE_CHUNK_SIZE>::new();
+            shard.push(legacy).unwrap();
+            // Written by firmware from before the extended cell existed.
+            let flash = seeded(&[
+                (StorageKey::StorageConfig, StorageValue::StorageConfig(SCHEMA_HASH)),
+                (
+                    StorageKey::LightingRuntimeConditionalSceneTable,
+                    StorageValue::LightingRuntimeConditionalSceneTable(1),
+                ),
+                (
+                    StorageKey::LightingRuntimeConditionalSceneShard(0),
+                    StorageValue::LightingRuntimeConditionalSceneShard(shard),
+                ),
+            ])
+            .await;
+            let mut storage = new_storage(flash).await;
+
+            let mut loaded = heapless::Vec::<LightingExtendedConditionalSceneCell, 4>::new();
+            storage.read_lighting_runtime_conditional_scenes(&mut loaded).await;
+
+            assert_eq!(loaded.len(), 1);
+            assert_eq!(loaded[0].cell, legacy);
+            assert_eq!(loaded[0].connection, None);
+        });
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    #[test]
+    fn runtime_conditional_commit_empties_the_legacy_table() {
+        block_on(async {
+            let flash = seeded(&[
+                (StorageKey::StorageConfig, StorageValue::StorageConfig(SCHEMA_HASH)),
+                (
+                    StorageKey::LightingRuntimeConditionalSceneTable,
+                    StorageValue::LightingRuntimeConditionalSceneTable(3),
+                ),
+            ])
+            .await;
+            let mut storage = new_storage(flash).await;
+
+            let mut write = LightingTableWrite::new();
+            storage
+                .commit_lighting_runtime_conditional_scenes(&mut write, 1)
+                .await
+                .unwrap();
+
+            assert!(matches!(
+                storage.fetch(StorageKey::LightingRuntimeConditionalSceneCommit).await,
+                Ok(Some(StorageValue::LightingRuntimeConditionalSceneCommit(
+                    LightingRuntimeConditionalSceneCommitRecord { len: 1, .. }
+                )))
+            ));
+            assert!(
+                matches!(
+                    storage.fetch(StorageKey::LightingRuntimeConditionalSceneTable).await,
+                    Ok(Some(StorageValue::LightingRuntimeConditionalSceneTable(0)))
+                ),
+                "a downgraded firmware must see an empty legacy table"
+            );
+        });
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    #[test]
+    fn extended_runtime_conditional_records_preserve_connection_condition() {
+        block_on(async {
+            let cell = LightingExtendedConditionalSceneCell {
+                cell: LightingConditionalSceneCell {
+                    conditions: rmk_types::protocol::rynk::LightingConditionSet {
+                        layer: None,
+                        battery: None,
+                        output_mode: None,
+                    },
+                    led_id: rmk_types::protocol::rynk::LightingLedId(7),
+                    effect: rmk_types::protocol::rynk::LightingEffect::Solid {
+                        color: rmk_types::protocol::rynk::LightingRgb8 { r: 4, g: 5, b: 6 },
+                    },
+                },
+                connection: Some(rmk_types::protocol::rynk::LightingConnectionCondition {
+                    transport: Some(rmk_types::protocol::rynk::LightingActiveTransport::Ble),
+                    profile: Some(4),
+                    ble_state: Some(rmk_types::ble::BleState::Advertising),
+                    bonded: None,
+                    usb_connected: None,
+                }),
+                effects: None,
+            };
+            let mut shard = heapless::Vec::<
+                LightingExtendedConditionalSceneCell,
+                LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE,
+            >::new();
+            shard.push(cell).unwrap();
+            let mut storage = new_storage(async_flash_wrapper(Part::new())).await;
+            storage
+                .put(StorageItem::LightingRuntimeConditionalSceneTableV2(1))
+                .await
+                .unwrap();
+            storage
+                .put(StorageItem::LightingRuntimeConditionalSceneShard {
+                    generation: LightingGeneration::A,
+                    index: 0,
+                    cells: shard,
+                })
+                .await
+                .unwrap();
+
+            let mut loaded = heapless::Vec::<LightingExtendedConditionalSceneCell, 4>::new();
+            storage.read_lighting_runtime_conditional_scenes(&mut loaded).await;
+
+            assert_eq!(loaded.as_slice(), &[cell]);
+        });
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    fn scene_shard(index: u8, value: u8, len: usize) -> heapless::Vec<LightingSceneCell, LIGHTING_SCENE_CHUNK_SIZE> {
+        use rmk_types::protocol::rynk::{LightingEffect, LightingLedId, LightingRgb8};
+        (0..len)
+            .map(|id| LightingSceneCell {
+                layer: 0,
+                led_id: LightingLedId(index as u16 * LIGHTING_SCENE_CHUNK_SIZE as u16 + id as u16),
+                effect: LightingEffect::Solid {
+                    color: LightingRgb8 { r: value, g: 0, b: 0 },
+                },
+            })
+            .collect()
+    }
+
+    /// Loaded scene cells as `(policy, red values)`, the value marking which
+    /// rewrite a cell came from.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    async fn loaded_scenes(storage: &mut Storage<TestFlash, 1, 1, 1, 0>) -> (Option<LightingLayerPolicy>, Vec<u8>) {
+        use rmk_types::protocol::rynk::LightingEffect;
+        let mut cells = heapless::Vec::<LightingSceneCell, 32>::new();
+        let policy = storage.read_lighting_scenes(&mut cells).await;
+        let values = cells
+            .iter()
+            .map(|cell| match cell.effect {
+                LightingEffect::Solid { color } => color.r,
+                _ => 0,
+            })
+            .collect();
+        (policy, values)
+    }
+
+    /// Power loss between the shard writes of a rewrite must restore the
+    /// previous table whole, whether that table predates commit records or
+    /// was committed by one.
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    #[test]
+    fn scene_rewrite_commits_a_generation_and_survives_interruption() {
+        block_on(async {
+            let mut storage = new_storage(async_flash_wrapper(Part::new())).await;
+            // Written by firmware without commit records.
+            for index in 0..2 {
+                storage
+                    .put(StorageItem::LightingSceneShard {
+                        generation: LightingGeneration::A,
+                        index,
+                        cells: scene_shard(index, 1, LIGHTING_SCENE_CHUNK_SIZE),
+                    })
+                    .await
+                    .unwrap();
+            }
+            storage
+                .put(StorageItem::LightingSceneTable(LightingSceneTableRecord {
+                    len: 2 * LIGHTING_SCENE_CHUNK_SIZE as u16,
+                    policy: LightingLayerPolicy::EffectiveOnly,
+                }))
+                .await
+                .unwrap();
+            assert_eq!(
+                loaded_scenes(&mut storage).await,
+                (Some(LightingLayerPolicy::EffectiveOnly), vec![1; 16])
+            );
+
+            // The first rewrite stops after one shard.
+            let mut write = LightingTableWrite::new();
+            storage
+                .store_lighting_scene_shard(&mut write, 0, scene_shard(0, 2, LIGHTING_SCENE_CHUNK_SIZE))
+                .await
+                .unwrap();
+            assert_eq!(
+                loaded_scenes(&mut storage).await,
+                (Some(LightingLayerPolicy::EffectiveOnly), vec![1; 16])
+            );
+
+            let mut write = LightingTableWrite::new();
+            for index in 0..2 {
+                storage
+                    .store_lighting_scene_shard(&mut write, index, scene_shard(index, 2, LIGHTING_SCENE_CHUNK_SIZE))
+                    .await
+                    .unwrap();
+            }
+            storage
+                .commit_lighting_scenes(&mut write, 16, LightingLayerPolicy::ActiveStack)
+                .await
+                .unwrap();
+            assert_eq!(
+                loaded_scenes(&mut storage).await,
+                (Some(LightingLayerPolicy::ActiveStack), vec![2; 16])
+            );
+            assert!(matches!(
+                storage.fetch(StorageKey::LightingSceneTable).await,
+                Ok(Some(StorageValue::LightingSceneTable(LightingSceneTableRecord {
+                    len: 0,
+                    ..
+                })))
+            ));
+
+            // The next rewrite goes back to the first generation's keys and
+            // is again cut short: the committed generation is untouched.
+            let mut write = LightingTableWrite::new();
+            storage
+                .store_lighting_scene_shard(&mut write, 0, scene_shard(0, 3, LIGHTING_SCENE_CHUNK_SIZE))
+                .await
+                .unwrap();
+            assert_eq!(
+                loaded_scenes(&mut storage).await,
+                (Some(LightingLayerPolicy::ActiveStack), vec![2; 16])
+            );
+
+            // A shorter table commits over the leftover shard.
+            let mut write = LightingTableWrite::new();
+            storage
+                .store_lighting_scene_shard(&mut write, 0, scene_shard(0, 4, 5))
+                .await
+                .unwrap();
+            storage
+                .commit_lighting_scenes(&mut write, 5, LightingLayerPolicy::ActiveStack)
+                .await
+                .unwrap();
+            assert_eq!(
+                loaded_scenes(&mut storage).await,
+                (Some(LightingLayerPolicy::ActiveStack), vec![4; 5])
+            );
+        });
+    }
+
+    #[cfg(all(feature = "lighting", feature = "rynk"))]
+    #[test]
+    fn runtime_conditional_rewrite_reads_only_the_committed_generation() {
+        block_on(async {
+            let cell = |led: u16| LightingExtendedConditionalSceneCell {
+                cell: LightingConditionalSceneCell {
+                    conditions: rmk_types::protocol::rynk::LightingConditionSet {
+                        layer: None,
+                        battery: None,
+                        output_mode: None,
+                    },
+                    led_id: rmk_types::protocol::rynk::LightingLedId(led),
+                    effect: rmk_types::protocol::rynk::LightingEffect::Solid {
+                        color: rmk_types::protocol::rynk::LightingRgb8 { r: 1, g: 2, b: 3 },
+                    },
+                },
+                connection: None,
+                effects: None,
+            };
+            let shard = |led: u16| {
+                let mut shard = heapless::Vec::<
+                    LightingExtendedConditionalSceneCell,
+                    LIGHTING_EXTENDED_CONDITIONAL_SCENE_CHUNK_SIZE,
+                >::new();
+                shard.push(cell(led)).unwrap();
+                shard
+            };
+            let mut storage = new_storage(async_flash_wrapper(Part::new())).await;
+            storage
+                .put(StorageItem::LightingRuntimeConditionalSceneTableV2(1))
+                .await
+                .unwrap();
+            storage
+                .put(StorageItem::LightingRuntimeConditionalSceneShard {
+                    generation: LightingGeneration::A,
+                    index: 0,
+                    cells: shard(7),
+                })
+                .await
+                .unwrap();
+            let mut loaded = heapless::Vec::<LightingExtendedConditionalSceneCell, 4>::new();
+            storage.read_lighting_runtime_conditional_scenes(&mut loaded).await;
+            assert_eq!(loaded.as_slice(), &[cell(7)]);
+
+            let mut write = LightingTableWrite::new();
+            storage
+                .store_lighting_runtime_conditional_shard(&mut write, 0, shard(8))
+                .await
+                .unwrap();
+            let mut loaded = heapless::Vec::<LightingExtendedConditionalSceneCell, 4>::new();
+            storage.read_lighting_runtime_conditional_scenes(&mut loaded).await;
+            assert_eq!(loaded.as_slice(), &[cell(7)]);
+
+            storage
+                .commit_lighting_runtime_conditional_scenes(&mut write, 1)
+                .await
+                .unwrap();
+            let mut loaded = heapless::Vec::<LightingExtendedConditionalSceneCell, 4>::new();
+            storage.read_lighting_runtime_conditional_scenes(&mut loaded).await;
+            assert_eq!(loaded.as_slice(), &[cell(8)]);
+            assert!(matches!(
+                storage.fetch(StorageKey::LightingRuntimeConditionalSceneTableV2).await,
+                Ok(Some(StorageValue::LightingRuntimeConditionalSceneTableV2(0)))
+            ));
         });
     }
 }

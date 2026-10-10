@@ -46,6 +46,7 @@ pub mod constants;
 pub mod dfu;
 pub mod fmt;
 pub mod fork;
+pub mod key;
 pub mod keyboard_macros;
 pub mod keycode;
 pub mod led_indicator;

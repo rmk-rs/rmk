@@ -4,12 +4,15 @@ version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Vendor bulk USB transport for the Rynk host library"
+description = "USB HID transport for the Rynk host library"
 license.workspace = true
 repository.workspace = true
 keywords = ["keyboard", "firmware", "rmk", "protocol", "usb"]
 
 [dependencies]
 rynk = { path = "..", version = "0.3" }
-nusb = { version = "0.2", features = ["tokio"] }
-embedded-io-adapters = { workspace = true, features = ["tokio-1"] }
+async-hid = { version = "0.5.3", default-features = false, features = ["tokio", "win32"] }
+futures-util.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.47", features = ["macros", "rt"] }

@@ -19,11 +19,9 @@ use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 use crate::ble::sleep::report_activity;
 use crate::channel::send_hid_report;
 use crate::core_traits::Runnable;
+use crate::event::{ActionEvent, KeyboardEvent, KeyboardEventPos, SubscribableEvent, publish_event_async};
 #[cfg(all(feature = "split", feature = "_ble"))]
-use crate::event::ClearPeerEvent;
-use crate::event::{
-    ActionEvent, KeyboardEvent, KeyboardEventPos, ModifierEvent, SubscribableEvent, publish_event, publish_event_async,
-};
+use crate::event::{ClearPeerEvent, publish_event};
 use crate::hid::{KeyboardReport, Report};
 use crate::keyboard::combo::Combo;
 use crate::keyboard::fork::ActiveFork;
@@ -61,6 +59,13 @@ pub(crate) static LOCK_LED_STATES: core::sync::atomic::AtomicU8 = core::sync::at
 /// [`LedIndicatorEvent`](crate::event::LedIndicatorEvent).
 pub(crate) fn current_led_indicator() -> LedIndicator {
     LedIndicator::from_bits(LOCK_LED_STATES.load(core::sync::atomic::Ordering::Relaxed))
+}
+
+/// Update the authoritative host-driven lock LED state before publishing its
+/// invalidation event. This also covers split peripherals, which do not have a
+/// local HID reader.
+pub(crate) fn set_current_led_indicator(indicator: LedIndicator) {
+    LOCK_LED_STATES.store(indicator.into_bits(), core::sync::atomic::Ordering::Relaxed);
 }
 
 /// State machine for Caps Word
@@ -1221,6 +1226,12 @@ impl<'a> Keyboard<'a> {
     }
 
     async fn process_key_action_normal(&mut self, action: Action, event: KeyboardEvent) {
+        #[cfg(feature = "lighting")]
+        if event.pressed
+            && let Action::Light(light_action) = action
+        {
+            crate::lighting::send_light_action(light_action).await;
+        }
         publish_event_async(ActionEvent {
             action,
             keyboard_event: event,
@@ -1787,6 +1798,7 @@ impl<'a> Keyboard<'a> {
     /// that holds them. This keeps the shared usage down until the last holder
     /// releases it.
     async fn send_keyboard_report(&mut self, modifiers: ModifierCombination) {
+        crate::state::set_modifier_state(modifiers);
         let mut keycodes = [0u8; 6];
         let mut n = 0;
         for k in self.registered.iter().filter(|k| k.keycode != HidKeyCode::No) {
@@ -1856,9 +1868,6 @@ impl<'a> Keyboard<'a> {
             if key.keycode == HidKeyCode::No {
                 // A modifier pressed after a fork fired is not suppressed by it.
                 self.fork_keep_mask |= key.mods;
-                publish_event(ModifierEvent {
-                    modifier: self.held_modifiers(),
-                });
             }
         }
     }
@@ -1867,11 +1876,6 @@ impl<'a> Keyboard<'a> {
     fn unregister_key(&mut self, key: HidKeyCode, mods: ModifierCombination, event: KeyboardEvent) {
         let key = RegisteredKey::new(event.pos, key, mods);
         self.registered.retain(|k| !k.matches(&key));
-        if key.keycode == HidKeyCode::No {
-            publish_event(ModifierEvent {
-                modifier: self.held_modifiers(),
-            });
-        }
     }
 
     /// Modifiers held by modifier actions.
@@ -2022,6 +2026,24 @@ mod test {
 
     fn create_test_keyboard() -> Keyboard<'static> {
         create_test_keyboard_with_config(BehaviorConfig::default())
+    }
+
+    #[test]
+    fn keyboard_report_snapshots_final_resolved_modifiers() {
+        let mut keyboard = create_test_keyboard();
+        keyboard.register_key(
+            HidKeyCode::A,
+            ModifierCombination::LSHIFT | ModifierCombination::RALT,
+            KeyboardEvent::key(0, 0, true),
+        );
+        crate::state::set_modifier_state(ModifierCombination::new());
+
+        block_on(keyboard.send_keyboard_report_with_resolved_modifiers(true));
+
+        assert_eq!(
+            crate::state::current_modifier_state(),
+            ModifierCombination::LSHIFT | ModifierCombination::RALT,
+        );
     }
 
     async fn force_timeout_first_hold(keyboard: &mut Keyboard<'static>) {
