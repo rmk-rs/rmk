@@ -2,7 +2,7 @@
 # File: snapshots/wire_values.snap
 # Each entry is the postcard byte encoding of one wire-type exemplar. A diff
 # here means a type's payload encoding changed (field reorder, variant
-# renumber, …). If intentional, bump ProtocolVersion::CURRENT and regenerate:
+# renumber, …). If intentional, regenerate and review compatibility:
 #   UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features host wire_values
 # Format: <label>  <hex bytes>
 
@@ -33,6 +33,7 @@ BleState::Advertising                            00
 BleState::Connected                              01
 BleState::Inactive                               02
 BleStatus{2,Connected,bonded}                    02 01 01
+BuildInfo{my-firmware..}                         1f 6d 79 2d 66 69 72 6d 77 61 72 65 20 76 34 2e 35 2e 36 20 2f 20 52 4d 4b 20 76 31 2e 32 2e 33
 ChargeState::Charging                            00
 ChargeState::Discharging                         01
 ChargeState::Unknown                             02
@@ -55,6 +56,7 @@ KeyCode::Consumer(VolumeIncrement)               01 12
 KeyCode::Hid(A)                                  00 04
 KeyCode::SystemControl(Sleep)                    02 02
 KeyPosition{layer:0,row:5,col:13}                00 05 0d
+LayerState{default:2,active:[0x05,..,0x80]}      02 05 00 00 00 00 00 00 80
 LayoutChunk{300,[0x0a,0x0b,0x0c]}                ac 02 03 0a 0b 0c
 LedIndicator(Num|Scroll)                         05
 LockStatus{true,false,2,[(1,2),(3,4)]}           01 00 02 02 01 02 03 04
@@ -89,6 +91,8 @@ SetForkRequest{2,fork}                           02 02 01 00 04 00 05 02 01 02 0
 SetKeyRequest{{0,5,13},Morse(7)}                 00 05 0d 05 07
 SetMacroRequest{2,macro}                         02 04 00 01 00 04 03 ac 02 04 61 05
 SetMorseRequest{0,morse}                         00 00 01 02 01 00 04
+SplitLatencyPolicy{0,4,Some(2)}                  00 04 01 02
+SplitLatencyState{policy,true,2}                 00 04 01 02 01 02
 StateBits{LCtrl,Caps,B1}                         01 02 01
 StorageResetMode::Full                           00
 StorageResetMode::LayoutOnly                     01

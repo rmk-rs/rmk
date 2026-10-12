@@ -43,4 +43,6 @@ pub enum LightAction {
     // Not in vial
     RgbModeRgbtest,
     RgbModeTwinkle,
+    /// Cycle standard lighting through always-on, always-off, and powered-only.
+    OutputModeCycle,
 }

@@ -5,14 +5,17 @@
 #[cfg(feature = "_ble")]
 use rmk_types::battery::BatteryStatus;
 use rmk_types::led_indicator::LedIndicator;
+use rmk_types::modifier::ModifierCombination;
 #[cfg(feature = "split")]
 use rmk_types::protocol::rynk::PeripheralStatus;
 #[cfg(feature = "_ble")]
 use rmk_types::protocol::rynk::command::GetBatteryStatus;
 #[cfg(feature = "split")]
 use rmk_types::protocol::rynk::command::GetPeripheralStatus;
-use rmk_types::protocol::rynk::command::{GetCurrentLayer, GetLedIndicator, GetMatrixState, GetSleepState, GetWpm};
-use rmk_types::protocol::rynk::{MATRIX_BITMAP_SIZE, MatrixState, RynkError};
+use rmk_types::protocol::rynk::command::{
+    GetCurrentLayer, GetLayerState, GetLedIndicator, GetMatrixState, GetModifierState, GetSleepState, GetWpm,
+};
+use rmk_types::protocol::rynk::{LayerState, MATRIX_BITMAP_SIZE, MatrixState, RynkError};
 
 use super::super::RynkService;
 use super::Handle;
@@ -20,6 +23,18 @@ use super::Handle;
 impl Handle<GetCurrentLayer> for RynkService<'_> {
     async fn handle(&self, _: ()) -> Result<u8, RynkError> {
         Ok(self.ctx.active_layer())
+    }
+}
+
+impl Handle<GetLayerState> for RynkService<'_> {
+    async fn handle(&self, _: ()) -> Result<LayerState, RynkError> {
+        Ok(self.ctx.layer_state())
+    }
+}
+
+impl Handle<GetModifierState> for RynkService<'_> {
+    async fn handle(&self, _: ()) -> Result<ModifierCombination, RynkError> {
+        Ok(crate::state::current_modifier_state())
     }
 }
 
