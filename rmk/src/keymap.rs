@@ -1,8 +1,9 @@
 use core::cell::RefCell;
 
 use embassy_time::Duration;
-use rmk_types::action::{EncoderAction, KeyAction, TouchAction, TouchGesture};
+use rmk_types::action::{Action, EncoderAction, KeyAction, TouchAction, TouchGesture};
 use rmk_types::fork::Fork;
+use rmk_types::keycode::KeyCode;
 use rmk_types::morse::{Morse, MorseProfile};
 #[cfg(all(feature = "storage", feature = "host"))]
 use {
@@ -264,7 +265,8 @@ impl KeyMapInner<'_> {
                 }
                 self.touchpads[self.touch_index(layer_num, id)].get(touch_pos.gesture)
             }
-            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => KeyAction::No,
+            KeyboardEventPos::Virtual { keycode, .. } => KeyAction::Single(Action::Key(KeyCode::Hid(keycode))),
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro => KeyAction::No,
         }
     }
 
@@ -295,7 +297,7 @@ impl KeyMapInner<'_> {
             KeyboardEventPos::Touch(_)
             | KeyboardEventPos::Combo(_)
             | KeyboardEventPos::Macro
-            | KeyboardEventPos::Virtual(_) => {}
+            | KeyboardEventPos::Virtual { .. } => {}
         }
     }
 
@@ -351,7 +353,7 @@ impl KeyMapInner<'_> {
             KeyboardEventPos::RotaryEncoder(_)
             | KeyboardEventPos::Combo(_)
             | KeyboardEventPos::Macro
-            | KeyboardEventPos::Virtual(_) => None,
+            | KeyboardEventPos::Virtual { .. } => None,
         };
         cache.map_or(default_layer, |cache| core::mem::replace(cache, default_layer))
     }
@@ -378,7 +380,7 @@ impl KeyMapInner<'_> {
                     *cache = layer_num;
                 }
             }
-            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual(_) => {}
+            KeyboardEventPos::Combo(_) | KeyboardEventPos::Macro | KeyboardEventPos::Virtual { .. } => {}
         }
     }
 

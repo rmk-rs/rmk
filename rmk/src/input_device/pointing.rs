@@ -11,9 +11,10 @@ use rmk_types::keycode::HidKeyCode;
 use crate::ble::sleep::report_activity;
 use crate::channel::send_hid_report;
 use crate::event::{
-    Axis, AxisEvent, AxisValType, PointingEvent, PointingProcessorEvent, PointingSetCpiEvent, SleepStateEvent,
+    Axis, AxisEvent, AxisValType, KeyboardEvent, PointingEvent, PointingProcessorEvent, PointingSetCpiEvent,
+    SleepStateEvent, publish_event_async,
 };
-use crate::hid::{KeyboardReport, MouseReport, Report};
+use crate::hid::{MouseReport, Report};
 use crate::keymap::KeyMap;
 
 pub const ALL_POINTING_DEVICES: u8 = 255;
@@ -822,7 +823,10 @@ impl<'a> PointingProcessor<'a> {
             PointingMode::Caret(caret_config) => {
                 if let Some((keycode, count)) = compute_caret_taps(x, y, &mut self.accumulator, &caret_config) {
                     for _ in 0..count {
-                        tap_key(keycode).await;
+                        publish_event_async(KeyboardEvent::virtual_key(event.device_id, keycode, true)).await;
+                        Timer::after_millis(5).await;
+                        publish_event_async(KeyboardEvent::virtual_key(event.device_id, keycode, false)).await;
+                        Timer::after_millis(5).await;
                     }
                 }
             }
@@ -839,31 +843,6 @@ impl<'a> PointingProcessor<'a> {
             self.set_pointing_mode(event.mode);
         }
     }
-}
-
-/// Tap a key (press and release with a short delay) - used for caret mode
-/// NOTE: This is a basic implementation because at the current state Keyboard (in keyboard.rs) does not support
-/// sending in KeyActions from the processor layer. If that changes in the future, this can be updated to use KeyActions and support more complex behavior (e.g. modifiers, macros).
-/// For the time being, this sends only simple key taps without modifiers.
-async fn tap_key(keycode: HidKeyCode) {
-    // Press
-    send_hid_report(Report::KeyboardReport(KeyboardReport {
-        modifier: 0,
-        reserved: 0,
-        leds: 0,
-        keycodes: [keycode as u8, 0, 0, 0, 0, 0],
-    }))
-    .await;
-    Timer::after_millis(5).await;
-    // Release
-    send_hid_report(Report::KeyboardReport(KeyboardReport {
-        modifier: 0,
-        reserved: 0,
-        leds: 0,
-        keycodes: [0, 0, 0, 0, 0, 0],
-    }))
-    .await;
-    Timer::after_millis(5).await;
 }
 
 /// Pure function: given a (x, y) motion delta, decide whether caret mode
@@ -1811,6 +1790,105 @@ mod tests {
     }
 
     // === Integration tests for PointingProcessor ===
+
+    #[cfg(not(feature = "_no_usb"))]
+    async fn expect_keyboard_report(modifier: u8, keys: &[HidKeyCode]) {
+        let Report::KeyboardReport(report) = crate::channel::USB_REPORT_CHANNEL.receive().await else {
+            panic!("expected a keyboard report");
+        };
+        assert_eq!(report.modifier, modifier);
+        assert_eq!(
+            report
+                .keycodes
+                .into_iter()
+                .filter(|code| *code != 0)
+                .collect::<Vec<_>>(),
+            keys.iter().map(|key| *key as u8).collect::<Vec<_>>()
+        );
+    }
+
+    #[cfg(not(feature = "_no_usb"))]
+    #[test]
+    fn caret_preserves_held_keys_and_tracks_modifier_changes() {
+        use embassy_futures::join::join;
+        use embassy_futures::select::select;
+        use rmk_types::connection::UsbState;
+
+        use crate::channel::USB_REPORT_CHANNEL;
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::core_traits::Runnable;
+        use crate::keyboard::Keyboard;
+        use crate::keymap::KeymapData;
+
+        block_on(async {
+            crate::state::set_usb_state(UsbState::Configured);
+            USB_REPORT_CHANNEL.clear();
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 3> = PositionalConfig::default();
+            let mut data: KeymapData<1, 3, 1, 0> =
+                KeymapData::new([[[crate::k!(LShift), crate::k!(A), crate::k!(Right)]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut keyboard = Keyboard::new(&keymap);
+            let mut pointing = PointingProcessor::new(&keymap, PointingProcessorConfig::default());
+            pointing.set_pointing_mode(PointingMode::Caret(CaretConfig::default()));
+            let motion = PointingEvent {
+                device_id: 0,
+                axes: [
+                    AxisEvent {
+                        typ: AxisValType::Rel,
+                        axis: Axis::X,
+                        value: 101,
+                    },
+                    AxisEvent {
+                        typ: AxisValType::Rel,
+                        axis: Axis::Y,
+                        value: 0,
+                    },
+                    AxisEvent {
+                        typ: AxisValType::Rel,
+                        axis: Axis::Z,
+                        value: 0,
+                    },
+                ],
+            };
+            select(
+                async {
+                    publish_event_async(KeyboardEvent::key(0, 0, true)).await;
+                    expect_keyboard_report(2, &[]).await;
+                    publish_event_async(KeyboardEvent::key(0, 1, true)).await;
+                    expect_keyboard_report(2, &[HidKeyCode::A]).await;
+
+                    pointing.on_pointing_event(motion).await;
+                    expect_keyboard_report(2, &[HidKeyCode::A, HidKeyCode::Right]).await;
+                    expect_keyboard_report(2, &[HidKeyCode::A]).await;
+
+                    // Releasing the caret's arrow must not release the physical arrow.
+                    publish_event_async(KeyboardEvent::key(0, 2, true)).await;
+                    expect_keyboard_report(2, &[HidKeyCode::A, HidKeyCode::Right]).await;
+                    pointing.on_pointing_event(motion).await;
+                    expect_keyboard_report(2, &[HidKeyCode::A, HidKeyCode::Right]).await;
+                    expect_keyboard_report(2, &[HidKeyCode::A, HidKeyCode::Right]).await;
+                    publish_event_async(KeyboardEvent::key(0, 2, false)).await;
+                    expect_keyboard_report(2, &[HidKeyCode::A]).await;
+
+                    // A modifier released during a tap takes effect before the tap ends.
+                    join(pointing.on_pointing_event(motion), async {
+                        Timer::after_millis(2).await;
+                        publish_event_async(KeyboardEvent::key(0, 0, false)).await;
+                    })
+                    .await;
+                    expect_keyboard_report(2, &[HidKeyCode::A, HidKeyCode::Right]).await;
+                    expect_keyboard_report(0, &[HidKeyCode::A, HidKeyCode::Right]).await;
+                    expect_keyboard_report(0, &[HidKeyCode::A]).await;
+                    publish_event_async(KeyboardEvent::key(0, 1, false)).await;
+                    expect_keyboard_report(0, &[]).await;
+                    assert!(USB_REPORT_CHANNEL.try_receive().is_err());
+                },
+                keyboard.run(),
+            )
+            .await;
+        });
+    }
 
     #[test]
     fn test_pointing_processor_mode_selection() {

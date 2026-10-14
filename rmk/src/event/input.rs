@@ -8,6 +8,7 @@
 use postcard::experimental::max_size::MaxSize;
 use rmk_macro::{Event, event};
 use rmk_types::action::TouchGesture;
+use rmk_types::keycode::HidKeyCode;
 use rmk_types::modifier::ModifierCombination;
 use serde::{Deserialize, Serialize};
 
@@ -17,11 +18,7 @@ use crate::input_device::rotary_encoder::Direction;
 // Keyboard Events
 // ============================================================================
 
-/// `KeyboardEvent` is the event whose `KeyAction` is stored in the keymap.
-///
-/// `KeyboardEvent` is different from events from pointing devices,
-/// events from pointing devices are processed directly by the corresponding processors,
-/// while `KeyboardEvent` is processed by the keyboard with the keymap.
+/// A press or release from a keymap position or a software-generated keycode.
 #[event(
     channel_size = crate::KEYBOARD_EVENT_CHANNEL_SIZE,
     pubs = crate::KEYBOARD_EVENT_PUB_SIZE,
@@ -55,6 +52,14 @@ impl KeyboardEvent {
             pos: KeyboardEventPos::Combo(idx),
         }
     }
+
+    /// A software key. Independent sources holding the same key need distinct IDs.
+    pub fn virtual_key(id: u8, keycode: HidKeyCode, pressed: bool) -> Self {
+        Self {
+            pressed,
+            pos: KeyboardEventPos::Virtual { id, keycode },
+        }
+    }
 }
 
 /// The position of the keyboard event.
@@ -73,8 +78,11 @@ pub enum KeyboardEventPos {
     Combo(u8),
     /// A macro op. A macro's keys belong to no macro in particular.
     Macro,
-    /// A software source of events rather than a key, indexed by a u8.
-    Virtual(u8),
+    /// A keycode emitted by a software source, independent of the active layer.
+    Virtual {
+        id: u8,
+        keycode: HidKeyCode,
+    },
 }
 
 impl KeyboardEventPos {
