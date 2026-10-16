@@ -10,11 +10,14 @@ use rmk_types::keycode::HidKeyCode;
 #[cfg(feature = "_ble")]
 use crate::ble::sleep::report_activity;
 use crate::channel::send_hid_report;
+use crate::core_traits::Runnable;
 use crate::event::{
-    Axis, AxisEvent, AxisValType, PointingEvent, PointingProcessorEvent, PointingSetCpiEvent, SleepStateEvent,
+    Axis, AxisEvent, AxisValType, EventSubscriber, PointingEvent, PointingProcessorEvent, PointingSetCpiEvent,
+    SleepStateEvent, publish_event_async,
 };
 use crate::hid::{KeyboardReport, MouseReport, Report};
 use crate::keymap::KeyMap;
+use crate::processor::Processor;
 
 pub const ALL_POINTING_DEVICES: u8 = 255;
 
@@ -78,6 +81,7 @@ pub enum InitState {
 /// This device publishes `PointingEvent` events with relative X/Y movement.
 #[processor(subscribe = [PointingSetCpiEvent, SleepStateEvent])]
 #[input_device(publish = PointingEvent)]
+#[::rmk::macros::runnable_generated]
 pub struct PointingDevice<S: PointingDriver> {
     pub sensor: S,
     pub init_state: InitState,
@@ -88,6 +92,16 @@ pub struct PointingDevice<S: PointingDriver> {
     pub last_report: Instant,
     pub accumulated_x: i32,
     pub accumulated_y: i32,
+}
+
+impl<S: PointingDriver> Runnable for PointingDevice<S> {
+    async fn run(&mut self) -> ! {
+        let mut controls = Self::subscriber();
+        loop {
+            let event = self.read_with_controls(&mut controls).await;
+            publish_event_async(event).await;
+        }
+    }
 }
 
 impl<S: PointingDriver> PointingDevice<S> {
@@ -216,6 +230,13 @@ impl<S: PointingDriver> PointingDevice<S> {
     // ¦                 >- Event returned  ¦
     // +------------------------------------+
     async fn read_pointing_event(&mut self) -> PointingEvent {
+        self.read_with_controls(&mut Self::subscriber()).await
+    }
+
+    async fn read_with_controls(
+        &mut self,
+        controls: &mut impl EventSubscriber<Event = <Self as Processor>::Event>,
+    ) -> PointingEvent {
         use embassy_futures::select::{Either, select};
 
         while self.init_state != InitState::Ready {
@@ -232,6 +253,7 @@ impl<S: PointingDriver> PointingDevice<S> {
         }
 
         loop {
+            embassy_futures::yield_now().await;
             let poll_wait = async {
                 if let Some(gpio) = self.sensor.motion_gpio() {
                     let _ = gpio.wait_for_low().await;
@@ -259,12 +281,14 @@ impl<S: PointingDriver> PointingDevice<S> {
                 }
             };
 
-            match select(poll_wait, report_wait).await {
-                Either::First(_) => {
+            // Only the GPIO/timer waits may be cancelled; sensor transactions must finish.
+            match select(controls.next_event(), select(poll_wait, report_wait)).await {
+                Either::First(event) => self.process(event).await,
+                Either::Second(Either::First(_)) => {
                     self.poll_once().await;
                     self.last_poll = Instant::now();
                 }
-                Either::Second(_) => {
+                Either::Second(Either::Second(_)) => {
                     if let Some(event) = self.take_report_event() {
                         self.last_report = Instant::now();
                         return event;
@@ -974,8 +998,15 @@ mod tests {
         }
 
         async fn read_motion(&mut self) -> Result<MotionData, PointingDriverError> {
+            crate::event::publish_event(PointingSetCpiEvent { device_id: 1, cpi: 800 });
+            Timer::after_micros(400).await;
             self.read_called = true;
             Ok(self.motion)
+        }
+
+        async fn set_resolution(&mut self, _: u16) -> Result<(), PointingDriverError> {
+            assert!(self.read_called, "control event interrupted the sensor read");
+            Ok(())
         }
 
         fn motion_pending(&mut self) -> bool {
@@ -1178,7 +1209,13 @@ mod tests {
             id: 1,
         };
 
-        let event = block_on(device.read_event());
+        use crate::event::SubscribableEvent;
+        let mut events = PointingEvent::subscriber();
+        let embassy_futures::select::Either::Second(event) =
+            block_on(embassy_futures::select::select(device.run(), events.next_event()))
+        else {
+            unreachable!()
+        };
 
         let axes = &event.axes;
         assert_eq!(axes[0].value, 3);
