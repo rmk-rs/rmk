@@ -1437,7 +1437,14 @@ impl<'a> Keyboard<'a> {
 
             // In passkey mode: capture on release only (prevents Enter release leaking)
             if !event.pressed {
+                let held = self.registered.len();
                 self.unregister_key(key, mods, event);
+                if self.registered.len() < held {
+                    // The host saw this key pressed before passkey entry began, so it owns the release
+                    let modifiers = self.resolve_modifiers(false);
+                    send_hid_report(Report::KeyboardReport(self.keyboard_report(modifiers))).await;
+                    return;
+                }
                 match self.passkey_entry_state.handle_key(key) {
                     PasskeyAction::Submitted(passkey) => {
                         info!("[passkey] Submitting passkey");
@@ -1781,12 +1788,21 @@ impl<'a> Keyboard<'a> {
     }
 
     /// Send the keyboard report for the held keycodes with exactly `modifiers`.
+    async fn send_keyboard_report(&mut self, modifiers: ModifierCombination) {
+        let report = self.keyboard_report(modifiers);
+        self.send_report(Report::KeyboardReport(report)).await;
+
+        // Yield once after sending the report to channel
+        yield_now().await;
+    }
+
+    /// The keyboard report for the held keycodes with exactly `modifiers`.
     ///
     /// Multiple slots can hold the same HID usage, but the host only tracks
     /// each usage as up or down, so duplicates are collapsed to the first slot
     /// that holds them. This keeps the shared usage down until the last holder
     /// releases it.
-    async fn send_keyboard_report(&mut self, modifiers: ModifierCombination) {
+    fn keyboard_report(&self, modifiers: ModifierCombination) -> KeyboardReport {
         let mut keycodes = [0u8; 6];
         let mut n = 0;
         for k in self.registered.iter().filter(|k| k.keycode != HidKeyCode::No) {
@@ -1800,16 +1816,12 @@ impl<'a> Keyboard<'a> {
             "Sending keyboard report, modifiers: {:?}, keycodes: {:?}",
             modifiers, keycodes
         );
-        let report = KeyboardReport {
+        KeyboardReport {
             modifier: modifiers.into_bits(),
             reserved: 0,
             leds: LOCK_LED_STATES.load(core::sync::atomic::Ordering::Relaxed),
             keycodes,
-        };
-        self.send_report(Report::KeyboardReport(report)).await;
-
-        // Yield once after sending the report to channel
-        yield_now().await;
+        }
     }
 
     /// Send system control report if needed
