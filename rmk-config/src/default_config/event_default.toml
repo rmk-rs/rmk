@@ -72,6 +72,8 @@ subs = 1
 [event.pointing]
 channel_size = 8
 pubs = 4
+# Each pointing processor and auto mouse layer configured in keyboard.toml adds
+# one (build_constants.rs).
 subs = 2
 
 # Raw multi-touch scans from touchpads, which stay on their board. No subscribers
