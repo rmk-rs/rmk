@@ -264,8 +264,11 @@ impl<'a> Keyboard<'a> {
     pub(crate) async fn fire_held_non_morse_keys(&mut self) {
         self.held_buffer.keys.sort_unstable_by_key(|k| k.press_time);
 
-        // Trigger all non morse keys in the buffer
-        while let Some(key) = self.held_buffer.remove_if(|k| !k.action.is_morse()) {
+        // Trigger all buffered non morse keys. Keys waiting for a combo are left to the combo.
+        while let Some(key) = self
+            .held_buffer
+            .remove_if(|k| !k.action.is_morse() && matches!(k.state, KeyState::Pressed(_)))
+        {
             debug!("Trigger non-morse key: {:?}", key);
             let action = if key.event.pos.is_physical() {
                 self.keymap.get_action_with_layer_cache(key.event)

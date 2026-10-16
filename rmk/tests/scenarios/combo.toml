@@ -267,6 +267,29 @@ steps = [
 ]
 expect = [["LShift"], ["LShift", "W"], ["LShift", "W", "E"], ["LShift", "W", "E", "R"], ["LShift", "W", "E", "R", "V"], ["LShift", "W", "E", "R"], ["LShift", "W", "E"], ["LShift", "W"], ["LShift"], []]
 
+# A key waiting on its combo partner when an unresolved MT(B, LShift) times out
+# into a hold stays with the combo. Regression: the hold timeout flushed W as a
+# plain key but left it in the combo state, so E still completed W+E — W and D
+# both reached the host, and the combo swallowed W's release, leaving W stuck.
+[[test]]
+name = "waiting_combo_key_survives_morse_hold_timeout"
+behavior.morse = { hold_timeout = "200ms" }
+behavior.combo = {
+  timeout = "100ms",
+  combos = [{ actions = ["W", "E"], output = "D", layer = 0 }]
+}
+steps = [
+  { press = [1, 1] },   # MT(B, LShift), unresolved
+  { delay = 160 },
+  { press = [1, 3] },   # W waits for E
+  { delay = 60 },       # MT times out into a hold meanwhile
+  { press = [1, 4] },   # E: W+E fires D
+  { release = [1, 3] },
+  { release = [1, 4] },
+  { release = [1, 1] },
+]
+expect = [["LShift"], ["LShift", "D"], ["LShift"], []]
+
 # Reproduces a single-combo stuck-key bug: re-pressing a combo key while the
 # combo is still held leaked the re-press into the HID report and overwrote the
 # combo output's slot, leaving the re-pressed key stuck on full release.
