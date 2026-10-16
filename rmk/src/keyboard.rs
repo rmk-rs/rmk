@@ -1455,13 +1455,27 @@ impl<'a> Keyboard<'a> {
             return;
         }
 
+        let owners_before = self.usage_owners(key);
         if event.pressed {
             self.register_key(key, mods, event);
         } else {
             self.unregister_key(key, mods, event);
         }
 
-        self.send_keyboard_report_with_resolved_modifiers(event.pressed).await;
+        let modifiers = self.resolve_modifiers(event.pressed);
+        if event.pressed && owners_before > 0 && self.usage_owners(key) > owners_before {
+            // A newly accepted owner needs another make transition. Preserve
+            // all other usages and the modifiers resolved for this press.
+            self.send_keyboard_report_suppressing(modifiers, key).await;
+        }
+        self.send_keyboard_report(modifiers).await;
+    }
+
+    fn usage_owners(&self, key: HidKeyCode) -> usize {
+        self.registered
+            .iter()
+            .filter(|owner| key != HidKeyCode::No && owner.keycode == key)
+            .count()
     }
 
     // Process action special keys
@@ -1787,9 +1801,18 @@ impl<'a> Keyboard<'a> {
     /// that holds them. This keeps the shared usage down until the last holder
     /// releases it.
     async fn send_keyboard_report(&mut self, modifiers: ModifierCombination) {
+        self.send_keyboard_report_suppressing(modifiers, HidKeyCode::No).await;
+    }
+
+    /// Send a report omitting only `suppressed`; `No` omits no held usage.
+    async fn send_keyboard_report_suppressing(&mut self, modifiers: ModifierCombination, suppressed: HidKeyCode) {
         let mut keycodes = [0u8; 6];
         let mut n = 0;
-        for k in self.registered.iter().filter(|k| k.keycode != HidKeyCode::No) {
+        for k in self
+            .registered
+            .iter()
+            .filter(|k| k.keycode != HidKeyCode::No && k.keycode != suppressed)
+        {
             let code = k.keycode as u8;
             if !keycodes[..n].contains(&code) {
                 keycodes[n] = code;
