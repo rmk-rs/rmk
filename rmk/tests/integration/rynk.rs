@@ -191,3 +191,29 @@ fn set_key_on_failing_flash_replies_storage_fault() {
             .await;
     });
 }
+
+#[cfg(feature = "storage")]
+#[test]
+fn hold_trigger_positions_survive_restart() {
+    const SET_POSITIONS: &str = r#"{"positions":[{"profile":255,"row":0,"col":0},{"profile":0,"row":0,"col":1}]}"#;
+    const STORED_STATE: &str =
+        r#"{"capacity":16,"positions":[{"profile":255,"row":0,"col":0},{"profile":0,"row":0,"col":1}]}"#;
+
+    test_block_on(async {
+        let flash = crate::simulator::Flash::new();
+        {
+            let mut keyboard = SimKeyboard::builder([[[k!(A), k!(B)]]])
+                .build_with_flash(flash.clone())
+                .await;
+            keyboard
+                .rynk::<command::SetMorseHoldTriggerPositions>(SET_POSITIONS, RynkReply::Ok("null"))
+                .run()
+                .await;
+        }
+        let mut keyboard = SimKeyboard::builder([[[k!(A), k!(B)]]]).build_with_flash(flash).await;
+        keyboard
+            .rynk::<command::GetMorseHoldTriggerPositions>("null", RynkReply::Ok(STORED_STATE))
+            .run()
+            .await;
+    });
+}

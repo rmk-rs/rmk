@@ -10,8 +10,13 @@ use rmk_types::fork::Fork;
 use rmk_types::led_indicator::LedIndicator;
 use rmk_types::morse::{Morse, MorseProfile};
 #[cfg(feature = "rynk")]
-use rmk_types::protocol::rynk::BehaviorConfig;
+use rmk_types::protocol::rynk::{
+    BehaviorConfig, MorseHoldTriggerPosition, MorseHoldTriggerPositionState, MorseHoldTriggerPositions,
+    SetMorseHoldTriggerPositionsRequest,
+};
 
+#[cfg(feature = "rynk")]
+use crate::config::HoldTriggerPositions;
 use crate::event::KeyboardEventPos;
 use crate::keyboard::combo::Combo;
 use crate::keymap::KeyMap;
@@ -194,6 +199,39 @@ impl<'a> KeyboardContext<'a> {
 
     pub fn morse_prior_idle_time(&self) -> Duration {
         self.keymap.morse_prior_idle_time()
+    }
+
+    #[cfg(feature = "rynk")]
+    pub fn morse_hold_trigger_positions(&self) -> MorseHoldTriggerPositionState {
+        // `Extend` works for both the firmware's bounded table and a host build's `Vec`.
+        let mut positions = MorseHoldTriggerPositions::new();
+        positions.extend(
+            self.keymap
+                .morse_hold_trigger_positions()
+                .iter()
+                .map(|&(profile, row, col)| MorseHoldTriggerPosition { profile, row, col }),
+        );
+        MorseHoldTriggerPositionState {
+            capacity: crate::HOLD_TRIGGER_KEY_POSITION_MAX_NUM as u8,
+            positions,
+        }
+    }
+
+    #[cfg(feature = "rynk")]
+    pub async fn set_morse_hold_trigger_positions(
+        &self,
+        request: SetMorseHoldTriggerPositionsRequest,
+    ) -> Result<(), ()> {
+        let mut stored = HoldTriggerPositions::new();
+        for position in request.positions {
+            stored
+                .push((position.profile, position.row, position.col))
+                .expect("Rynk decoder enforces the compiled hold-trigger capacity");
+        }
+        self.keymap.set_morse_hold_trigger_positions(stored.clone());
+        #[cfg(feature = "storage")]
+        store(StorageItem::MorseHoldTriggerPositions(stored)).await?;
+        Ok(())
     }
 
     pub async fn set_combo_timeout(&self, ms: u16) -> Result<(), ()> {
