@@ -134,9 +134,13 @@ impl rynk::io::ErrorType for UsbWriter {
 
 impl rynk::io::Write for UsbWriter {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        let mut transfer = self.ep.allocate(buf.len());
-        transfer.extend_from_slice(buf);
-        self.ep.submit(transfer);
+        // A transfer still pending is a cancelled `write` of these same bytes,
+        // which the driver is retrying; submitting again would send them twice.
+        if self.ep.pending() == 0 {
+            let mut transfer = self.ep.allocate(buf.len());
+            transfer.extend_from_slice(buf);
+            self.ep.submit(transfer);
+        }
         let completion = core::future::poll_fn(|cx| self.ep.poll_next_complete(cx)).await;
         completion.status.map_err(std::io::Error::other)?;
         Ok(buf.len())
