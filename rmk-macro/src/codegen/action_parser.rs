@@ -13,23 +13,29 @@ use strum::VariantNames;
 
 #[derive(Default)]
 struct ModifierCombinationMacro {
-    right: bool,
-    gui: bool,
-    alt: bool,
-    shift: bool,
-    ctrl: bool,
+    left_ctrl: bool,
+    left_shift: bool,
+    left_alt: bool,
+    left_gui: bool,
+    right_ctrl: bool,
+    right_shift: bool,
+    right_alt: bool,
+    right_gui: bool,
 }
 // Allows to use `#modifiers` in the quote
 impl quote::ToTokens for ModifierCombinationMacro {
     fn to_tokens(&self, tokens: &mut TokenStream2) {
-        let right = self.right;
-        let gui = self.gui;
-        let alt = self.alt;
-        let shift = self.shift;
-        let ctrl = self.ctrl;
+        let left_ctrl = self.left_ctrl;
+        let left_shift = self.left_shift;
+        let left_alt = self.left_alt;
+        let left_gui = self.left_gui;
+        let right_ctrl = self.right_ctrl;
+        let right_shift = self.right_shift;
+        let right_alt = self.right_alt;
+        let right_gui = self.right_gui;
 
         tokens.extend(quote! {
-            ::rmk::types::modifier::ModifierCombination::new_from(#right, #gui, #alt, #shift, #ctrl)
+            ::rmk::types::modifier::ModifierCombination::new_from_vals(#left_ctrl, #left_shift, #left_alt, #left_gui, #right_ctrl, #right_shift, #right_alt, #right_gui)
         });
     }
 }
@@ -37,26 +43,14 @@ impl quote::ToTokens for ModifierCombinationMacro {
 /// Get modifier combination, in types of mod1 | mod2 | ...
 fn parse_modifiers(modifiers_str: &str) -> ModifierCombinationMacro {
     const MODIFIERS: &SetterTable<ModifierCombinationMacro> = &[
-        ("LShift", |c| c.shift = true),
-        ("LCtrl", |c| c.ctrl = true),
-        ("LAlt", |c| c.alt = true),
-        ("LGui", |c| c.gui = true),
-        ("RShift", |c| {
-            c.right = true;
-            c.shift = true;
-        }),
-        ("RCtrl", |c| {
-            c.right = true;
-            c.ctrl = true;
-        }),
-        ("RAlt", |c| {
-            c.right = true;
-            c.alt = true;
-        }),
-        ("RGui", |c| {
-            c.right = true;
-            c.gui = true;
-        }),
+        ("LCtrl", |c| c.left_ctrl = true),
+        ("LShift", |c| c.left_shift = true),
+        ("LAlt", |c| c.left_alt = true),
+        ("LGui", |c| c.left_gui = true),
+        ("RCtrl", |c| c.right_ctrl = true),
+        ("RShift", |c| c.right_shift = true),
+        ("RAlt", |c| c.right_alt = true),
+        ("RGui", |c| c.right_gui = true),
     ];
 
     parse_name_list(
@@ -732,13 +726,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_modifiers_resolves_canonical_and_alias_names() {
+    fn parse_modifiers_resolves_aliases_and_keeps_each_side() {
         let m = parse_modifiers("LCtrl | lcmd | algr");
-        assert!(m.ctrl);
-        assert!(m.gui);
-        assert!(m.alt);
-        assert!(m.right);
-        assert!(!m.shift);
+        assert!(m.left_ctrl);
+        assert!(m.left_gui);
+        assert!(m.right_alt);
+        assert!(!m.left_alt && !m.right_ctrl && !m.right_gui);
+        assert!(!m.left_shift && !m.right_shift);
     }
 
     #[test]
