@@ -195,6 +195,10 @@ pub struct Keyboard<'a> {
     /// Expiry deadline while the oneshot modifiers are armed (`Single`)
     osm_deadline: Option<Instant>,
 
+    /// The non-keyboard key whose press carried the oneshot modifiers, so its
+    /// release reports them released
+    osm_held_by: Option<KeyboardEventPos>,
+
     /// The pending User-key hold gesture: when it fires, and the id of the held key.
     /// Any key event cancels it.
     #[cfg(feature = "_ble")]
@@ -244,6 +248,7 @@ impl<'a> Keyboard<'a> {
             osl_deadline: None,
             osm_state: OneShotState::default(),
             osm_deadline: None,
+            osm_held_by: None,
             #[cfg(feature = "_ble")]
             user_hold: None,
             caps_word: CapsWordState::default(),
@@ -1560,8 +1565,17 @@ impl<'a> Keyboard<'a> {
         // report, so they are a modifier action at this position, held around the key.
         let is_basic_keyboard_key = key.is_keyboard_key();
         let hold_mods = !is_basic_keyboard_key && mods.into_bits() != 0;
-        if hold_mods && event.pressed {
+        // Pending one-shot modifiers are held around such a key the same way.
+        let hold_osm = if event.pressed {
+            !is_basic_keyboard_key && self.osm_state.value().is_some()
+        } else {
+            self.osm_held_by.take_if(|pos| *pos == event.pos).is_some()
+        };
+        if (hold_mods || hold_osm) && event.pressed {
             self.register_key(HidKeyCode::No, mods, event);
+            if hold_osm {
+                self.osm_held_by = Some(event.pos);
+            }
             self.send_keyboard_report_with_resolved_modifiers(true).await;
         }
         if let Some(consumer) = key.process_as_consumer() {
@@ -1575,6 +1589,8 @@ impl<'a> Keyboard<'a> {
         }
         if hold_mods && !event.pressed {
             self.unregister_key(HidKeyCode::No, mods, event);
+        }
+        if (hold_mods || hold_osm) && !event.pressed {
             self.send_keyboard_report_with_resolved_modifiers(false).await;
         }
 
