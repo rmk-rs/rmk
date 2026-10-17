@@ -41,6 +41,26 @@ steps = [
 ]
 expect = [["C"], [], ["A"], [], ["B"], []]
 
+# A write ends the macro playing but lets go of the Ctrl it holds.
+# Regression: the write dropped `up LCtrl` with the rest of the macro, and Ctrl
+# stayed down.
+[[test]]
+name = "macro_write_releases_what_the_macro_holds"
+features = ["storage"]
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "down", keycode = "LCtrl" },
+    { operation = "delay", duration = "1000ms" },
+    { operation = "up", keycode = "LCtrl" },
+  ] },
+] }
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { rynk = { cmd = "SetMacro", payload = { index = 0, macro_ops = [] } } },
+  { delay = 1100 },
+]
+expect = [["LCtrl"], []]
+
 # Every op shape crosses the wire and comes back as written.
 [[test]]
 name = "every_op_shape_round_trips"
