@@ -708,6 +708,10 @@ impl Handler for UsbDeviceHandler {
             let live = current_usb_state();
             if live == UsbState::Configured {
                 self.pre_suspend = live;
+                // A request from before this suspend, e.g. `run_writer` hitting a
+                // Disabled endpoint after an unplug or bus reset, would wake the
+                // host right away.
+                USB_REMOTE_WAKEUP.reset();
                 set_usb_state(UsbState::Suspended);
                 info!(
                     "Device suspended, the Vbus current limit is 500µA (or 2.5mA for high-power devices with remote wakeup enabled)."
@@ -741,7 +745,7 @@ mod tests {
     use embassy_usb::class::hid::RequestHandler;
     use rmk_types::connection::UsbState;
 
-    use super::{HidProtocolMode, OutResponse, UsbDeviceHandler, UsbRequestHandler};
+    use super::{HidProtocolMode, OutResponse, USB_REMOTE_WAKEUP, UsbDeviceHandler, UsbRequestHandler};
     use crate::state::{current_usb_state, set_usb_state};
 
     /// A BIOS or KVM switch selects the boot protocol before it will use the
@@ -797,6 +801,20 @@ mod tests {
 
         handler.suspended(false);
         assert_eq!(current_usb_state(), UsbState::Configured);
+    }
+
+    /// A wakeup requested while the bus was awake, e.g. by a release report
+    /// hitting the endpoint of a just-unplugged cable, must not wake the host
+    /// out of its next suspend.
+    #[test]
+    fn suspend_discards_wakeup_requested_before_it() {
+        let mut handler = UsbDeviceHandler::new();
+        handler.enabled(true);
+        handler.configured(true);
+        USB_REMOTE_WAKEUP.signal(());
+
+        handler.suspended(true);
+        assert!(!USB_REMOTE_WAKEUP.signaled());
     }
 
     /// A stray duplicate `suspended(true)` while already Suspended must not
