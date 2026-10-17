@@ -462,7 +462,10 @@ fn expand_forks(
         Some(forks) => {
             let forks_def = forks.forks.iter().map(|fork| {
                 let trigger = parse_key(fork.trigger.to_owned(), profiles);
-                let negative_output = parse_key(fork.negative_output.to_owned(), profiles);
+                let negative_output = fork.negative_output.as_ref().map_or(
+                    quote! { ::rmk::types::action::KeyAction::Transparent },
+                    |k| parse_key(k.to_owned(), profiles),
+                );
                 let positive_output = parse_key(fork.positive_output.to_owned(), profiles);
                 let match_any  = fork.match_any.as_ref().map(|s| parse_state_combination(s)).unwrap_or_default();
                 let match_none = fork.match_none.as_ref().map(|s| parse_state_combination(s)).unwrap_or_default();

@@ -904,6 +904,10 @@ impl<'a> Keyboard<'a> {
                         let decision = (fork.match_any & decision_state) != StateBits::default()
                             && (fork.match_none & decision_state) == StateBits::default();
 
+                        if !decision && fork.negative_output == KeyAction::Transparent {
+                            continue;
+                        }
+
                         replacement = if decision {
                             fork.positive_output
                         } else {

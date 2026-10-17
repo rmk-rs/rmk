@@ -80,7 +80,7 @@ impl StateBits {
 pub struct Fork {
     /// The key action that activates this fork. Should not be `KeyAction::Transparent`.
     pub trigger: KeyAction,
-    /// Output when the state condition is NOT met.
+    /// Output when the state condition is NOT met. `Transparent` leaves the key alone.
     pub negative_output: KeyAction,
     /// Output when the state condition IS met.
     pub positive_output: KeyAction,

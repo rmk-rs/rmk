@@ -78,3 +78,49 @@ steps = [
   { release = [0, 0] },
 ]
 expect = [["LShift"], ["LShift", "Kc1"], ["Kc1"], ["Kc1", "Kc2"], ["Kc2"], [], ["LShift"], []]
+
+# The negative branch still drops match_any modifiers.
+[[test]]
+name = "explicit_negative_output_drops_modifier"
+behavior.fork = { forks = [{ trigger = "Kp9", positive_output = "Kc9", negative_output = "Kp9", match_any = "LShift", match_none = "LCtrl" }] }
+steps = [
+  { press = [0, 1] },
+  { press = [0, 0] },
+  { tap = { pos = [0, 2], duration = 30 } },
+  { release = [0, 0] },
+  { release = [0, 1] },
+]
+expect = [["LCtrl"], ["LCtrl", "LShift"], ["LCtrl"], ["LCtrl", "Kp9"], ["LCtrl"], ["LCtrl", "LShift"], ["LCtrl"], []]
+
+[[test]]
+name = "omitted_negative_output_leaves_key_alone"
+behavior.fork = { forks = [{ trigger = "Kp9", positive_output = "Kc9", match_any = "LShift", match_none = "LCtrl" }] }
+steps = [
+  { press = [0, 1] },
+  { press = [0, 0] },
+  { tap = { pos = [0, 2], duration = 30 } },
+  { release = [0, 0] },
+  { release = [0, 1] },
+]
+expect = [["LCtrl"], ["LCtrl", "LShift"], ["LCtrl", "LShift", "Kp9"], ["LCtrl", "LShift"], ["LCtrl"], []]
+
+[[test]]
+name = "omitted_positive_output_is_trigger"
+behavior.fork = { forks = [{ trigger = "Kp9", match_any = "LShift" }] }
+steps = [
+  { press = [0, 0] },
+  { tap = { pos = [0, 2], duration = 30 } },
+  { release = [0, 0] },
+]
+expect = [["LShift"], [], ["Kp9"], [], ["LShift"], []]
+
+[[test]]
+name = "trigger_list"
+behavior.fork = { forks = [{ trigger = ["Kp9", "Kc1"], match_any = "LShift" }] }
+steps = [
+  { press = [0, 0] },
+  { tap = { pos = [0, 2], duration = 30 } },
+  { tap = { pos = [0, 5], duration = 30 } },
+  { release = [0, 0] },
+]
+expect = [["LShift"], [], ["Kp9"], [], ["LShift"], [], ["Kc1"], [], ["LShift"], []]

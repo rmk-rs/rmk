@@ -47,13 +47,17 @@ impl crate::KeyboardTomlConfig {
                 behavior.macros = behavior.macros.or(default.macros);
                 behavior.fork = behavior.fork.or(default.fork);
                 if let Some(fork) = &behavior.fork {
-                    if fork.forks.len() > self.rmk.fork_max_num {
+                    let count: usize = fork.forks.iter().map(|f| f.trigger.keys().len()).sum();
+                    if count > self.rmk.fork_max_num {
                         return Err(
                             "keyboard.toml: number of forks is greater than fork_max_num configured under [rmk] section"
                                 .to_string(),
                         );
                     }
                     for (i, f) in fork.forks.iter().enumerate() {
+                        if f.trigger.keys().is_empty() {
+                            return Err(format!("keyboard.toml: trigger list in fork #{i} is empty"));
+                        }
                         let Some(layers) = &f.layers else { continue };
                         if layers.is_empty() {
                             return Err(format!("keyboard.toml: layers list in fork #{i} is empty"));

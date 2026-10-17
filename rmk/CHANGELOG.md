@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expose whether the active BLE profile is bonded via `BleStatus::bonded`, so LEDs and displays can tell a paired-but-disconnected profile from an empty slot.
 - Make `rmk::state::current_ble_status()` and `current_connection_status()` public, so user code can read the current status without subscribing to `ConnectionStatusChangeEvent`.
 - Forks accept a `layers` filter, so they only fire for keys from those layers.
+- Forks accept a list of triggers, and their outputs are optional: an omitted `positive_output` is the trigger, and an omitted `negative_output` leaves the key alone.
 
 ### Fixed
 

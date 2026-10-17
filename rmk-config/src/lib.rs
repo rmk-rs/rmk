@@ -1016,14 +1016,31 @@ pub(crate) struct ForksConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ForkConfig {
-    pub trigger: String,
-    pub negative_output: String,
-    pub positive_output: String,
+    pub trigger: ForkTrigger,
+    pub negative_output: Option<String>,
+    pub positive_output: Option<String>,
     pub match_any: Option<String>,
     pub match_none: Option<String>,
     pub kept_modifiers: Option<String>,
     pub bindable: Option<bool>,
     pub layers: Option<Vec<u8>>,
+}
+
+/// One trigger key, or a list of them.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum ForkTrigger {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl ForkTrigger {
+    pub(crate) fn keys(&self) -> &[String] {
+        match self {
+            Self::One(key) => std::slice::from_ref(key),
+            Self::Many(keys) => keys,
+        }
+    }
 }
 
 /// Configurations for morse keys

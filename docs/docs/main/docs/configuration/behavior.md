@@ -458,9 +458,9 @@ In the `fork` sub-table, you can configure the keyboard's state-based key fork f
 Fork configuration includes the following parameters:
 
 - `forks`: An array containing all defined forks. Each fork configuration is an object containing the following attributes:
-  - `trigger`: Defines the triggering key.
-  - `negative_output`: A string defining the output action to be triggered when the conditions are not met
-  - `positive_output`: A string defining the output action to be triggered when the conditions are met
+  - `trigger`: Defines the triggering key, or a list of keys. A list creates one fork per key, each counting toward `fork_max_num`.
+  - `negative_output`: A string defining the output action to be triggered when the conditions are not met. If omitted, the trigger key is left alone and no modifiers are suppressed (optional)
+  - `positive_output`: A string defining the output action to be triggered when the conditions are met. Defaults to the trigger key (optional)
   - `layers`: A list of layers the trigger key must come from. Defaults to all layers (optional)
   - `match_any`: A string defining a combination of modifier keys, lock LEDs, mouse buttons (optional)
   - `match_none`: A string defining a combination of modifier keys, lock LEDs, mouse buttons (optional)
@@ -504,6 +504,9 @@ forks = [
 
   # Shift + Backspace output Delete key, but only on layer 0
   { trigger = "Backspace", negative_output = "Backspace", positive_output = "Delete", match_any = "LShift|RShift", layers = [0] },
+
+  # Digits on layer 1 are typed without Shift, unless Ctrl is also held
+  { trigger = ["Kc1", "Kc2", "Kc3"], layers = [1], match_any = "LShift", match_none = "LCtrl" },
 
   # Ctrl + play/pause will send next track. MediaPlayPause -> MediaNextTrack
   # Ctrl + Shift + play/pause will send previous track. MediaPlayPause -> MediaPrevTrack
