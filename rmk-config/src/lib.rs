@@ -1476,6 +1476,23 @@ impl Default for EncoderResolution {
     }
 }
 
+impl EncoderResolution {
+    /// Number of pulses per reported step
+    pub fn value(&self) -> Result<u8, String> {
+        let resolution = match *self {
+            Self::Value(resolution) => u16::from(resolution),
+            Self::Derived { detent: 0, .. } => return Err("encoder `detent` must be nonzero".to_string()),
+            Self::Derived { detent, pulse } => u16::from(pulse) * 4 / u16::from(detent),
+        };
+        match u8::try_from(resolution) {
+            Ok(resolution) if resolution > 0 => Ok(resolution),
+            _ => Err(format!(
+                "encoder resolution must be between 1 and 255, got {resolution}"
+            )),
+        }
+    }
+}
+
 /// Pointing device config
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
