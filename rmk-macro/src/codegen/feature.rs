@@ -11,43 +11,25 @@ pub(crate) fn get_rmk_features() -> Option<Vec<String>> {
         &std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is not set"),
     )
     .join("Cargo.toml");
-    match cargo_toml::Manifest::from_path(&manifest_path) {
-        Ok(manifest) => manifest
-            .dependencies
-            .iter()
-            .find(|(name, _dep)| *name == "rmk")
-            .map(|(_name, dep)| {
-                let default_features = if let Some(d) = dep.detail() {
-                    d.default_features
-                } else {
-                    true
-                };
+    let manifest = cargo_toml::Manifest::from_path(&manifest_path).ok()?;
+    let dep = manifest.dependencies.get("rmk")?;
+    let mut feature_set = dep.req_features().to_vec();
 
-                let mut feature_set = dep.req_features().to_vec();
-
-                // Add default features to the feature list.
-                // Must mirror `default = [...]` in rmk/Cargo.toml.
-                if default_features {
-                    feature_set.push("defmt".to_string());
-                    feature_set.push("storage".to_string());
-                    feature_set.push("vial".to_string());
-                    feature_set.push("host_lock".to_string());
-                    feature_set.push("watchdog".to_string());
-                }
-                feature_set
-            }),
-        Err(_e) => None,
+    // Add default features to the feature list.
+    // Must mirror `default = [...]` in rmk/Cargo.toml.
+    if dep.detail().is_none_or(|d| d.default_features) {
+        feature_set.push("defmt".to_string());
+        feature_set.push("storage".to_string());
+        feature_set.push("vial".to_string());
+        feature_set.push("host_lock".to_string());
+        feature_set.push("watchdog".to_string());
     }
+    Some(feature_set)
 }
 
 /// Check whether the given feature is enabled
 pub(crate) fn is_feature_enabled(feature_list: &Option<Vec<String>>, feature: &str) -> bool {
-    if let Some(rmk_features) = feature_list {
-        for f in rmk_features {
-            if f == feature {
-                return true;
-            }
-        }
-    }
-    false
+    feature_list
+        .as_ref()
+        .is_some_and(|features| features.iter().any(|f| f == feature))
 }
