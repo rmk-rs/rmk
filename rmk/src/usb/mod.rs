@@ -677,6 +677,8 @@ impl Handler for UsbDeviceHandler {
     }
 
     fn reset(&mut self) {
+        self.pre_suspend = UsbState::Enabled;
+        set_usb_state(UsbState::Enabled);
         info!("Bus reset, the Vbus current limit is 100mA");
     }
 
@@ -822,6 +824,37 @@ mod tests {
         let mut handler = UsbDeviceHandler::new();
         set_usb_state(UsbState::Configured);
 
+        handler.suspended(false);
+        assert_eq!(current_usb_state(), UsbState::Configured);
+    }
+
+    #[test]
+    fn reset_clears_configuration_until_the_host_configures_again() {
+        let mut handler = UsbDeviceHandler::new();
+        handler.enabled(true);
+        handler.configured(true);
+        handler.reset();
+        assert_eq!(current_usb_state(), UsbState::Enabled);
+        handler.suspended(true);
+        handler.suspended(false);
+        assert_eq!(current_usb_state(), UsbState::Enabled);
+        handler.configured(true);
+        assert_eq!(current_usb_state(), UsbState::Configured);
+    }
+
+    #[test]
+    fn reset_during_suspend_does_not_restore_the_old_configuration() {
+        let mut handler = UsbDeviceHandler::new();
+        handler.enabled(true);
+        handler.configured(true);
+        handler.suspended(true);
+        handler.reset();
+        assert_eq!(current_usb_state(), UsbState::Enabled);
+        assert_eq!(handler.pre_suspend, UsbState::Enabled);
+        handler.suspended(false);
+        assert_eq!(current_usb_state(), UsbState::Enabled);
+        handler.configured(true);
+        handler.suspended(true);
         handler.suspended(false);
         assert_eq!(current_usb_state(), UsbState::Configured);
     }
