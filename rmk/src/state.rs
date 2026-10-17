@@ -162,8 +162,9 @@ mod tests {
     };
     #[cfg(feature = "_ble")]
     use super::{set_ble_bonded, set_ble_profile, set_ble_state};
+    use crate::channel::ReportChannel;
     use crate::event::{ConnectionStatusChangeEvent, EventSubscriber, SubscribableEvent};
-    use crate::hid::{KeyboardReport, Report};
+    use crate::hid::{KeyboardReport, MouseReport, Report};
     use crate::test_support::test_block_on as block_on;
 
     fn state_test_lock() -> &'static Mutex<()> {
@@ -198,6 +199,19 @@ mod tests {
             }
             _ => panic!("expected keyboard all-up report"),
         }
+    }
+
+    fn assert_releases_everything(ch: &ReportChannel) {
+        assert_all_up_keyboard_report(ch.try_receive().expect("channel should contain keyboard all-up report"));
+        assert!(matches!(ch.try_receive(), Ok(Report::MouseReport(r)) if r == MouseReport::default()));
+        assert!(matches!(ch.try_receive(), Ok(Report::MediaKeyboardReport(r)) if r.usage_id == 0));
+        assert!(matches!(ch.try_receive(), Ok(Report::SystemControlReport(r)) if r.usage_id == 0));
+        #[cfg(feature = "steno")]
+        assert!(matches!(ch.try_receive(), Ok(Report::StenoReport(r)) if r.keys == [0; 8]));
+        assert!(
+            ch.try_receive().is_err(),
+            "channel should contain only the release reports"
+        );
     }
 
     #[test]
@@ -299,6 +313,8 @@ mod tests {
     #[cfg(not(feature = "_no_usb"))]
     #[test]
     fn flipping_away_from_active_clears_stale_reports_and_queues_all_up() {
+        use usbd_hid::descriptor::MediaKeyboardReport;
+
         use crate::channel::USB_REPORT_CHANNEL;
 
         let _guard = state_test_lock().lock().unwrap();
@@ -316,18 +332,19 @@ mod tests {
         USB_REPORT_CHANNEL
             .try_send(pressed_keyboard_report())
             .expect("channel should have capacity for sentinel");
+        USB_REPORT_CHANNEL
+            .try_send(Report::MouseReport(MouseReport {
+                buttons: 1,
+                ..Default::default()
+            }))
+            .expect("channel should have capacity for sentinel");
+        USB_REPORT_CHANNEL
+            .try_send(Report::MediaKeyboardReport(MediaKeyboardReport { usage_id: 0xE9 }))
+            .expect("channel should have capacity for sentinel");
 
         set_usb_state(UsbState::Disabled);
         assert!(super::active_transport().is_none());
-        assert_all_up_keyboard_report(
-            USB_REPORT_CHANNEL
-                .try_receive()
-                .expect("USB_REPORT_CHANNEL should contain keyboard all-up report"),
-        );
-        assert!(
-            USB_REPORT_CHANNEL.try_receive().is_err(),
-            "USB_REPORT_CHANNEL should contain only the all-up report"
-        );
+        assert_releases_everything(&USB_REPORT_CHANNEL);
     }
 
     #[cfg(not(feature = "_no_usb"))]
@@ -355,15 +372,7 @@ mod tests {
             },
         ));
 
-        assert_all_up_keyboard_report(
-            USB_REPORT_CHANNEL
-                .try_receive()
-                .expect("USB_REPORT_CHANNEL should contain keyboard all-up report"),
-        );
-        assert!(
-            USB_REPORT_CHANNEL.try_receive().is_err(),
-            "USB_REPORT_CHANNEL should contain only the all-up report"
-        );
+        assert_releases_everything(&USB_REPORT_CHANNEL);
     }
 
     #[cfg(all(not(feature = "_no_usb"), feature = "_ble"))]
@@ -384,15 +393,7 @@ mod tests {
 
         set_usb_state(UsbState::Configured);
         assert_eq!(super::active_transport(), Some(ConnectionType::Usb));
-        assert_all_up_keyboard_report(
-            BLE_REPORT_CHANNEL
-                .try_receive()
-                .expect("BLE_REPORT_CHANNEL should contain keyboard all-up report"),
-        );
-        assert!(
-            BLE_REPORT_CHANNEL.try_receive().is_err(),
-            "BLE_REPORT_CHANNEL should contain only the all-up report"
-        );
+        assert_releases_everything(&BLE_REPORT_CHANNEL);
     }
 
     #[cfg(not(feature = "_no_usb"))]

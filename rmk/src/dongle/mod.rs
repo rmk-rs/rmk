@@ -41,7 +41,7 @@ use crate::ble::adv::Adv;
 use crate::ble::profile::{ProfileInfo, ProfileManager};
 use crate::ble::scan::{DONGLE_SCAN_WINDOW, scan_config, start_scan};
 use crate::ble::wait_for_stack_started;
-use crate::channel::send_hid_report;
+use crate::channel::{RELEASE_ALL_REPORTS, send_hid_report};
 use crate::core_traits::Runnable;
 #[cfg(feature = "custom_message")]
 use crate::dongle::event::{CUSTOM_TO_DONGLE_UUID, CUSTOM_TO_KEYBOARD_UUID};
@@ -775,19 +775,8 @@ impl ReportCharacteristics {
 /// Release whatever the keyboard was holding when the link dropped, so nothing
 /// stays stuck down on the host.
 async fn release_held_keys() {
-    for report in [
-        Report::KeyboardReport(KeyboardReport::default()),
-        Report::MouseReport(MouseReport {
-            buttons: 0,
-            x: 0,
-            y: 0,
-            wheel: 0,
-            pan: 0,
-        }),
-        Report::MediaKeyboardReport(MediaKeyboardReport { usage_id: 0 }),
-        Report::SystemControlReport(SystemControlReport { usage_id: 0 }),
-    ] {
-        send_hid_report(report).await;
+    for report in RELEASE_ALL_REPORTS {
+        send_hid_report(report.clone()).await;
     }
 }
 
