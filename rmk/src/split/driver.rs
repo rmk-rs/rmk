@@ -205,7 +205,11 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
         #[cfg(feature = "dfu_split")]
         let mut dfu_sub = DfuCmdEvent::subscriber();
 
-        // Send connection and lock LED state when the session starts.
+        // Capture after subscribing and before the first await; later changes
+        // stay queued while the initial state is being sent.
+        let sleeping = crate::state::current_sleep_state();
+
+        // Send the current state when the session starts.
         for message in [
             SplitMessage::ConnectionStatus(crate::state::current_connection_status()),
             SplitMessage::KeyboardIndicator(crate::keyboard::current_led_indicator().into_bits()),
@@ -213,6 +217,10 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
             if self.send(&message).await.is_err() {
                 return;
             }
+        }
+
+        if self.send(&SplitMessage::SleepState(sleeping)).await.is_err() {
+            return;
         }
 
         #[cfg(feature = "dfu_split")]
@@ -311,5 +319,79 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
             }
             _ => warn!("{:?} should not come from peripheral", split_message),
         }
+    }
+}
+
+#[cfg(all(test, feature = "_ble"))]
+mod sleep_sync_tests {
+    use core::sync::atomic::Ordering;
+    use std::cell::RefCell;
+
+    use embassy_futures::yield_now;
+    use embassy_time::Timer;
+
+    use super::*;
+    use crate::ble::sleep::SLEEPING_STATE;
+    use crate::event::SleepStateEvent;
+    use crate::test_support::test_block_on;
+
+    struct SleepProbe<'a> {
+        sent: &'a RefCell<Vec<SplitMessage>>,
+        race: bool,
+    }
+
+    impl SplitReader for SleepProbe<'_> {
+        async fn read(&mut self) -> Result<SplitMessage, SplitDriverError> {
+            core::future::pending().await
+        }
+    }
+
+    impl SplitWriter for SleepProbe<'_> {
+        async fn write(&mut self, message: &SplitMessage) -> Result<usize, SplitDriverError> {
+            self.sent.borrow_mut().push(*message);
+            if self.race {
+                self.race = false;
+                let sleeping = !SLEEPING_STATE.load(Ordering::Acquire);
+                SLEEPING_STATE.store(sleeping, Ordering::Release);
+                publish_event(SleepStateEvent(sleeping));
+                yield_now().await;
+            }
+            Ok(1)
+        }
+    }
+
+    fn sent_sleep_states(initial: bool, race: bool) -> Vec<bool> {
+        SLEEPING_STATE.store(initial, Ordering::Release);
+        let sent = RefCell::new(Vec::new());
+        let manager = PeripheralManager::new(
+            SleepProbe { sent: &sent, race },
+            0,
+            PeripheralMatrixConfig {
+                rows: 1,
+                cols: 1,
+                row_offset: 0,
+                col_offset: 0,
+            },
+        );
+        test_block_on(select(manager.run(), Timer::after_millis(5)));
+        sent.into_inner()
+            .into_iter()
+            .filter_map(|message| match message {
+                SplitMessage::SleepState(sleeping) => Some(sleeping),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_new_session_receives_the_current_sleep_state() {
+        assert_eq!(sent_sleep_states(true, false), [true]);
+        assert_eq!(sent_sleep_states(false, false), [false]);
+    }
+
+    #[test]
+    fn sleep_changes_during_initial_send_follow_the_snapshot() {
+        assert_eq!(sent_sleep_states(false, true), [false, true]);
+        assert_eq!(sent_sleep_states(true, true), [true, false]);
     }
 }
