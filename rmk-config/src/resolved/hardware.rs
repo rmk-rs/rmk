@@ -136,7 +136,7 @@ impl crate::KeyboardTomlConfig {
             None
         };
         let dfu = self.split_side_dfu(None)?;
-        let light = self.get_light_config();
+        let light = self.light.clone().unwrap_or_default();
         let display = self.get_display_config();
         let output = self.get_output_config()?;
         let dependency = self.get_dependency_config();

@@ -25,7 +25,6 @@ pub(crate) mod keycode_alias;
 pub(crate) mod keymap;
 pub mod layout;
 pub use layout::{STOCK_WIDTHS, layout_blob_from_toml, layout_info_from_toml};
-pub(crate) mod light;
 pub(crate) mod storage;
 
 /// Bytes in one persisted macro chunk, shared by configuration and firmware.
