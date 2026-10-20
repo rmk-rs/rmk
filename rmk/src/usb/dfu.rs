@@ -1,8 +1,8 @@
 use core::sync::atomic::Ordering;
 
 use embassy_usb::Handler;
-use embassy_usb::class::dfu::consts::{DfuAttributes, Status};
-use embassy_usb::class::dfu::dfu_mode::{self, DfuState};
+use embassy_usb::class::dfu::device::consts::{DfuAttributes, Status};
+use embassy_usb::class::dfu::device::dfu_mode::{self, DfuState};
 use embassy_usb::control::{InResponse, OutResponse, Recipient, Request, RequestType};
 use embassy_usb::driver::Direction;
 use embassy_usb::types::{InterfaceNumber, StringIndex};
