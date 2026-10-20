@@ -5,8 +5,8 @@
 //! to leave. Having no keys, it honours the DETACH only for 30 s after plug-in.
 
 use embassy_time::{Duration, Instant};
-use embassy_usb::class::dfu::app_mode::{self, DfuState};
-use embassy_usb::class::dfu::consts::DfuAttributes;
+use embassy_usb::class::dfu::device::app_mode::{self, DfuState};
+use embassy_usb::class::dfu::device::consts::DfuAttributes;
 use embassy_usb::driver::Driver;
 use embassy_usb::{Builder, msos};
 use static_cell::StaticCell;

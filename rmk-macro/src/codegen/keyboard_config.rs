@@ -50,6 +50,7 @@ pub(crate) fn expand_device_config(
         let keyboard_device_config = ::rmk::config::DeviceConfig {
             vid: #vid,
             pid: #pid,
+            bcd_version: 0x0010,
             manufacturer: #manufacturer,
             product_name: #product_name,
             serial_number: #serial_number_tokens,

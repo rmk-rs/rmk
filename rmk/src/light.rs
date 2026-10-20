@@ -1,4 +1,4 @@
-use embassy_usb::class::hid::HidReader;
+use embassy_usb::class::hid::device::HidReader;
 use embassy_usb::driver::Driver;
 use rmk_types::led_indicator::LedIndicator;
 

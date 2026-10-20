@@ -2,8 +2,9 @@ use embassy_futures::join::join5;
 use embassy_futures::select::{Either, select};
 use embassy_sync::signal::Signal;
 #[cfg(feature = "usb_log")]
-use embassy_usb::class::cdc_acm::CdcAcmClass;
-use embassy_usb::class::hid::{HidProtocolMode, HidReader, HidReaderWriter, HidWriter, ReportId, RequestHandler};
+use embassy_usb::class::cdc_acm::device::CdcAcmClass;
+use embassy_usb::class::hid::device::{HidReader, HidReaderWriter, HidWriter, RequestHandler};
+use embassy_usb::class::hid::{HidProtocolMode, ReportId};
 use embassy_usb::control::OutResponse;
 use embassy_usb::driver::{Driver, EndpointError};
 use embassy_usb::{Builder, Handler, UsbDevice};
@@ -196,6 +197,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(
     config_descriptor: &'d mut [u8],
 ) -> Builder<'d, D> {
     let mut usb_config = embassy_usb::Config::new(keyboard_config.vid, keyboard_config.pid);
+    usb_config.device_release = keyboard_config.bcd_version;
     usb_config.manufacturer = Some(keyboard_config.manufacturer);
     usb_config.product = Some(keyboard_config.product_name);
     static SERIAL: StaticCell<heapless::String<DEVICE_INFO_STRING_MAX_LEN>> = StaticCell::new();
@@ -257,7 +259,7 @@ pub struct UsbTransport<'a, D: Driver<'static>, S = ()> {
     steno_writer: HidWriter<'static, D, 9>,
     /// Taken by `run`: the logger future consumes the CDC class.
     #[cfg(feature = "usb_log")]
-    logger: Option<embassy_usb::class::cdc_acm::CdcAcmClass<'static, D>>,
+    logger: Option<embassy_usb::class::cdc_acm::device::CdcAcmClass<'static, D>>,
     #[cfg(any(feature = "host", feature = "dongle"))]
     host_reader: host_usb::HostUsbReader<D>,
     #[cfg(any(feature = "host", feature = "dongle"))]
@@ -548,7 +550,7 @@ pub async fn run_peripheral_usb<D: Driver<'static>>(driver: D, config: DeviceCon
 #[cfg(feature = "usb_log")]
 macro_rules! add_usb_logger {
     ($usb_builder:expr) => {{
-        use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
+        use embassy_usb::class::cdc_acm::device::{CdcAcmClass, State};
         use static_cell::StaticCell;
 
         // The usb logger can be only initialized once, so just use a fixed name for the state
@@ -565,18 +567,18 @@ macro_rules! usb_hid_state_and_config {
     ($descriptor:ty, $max_packet:expr, $subclass:expr, $protocol:expr) => {{
         use usbd_hid::descriptor::SerializedDescriptor;
         paste::paste! {
-            static [<$descriptor:snake:upper _STATE>]: ::static_cell::StaticCell<::embassy_usb::class::hid::State> = ::static_cell::StaticCell::new();
+            static [<$descriptor:snake:upper _STATE>]: ::static_cell::StaticCell<::embassy_usb::class::hid::device::State> = ::static_cell::StaticCell::new();
             static [<$descriptor:snake:upper _HANDLER>]: ::static_cell::StaticCell<$crate::usb::UsbRequestHandler> = ::static_cell::StaticCell::new();
         }
 
-        let state = paste::paste! { [<$descriptor:snake:upper _STATE>].init(::embassy_usb::class::hid::State::new()) };
+        let state = paste::paste! { [<$descriptor:snake:upper _STATE>].init(::embassy_usb::class::hid::device::State::new()) };
         let request_handler = paste::paste! {
             [<$descriptor:snake:upper _HANDLER>].init($crate::usb::UsbRequestHandler {
                 protocol: ::embassy_usb::class::hid::HidProtocolMode::Report,
             })
         };
 
-        let hid_config = ::embassy_usb::class::hid::Config {
+        let hid_config = ::embassy_usb::class::hid::device::Config {
             report_descriptor: <$descriptor>::desc(),
             request_handler: Some(request_handler),
             poll_ms: 1,
@@ -596,7 +598,7 @@ macro_rules! add_usb_writer {
             ::embassy_usb::class::hid::HidSubclass::No,
             ::embassy_usb::class::hid::HidBootProtocol::None
         );
-        ::embassy_usb::class::hid::HidWriter::<_, $n>::new($usb_builder, state, hid_config)
+        ::embassy_usb::class::hid::device::HidWriter::<_, $n>::new($usb_builder, state, hid_config)
     }};
 }
 
@@ -615,7 +617,7 @@ macro_rules! add_usb_reader_writer {
     ($usb_builder:expr, $descriptor:ty, $read_n:expr, $write_n:expr, $max_packet:expr, $subclass:expr, $protocol:expr) => {{
         let (state, hid_config) =
             $crate::usb::usb_hid_state_and_config!($descriptor, $max_packet, $subclass, $protocol);
-        ::embassy_usb::class::hid::HidReaderWriter::<_, $read_n, $write_n>::new($usb_builder, state, hid_config)
+        ::embassy_usb::class::hid::device::HidReaderWriter::<_, $read_n, $write_n>::new($usb_builder, state, hid_config)
     }};
 }
 
@@ -740,7 +742,7 @@ impl Handler for UsbDeviceHandler {
 #[cfg(test)]
 mod tests {
     use embassy_usb::Handler;
-    use embassy_usb::class::hid::RequestHandler;
+    use embassy_usb::class::hid::device::RequestHandler;
     use rmk_types::connection::UsbState;
 
     use super::{HidProtocolMode, OutResponse, UsbDeviceHandler, UsbRequestHandler};

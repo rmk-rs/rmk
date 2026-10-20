@@ -1,7 +1,7 @@
 //! Vial over USB HID (32-byte IN/OUT reports).
 
 use embassy_usb::Builder;
-use embassy_usb::class::hid::{HidReader, HidWriter};
+use embassy_usb::class::hid::device::{HidReader, HidWriter};
 use embassy_usb::driver::Driver;
 use embedded_io_async::{ErrorType, Read, Write};
 
