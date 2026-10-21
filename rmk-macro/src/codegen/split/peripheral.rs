@@ -447,7 +447,7 @@ fn expand_split_peripheral(
                 #protocol_config
                 ..Default::default()
             };
-            let peripheral_service = ::rmk::host::peripheral::PeripheralService::new(&peripheral_config, ::rmk::split::PeripheralMatrixConfig {
+            let peripheral_service = ::rmk::host::peripheral::PeripheralService::new(peripheral_config, ::rmk::split::PeripheralMatrixConfig {
                 rows: #rows, cols: #cols, row_offset: #row_offset, col_offset: #col_offset,
             });
         }

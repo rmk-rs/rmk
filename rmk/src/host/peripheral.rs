@@ -1,58 +1,31 @@
-//! USB update commands for a split peripheral, independent of its central.
+//! Local matrix state for a split peripheral's USB host service.
 
 use core::cell::RefCell;
 
-#[cfg(feature = "vial")]
-use embassy_time::Duration;
-#[cfg(feature = "vial")]
 use embedded_io_async::{Read, Write};
-#[cfg(feature = "vial")]
-use rmk_types::protocol::vial::ViaCommand;
 
-#[cfg(feature = "vial")]
-use super::lock::HostLock;
 use super::lock::UnlockKeyState;
-#[cfg(feature = "vial")]
-use super::via::system::process_system_packet;
-use crate::config::RmkConfig;
-#[cfg(feature = "vial")]
-use crate::config::VialConfig;
 #[cfg(feature = "rynk")]
-use crate::config::{DeviceConfig, LockConfig};
-use crate::event::{KeyboardEvent, publish_event_async};
+use super::rynk::RynkService as Service;
 #[cfg(feature = "vial")]
-use crate::hid::ViaReport;
+use super::via::VialService as Service;
+use crate::config::RmkConfig;
+use crate::event::{KeyboardEvent, publish_event_async};
 use crate::input_device::InputDevice;
 use crate::matrix::MatrixState;
 use crate::split::PeripheralMatrixConfig;
 
-/// Serves host identity, unlock and bootloader commands without a keymap.
-/// Run `run_matrix` alongside the USB service so unlock works without a split link.
+/// Records this side's keys without a keymap or a connection to the central.
 pub struct PeripheralService {
-    #[cfg(feature = "vial")]
-    config: VialConfig<'static>,
-    #[cfg(feature = "rynk")]
-    config: LockConfig,
-    #[cfg(feature = "rynk")]
-    device: DeviceConfig<'static>,
-    #[cfg(feature = "rynk")]
-    layout_blob: &'static [u8],
+    config: RmkConfig<'static>,
     matrix: RefCell<MatrixState>,
     matrix_config: PeripheralMatrixConfig,
 }
 
 impl PeripheralService {
-    /// `config` uses shared-layout positions; `matrix_config` identifies this side's local region.
-    pub fn new(config: &RmkConfig<'static>, matrix_config: PeripheralMatrixConfig) -> Self {
+    pub fn new(config: RmkConfig<'static>, matrix_config: PeripheralMatrixConfig) -> Self {
         Self {
-            #[cfg(feature = "vial")]
-            config: config.vial_config,
-            #[cfg(feature = "rynk")]
-            config: config.lock_config,
-            #[cfg(feature = "rynk")]
-            device: config.device_config.clone(),
-            #[cfg(feature = "rynk")]
-            layout_blob: config.layout_blob,
+            config,
             matrix: RefCell::new(MatrixState::new(
                 matrix_config.rows as usize,
                 matrix_config.cols as usize,
@@ -61,7 +34,6 @@ impl PeripheralService {
         }
     }
 
-    /// Run instead of the matrix's normal task. Coordinates are local to this side.
     pub async fn run_matrix<M: InputDevice<Event = KeyboardEvent>>(&self, matrix: &mut M) -> ! {
         loop {
             let event = matrix.read_event().await;
@@ -70,31 +42,10 @@ impl PeripheralService {
         }
     }
 
-    /// A new transport session always starts locked unless explicitly insecure.
-    #[cfg(feature = "vial")]
     pub async fn run_session<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
-        let locker = HostLock::new(
-            self.config.unlock_keys,
-            self,
-            self.config.insecure,
-            Duration::from_millis(100),
-        );
-        let mut buf = [0u8; 32];
-        loop {
-            if rx.read_exact(&mut buf).await.is_err() {
-                return;
-            }
-            let mut report = ViaReport {
-                input_data: buf,
-                output_data: buf,
-            };
-            if !process_system_packet(&mut report, &self.config, &locker) {
-                report.input_data[0] = ViaCommand::Unhandled as u8;
-            }
-            if tx.write_all(&report.input_data).await.is_err() {
-                return;
-            }
-        }
+        Service::<false>::new_peripheral(self, &self.config)
+            .run(rx, tx)
+            .await;
     }
 }
 
@@ -112,11 +63,12 @@ impl UnlockKeyState for PeripheralService {
 
 #[cfg(all(test, feature = "vial"))]
 mod tests {
-    use core::sync::atomic::Ordering;
-
     use embassy_futures::block_on;
+    use embassy_time::Duration;
 
     use super::*;
+    use crate::config::VialConfig;
+    use crate::host::lock::HostLock;
 
     const CONFIG: VialConfig<'static> = VialConfig {
         vial_keyboard_id: &[1; 8],
@@ -137,78 +89,11 @@ mod tests {
             vial_config: CONFIG,
             ..Default::default()
         };
-        PeripheralService::new(&config, MATRIX)
-    }
-
-    fn requests(commands: &[[u8; 2]]) -> std::vec::Vec<u8> {
-        commands
-            .iter()
-            .flat_map(|cmd| {
-                let mut packet = [0u8; 32];
-                packet[..2].copy_from_slice(cmd);
-                packet
-            })
-            .collect()
+        PeripheralService::new(config, MATRIX)
     }
 
     #[test]
-    fn peripheral_unlock_is_local_and_authorizes_one_jump() {
-        let first = peripheral();
-        let second = peripheral();
-        first.matrix.borrow_mut().update(&KeyboardEvent::key(0, 0, true));
-        first.matrix.borrow_mut().update(&KeyboardEvent::key(1, 1, true));
-        let input = requests(&[
-            [0x0b, 0],
-            [0xfe, 6],
-            [0xfe, 7],
-            [0xfe, 5],
-            [0x0b, 0],
-            [0xfe, 5],
-            [0x0b, 0],
-            [1, 0],
-            [0xfe, 0],
-            [5, 0],
-        ]);
-        let mut replies = [0u8; 32 * 10];
-        block_on(first.run_session(&mut input.as_slice(), &mut replies.as_mut_slice()));
-        assert_eq!(
-            replies[0], 0xff,
-            "jump is refused before unlock even while keys are held"
-        );
-        assert_eq!(replies[3 * 32], 1, "local keys unlock this side");
-        assert_eq!(
-            &replies[3 * 32 + 2..3 * 32 + 6],
-            &[2, 3, 3, 4],
-            "GUI positions match the shared definition"
-        );
-        assert_eq!(replies[5 * 32], 0, "the jump consumes authorization");
-        assert_eq!(replies[6 * 32], 0xff, "a second jump requires a new unlock");
-        assert_eq!(replies[7 * 32], 1, "the updater can probe a locked peripheral");
-        assert_eq!(&replies[8 * 32 + 4..8 * 32 + 12], CONFIG.vial_keyboard_id);
-        assert_eq!(replies[9 * 32], 0xff, "the peripheral does not accept keymap writes");
-        assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
-
-        let input = requests(&[[0xfe, 6], [0xfe, 7], [0xfe, 5], [0x0b, 0]]);
-        let mut replies = [0u8; 32 * 4];
-        block_on(second.run_session(&mut input.as_slice(), &mut replies.as_mut_slice()));
-        assert_eq!(replies[2 * 32], 0, "the other side remains locked");
-        assert_eq!(replies[3 * 32], 0xff);
-
-        let input = requests(&[[0xfe, 6], [0xfe, 7]]);
-        block_on(first.run_session(&mut input.as_slice(), &mut [0u8; 64].as_mut_slice()));
-        let input = requests(&[[0xfe, 5], [0x0b, 0]]);
-        let mut replies = [0u8; 64];
-        block_on(first.run_session(&mut input.as_slice(), &mut replies.as_mut_slice()));
-        assert_eq!(
-            replies[0], 0,
-            "a new connection starts locked even if keys are still held"
-        );
-        assert_eq!(replies[32], 0xff);
-        assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn local_matrix_unlocks_without_a_central_and_keeps_forwarding_keys() {
+    fn local_matrix_unlocks_only_this_half_and_keeps_forwarding_keys() {
         use crate::core_traits::Runnable;
         use crate::event::SubscribableEvent;
         struct Matrix(std::collections::VecDeque<KeyboardEvent>);
@@ -229,21 +114,21 @@ mod tests {
         let events = [KeyboardEvent::key(0, 0, true), KeyboardEvent::key(1, 1, true)];
         let mut matrix = Matrix(events.into());
         let service = peripheral();
+        let other = peripheral();
         let mut subscriber = KeyboardEvent::subscriber();
         let update = async {
             for event in events {
                 assert_eq!(subscriber.next_message_pure().await, event);
             }
-            let input = requests(&[[0xfe, 6], [0xfe, 7], [0xfe, 5]]);
-            let mut replies = [0u8; 96];
-            service
-                .run_session(&mut input.as_slice(), &mut replies.as_mut_slice())
-                .await;
-            assert_eq!(replies[64], 1);
+            let local = HostLock::new(CONFIG.unlock_keys, &service, false, Duration::from_millis(100));
+            let remote = HostLock::new(CONFIG.unlock_keys, &other, false, Duration::from_millis(100));
+            local.unlocking();
+            remote.unlocking();
+            assert_eq!(local.check_unlock(), 0);
+            assert_eq!(remote.check_unlock(), 2);
+            assert!(local.is_unlocked());
+            assert!(!remote.is_unlocked(), "the other half cannot use these held keys");
         };
         block_on(embassy_futures::select::select(service.run_matrix(&mut matrix), update));
     }
 }
-
-#[cfg(feature = "rynk")]
-mod rynk;

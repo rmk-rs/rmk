@@ -9,9 +9,9 @@ use rmk_types::protocol::rynk::{
 };
 use rmk_types::{DEVICE_INFO_STRING_MAX_LEN, constants};
 
-use super::super::RynkService;
 use super::Handle;
 use crate::config::DeviceConfig;
+use crate::host::context::KeyboardContext;
 use crate::host::lock::HostLock;
 
 /// The `rmk` crate version baked into the firmware, so hosts can key
@@ -41,9 +41,9 @@ impl Handle<GetVersion> for DeviceConfig<'_> {
     }
 }
 
-impl Handle<GetCapabilities> for RynkService<'_> {
+impl Handle<GetCapabilities> for KeyboardContext<'_> {
     async fn handle(&self, _: ()) -> Result<DeviceCapabilities, RynkError> {
-        let (rows, cols, num_layers) = self.ctx.keymap_dimensions();
+        let (rows, cols, num_layers) = self.keymap_dimensions();
         Ok(DeviceCapabilities {
             // Layout (live, from the configured keymap)
             num_layers: num_layers as u8,
@@ -51,7 +51,7 @@ impl Handle<GetCapabilities> for RynkService<'_> {
             num_cols: cols as u8,
 
             // Input device limits (compile-time from keyboard.toml)
-            num_encoders: self.ctx.num_encoders() as u8,
+            num_encoders: self.num_encoders() as u8,
             max_combos: constants::MAX_COMBOS as u8,
             max_combo_keys: constants::MAX_COMBO_KEYS as u8,
             max_macros: constants::MAX_MACROS as u8,
@@ -105,13 +105,13 @@ impl Handle<BootloaderJump> for DeviceConfig<'_> {
     }
 }
 
-impl Handle<StorageReset> for RynkService<'_> {
+impl Handle<StorageReset> for KeyboardContext<'_> {
     async fn handle(&self, mode: StorageResetMode) -> Result<(), RynkError> {
         if mode != StorageResetMode::Full {
             // TODO: Reset required storage range
             return Err(RynkError::Unimplemented);
         }
-        self.ctx.reset_storage().await;
+        self.reset_storage().await;
         Ok(())
     }
 }
