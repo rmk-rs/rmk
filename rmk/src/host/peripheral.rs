@@ -2,30 +2,21 @@
 
 use core::cell::RefCell;
 
-use embedded_io_async::{Read, Write};
-
 use super::lock::UnlockKeyState;
-#[cfg(feature = "rynk")]
-use super::rynk::RynkService as Service;
-#[cfg(feature = "vial")]
-use super::via::VialService as Service;
-use crate::config::RmkConfig;
 use crate::event::{KeyboardEvent, publish_event_async};
 use crate::input_device::InputDevice;
 use crate::matrix::MatrixState;
 use crate::split::PeripheralMatrixConfig;
 
 /// Records this side's keys without a keymap or a connection to the central.
-pub struct PeripheralService {
-    config: RmkConfig<'static>,
+pub struct PeripheralMatrix {
     matrix: RefCell<MatrixState>,
     matrix_config: PeripheralMatrixConfig,
 }
 
-impl PeripheralService {
-    pub fn new(config: RmkConfig<'static>, matrix_config: PeripheralMatrixConfig) -> Self {
+impl PeripheralMatrix {
+    pub fn new(matrix_config: PeripheralMatrixConfig) -> Self {
         Self {
-            config,
             matrix: RefCell::new(MatrixState::new(
                 matrix_config.rows as usize,
                 matrix_config.cols as usize,
@@ -41,15 +32,9 @@ impl PeripheralService {
             publish_event_async(event).await;
         }
     }
-
-    pub async fn run_session<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
-        Service::<false>::new_peripheral(self, &self.config)
-            .run(rx, tx)
-            .await;
-    }
 }
 
-impl UnlockKeyState for PeripheralService {
+impl UnlockKeyState for PeripheralMatrix {
     fn is_pressed(&self, row: u8, col: u8) -> bool {
         let Some(row) = row.checked_sub(self.matrix_config.row_offset) else {
             return false;
@@ -62,28 +47,32 @@ impl UnlockKeyState for PeripheralService {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use crate::event::SubscribableEvent;
 
-    #[test]
-    fn local_matrix_coordinates_do_not_leak_between_halves() {
-        let matrix = PeripheralMatrixConfig {
-            rows: 2,
-            cols: 2,
+    pub(crate) fn scanned_matrix(pressed: bool) -> PeripheralMatrix {
+        #[rmk_macro::input_device(publish = KeyboardEvent)]
+        struct Matrix(Option<KeyboardEvent>);
+        impl Matrix {
+            async fn read_keyboard_event(&mut self) -> KeyboardEvent {
+                match self.0.take() {
+                    Some(event) => event,
+                    None => core::future::pending().await,
+                }
+            }
+        }
+        let keys = PeripheralMatrix::new(PeripheralMatrixConfig {
+            rows: 1,
+            cols: 1,
             row_offset: 2,
             col_offset: 3,
-        };
-        let local = PeripheralService::new(RmkConfig::default(), matrix);
-        let other = PeripheralService::new(RmkConfig::default(), matrix);
-        local.matrix.borrow_mut().update(&KeyboardEvent::key(0, 0, true));
-        local.matrix.borrow_mut().update(&KeyboardEvent::key(1, 1, true));
-
-        assert!(local.is_pressed(2, 3));
-        assert!(local.is_pressed(3, 4));
-        assert!(!local.is_pressed(1, 3));
-        assert!(!local.is_pressed(2, 2));
-        assert!(!local.is_pressed(4, 5));
-        assert!(!other.is_pressed(2, 3));
-        assert!(!other.is_pressed(3, 4));
+        });
+        let event = KeyboardEvent::key(0, 0, pressed);
+        let mut matrix = Matrix(Some(event));
+        let mut subscriber = KeyboardEvent::subscriber();
+        assert!(embassy_futures::poll_once(keys.run_matrix(&mut matrix)).is_pending());
+        assert_eq!(subscriber.try_next_message_pure(), Some(event));
+        keys
     }
 }

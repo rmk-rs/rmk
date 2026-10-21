@@ -33,7 +33,7 @@ impl<'a> VialService<'a> {
     }
 }
 
-#[cfg(all(feature = "host_lock", any(feature = "split", test)))]
+#[cfg(all(feature = "host_lock", feature = "split", any(not(feature = "_no_usb"), test)))]
 impl<'a> VialService<'a, false> {
     pub(crate) fn new_peripheral(keys: &'a dyn crate::host::lock::UnlockKeyState, config: &RmkConfig<'static>) -> Self {
         Self {
@@ -58,14 +58,11 @@ impl<const HAS_KEYMAP: bool> VialService<'_, HAS_KEYMAP> {
             }
             ViaCommand::BootloaderJump => {
                 #[cfg(feature = "host_lock")]
-                let allowed = locker.take_unlock();
-                #[cfg(not(feature = "host_lock"))]
-                let allowed = true;
-                if allowed {
-                    crate::boot::jump_to_bootloader();
-                } else {
+                if !locker.take_unlock() {
                     report.input_data[0] = ViaCommand::Unhandled as u8;
+                    return;
                 }
+                crate::boot::jump_to_bootloader();
                 return;
             }
             ViaCommand::Vial => {
@@ -376,19 +373,18 @@ mod tests {
 
     #[cfg(feature = "host_lock")]
     #[test]
-    fn central_protected_commands_consume_authorization() {
+    fn protected_commands_consume_authorization() {
         use core::sync::atomic::Ordering;
 
         use crate::event::KeyboardEvent;
-        let mut data = KeymapData::new([[[KeyAction::No; 2]; 2]]);
+        let mut data = KeymapData::new([[[KeyAction::No; 4]; 3]]);
         let mut behavior = BehaviorConfig::default();
-        let positional = PositionalConfig::<2, 2>::default();
+        let positional = PositionalConfig::<3, 4>::default();
         let keymap = block_on(KeyMap::new(&mut data, &mut behavior, &positional));
         let mut config = RmkConfig::default();
-        config.vial_config.unlock_keys = &[(0, 0), (0, 1)];
+        config.vial_config.unlock_keys = &[(2, 3)];
         let service = VialService::new(&keymap, &config);
-        keymap.update_matrix_state(&KeyboardEvent::key(0, 0, true));
-        keymap.update_matrix_state(&KeyboardEvent::key(0, 1, true));
+        keymap.update_matrix_state(&KeyboardEvent::key(2, 3, true));
         let commands = [
             [0x0b, 0],
             [0xfe, 6],
@@ -400,39 +396,36 @@ mod tests {
             [0xfe, 7],
             [0x0b, 0],
             [0x0b, 0],
+            [0xfe, 6],
+            [0xfe, 7],
+            [0xfe, 5],
         ];
-        let mut input = [0u8; 32 * 10];
+        let mut input = [0u8; 32 * 13];
         for (packet, cmd) in input.chunks_mut(32).zip(commands) {
             packet[..2].copy_from_slice(&cmd);
         }
-        let mut replies = [0u8; 32 * 10];
+        let mut replies = [0u8; 32 * 13];
         block_on(service.run(&mut input.as_slice(), &mut replies.as_mut_slice()));
         assert_eq!(replies[0], 0xff);
         assert_eq!(replies[3 * 32], 1);
-        assert_eq!(replies[4 * 32 + 2], 3, "matrix read succeeds once");
+        assert_eq!(replies[4 * 32 + 4], 8, "matrix read succeeds once");
         assert_eq!(replies[5 * 32], 0xff, "matrix read consumed the first grant");
         assert_eq!(replies[9 * 32], 0xff, "jump consumed the second grant");
         assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
-        let peripheral = VialService::<false>::new_peripheral(&keymap, &config);
-        let locker = crate::host::lock::HostLock::new(
-            config.vial_config.unlock_keys,
-            &keymap,
-            false,
-            embassy_time::Duration::from_millis(100),
-        );
-        locker.unlocking();
-        assert_eq!(locker.check_unlock(), 0);
-        let mut unsupported = ViaReport {
-            input_data: [0; 32],
-            output_data: [0; 32],
-        };
-        unsupported.output_data[0] = ViaCommand::DynamicKeymapSetKeyCode as u8;
-        block_on(peripheral.process_via_packet(&mut unsupported, &locker));
-        assert_eq!(unsupported.input_data[0], 0xff);
-        assert!(
-            locker.is_unlocked(),
-            "unsupported keymap commands do not consume a peripheral's grant"
-        );
+        assert_eq!(replies[12 * 32], 1, "the session ends with an unused grant");
+        block_on(service.run(&mut &input[..32], &mut replies.as_mut_slice()));
+        assert_eq!(replies[0], 0xff, "a new session must unlock again");
+        #[cfg(feature = "split")]
+        {
+            let keys = crate::host::peripheral::tests::scanned_matrix(true);
+            let peripheral = VialService::<false>::new_peripheral(&keys, &config);
+            input[4 * 32] = ViaCommand::DynamicKeymapSetKeyCode as u8;
+            block_on(peripheral.run(&mut input.as_slice(), &mut replies.as_mut_slice()));
+            assert_eq!(replies[4 * 32], 0xff, "peripheral rejects keymap writes");
+            assert_eq!(replies[5 * 32], 0x0b, "rejected write preserves authorization");
+            assert_eq!(replies[9 * 32], 0xff, "peripheral jump consumes authorization");
+            assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 3);
+        }
     }
 
     // `output_data` is [u8; 32], so the handler slices `output_data[4..4 + size]`.

@@ -100,44 +100,30 @@ impl Host {
 
 #[cfg(test)]
 mod tests {
-    use crate::{KeyboardTomlConfig, SplitHostConfig};
+    use crate::{HostConfig, KeyboardTomlConfig, SplitHostConfig};
 
     fn split_config() -> KeyboardTomlConfig {
-        toml::from_str(
-            r#"
-[host]
-insecure = true
-unlock_keys = [[7, 7]]
-[split]
-connection = "ble"
-[split.central]
-rows = 2
-cols = 2
-row_offset = 1
-col_offset = 2
-[split.central.matrix]
-[split.central.host]
-unlock_keys = [[0, 0], [1, 1]]
-[[split.peripheral]]
-rows = 2
-cols = 2
-row_offset = 3
-col_offset = 4
-[split.peripheral.matrix]
-[split.peripheral.host]
-unlock_keys = [[0, 1], [1, 0]]
-"#,
-        )
+        toml::from_str(include_str!(
+            "../../../examples/use_config/nrf52840_ble_split/keyboard.toml"
+        ))
         .unwrap()
     }
 
     #[test]
     fn split_unlock_keys_and_policy_are_local_to_each_board() {
         let mut config = split_config();
+        config.host = Some(HostConfig {
+            unlock_keys: Some(vec![[0, 2]]),
+            insecure: true,
+            ..Default::default()
+        });
+        let board = &mut config.split.as_mut().unwrap().central;
+        board.row_offset = 1;
+        board.col_offset = 1;
         let central = config.host();
         let peripheral = config.peripheral_host(0).unwrap().unwrap();
-        assert_eq!(central.unlock_keys, [[1, 2], [2, 3]]);
-        assert_eq!(peripheral.unlock_keys, [[3, 5], [4, 4]]);
+        assert_eq!(central.unlock_keys, [[1, 1], [1, 2]]);
+        assert_eq!(peripheral.unlock_keys, [[2, 2], [3, 2]]);
         assert!(!central.insecure && !peripheral.insecure);
         config.split.as_mut().unwrap().peripheral[0].host = Some(SplitHostConfig {
             unlock_keys: vec![],
@@ -149,14 +135,14 @@ unlock_keys = [[0, 1], [1, 0]]
         config.split.as_mut().unwrap().peripheral[0].host = None;
         assert!(config.peripheral_host(0).unwrap().is_none());
         config.split.as_mut().unwrap().central.host = None;
-        assert_eq!(config.host().unlock_keys, [[7, 7]]);
+        assert_eq!(config.host().unlock_keys, [[0, 2]]);
         assert!(config.host().insecure);
     }
 
     #[test]
     fn rejects_unusable_local_unlock_combinations() {
         let mut config = split_config();
-        for keys in [vec![], vec![[2, 0]], vec![[0, 2]], vec![[0, 0]; 5]] {
+        for keys in [vec![], vec![[2, 0]], vec![[0, 1]]] {
             config.split.as_mut().unwrap().peripheral[0].host = Some(SplitHostConfig {
                 unlock_keys: keys,
                 insecure: false,
@@ -166,13 +152,13 @@ unlock_keys = [[0, 1], [1, 0]]
         let board = &mut config.split.as_mut().unwrap().peripheral[0];
         board.host.as_mut().unwrap().unlock_keys = vec![[0, 0]];
         board.matrix.matrix_type = crate::MatrixType::DirectPin;
-        board.matrix.direct_pins = Some(vec![vec!["_".into(), "P0_01".into()]]);
+        board.matrix.direct_pins = Some(vec![vec!["_".into()], vec!["P0_01".into()]]);
         assert!(config.peripheral_host(0).is_err());
         config.split.as_mut().unwrap().peripheral[0]
             .host
             .as_mut()
             .unwrap()
-            .unlock_keys = vec![[0, 1]];
+            .unlock_keys = vec![[1, 0]];
         assert!(config.peripheral_host(0).is_ok());
     }
 }

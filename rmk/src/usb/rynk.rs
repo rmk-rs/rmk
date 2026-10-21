@@ -8,7 +8,7 @@ use rmk_types::protocol::rynk::{RYNK_USB_INTERFACE_CLASS, RYNK_USB_INTERFACE_PRO
 use super::HostSession;
 
 #[cfg(feature = "rynk")]
-impl HostSession for crate::host::rynk::RynkService<'_> {
+impl<const HAS_KEYMAP: bool> HostSession for crate::host::rynk::RynkService<'_, HAS_KEYMAP> {
     async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
         self.run(rx, tx).await
     }

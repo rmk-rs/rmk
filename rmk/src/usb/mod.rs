@@ -70,13 +70,6 @@ impl HostSession for () {
     }
 }
 
-#[cfg(all(feature = "split", any(feature = "vial", feature = "rynk"), feature = "host_lock"))]
-impl HostSession for crate::host::peripheral::PeripheralService {
-    async fn serve<R: embedded_io_async::Read, W: embedded_io_async::Write>(&self, rx: &mut R, tx: &mut W) {
-        self.run_session(rx, tx).await
-    }
-}
-
 /// Borrowed view over the USB HID IN endpoints used by the report writer task.
 ///
 /// `UsbTransport` owns the USB device, readers, writers, host interface, and
@@ -578,10 +571,14 @@ pub async fn run_peripheral_usb<D: Driver<'static>>(driver: D, config: DeviceCon
 #[cfg(all(feature = "split", any(feature = "vial", feature = "rynk"), feature = "host_lock"))]
 pub async fn run_peripheral_usb_with_host<D: Driver<'static>>(
     driver: D,
-    config: DeviceConfig<'static>,
-    service: &crate::host::peripheral::PeripheralService,
+    config: crate::config::RmkConfig<'static>,
+    matrix: &crate::host::peripheral::PeripheralMatrix,
 ) {
-    let mut builder = new_usb_builder(driver, config, default_config_descriptor());
+    #[cfg(feature = "vial")]
+    let service = crate::host::via::VialService::<false>::new_peripheral(matrix, &config);
+    #[cfg(feature = "rynk")]
+    let service = crate::host::rynk::RynkService::<false>::new_peripheral(matrix, &config);
+    let mut builder = new_usb_builder(driver, config.device_config, default_config_descriptor());
     let (mut reader, mut writer) = host_usb::build_host_usb(&mut builder);
     #[cfg(feature = "usb_log")]
     let logger = run_usb_logger(add_usb_logger!(&mut builder));
@@ -590,7 +587,7 @@ pub async fn run_peripheral_usb_with_host<D: Driver<'static>>(
     let mut device = builder.build();
     embassy_futures::join::join3(
         device.run(),
-        host_usb::run_host_usb(&mut reader, &mut writer, service),
+        host_usb::run_host_usb(&mut reader, &mut writer, &service),
         logger,
     )
     .await;

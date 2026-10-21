@@ -66,7 +66,7 @@ RMK_FEATURESETS=(
 RMK_TEST_FEATURESETS=(
     ""
     "split,_dfu,dfu_split,storage,async_matrix"
-    "vial,host_lock,_no_usb,steno,passkey_entry"
+    "split,vial,host_lock,_no_usb,steno,passkey_entry"
     "rynk,_ble,split,async_matrix,storage"
     "rynk,_ble,ext_adv,split,async_matrix,storage"
     "dongle,rynk,_ble,ext_adv,split,async_matrix,storage"

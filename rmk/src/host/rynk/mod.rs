@@ -48,7 +48,7 @@ impl<'a> RynkService<'a> {
     }
 }
 
-#[cfg(any(feature = "split", test))]
+#[cfg(all(feature = "split", any(not(feature = "_no_usb"), test)))]
 impl<'a> RynkService<'a, false> {
     pub(crate) fn new_peripheral(keys: &'a dyn UnlockKeyState, config: &RmkConfig<'static>) -> Self {
         Self {
@@ -83,7 +83,7 @@ impl<const HAS_KEYMAP: bool> RynkService<'_, HAS_KEYMAP> {
     /// Whether `cmd` needs an unlocked device.
     fn requires_unlock(&self, cmd: Cmd) -> bool {
         match cmd {
-            Cmd::StorageReset | Cmd::GetMatrixState => true,
+            Cmd::BootloaderJump | Cmd::StorageReset | Cmd::GetMatrixState => true,
             // Deleting or hiding a bond opens a re-pair hijack window; BLE-only commands.
             #[cfg(feature = "_ble")]
             Cmd::ClearBleProfile | Cmd::DisconnectBleProfile => true,
@@ -95,6 +95,9 @@ impl<const HAS_KEYMAP: bool> RynkService<'_, HAS_KEYMAP> {
     /// payload in place; on error the caller answers with the error envelope.
     async fn dispatch(&self, locker: &HostLock<'_>, msg: &mut RynkMessage<'_>) -> Result<(), RynkError> {
         let cmd = msg.header().cmd;
+        if (HAS_KEYMAP || cmd == Cmd::BootloaderJump) && self.requires_unlock(cmd) && !locker.take_unlock() {
+            return Err(RynkError::Locked);
+        }
 
         match cmd {
             Cmd::GetVersion => return serve::<command::GetVersion, _>(&self.device, msg).await,
@@ -104,23 +107,14 @@ impl<const HAS_KEYMAP: bool> RynkService<'_, HAS_KEYMAP> {
             Cmd::UnlockPoll => return serve::<command::UnlockPoll, _>(locker, msg).await,
             Cmd::Lock => return serve::<command::Lock, _>(locker, msg).await,
             Cmd::Reboot => return serve::<command::Reboot, _>(&self.device, msg).await,
-            Cmd::BootloaderJump => {
-                if !locker.take_unlock() {
-                    return Err(RynkError::Locked);
-                }
-                return serve::<command::BootloaderJump, _>(&self.device, msg).await;
-            }
-            Cmd::GetCapabilities => {
-                if !HAS_KEYMAP {
-                    msg.decode_request::<()>()?;
-                    return msg.encode_response(&DeviceCapabilities {
-                        is_split: true,
-                        max_payload_size: RYNK_MAX_PAYLOAD_SIZE as u16,
-                        ..Default::default()
-                    });
-                }
-                let ctx = self.ctx.as_ref().ok_or(RynkError::UnknownCmd)?;
-                return serve::<command::GetCapabilities, _>(ctx, msg).await;
+            Cmd::BootloaderJump => return serve::<command::BootloaderJump, _>(&self.device, msg).await,
+            Cmd::GetCapabilities if !HAS_KEYMAP => {
+                msg.decode_request::<()>()?;
+                return msg.encode_response(&DeviceCapabilities {
+                    is_split: true,
+                    max_payload_size: RYNK_MAX_PAYLOAD_SIZE as u16,
+                    ..Default::default()
+                });
             }
             _ => {}
         }
@@ -128,10 +122,8 @@ impl<const HAS_KEYMAP: bool> RynkService<'_, HAS_KEYMAP> {
             return Err(RynkError::UnknownCmd);
         }
         let ctx = self.ctx.as_ref().ok_or(RynkError::UnknownCmd)?;
-        if self.requires_unlock(cmd) && !locker.take_unlock() {
-            return Err(RynkError::Locked);
-        }
         match cmd {
+            Cmd::GetCapabilities => serve::<command::GetCapabilities, _>(ctx, msg).await,
             Cmd::StorageReset => serve::<command::StorageReset, _>(ctx, msg).await,
             Cmd::GetKeyAction => serve::<command::GetKeyAction, _>(ctx, msg).await,
             Cmd::SetKeyAction => serve::<command::SetKeyAction, _>(ctx, msg).await,
@@ -388,51 +380,51 @@ mod tests {
         out
     }
 
+    #[cfg(feature = "split")]
     #[test]
     fn peripheral_reuses_unlock_without_exposing_keymap_commands() {
-        let mut data: KeymapData<1, 1, 1, 0> = KeymapData::new([[[KeyAction::No]]]);
-        let mut behavior = BehaviorConfig::default();
-        let positional = PositionalConfig::<1, 1>::default();
-        let keys = block_on(KeyMap::new(&mut data, &mut behavior, &positional));
-        keys.update_matrix_state(&KeyboardEvent::key(0, 0, true));
         let config = RmkConfig {
             lock_config: LockConfig {
-                unlock_keys: &[(0, 0)],
+                unlock_keys: &[(2, 3)],
                 ..Default::default()
             },
             ..Default::default()
         };
-        let service = RynkService::<false>::new_peripheral(&keys, &config);
-        let mut rx = ChunkRead {
-            chunks: [
-                req(Cmd::UnlockPoll.raw(), 0),
-                req(Cmd::GetLockStatus.raw(), 1),
-                req(Cmd::GetCapabilities.raw(), 2),
-                req(Cmd::GetMatrixState.raw(), 3),
-                req_with(Cmd::SetDefaultLayer.raw(), 4, &0u8),
-                req(Cmd::BootloaderJump.raw(), 5),
-                req(Cmd::BootloaderJump.raw(), 6),
-            ]
-            .into(),
-        };
-        let mut tx = VecWrite { captured: Vec::new() };
-        block_on(service.run(&mut rx, &mut tx));
-        let replies = decode_frames(&tx.captured);
-        assert_eq!(replies.len(), 7);
-        let caps = postcard::from_bytes::<Result<DeviceCapabilities, RynkError>>(&replies[2].2)
-            .unwrap()
-            .unwrap();
-        assert_eq!(caps.num_layers, 0);
-        for (reply, expected) in replies[3..].iter().zip([
-            Err(RynkError::UnknownCmd),
-            Err(RynkError::UnknownCmd),
-            Ok(()),
-            Err(RynkError::Locked),
-        ]) {
-            assert_eq!(
-                postcard::from_bytes::<Result<(), RynkError>>(&reply.2).unwrap(),
-                expected
-            );
+        let held = crate::host::peripheral::tests::scanned_matrix(true);
+        let released = crate::host::peripheral::tests::scanned_matrix(false);
+        for (keys, pressed) in [(&held, true), (&released, false)] {
+            let service = RynkService::<false>::new_peripheral(keys, &config);
+            let mut rx = ChunkRead {
+                chunks: [
+                    req(Cmd::UnlockPoll.raw(), 0),
+                    req(Cmd::GetLockStatus.raw(), 1),
+                    req(Cmd::GetCapabilities.raw(), 2),
+                    req(Cmd::GetMatrixState.raw(), 3),
+                    req_with(Cmd::SetDefaultLayer.raw(), 4, &0u8),
+                    req(Cmd::BootloaderJump.raw(), 5),
+                    req(Cmd::BootloaderJump.raw(), 6),
+                ]
+                .into(),
+            };
+            let mut tx = VecWrite { captured: Vec::new() };
+            block_on(service.run(&mut rx, &mut tx));
+            let replies = decode_frames(&tx.captured);
+            assert_eq!(replies.len(), 7);
+            let caps = postcard::from_bytes::<Result<DeviceCapabilities, RynkError>>(&replies[2].2)
+                .unwrap()
+                .unwrap();
+            assert_eq!(caps.num_layers, 0);
+            for (reply, expected) in replies[3..].iter().zip([
+                Err(RynkError::UnknownCmd),
+                Err(RynkError::UnknownCmd),
+                if pressed { Ok(()) } else { Err(RynkError::Locked) },
+                Err(RynkError::Locked),
+            ]) {
+                assert_eq!(
+                    postcard::from_bytes::<Result<(), RynkError>>(&reply.2).unwrap(),
+                    expected
+                );
+            }
         }
         assert_eq!(
             crate::boot::BOOTLOADER_JUMPS.load(core::sync::atomic::Ordering::Relaxed),

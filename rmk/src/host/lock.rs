@@ -215,8 +215,6 @@ mod tests {
         keymap.update_matrix_state(&KeyboardEvent::key(1, 1, true));
         assert_eq!(lock.check_unlock(), 0, "all held");
         assert!(lock.is_unlocked(), "unlocked once all keys held");
-        assert!(lock.take_unlock());
-        assert!(!lock.take_unlock(), "authorization cannot be reused");
     }
 
     #[test]

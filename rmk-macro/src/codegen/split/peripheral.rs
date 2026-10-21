@@ -15,7 +15,7 @@ use crate::codegen::chip::comm::expand_usb_init;
 use crate::codegen::chip::flash::{expand_dfu_interface, expand_flash_init};
 use crate::codegen::chip::gpio::expand_output_initialization;
 use crate::codegen::display::{expand_display_config, expand_display_interrupt};
-use crate::codegen::entry::join_all_tasks;
+use crate::codegen::entry::{expand_tasks, join_all_tasks};
 use crate::codegen::feature::{get_rmk_features, is_feature_enabled};
 use crate::codegen::import::expand_custom_imports;
 use crate::codegen::input_device::adc::expand_adc_device;
@@ -443,11 +443,11 @@ fn expand_split_peripheral(
                 ..keyboard_device_config
             };
             let peripheral_config = ::rmk::config::RmkConfig {
-                device_config: keyboard_device_config.clone(),
+                device_config: keyboard_device_config,
                 #protocol_config
                 ..Default::default()
             };
-            let peripheral_service = ::rmk::host::peripheral::PeripheralService::new(peripheral_config, ::rmk::split::PeripheralMatrixConfig {
+            let peripheral_matrix = ::rmk::host::peripheral::PeripheralMatrix::new(::rmk::split::PeripheralMatrixConfig {
                 rows: #rows, cols: #cols, row_offset: #row_offset, col_offset: #col_offset,
             });
         }
@@ -465,7 +465,7 @@ fn expand_split_peripheral(
         };
         (
             Some(if host.is_some() {
-                quote! { ::rmk::usb::run_peripheral_usb_with_host(driver, keyboard_device_config, &peripheral_service) }
+                quote! { ::rmk::usb::run_peripheral_usb_with_host(driver, peripheral_config, &peripheral_matrix) }
             } else {
                 quote! { ::rmk::usb::run_peripheral_usb(driver, keyboard_device_config) }
             }),
@@ -636,18 +636,19 @@ fn expand_split_peripheral_entry(
     dfu_task: Option<TokenStream2>,
     host_enabled: bool,
 ) -> TokenStream2 {
-    // Add matrix to devices, and run all devices
-    let mut devs = devices.clone();
-    if !host_enabled {
-        devs.push(quote! {matrix});
-    }
+    let mut devs = devices;
     if split_config.connection == SplitConnection::Ble {
         devs.push(quote! {storage});
     }
-    let device_task = if devs.is_empty() {
-        quote! { core::future::pending::<()>() }
+    let matrix_task = if host_enabled {
+        quote! { peripheral_matrix.run_matrix(&mut matrix) }
     } else {
-        quote! { ::rmk::run_all!(#(#devs),*) }
+        quote! { ::rmk::run_all!(matrix) }
+    };
+    let device_task = if devs.is_empty() {
+        matrix_task
+    } else {
+        expand_tasks(vec![matrix_task, quote! { ::rmk::run_all!(#(#devs),*) }])
     };
 
     // Create processor task if there are processors
@@ -662,9 +663,6 @@ fn expand_split_peripheral_entry(
     };
 
     let mut tasks = vec![device_task];
-    if host_enabled {
-        tasks.push(quote! { peripheral_service.run_matrix(&mut matrix) });
-    }
     let serial_init = match split_config.connection {
         SplitConnection::Ble => {
             let peripheral_run = quote! {

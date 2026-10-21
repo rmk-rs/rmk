@@ -22,7 +22,7 @@ pub(crate) fn build_host_usb<D: Driver<'static>>(
     rw.split()
 }
 
-impl super::HostSession for VialService<'_> {
+impl<const HAS_KEYMAP: bool> super::HostSession for VialService<'_, HAS_KEYMAP> {
     async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
         self.run(rx, tx).await
     }
