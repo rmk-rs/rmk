@@ -11,6 +11,7 @@ use rmk_types::{DEVICE_INFO_STRING_MAX_LEN, constants};
 
 use super::super::RynkService;
 use super::Handle;
+use crate::config::DeviceConfig;
 use crate::host::lock::HostLock;
 
 /// The `rmk` crate version baked into the firmware, so hosts can key
@@ -34,7 +35,7 @@ const RMK_VERSION: FirmwareVersion = {
     }
 };
 
-impl Handle<GetVersion> for RynkService<'_> {
+impl Handle<GetVersion> for DeviceConfig<'_> {
     async fn handle(&self, _: ()) -> Result<ProtocolVersion, RynkError> {
         Ok(ProtocolVersion::CURRENT)
     }
@@ -88,7 +89,7 @@ impl Handle<GetCapabilities> for RynkService<'_> {
     }
 }
 
-impl Handle<Reboot> for RynkService<'_> {
+impl Handle<Reboot> for DeviceConfig<'_> {
     async fn handle(&self, _: ()) -> Result<(), RynkError> {
         // Fire-and-forget: synchronous reset never returns on real hardware.
         crate::boot::reboot_keyboard();
@@ -96,7 +97,7 @@ impl Handle<Reboot> for RynkService<'_> {
     }
 }
 
-impl Handle<BootloaderJump> for RynkService<'_> {
+impl Handle<BootloaderJump> for DeviceConfig<'_> {
     async fn handle(&self, _: ()) -> Result<(), RynkError> {
         // Fire-and-forget, same reasoning as `Reboot`.
         crate::boot::jump_to_bootloader();
@@ -137,15 +138,15 @@ impl Handle<Lock> for HostLock<'_> {
     }
 }
 
-impl Handle<GetDeviceInfo> for RynkService<'_> {
+impl Handle<GetDeviceInfo> for DeviceConfig<'_> {
     async fn handle(&self, _: ()) -> Result<DeviceInfo, RynkError> {
         Ok(DeviceInfo {
             rmk_version: RMK_VERSION,
-            vendor_id: self.device.vid,
-            product_id: self.device.pid,
-            manufacturer: truncated(self.device.manufacturer),
-            product_name: truncated(self.device.product_name),
-            serial_number: self.device.serial_number.clone(),
+            vendor_id: self.vid,
+            product_id: self.pid,
+            manufacturer: truncated(self.manufacturer),
+            product_name: truncated(self.product_name),
+            serial_number: self.serial_number.clone(),
         })
     }
 }

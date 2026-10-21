@@ -56,6 +56,15 @@ impl<'a> HostLock<'a> {
         self.insecure || self.unlocked.get()
     }
 
+    /// Consume the authorization before executing one protected command.
+    pub fn take_unlock(&self) -> bool {
+        let allowed = self.is_unlocked();
+        if allowed {
+            self.lock();
+        }
+        allowed
+    }
+
     pub fn unlocking(&self) {
         self.unlocking.set(true);
         self.last_poll.set(Instant::now());
@@ -206,6 +215,8 @@ mod tests {
         keymap.update_matrix_state(&KeyboardEvent::key(1, 1, true));
         assert_eq!(lock.check_unlock(), 0, "all held");
         assert!(lock.is_unlocked(), "unlocked once all keys held");
+        assert!(lock.take_unlock());
+        assert!(!lock.take_unlock(), "authorization cannot be reused");
     }
 
     #[test]
@@ -228,6 +239,10 @@ mod tests {
         assert!(lock.is_unlocked(), "insecure starts unlocked");
         lock.lock();
         assert!(lock.is_unlocked(), "lock() does not override insecure mode");
+        assert!(
+            lock.take_unlock() && lock.take_unlock(),
+            "insecure explicitly bypasses one-use authorization"
+        );
     }
 
     #[cfg(feature = "rynk")]

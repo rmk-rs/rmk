@@ -17,7 +17,7 @@ mod system;
 
 /// Fixed-size endpoints: a request → response function. [`serve`] adds the
 /// decode → handle → encode wire glue.
-pub(super) trait Handle<E: Endpoint> {
+pub(crate) trait Handle<E: Endpoint> {
     async fn handle(&self, req: E::Request) -> Result<E::Response, RynkError>;
 }
 
@@ -29,7 +29,7 @@ pub(super) trait HandleBulk<E: Endpoint> {
 }
 
 /// Answer `msg` in place from a fixed-size endpoint's handler.
-pub(super) async fn serve<E: Endpoint, T: Handle<E>>(h: &T, msg: &mut RynkMessage<'_>) -> Result<(), RynkError> {
+pub(crate) async fn serve<E: Endpoint, T: Handle<E>>(h: &T, msg: &mut RynkMessage<'_>) -> Result<(), RynkError> {
     let req = msg.decode_request::<E::Request>()?;
     let resp = h.handle(req).await?;
     msg.encode_response(&resp)

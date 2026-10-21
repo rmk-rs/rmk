@@ -45,8 +45,8 @@ impl crate::KeyboardTomlConfig {
             return Ok(None);
         }
         let mut host = self.host();
-        if !host.vial_enabled || host.rynk_enabled {
-            return Err("[split.peripheral.host] currently requires Vial".into());
+        if host.vial_enabled == host.rynk_enabled {
+            return Err("[split.peripheral.host] requires exactly one of Vial or Rynk".into());
         }
         host.apply_side(board, "[split.peripheral.host]")?;
         Ok(Some(host))
@@ -80,7 +80,7 @@ impl Host {
                 return Err(format!("{section}.unlock_keys ({row}, {col}) has no physical pin"));
             }
         }
-        // Vial reports positions in the shared keyboard definition.
+        // Host tools report positions in the shared keyboard layout.
         self.unlock_keys = config
             .unlock_keys
             .iter()

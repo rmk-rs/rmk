@@ -108,8 +108,10 @@ The central's table overrides the top-level `[host]` unlock settings. Without
 that table, the existing top-level settings and global coordinates still apply.
 A peripheral never inherits the central's combination or unlocked state.
 
-Adding `[split.peripheral.host]` enables an update-only USB Vial interface. It
-requires the `split`, `vial`, and `host_lock` Cargo features, USB enabled, and a
+Adding `[split.peripheral.host]` enables an update-only USB host interface using
+the protocol selected in `[host]`: Vial over HID or Rynk over vendor bulk. It
+requires `split` and `host_lock` (`rynk` enables `host_lock` automatically), the
+matching `vial` or `rynk` Cargo feature, USB enabled, and a
 supported bootloader feature (`adafruit_bl` for the Adafruit nRF52 bootloader,
 or `rp2040` for BOOTSEL). It is separate from embassy-boot application DFU and
 cannot be combined with the `dfu_nrf` or `dfu_rp` features. A peripheral without
@@ -120,20 +122,26 @@ offline. Its USB product name ends in `(peripheral N)`, where `N` is its
 zero-based split index. It exposes identity, unlock, and bootloader commands;
 keymap editing is still handled by the central.
 
-With `host_lock` enabled, Vial's `BootloaderJump` requires the current connection
-to be unlocked. Both sides start locked, and unlocking one side does not unlock
-the other. USB disconnect, bus reset, or deconfiguration ends the session and
-locks it again; USB suspend preserves the session. `insecure = true` explicitly
-keeps that side unlocked. Hardware bootloader recovery remains available.
+Each unlock authorizes one protected command. The grant is consumed before that
+command executes, including an attempt that returns an error. Vial protects
+`BootloaderJump` and matrix-state reads; Rynk applies the same rule to all commands
+in its locked set, including config writes when `write_requires_unlock = true`.
+Identity, capability and lock-status queries do not consume the grant. Both sides
+start locked and authorize independently. `insecure = true` explicitly bypasses
+the gate. Hardware bootloader recovery remains available.
 The dongle's USB `DFU_DETACH` shortcut is enabled only for a transport bound to
 `DongleRouter`; enabling the `dongle` Cargo feature on a keyboard does not enable
 that shortcut.
 
-An updater must keep the same HID connection while it reads `GetUnlockStatus`,
-sends `UnlockStart`, polls `UnlockPoll` while the user holds the displayed keys,
-and sends `BootloaderJump` after unlocking. A locked jump returns VIA's
-`Unhandled` response (`0xFF`). The updater must then wait for the bootloader to
-appear and confirm the application returns after flashing. The RMK GUI updater
-needs matching support for this unlock sequence.
+For Vial, the updater reads `GetUnlockStatus`, sends `UnlockStart`, and polls
+`UnlockPoll` while the user holds the displayed keys. For Rynk, it uses
+`GetLockStatus` and `UnlockPoll`. It then sends `BootloaderJump` on the same
+connection, without spending the grant on another protected command first.
+A locked jump returns VIA's `Unhandled` (`0xFF`) or Rynk's `Locked` error.
+The Rynk peripheral supports `GetVersion`, `GetDeviceInfo`, `GetCapabilities`,
+`GetLayout`, the lock commands, `Reboot`, and `BootloaderJump`; it reports zero
+keymap layers and no bulk configuration support. The updater must wait for the
+bootloader and confirm the application returns after flashing. The RMK GUI
+updater needs matching support for this unlock sequence.
 
 See the `examples/use_config/nrf52840_ble_split` example for both sides enabled.

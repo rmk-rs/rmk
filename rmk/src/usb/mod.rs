@@ -47,8 +47,6 @@ use rynk as host_usb;
 #[cfg(feature = "vial")]
 use vial as host_usb;
 
-pub(crate) static USB_SESSION_RESET: Signal<RawMutex, ()> = Signal::new();
-
 pub(crate) static USB_REMOTE_WAKEUP: Signal<RawMutex, ()> = Signal::new();
 
 // Set while the host has selected the boot protocol (BIOS, UEFI, some KVMs).
@@ -69,6 +67,13 @@ pub(crate) trait HostSession {
 impl HostSession for () {
     async fn serve<R: embedded_io_async::Read, W: embedded_io_async::Write>(&self, _rx: &mut R, _tx: &mut W) {
         core::future::pending().await
+    }
+}
+
+#[cfg(all(feature = "split", any(feature = "vial", feature = "rynk"), feature = "host_lock"))]
+impl HostSession for crate::host::peripheral::PeripheralService {
+    async fn serve<R: embedded_io_async::Read, W: embedded_io_async::Write>(&self, rx: &mut R, tx: &mut W) {
+        self.run_session(rx, tx).await
     }
 }
 
@@ -569,15 +574,15 @@ pub async fn run_peripheral_usb<D: Driver<'static>>(driver: D, config: DeviceCon
     ::embassy_futures::join::join(usb_device.run(), logger_fut).await;
 }
 
-/// Run the peripheral's update-only Vial interface alongside optional USB logging.
-#[cfg(all(feature = "split", feature = "vial", feature = "host_lock"))]
-pub async fn run_peripheral_usb_with_vial<D: Driver<'static>>(
+/// Run the peripheral's update-only host interface alongside optional USB logging.
+#[cfg(all(feature = "split", any(feature = "vial", feature = "rynk"), feature = "host_lock"))]
+pub async fn run_peripheral_usb_with_host<D: Driver<'static>>(
     driver: D,
     config: DeviceConfig<'static>,
     service: &crate::host::peripheral::PeripheralService,
 ) {
     let mut builder = new_usb_builder(driver, config, default_config_descriptor());
-    let (mut reader, mut writer) = vial::build_host_usb(&mut builder);
+    let (mut reader, mut writer) = host_usb::build_host_usb(&mut builder);
     #[cfg(feature = "usb_log")]
     let logger = run_usb_logger(add_usb_logger!(&mut builder));
     #[cfg(not(feature = "usb_log"))]
@@ -585,7 +590,7 @@ pub async fn run_peripheral_usb_with_vial<D: Driver<'static>>(
     let mut device = builder.build();
     embassy_futures::join::join3(
         device.run(),
-        vial::run_host_usb(&mut reader, &mut writer, service),
+        host_usb::run_host_usb(&mut reader, &mut writer, service),
         logger,
     )
     .await;
@@ -716,7 +721,6 @@ impl Handler for UsbDeviceHandler {
             info!("Device enabled");
             set_usb_state(UsbState::Enabled);
         } else {
-            USB_SESSION_RESET.signal(());
             info!("Device disabled");
             set_usb_state(UsbState::Disabled);
         }
@@ -724,7 +728,6 @@ impl Handler for UsbDeviceHandler {
 
     fn reset(&mut self) {
         BOOT_MODE.store(false, Ordering::Relaxed);
-        USB_SESSION_RESET.signal(());
         self.pre_suspend = UsbState::Enabled;
         set_usb_state(UsbState::Enabled);
         info!("Bus reset, the Vbus current limit is 100mA");
@@ -740,7 +743,6 @@ impl Handler for UsbDeviceHandler {
             info!("Device configured, it may now draw up to the configured current from Vbus.")
         } else {
             set_usb_state(UsbState::Enabled);
-            USB_SESSION_RESET.signal(());
             info!("Device is no longer configured, the Vbus current limit is 100mA.");
         }
     }

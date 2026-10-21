@@ -63,7 +63,7 @@ impl<'a> VialService<'a> {
                             error!("It is not secure to use matrix tester without vial lock");
                         }
                         #[cfg(feature = "host_lock")]
-                        ViaKeyboardInfo::SwitchMatrixState if locker.is_unlocked() => {
+                        ViaKeyboardInfo::SwitchMatrixState if locker.take_unlock() => {
                             let bitmap = &mut report.input_data[2..];
                             self.ctx.read_matrix_state(bitmap);
                             // Vial wants each row's bytes big-endian (QMK matrix_row_t order).
@@ -340,7 +340,7 @@ mod tests {
 
     #[cfg(feature = "host_lock")]
     #[test]
-    fn central_bootloader_jump_requires_unlock_in_the_current_session() {
+    fn central_protected_commands_consume_authorization() {
         use core::sync::atomic::Ordering;
 
         use crate::event::KeyboardEvent;
@@ -353,21 +353,29 @@ mod tests {
         let service = VialService::new(&keymap, &config);
         keymap.update_matrix_state(&KeyboardEvent::key(0, 0, true));
         keymap.update_matrix_state(&KeyboardEvent::key(0, 1, true));
-        let commands = [[0x0b, 0], [0xfe, 6], [0xfe, 7], [0xfe, 5], [0x0b, 0]];
-        let mut input = [0u8; 32 * 5];
+        let commands = [
+            [0x0b, 0],
+            [0xfe, 6],
+            [0xfe, 7],
+            [0xfe, 5],
+            [0x02, 0x03],
+            [0x0b, 0],
+            [0xfe, 6],
+            [0xfe, 7],
+            [0x0b, 0],
+            [0x0b, 0],
+        ];
+        let mut input = [0u8; 32 * 10];
         for (packet, cmd) in input.chunks_mut(32).zip(commands) {
             packet[..2].copy_from_slice(&cmd);
         }
-        let mut replies = [0u8; 32 * 5];
-        block_on(service.run_session(&mut input.as_slice(), &mut replies.as_mut_slice()));
+        let mut replies = [0u8; 32 * 10];
+        block_on(service.run(&mut input.as_slice(), &mut replies.as_mut_slice()));
         assert_eq!(replies[0], 0xff);
         assert_eq!(replies[3 * 32], 1);
-        assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
-
-        // The same service survives USB unplug on a battery-powered keyboard.
-        let mut replies = [0u8; 32];
-        block_on(service.run_session(&mut &input[..32], &mut replies.as_mut_slice()));
-        assert_eq!(replies[0], 0xff);
+        assert_eq!(replies[4 * 32 + 2], 3, "matrix read succeeds once");
+        assert_eq!(replies[5 * 32], 0xff, "matrix read consumed the first grant");
+        assert_eq!(replies[9 * 32], 0xff, "jump consumed the second grant");
         assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
     }
 

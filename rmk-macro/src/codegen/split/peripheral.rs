@@ -25,7 +25,7 @@ use crate::codegen::input_device::iqs5xx::{expand_iqs5xx_device, expand_iqs5xx_i
 use crate::codegen::input_device::pmw33xx::expand_pmw33xx_device;
 use crate::codegen::input_device::pmw3610::expand_pmw3610_device;
 use crate::codegen::keyboard_config::{
-    expand_device_config, expand_vial_config, read_keyboard_toml_config,
+    expand_device_config, expand_lock_config, expand_vial_config, read_keyboard_toml_config,
 };
 use crate::codegen::matrix::{
     expand_bootmagic_check, expand_matrix_direct_pins, expand_matrix_input_output_pins,
@@ -67,11 +67,14 @@ pub(crate) fn parse_split_peripheral_mod(
     let host = toml_config
         .peripheral_host(id)
         .expect("invalid peripheral host config");
-    if host.is_some() {
-        if !is_feature_enabled(&rmk_features, "vial")
-            || !is_feature_enabled(&rmk_features, "host_lock")
+    if let Some(protocol) = &host {
+        if protocol.rynk_enabled != is_feature_enabled(&rmk_features, "rynk")
+            || protocol.vial_enabled != is_feature_enabled(&rmk_features, "vial")
         {
-            panic!("[split.peripheral.host] requires the vial and host_lock Cargo features");
+            panic!("[host] must select the same Vial/Rynk protocol as the rmk Cargo features");
+        }
+        if !protocol.rynk_enabled && !is_feature_enabled(&rmk_features, "host_lock") {
+            panic!("[split.peripheral.host] requires the host_lock Cargo feature");
         }
         if is_feature_enabled(&rmk_features, "_no_usb")
             || hardware.communication.get_usb_info().is_none()
@@ -130,9 +133,13 @@ pub(crate) fn parse_split_peripheral_mod(
         }
     };
 
-    let vial_config = host.as_ref().map(expand_vial_config);
+    let host_config = host.as_ref().map(|host| {
+        let vial = expand_vial_config(host);
+        let lock = expand_lock_config(host);
+        quote! { #vial #lock }
+    });
     quote! {
-        #vial_config
+        #host_config
         #main_function_sig {
             // ::defmt::info!("RMK start!");
             #main_function
@@ -419,7 +426,12 @@ fn expand_split_peripheral(
         chip_init.extend(quote! { #flash_init });
     }
 
-    let host_init = host.map(|_| {
+    let host_init = host.map(|host| {
+        let protocol_config = if host.vial_enabled {
+            quote! { vial_config: VIAL_CONFIG, }
+        } else {
+            quote! { lock_config: LOCK_CONFIG, }
+        };
         let rows = peripheral_config.rows as u8;
         let cols = peripheral_config.cols as u8;
         let row_offset = peripheral_config.row_offset as u8;
@@ -430,7 +442,12 @@ fn expand_split_peripheral(
                 product_name: #product_name,
                 ..keyboard_device_config
             };
-            let peripheral_service = ::rmk::host::peripheral::PeripheralService::new(VIAL_CONFIG, ::rmk::split::PeripheralMatrixConfig {
+            let peripheral_config = ::rmk::config::RmkConfig {
+                device_config: keyboard_device_config.clone(),
+                #protocol_config
+                ..Default::default()
+            };
+            let peripheral_service = ::rmk::host::peripheral::PeripheralService::new(&peripheral_config, ::rmk::split::PeripheralMatrixConfig {
                 rows: #rows, cols: #cols, row_offset: #row_offset, col_offset: #col_offset,
             });
         }
@@ -448,7 +465,7 @@ fn expand_split_peripheral(
         };
         (
             Some(if host.is_some() {
-                quote! { ::rmk::usb::run_peripheral_usb_with_vial(driver, keyboard_device_config, &peripheral_service) }
+                quote! { ::rmk::usb::run_peripheral_usb_with_host(driver, keyboard_device_config, &peripheral_service) }
             } else {
                 quote! { ::rmk::usb::run_peripheral_usb(driver, keyboard_device_config) }
             }),

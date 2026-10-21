@@ -46,8 +46,7 @@ pub(crate) async fn run_host_usb<D: Driver<'static>, S: super::HostSession>(
         reader.ready().await;
         let mut rx = VialUsbRx { reader: &mut *reader };
         let mut tx = VialUsbTx { writer: &mut *writer };
-        super::USB_SESSION_RESET.reset();
-        embassy_futures::select::select(super::USB_SESSION_RESET.wait(), session.serve(&mut rx, &mut tx)).await;
+        session.serve(&mut rx, &mut tx).await;
     }
 }
 
@@ -104,12 +103,5 @@ impl<D: Driver<'static>> Write for VialUsbTx<'_, D> {
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
         Ok(())
-    }
-}
-
-#[cfg(all(feature = "split", feature = "host_lock"))]
-impl super::HostSession for crate::host::peripheral::PeripheralService {
-    async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
-        self.run_session(rx, tx).await
     }
 }

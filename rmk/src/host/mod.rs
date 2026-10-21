@@ -26,5 +26,5 @@ pub use rynk::RynkService as HostService;
 #[cfg(feature = "vial")]
 pub use via::VialService as HostService;
 
-#[cfg(all(feature = "split", feature = "vial", feature = "host_lock"))]
+#[cfg(all(feature = "split", any(feature = "vial", feature = "rynk"), feature = "host_lock"))]
 pub mod peripheral;

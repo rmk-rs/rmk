@@ -17,7 +17,7 @@ pub(crate) fn process_system_packet(
         }
         ViaCommand::BootloaderJump => {
             #[cfg(feature = "host_lock")]
-            let unlocked = locker.is_unlocked();
+            let unlocked = locker.take_unlock();
             #[cfg(not(feature = "host_lock"))]
             let unlocked = true;
             if unlocked {

@@ -2,32 +2,57 @@
 
 use core::cell::RefCell;
 
+#[cfg(feature = "vial")]
 use embassy_time::Duration;
+#[cfg(feature = "vial")]
 use embedded_io_async::{Read, Write};
+#[cfg(feature = "vial")]
 use rmk_types::protocol::vial::ViaCommand;
 
-use super::lock::{HostLock, UnlockKeyState};
+#[cfg(feature = "vial")]
+use super::lock::HostLock;
+use super::lock::UnlockKeyState;
+#[cfg(feature = "vial")]
 use super::via::system::process_system_packet;
+use crate::config::RmkConfig;
+#[cfg(feature = "vial")]
 use crate::config::VialConfig;
+#[cfg(feature = "rynk")]
+use crate::config::{DeviceConfig, LockConfig};
 use crate::event::{KeyboardEvent, publish_event_async};
+#[cfg(feature = "vial")]
 use crate::hid::ViaReport;
 use crate::input_device::InputDevice;
 use crate::matrix::MatrixState;
 use crate::split::PeripheralMatrixConfig;
 
-/// Serves Vial identity, unlock and bootloader commands without a keymap.
+/// Serves host identity, unlock and bootloader commands without a keymap.
 /// Run `run_matrix` alongside the USB service so unlock works without a split link.
 pub struct PeripheralService {
+    #[cfg(feature = "vial")]
     config: VialConfig<'static>,
+    #[cfg(feature = "rynk")]
+    config: LockConfig,
+    #[cfg(feature = "rynk")]
+    device: DeviceConfig<'static>,
+    #[cfg(feature = "rynk")]
+    layout_blob: &'static [u8],
     matrix: RefCell<MatrixState>,
     matrix_config: PeripheralMatrixConfig,
 }
 
 impl PeripheralService {
     /// `config` uses shared-layout positions; `matrix_config` identifies this side's local region.
-    pub fn new(config: VialConfig<'static>, matrix_config: PeripheralMatrixConfig) -> Self {
+    pub fn new(config: &RmkConfig<'static>, matrix_config: PeripheralMatrixConfig) -> Self {
         Self {
-            config,
+            #[cfg(feature = "vial")]
+            config: config.vial_config,
+            #[cfg(feature = "rynk")]
+            config: config.lock_config,
+            #[cfg(feature = "rynk")]
+            device: config.device_config.clone(),
+            #[cfg(feature = "rynk")]
+            layout_blob: config.layout_blob,
             matrix: RefCell::new(MatrixState::new(
                 matrix_config.rows as usize,
                 matrix_config.cols as usize,
@@ -46,6 +71,7 @@ impl PeripheralService {
     }
 
     /// A new transport session always starts locked unless explicitly insecure.
+    #[cfg(feature = "vial")]
     pub async fn run_session<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
         let locker = HostLock::new(
             self.config.unlock_keys,
@@ -84,7 +110,7 @@ impl UnlockKeyState for PeripheralService {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "vial"))]
 mod tests {
     use core::sync::atomic::Ordering;
 
@@ -106,6 +132,14 @@ mod tests {
         col_offset: 3,
     };
 
+    fn peripheral() -> PeripheralService {
+        let config = RmkConfig {
+            vial_config: CONFIG,
+            ..Default::default()
+        };
+        PeripheralService::new(&config, MATRIX)
+    }
+
     fn requests(commands: &[[u8; 2]]) -> std::vec::Vec<u8> {
         commands
             .iter()
@@ -118,9 +152,9 @@ mod tests {
     }
 
     #[test]
-    fn peripheral_unlock_is_local_and_expires_with_the_session() {
-        let first = PeripheralService::new(CONFIG, MATRIX);
-        let second = PeripheralService::new(CONFIG, MATRIX);
+    fn peripheral_unlock_is_local_and_authorizes_one_jump() {
+        let first = peripheral();
+        let second = peripheral();
         first.matrix.borrow_mut().update(&KeyboardEvent::key(0, 0, true));
         first.matrix.borrow_mut().update(&KeyboardEvent::key(1, 1, true));
         let input = requests(&[
@@ -129,7 +163,7 @@ mod tests {
             [0xfe, 7],
             [0xfe, 5],
             [0x0b, 0],
-            [0xfe, 8],
+            [0xfe, 5],
             [0x0b, 0],
             [1, 0],
             [0xfe, 0],
@@ -147,7 +181,8 @@ mod tests {
             &[2, 3, 3, 4],
             "GUI positions match the shared definition"
         );
-        assert_eq!(replies[6 * 32], 0xff, "Lock closes the bootloader gate");
+        assert_eq!(replies[5 * 32], 0, "the jump consumes authorization");
+        assert_eq!(replies[6 * 32], 0xff, "a second jump requires a new unlock");
         assert_eq!(replies[7 * 32], 1, "the updater can probe a locked peripheral");
         assert_eq!(&replies[8 * 32 + 4..8 * 32 + 12], CONFIG.vial_keyboard_id);
         assert_eq!(replies[9 * 32], 0xff, "the peripheral does not accept keymap writes");
@@ -193,7 +228,7 @@ mod tests {
         }
         let events = [KeyboardEvent::key(0, 0, true), KeyboardEvent::key(1, 1, true)];
         let mut matrix = Matrix(events.into());
-        let service = PeripheralService::new(CONFIG, MATRIX);
+        let service = peripheral();
         let mut subscriber = KeyboardEvent::subscriber();
         let update = async {
             for event in events {
@@ -209,3 +244,6 @@ mod tests {
         block_on(embassy_futures::select::select(service.run_matrix(&mut matrix), update));
     }
 }
+
+#[cfg(feature = "rynk")]
+mod rynk;
