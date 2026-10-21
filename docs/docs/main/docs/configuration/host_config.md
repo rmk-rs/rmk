@@ -83,65 +83,32 @@ rmk = { version = "0.9", default-features = false, features = [
 ] }
 ```
 
-## Independent split unlock
+## Split USB bootloader entry
 
-Configure a local unlock combination for each side. Add these tables alongside
-that side's existing matrix configuration:
+Add unlock keys alongside each side's matrix configuration:
 
 ```toml
 [split.central.host]
-insecure = false
 unlock_keys = [[0, 0], [0, 1]]
 
 [split.peripheral.host]
-insecure = false
 unlock_keys = [[0, 0], [1, 0]]
 ```
 
-Each coordinate is local to its side, before `row_offset` and `col_offset`.
-Choose up to four real keys on that side. Empty combinations and invalid local
-positions are rejected unless an empty combination is explicitly paired with
-`insecure = true`. RMK converts positions reported to Vial into the shared
-keyboard layout, so the configurator can highlight the correct keys.
+Coordinates are local to each side, before `row_offset` and `col_offset`. Choose
+up to four physical keys; an empty combination requires `insecure = true`.
+The central's table overrides `[host]` unlock settings. Without it, the existing
+`[host]` settings still apply. The peripheral has its own keys and authorization.
 
-The central's table overrides the top-level `[host]` unlock settings. Without
-that table, the existing top-level settings and global coordinates still apply.
-A peripheral never inherits the central's combination or unlocked state.
+`[split.peripheral.host]` enables USB identity, unlock and bootloader commands
+using the selected Vial or Rynk protocol, even when the central is offline.
+It requires USB support, `split`, `host_lock` (included by `rynk`), and a supported
+bootloader feature such as `adafruit_bl` or `rp2040`. It cannot be combined with
+`dfu_nrf` or `dfu_rp`. Omit the table to keep the peripheral's existing behavior.
 
-Adding `[split.peripheral.host]` enables an update-only USB host interface using
-the protocol selected in `[host]`: Vial over HID or Rynk over vendor bulk. It
-requires `split` and `host_lock` (`rynk` enables `host_lock` automatically), the
-matching `vial` or `rynk` Cargo feature, USB enabled, and a
-supported bootloader feature (`adafruit_bl` for the Adafruit nRF52 bootloader,
-or `rp2040` for BOOTSEL). It is separate from embassy-boot application DFU and
-cannot be combined with the `dfu_nrf` or `dfu_rp` features. A peripheral without
-this table keeps its existing USB behavior.
+Unlock the connected side with the existing protocol commands, then send
+`BootloaderJump` on that connection. Each unlock permits one protected request;
+identity and lock-status queries do not consume it. Keymap editing stays on the
+central. Host tools need to support this unlock sequence.
 
-The peripheral scans its own keys and serves USB even when the central is
-offline. Its USB product name ends in `(peripheral N)`, where `N` is its
-zero-based split index. It exposes identity, unlock, and bootloader commands;
-keymap editing is still handled by the central.
-
-Each unlock authorizes one protected command. The grant is consumed before that
-command executes, including an attempt that returns an error. Vial protects
-`BootloaderJump` and matrix-state reads; Rynk applies the same rule to all commands
-in its locked set, including config writes when `write_requires_unlock = true`.
-Identity, capability and lock-status queries do not consume the grant. Both sides
-start locked and authorize independently. `insecure = true` explicitly bypasses
-the gate. Hardware bootloader recovery remains available.
-The dongle's USB `DFU_DETACH` shortcut is enabled only for a transport bound to
-`DongleRouter`; enabling the `dongle` Cargo feature on a keyboard does not enable
-that shortcut.
-
-For Vial, the updater reads `GetUnlockStatus`, sends `UnlockStart`, and polls
-`UnlockPoll` while the user holds the displayed keys. For Rynk, it uses
-`GetLockStatus` and `UnlockPoll`. It then sends `BootloaderJump` on the same
-connection, without spending the grant on another protected command first.
-A locked jump returns VIA's `Unhandled` (`0xFF`) or Rynk's `Locked` error.
-The Rynk peripheral supports `GetVersion`, `GetDeviceInfo`, `GetCapabilities`,
-`GetLayout`, the lock commands, `Reboot`, and `BootloaderJump`; it reports zero
-keymap layers and no bulk configuration support. The updater must wait for the
-bootloader and confirm the application returns after flashing. The RMK GUI
-updater needs matching support for this unlock sequence.
-
-See the `examples/use_config/nrf52840_ble_split` example for both sides enabled.
+See `examples/use_config/nrf52840_ble_split` for a complete example.

@@ -35,13 +35,9 @@ impl<'a> VialService<'a> {
 
 #[cfg(all(feature = "host_lock", any(feature = "split", test)))]
 impl<'a> VialService<'a, false> {
-    pub(crate) fn new_peripheral(
-        #[cfg(feature = "host_lock")] keys: &'a dyn crate::host::lock::UnlockKeyState,
-        config: &RmkConfig<'static>,
-    ) -> Self {
+    pub(crate) fn new_peripheral(keys: &'a dyn crate::host::lock::UnlockKeyState, config: &RmkConfig<'static>) -> Self {
         Self {
             ctx: None,
-            #[cfg(feature = "host_lock")]
             keys,
             vial_config: config.vial_config,
         }
