@@ -4,6 +4,8 @@
 //! commands never reach it; this interface is how `dfu-util` and rmk-gui ask it
 //! to leave. Having no keys, it honours the DETACH only for 30 s after plug-in.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use embassy_time::{Duration, Instant};
 use embassy_usb::class::dfu::device::app_mode::{self, DfuState};
 use embassy_usb::class::dfu::device::consts::DfuAttributes;
@@ -19,14 +21,16 @@ const PLUG_WINDOW: Duration = Duration::from_secs(30);
 /// WebUSB's `claimInterface` never completes on Windows.
 const DEVICE_INTERFACE_GUID: &str = "{289C94D7-FCC4-4C54-87E1-1E92C7A17CFE}";
 
+pub(crate) static ENABLED: AtomicBool = AtomicBool::new(false);
+
 struct Detach;
 
 impl app_mode::Handler for Detach {
     fn enter_dfu(&mut self) {
-        if Instant::now() <= Instant::MIN + PLUG_WINDOW {
+        if ENABLED.load(Ordering::Relaxed) && Instant::now() <= Instant::MIN + PLUG_WINDOW {
             crate::boot::jump_to_bootloader()
         } else {
-            info!("DFU_DETACH ignored: plug-in window over");
+            info!("DFU_DETACH ignored: not a dongle or plug-in window over");
         }
     }
 }
@@ -51,4 +55,33 @@ pub(crate) fn register<D: Driver<'static>>(builder: &mut Builder<'static, D>) {
             msos::PropertyData::RegMultiSz(&[DEVICE_INTERFACE_GUID]),
         ));
     });
+}
+
+#[cfg(all(test, feature = "host_lock", feature = "host"))]
+mod tests {
+    use embassy_usb::class::dfu::device::app_mode::Handler;
+
+    use super::*;
+
+    #[test]
+    fn keyboard_dongle_feature_does_not_bypass_host_lock() {
+        use crate::usb::HostSession;
+        embassy_time::MockDriver::get().reset();
+        ENABLED.store(
+            <crate::host::HostService<'_> as HostSession>::IS_DONGLE,
+            Ordering::Relaxed,
+        );
+        Detach.enter_dfu();
+        assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 0);
+
+        ENABLED.store(
+            <crate::dongle::DongleRouter as HostSession>::IS_DONGLE,
+            Ordering::Relaxed,
+        );
+        Detach.enter_dfu();
+        assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
+        embassy_time::MockDriver::get().advance(Duration::from_secs(31));
+        Detach.enter_dfu();
+        assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
+    }
 }

@@ -30,6 +30,7 @@ impl super::HostSession for VialService<'_> {
 
 #[cfg(feature = "dongle")]
 impl super::HostSession for crate::dongle::DongleRouter {
+    const IS_DONGLE: bool = true;
     async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
         self.run_session(rx, tx).await
     }

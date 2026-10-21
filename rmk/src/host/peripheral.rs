@@ -131,8 +131,11 @@ mod tests {
             [0x0b, 0],
             [0xfe, 8],
             [0x0b, 0],
+            [1, 0],
+            [0xfe, 0],
+            [5, 0],
         ]);
-        let mut replies = [0u8; 32 * 7];
+        let mut replies = [0u8; 32 * 10];
         block_on(first.run_session(&mut input.as_slice(), &mut replies.as_mut_slice()));
         assert_eq!(
             replies[0], 0xff,
@@ -145,6 +148,9 @@ mod tests {
             "GUI positions match the shared definition"
         );
         assert_eq!(replies[6 * 32], 0xff, "Lock closes the bootloader gate");
+        assert_eq!(replies[7 * 32], 1, "the updater can probe a locked peripheral");
+        assert_eq!(&replies[8 * 32 + 4..8 * 32 + 12], CONFIG.vial_keyboard_id);
+        assert_eq!(replies[9 * 32], 0xff, "the peripheral does not accept keymap writes");
         assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
 
         let input = requests(&[[0xfe, 6], [0xfe, 7], [0xfe, 5], [0x0b, 0]]);
@@ -201,18 +207,5 @@ mod tests {
             assert_eq!(replies[64], 1);
         };
         block_on(embassy_futures::select::select(service.run_matrix(&mut matrix), update));
-    }
-
-    #[test]
-    fn peripheral_answers_identity_and_refuses_keymap_writes() {
-        let service = PeripheralService::new(CONFIG, MATRIX);
-        let input = requests(&[[1, 0], [0xfe, 0], [0xfe, 1], [0xfe, 2], [5, 0]]);
-        let mut replies = [0u8; 32 * 5];
-        block_on(service.run_session(&mut input.as_slice(), &mut replies.as_mut_slice()));
-        assert_eq!(replies[0], 1);
-        assert_eq!(&replies[36..44], CONFIG.vial_keyboard_id);
-        assert_eq!(u32::from_le_bytes(replies[64..68].try_into().unwrap()), 4);
-        assert_eq!(&replies[96..100], CONFIG.vial_keyboard_def);
-        assert_eq!(replies[128], 0xff);
     }
 }

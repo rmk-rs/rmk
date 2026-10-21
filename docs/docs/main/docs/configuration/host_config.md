@@ -125,6 +125,9 @@ to be unlocked. Both sides start locked, and unlocking one side does not unlock
 the other. USB disconnect, bus reset, or deconfiguration ends the session and
 locks it again; USB suspend preserves the session. `insecure = true` explicitly
 keeps that side unlocked. Hardware bootloader recovery remains available.
+The dongle's USB `DFU_DETACH` shortcut is enabled only for a transport bound to
+`DongleRouter`; enabling the `dongle` Cargo feature on a keyboard does not enable
+that shortcut.
 
 An updater must keep the same HID connection while it reads `GetUnlockStatus`,
 sends `UnlockStart`, polls `UnlockPoll` while the user holds the displayed keys,

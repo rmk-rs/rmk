@@ -16,6 +16,7 @@ impl HostSession for crate::host::rynk::RynkService<'_> {
 
 #[cfg(feature = "dongle")]
 impl HostSession for crate::dongle::DongleRouter {
+    const IS_DONGLE: bool = true;
     async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
         self.run_session(rx, tx).await
     }

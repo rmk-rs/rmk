@@ -137,12 +137,18 @@ unlock_keys = [[0, 1], [1, 0]]
 
     #[test]
     fn split_unlock_keys_and_policy_are_local_to_each_board() {
-        let config = split_config();
+        let mut config = split_config();
         let central = config.host();
         let peripheral = config.peripheral_host(0).unwrap().unwrap();
         assert_eq!(central.unlock_keys, [[1, 2], [2, 3]]);
         assert_eq!(peripheral.unlock_keys, [[3, 5], [4, 4]]);
         assert!(!central.insecure && !peripheral.insecure);
+        config.split.as_mut().unwrap().peripheral[0].host = Some(SplitHostConfig {
+            unlock_keys: vec![],
+            insecure: true,
+        });
+        assert!(config.peripheral_host(0).unwrap().unwrap().insecure);
+        assert!(!config.host().insecure);
     }
 
     #[test]
@@ -179,16 +185,5 @@ unlock_keys = [[0, 1], [1, 0]]
             .unwrap()
             .unlock_keys = vec![[1, 1]];
         assert!(config.peripheral_host(0).is_ok());
-    }
-
-    #[test]
-    fn peripheral_insecure_is_explicit_and_does_not_unlock_central() {
-        let mut config = split_config();
-        config.split.as_mut().unwrap().peripheral[0].host = Some(SplitHostConfig {
-            unlock_keys: vec![],
-            insecure: true,
-        });
-        assert!(config.peripheral_host(0).unwrap().unwrap().insecure);
-        assert!(!config.host().insecure);
     }
 }

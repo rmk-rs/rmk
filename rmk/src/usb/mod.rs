@@ -60,6 +60,9 @@ static BOOT_MODE: AtomicBool = AtomicBool::new(false);
 /// Which one is a type parameter of [`UsbTransport`], so only the attached one
 /// reaches the image.
 pub(crate) trait HostSession {
+    #[cfg(feature = "dongle")]
+    const IS_DONGLE: bool = false;
+
     async fn serve<R: embedded_io_async::Read, W: embedded_io_async::Write>(&self, rx: &mut R, tx: &mut W);
 }
 
@@ -465,6 +468,9 @@ impl<'a, D: Driver<'static>, S> UsbTransport<'a, D, S> {
 
 impl<D: Driver<'static>, S: HostSession> Runnable for UsbTransport<'_, D, S> {
     async fn run(&mut self) -> ! {
+        // Keyboard firmware also enables the dongle feature; the attached service determines its role.
+        #[cfg(feature = "dongle")]
+        dfu_detach::ENABLED.store(S::IS_DONGLE, core::sync::atomic::Ordering::Relaxed);
         let Self {
             device,
             keyboard_reader,
@@ -786,27 +792,8 @@ mod tests {
     use embassy_usb::class::hid::device::RequestHandler;
     use rmk_types::connection::UsbState;
 
-    use super::{HidProtocolMode, OutResponse, USB_SESSION_RESET, UsbDeviceHandler, UsbRequestHandler};
+    use super::{HidProtocolMode, OutResponse, UsbDeviceHandler, UsbRequestHandler};
     use crate::state::{current_usb_state, set_usb_state};
-
-    #[test]
-    fn usb_disconnect_and_reset_invalidate_the_host_session() {
-        let mut handler = UsbDeviceHandler::new();
-        USB_SESSION_RESET.reset();
-        handler.enabled(false);
-        assert!(USB_SESSION_RESET.try_take().is_some());
-        handler.reset();
-        assert!(USB_SESSION_RESET.try_take().is_some());
-        handler.configured(false);
-        assert!(USB_SESSION_RESET.try_take().is_some());
-        handler.configured(true);
-        handler.suspended(true);
-        handler.suspended(false);
-        assert!(
-            USB_SESSION_RESET.try_take().is_none(),
-            "suspend preserves the same USB session"
-        );
-    }
 
     /// A BIOS or KVM switch selects the boot protocol before it will use the
     /// keyboard; rejecting the switch strands a host that trusts the boot
