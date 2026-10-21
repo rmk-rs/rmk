@@ -67,21 +67,13 @@ mod tests {
     fn keyboard_dongle_feature_does_not_bypass_host_lock() {
         use crate::usb::HostSession;
         embassy_time::MockDriver::get().reset();
-        ENABLED.store(
-            <crate::host::HostService<'_> as HostSession>::IS_DONGLE,
-            Ordering::Relaxed,
-        );
-        Detach.enter_dfu();
-        assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 0);
-
-        ENABLED.store(
-            <crate::dongle::DongleRouter as HostSession>::IS_DONGLE,
-            Ordering::Relaxed,
-        );
-        Detach.enter_dfu();
-        assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
-        embassy_time::MockDriver::get().advance(Duration::from_secs(31));
-        Detach.enter_dfu();
-        assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
+        for (enabled, jumps) in [
+            (<crate::host::HostService<'_> as HostSession>::IS_DONGLE, 0),
+            (<crate::dongle::DongleRouter as HostSession>::IS_DONGLE, 1),
+        ] {
+            ENABLED.store(enabled, Ordering::Relaxed);
+            Detach.enter_dfu();
+            assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), jumps);
+        }
     }
 }

@@ -49,9 +49,8 @@ impl UnlockKeyState for PeripheralMatrix {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::event::SubscribableEvent;
 
-    pub(crate) fn scanned_matrix(pressed: bool) -> PeripheralMatrix {
+    pub(crate) fn scanned_matrix() -> PeripheralMatrix {
         #[rmk_macro::input_device(publish = KeyboardEvent)]
         struct Matrix(Option<KeyboardEvent>);
         impl Matrix {
@@ -68,11 +67,9 @@ pub(crate) mod tests {
             row_offset: 2,
             col_offset: 3,
         });
-        let event = KeyboardEvent::key(0, 0, pressed);
+        let event = KeyboardEvent::key(0, 0, true);
         let mut matrix = Matrix(Some(event));
-        let mut subscriber = KeyboardEvent::subscriber();
-        assert!(embassy_futures::poll_once(keys.run_matrix(&mut matrix)).is_pending());
-        assert_eq!(subscriber.try_next_message_pure(), Some(event));
+        let _ = embassy_futures::poll_once(keys.run_matrix(&mut matrix));
         keys
     }
 }

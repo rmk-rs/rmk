@@ -870,6 +870,7 @@ mod tests {
             0,
             &features,
             None,
+            false,
         )
         .to_string();
         assert!(ble.contains("build_sdc"));
@@ -894,6 +895,7 @@ mod tests {
                 0,
                 &features,
                 None,
+                false,
             )
             .to_string();
             assert!(irqs.contains("USBD"));
@@ -938,6 +940,7 @@ charge_led = {{ pin = "PIN_21", low_active = false }}
                 mod keyboard {}
             ),
             &Some(vec!["split".into()]),
+            None,
             None,
         )
         .to_string();

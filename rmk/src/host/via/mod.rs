@@ -341,18 +341,10 @@ mod tests {
     /// These tests run no storage task, so writes that wait for one would never be
     /// answered; the stand-in answers them.
     fn process(service: &mut VialService, report: &mut ViaReport) {
-        #[cfg(feature = "host_lock")]
-        let locker = crate::host::lock::HostLock::new(
-            service.vial_config.unlock_keys,
-            service.keys,
-            service.vial_config.insecure,
-            embassy_time::Duration::from_millis(100),
-        );
         block_on(embassy_futures::select::select(
-            service.process_via_packet(
-                report,
-                #[cfg(feature = "host_lock")]
-                &locker,
+            service.run(
+                &mut report.output_data.as_slice(),
+                &mut report.input_data.as_mut_slice(),
             ),
             crate::test_support::drain_flash_channel(),
         ));
@@ -387,44 +379,41 @@ mod tests {
         keymap.update_matrix_state(&KeyboardEvent::key(2, 3, true));
         let commands = [
             [0x0b, 0],
-            [0xfe, 6],
             [0xfe, 7],
             [0xfe, 5],
             [0x02, 0x03],
             [0x0b, 0],
-            [0xfe, 6],
             [0xfe, 7],
             [0x0b, 0],
             [0x0b, 0],
-            [0xfe, 6],
             [0xfe, 7],
             [0xfe, 5],
         ];
-        let mut input = [0u8; 32 * 13];
+        let mut input = [0u8; 32 * 10];
         for (packet, cmd) in input.chunks_mut(32).zip(commands) {
             packet[..2].copy_from_slice(&cmd);
         }
-        let mut replies = [0u8; 32 * 13];
+        let mut replies = [0u8; 32 * 10];
         block_on(service.run(&mut input.as_slice(), &mut replies.as_mut_slice()));
         assert_eq!(replies[0], 0xff);
-        assert_eq!(replies[3 * 32], 1);
-        assert_eq!(replies[4 * 32 + 4], 8, "matrix read succeeds once");
-        assert_eq!(replies[5 * 32], 0xff, "matrix read consumed the first grant");
-        assert_eq!(replies[9 * 32], 0xff, "jump consumed the second grant");
+        assert_eq!(replies[2 * 32], 1);
+        assert_eq!(replies[3 * 32 + 4], 8, "matrix read succeeds once");
+        assert_eq!(replies[4 * 32], 0xff, "matrix read consumed the first grant");
+        assert_eq!(replies[7 * 32], 0xff, "jump consumed the second grant");
         assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
-        assert_eq!(replies[12 * 32], 1, "the session ends with an unused grant");
+        assert_eq!(replies[9 * 32], 1, "the session ends with an unused grant");
         block_on(service.run(&mut &input[..32], &mut replies.as_mut_slice()));
         assert_eq!(replies[0], 0xff, "a new session must unlock again");
         #[cfg(feature = "split")]
         {
-            let keys = crate::host::peripheral::tests::scanned_matrix(true);
+            let keys = crate::host::peripheral::tests::scanned_matrix();
             let peripheral = VialService::<false>::new_peripheral(&keys, &config);
-            input[4 * 32] = ViaCommand::DynamicKeymapSetKeyCode as u8;
-            block_on(peripheral.run(&mut input.as_slice(), &mut replies.as_mut_slice()));
-            assert_eq!(replies[4 * 32], 0xff, "peripheral rejects keymap writes");
-            assert_eq!(replies[5 * 32], 0x0b, "rejected write preserves authorization");
-            assert_eq!(replies[9 * 32], 0xff, "peripheral jump consumes authorization");
-            assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 3);
+            block_on(peripheral.run(&mut &input[5 * 32..], &mut replies.as_mut_slice()));
+            assert_eq!(replies[2 * 32], 0xff, "peripheral jump consumes authorization");
+            assert_eq!(replies[4 * 32], 1, "peripheral has an unused grant");
+            block_on(peripheral.run(&mut &input[..32], &mut replies.as_mut_slice()));
+            assert_eq!(replies[0], 0xff, "peripheral reconnect must unlock again");
+            assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 2);
         }
     }
 

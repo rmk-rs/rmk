@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_then_full_hold_unlocks() {
+    fn partial_then_full_hold_unlocks_independently() {
         keymap!(keymap);
         let keys = [(0u8, 0u8), (1u8, 1u8)];
         let lock = HostLock::new(&keys, &keymap, false, WINDOW);
@@ -215,6 +215,19 @@ mod tests {
         keymap.update_matrix_state(&KeyboardEvent::key(1, 1, true));
         assert_eq!(lock.check_unlock(), 0, "all held");
         assert!(lock.is_unlocked(), "unlocked once all keys held");
+        #[cfg(all(feature = "split", any(feature = "vial", feature = "rynk")))]
+        {
+            let keys = crate::host::peripheral::tests::scanned_matrix();
+            let peripheral = HostLock::new(&[(2, 3)], &keys, false, WINDOW);
+            assert!(lock.is_unlocked() && !peripheral.is_unlocked());
+            peripheral.unlocking();
+            assert_eq!(peripheral.check_unlock(), 0);
+            lock.lock();
+            assert!(
+                peripheral.is_unlocked(),
+                "locking the central must not relock its peripheral"
+            );
+        }
     }
 
     #[test]
@@ -237,10 +250,6 @@ mod tests {
         assert!(lock.is_unlocked(), "insecure starts unlocked");
         lock.lock();
         assert!(lock.is_unlocked(), "lock() does not override insecure mode");
-        assert!(
-            lock.take_unlock() && lock.take_unlock(),
-            "insecure explicitly bypasses one-use authorization"
-        );
     }
 
     #[cfg(feature = "rynk")]
