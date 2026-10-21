@@ -1,11 +1,11 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use rmk_config::SplitConnection;
-use rmk_config::resolved::Hardware;
 use rmk_config::resolved::hardware::{
     BoardConfig, ChipModel, ChipSeries, DfuConfig, InputDeviceConfig, MatrixType, SplitBoardConfig,
     SplitConfig,
 };
+use rmk_config::resolved::{Hardware, Host};
 use syn::ItemMod;
 
 use super::central::expand_serial_init;
@@ -24,7 +24,9 @@ use crate::codegen::input_device::encoder::expand_encoder_device;
 use crate::codegen::input_device::iqs5xx::{expand_iqs5xx_device, expand_iqs5xx_interrupts};
 use crate::codegen::input_device::pmw33xx::expand_pmw33xx_device;
 use crate::codegen::input_device::pmw3610::expand_pmw3610_device;
-use crate::codegen::keyboard_config::{expand_device_config, read_keyboard_toml_config};
+use crate::codegen::keyboard_config::{
+    expand_device_config, expand_vial_config, read_keyboard_toml_config,
+};
 use crate::codegen::matrix::{
     expand_bootmagic_check, expand_matrix_direct_pins, expand_matrix_input_output_pins,
 };
@@ -62,6 +64,33 @@ pub(crate) fn parse_split_peripheral_mod(
         .expect("failed to resolve split-side dfu config");
     hardware.dfu = dfu;
 
+    let host = toml_config
+        .peripheral_host(id)
+        .expect("invalid peripheral host config");
+    if host.is_some() {
+        if !is_feature_enabled(&rmk_features, "vial")
+            || !is_feature_enabled(&rmk_features, "host_lock")
+        {
+            panic!("[split.peripheral.host] requires the vial and host_lock Cargo features");
+        }
+        if is_feature_enabled(&rmk_features, "_no_usb")
+            || hardware.communication.get_usb_info().is_none()
+        {
+            panic!("[split.peripheral.host] requires USB support");
+        }
+        if cfg!(feature = "_dfu") {
+            panic!(
+                "[split.peripheral.host] is a bootloader entry, and cannot be combined with embassy-boot DFU"
+            );
+        }
+        if !["adafruit_bl", "rp2040", "zsa_voyager_bl"]
+            .iter()
+            .any(|feature| is_feature_enabled(&rmk_features, feature))
+        {
+            panic!("[split.peripheral.host] requires a supported bootloader feature");
+        }
+    }
+
     let main_function = expand_split_peripheral(
         id,
         &identity,
@@ -69,6 +98,7 @@ pub(crate) fn parse_split_peripheral_mod(
         item_mod,
         &rmk_features,
         hardware.dfu.as_ref(),
+        host.as_ref(),
     );
 
     let bind_interrupts = expand_bind_interrupt_for_split_peripheral(
@@ -77,6 +107,7 @@ pub(crate) fn parse_split_peripheral_mod(
         id,
         &rmk_features,
         hardware.dfu.as_ref(),
+        host.is_some(),
     );
 
     let chip = &hardware.chip;
@@ -99,7 +130,9 @@ pub(crate) fn parse_split_peripheral_mod(
         }
     };
 
+    let vial_config = host.as_ref().map(expand_vial_config);
     quote! {
+        #vial_config
         #main_function_sig {
             // ::defmt::info!("RMK start!");
             #main_function
@@ -113,6 +146,7 @@ fn expand_bind_interrupt_for_split_peripheral(
     peripheral_id: usize,
     rmk_features: &Option<Vec<String>>,
     dfu: Option<&DfuConfig>,
+    host_enabled: bool,
 ) -> TokenStream2 {
     let communication = &hardware.communication;
 
@@ -144,7 +178,7 @@ fn expand_bind_interrupt_for_split_peripheral(
 
     let dfu_enabled = cfg!(feature = "_dfu");
     let usb_log_enabled = is_feature_enabled(rmk_features, "usb_log");
-    let usb_enabled = dfu_enabled || usb_log_enabled;
+    let usb_enabled = dfu_enabled || usb_log_enabled || host_enabled;
 
     match chip.series {
         ChipSeries::Nrf52 => {
@@ -307,7 +341,7 @@ fn expand_bind_interrupt_for_split_peripheral(
                         runner.run().await
                     }
                 }
-            } else if !display_interrupt.is_empty() || !iqs5xx_interrupt.is_empty() || dfu_enabled {
+            } else if !display_interrupt.is_empty() || !iqs5xx_interrupt.is_empty() || usb_enabled {
                 // DFU external SPI flash DMA channels
                 let dfu_dma_channels = dfu
                     .and_then(|d| d.external_flash.as_ref())
@@ -349,6 +383,7 @@ fn expand_split_peripheral(
     item_mod: ItemMod,
     rmk_features: &Option<Vec<String>>,
     dfu: Option<&DfuConfig>,
+    host: Option<&Host>,
 ) -> TokenStream2 {
     // Check whether keyboard.toml contains split section
     let split_config = match &hardware.board {
@@ -365,7 +400,7 @@ fn expand_split_peripheral(
 
     // True exactly when the flash init defines `state_partition`/`dfu_partition`.
     let dfu_enabled = cfg!(feature = "_dfu");
-    let usb_enabled = dfu_enabled || is_feature_enabled(rmk_features, "usb_log");
+    let usb_enabled = dfu_enabled || is_feature_enabled(rmk_features, "usb_log") || host.is_some();
 
     let imports = expand_custom_imports(&item_mod);
     let mut chip_init = expand_chip_init(hardware, Some(id), &item_mod);
@@ -384,7 +419,23 @@ fn expand_split_peripheral(
         chip_init.extend(quote! { #flash_init });
     }
 
-    // Run usb device if dfu or usb_log is enabled.
+    let host_init = host.map(|_| {
+        let rows = peripheral_config.rows as u8;
+        let cols = peripheral_config.cols as u8;
+        let row_offset = peripheral_config.row_offset as u8;
+        let col_offset = peripheral_config.col_offset as u8;
+        let product_name = format!("{} (peripheral {})", identity.product_name, id);
+        quote! {
+            let keyboard_device_config = ::rmk::config::DeviceConfig {
+                product_name: #product_name,
+                ..keyboard_device_config
+            };
+            let peripheral_service = ::rmk::host::peripheral::PeripheralService::new(VIAL_CONFIG, ::rmk::split::PeripheralMatrixConfig {
+                rows: #rows, cols: #cols, row_offset: #row_offset, col_offset: #col_offset,
+            });
+        }
+    });
+    // Run USB independently of the split link.
     let (usb_task_future, dfu_task) = if usb_enabled {
         let usb_init = expand_usb_init(hardware, &item_mod);
         chip_init.extend(usb_init);
@@ -396,8 +447,10 @@ fn expand_split_peripheral(
             None
         };
         (
-            Some(quote! {
-                ::rmk::usb::run_peripheral_usb(driver, keyboard_device_config)
+            Some(if host.is_some() {
+                quote! { ::rmk::usb::run_peripheral_usb_with_vial(driver, keyboard_device_config, &peripheral_service) }
+            } else {
+                quote! { ::rmk::usb::run_peripheral_usb(driver, keyboard_device_config) }
             }),
             dfu_task,
         )
@@ -533,6 +586,7 @@ fn expand_split_peripheral(
         watchdog_task,
         usb_task_future,
         dfu_task,
+        host.is_some(),
     );
 
     quote! {
@@ -541,6 +595,7 @@ fn expand_split_peripheral(
         #chip_init
         #registered_processor_initializers
         #matrix_config
+        #host_init
         #keymap_init
         #output_config
         #device_initialization
@@ -562,17 +617,20 @@ fn expand_split_peripheral_entry(
     watchdog_task: Option<TokenStream2>,
     usb_task_future: Option<TokenStream2>,
     dfu_task: Option<TokenStream2>,
+    host_enabled: bool,
 ) -> TokenStream2 {
     // Add matrix to devices, and run all devices
     let mut devs = devices.clone();
-    devs.push(quote! {matrix});
+    if !host_enabled {
+        devs.push(quote! {matrix});
+    }
     if split_config.connection == SplitConnection::Ble {
         devs.push(quote! {storage});
     }
-    let device_task = quote! {
-        ::rmk::run_all! (
-            #(#devs),*
-        )
+    let device_task = if devs.is_empty() {
+        quote! { core::future::pending::<()>() }
+    } else {
+        quote! { ::rmk::run_all!(#(#devs),*) }
     };
 
     // Create processor task if there are processors
@@ -587,6 +645,9 @@ fn expand_split_peripheral_entry(
     };
 
     let mut tasks = vec![device_task];
+    if host_enabled {
+        tasks.push(quote! { peripheral_service.run_matrix(&mut matrix) });
+    }
     let serial_init = match split_config.connection {
         SplitConnection::Ble => {
             let peripheral_run = quote! {

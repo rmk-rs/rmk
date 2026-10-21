@@ -47,6 +47,8 @@ use rynk as host_usb;
 #[cfg(feature = "vial")]
 use vial as host_usb;
 
+pub(crate) static USB_SESSION_RESET: Signal<RawMutex, ()> = Signal::new();
+
 pub(crate) static USB_REMOTE_WAKEUP: Signal<RawMutex, ()> = Signal::new();
 
 // Set while the host has selected the boot protocol (BIOS, UEFI, some KVMs).
@@ -561,6 +563,28 @@ pub async fn run_peripheral_usb<D: Driver<'static>>(driver: D, config: DeviceCon
     ::embassy_futures::join::join(usb_device.run(), logger_fut).await;
 }
 
+/// Run the peripheral's update-only Vial interface alongside optional USB logging.
+#[cfg(all(feature = "split", feature = "vial", feature = "host_lock"))]
+pub async fn run_peripheral_usb_with_vial<D: Driver<'static>>(
+    driver: D,
+    config: DeviceConfig<'static>,
+    service: &crate::host::peripheral::PeripheralService,
+) {
+    let mut builder = new_usb_builder(driver, config, default_config_descriptor());
+    let (mut reader, mut writer) = vial::build_host_usb(&mut builder);
+    #[cfg(feature = "usb_log")]
+    let logger = run_usb_logger(add_usb_logger!(&mut builder));
+    #[cfg(not(feature = "usb_log"))]
+    let logger = core::future::pending::<()>();
+    let mut device = builder.build();
+    embassy_futures::join::join3(
+        device.run(),
+        vial::run_host_usb(&mut reader, &mut writer, service),
+        logger,
+    )
+    .await;
+}
+
 #[cfg(feature = "usb_log")]
 macro_rules! add_usb_logger {
     ($usb_builder:expr) => {{
@@ -686,6 +710,7 @@ impl Handler for UsbDeviceHandler {
             info!("Device enabled");
             set_usb_state(UsbState::Enabled);
         } else {
+            USB_SESSION_RESET.signal(());
             info!("Device disabled");
             set_usb_state(UsbState::Disabled);
         }
@@ -693,6 +718,7 @@ impl Handler for UsbDeviceHandler {
 
     fn reset(&mut self) {
         BOOT_MODE.store(false, Ordering::Relaxed);
+        USB_SESSION_RESET.signal(());
         self.pre_suspend = UsbState::Enabled;
         set_usb_state(UsbState::Enabled);
         info!("Bus reset, the Vbus current limit is 100mA");
@@ -708,6 +734,7 @@ impl Handler for UsbDeviceHandler {
             info!("Device configured, it may now draw up to the configured current from Vbus.")
         } else {
             set_usb_state(UsbState::Enabled);
+            USB_SESSION_RESET.signal(());
             info!("Device is no longer configured, the Vbus current limit is 100mA.");
         }
     }
@@ -759,8 +786,27 @@ mod tests {
     use embassy_usb::class::hid::device::RequestHandler;
     use rmk_types::connection::UsbState;
 
-    use super::{HidProtocolMode, OutResponse, UsbDeviceHandler, UsbRequestHandler};
+    use super::{HidProtocolMode, OutResponse, USB_SESSION_RESET, UsbDeviceHandler, UsbRequestHandler};
     use crate::state::{current_usb_state, set_usb_state};
+
+    #[test]
+    fn usb_disconnect_and_reset_invalidate_the_host_session() {
+        let mut handler = UsbDeviceHandler::new();
+        USB_SESSION_RESET.reset();
+        handler.enabled(false);
+        assert!(USB_SESSION_RESET.try_take().is_some());
+        handler.reset();
+        assert!(USB_SESSION_RESET.try_take().is_some());
+        handler.configured(false);
+        assert!(USB_SESSION_RESET.try_take().is_some());
+        handler.configured(true);
+        handler.suspended(true);
+        handler.suspended(false);
+        assert!(
+            USB_SESSION_RESET.try_take().is_none(),
+            "suspend preserves the same USB session"
+        );
+    }
 
     /// A BIOS or KVM switch selects the boot protocol before it will use the
     /// keyboard; rejecting the switch strands a host that trusts the boot

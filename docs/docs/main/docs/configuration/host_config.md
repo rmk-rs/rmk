@@ -82,3 +82,55 @@ rmk = { version = "0.9", default-features = false, features = [
     "rp2040",
 ] }
 ```
+
+## Independent split unlock
+
+Configure a local unlock combination for each side. Add these tables alongside
+that side's existing matrix configuration:
+
+```toml
+[split.central.host]
+insecure = false
+unlock_keys = [[0, 0], [0, 1]]
+
+[split.peripheral.host]
+insecure = false
+unlock_keys = [[0, 0], [1, 0]]
+```
+
+Each coordinate is local to its side, before `row_offset` and `col_offset`.
+Choose up to four real keys on that side. Empty combinations and invalid local
+positions are rejected unless an empty combination is explicitly paired with
+`insecure = true`. RMK converts positions reported to Vial into the shared
+keyboard layout, so the configurator can highlight the correct keys.
+
+The central's table overrides the top-level `[host]` unlock settings. Without
+that table, the existing top-level settings and global coordinates still apply.
+A peripheral never inherits the central's combination or unlocked state.
+
+Adding `[split.peripheral.host]` enables an update-only USB Vial interface. It
+requires the `split`, `vial`, and `host_lock` Cargo features, USB enabled, and a
+supported bootloader feature (`adafruit_bl` for the Adafruit nRF52 bootloader,
+or `rp2040` for BOOTSEL). It is separate from embassy-boot application DFU and
+cannot be combined with the `dfu_nrf` or `dfu_rp` features. A peripheral without
+this table keeps its existing USB behavior.
+
+The peripheral scans its own keys and serves USB even when the central is
+offline. Its USB product name ends in `(peripheral N)`, where `N` is its
+zero-based split index. It exposes identity, unlock, and bootloader commands;
+keymap editing is still handled by the central.
+
+With `host_lock` enabled, Vial's `BootloaderJump` requires the current connection
+to be unlocked. Both sides start locked, and unlocking one side does not unlock
+the other. USB disconnect, bus reset, or deconfiguration ends the session and
+locks it again; USB suspend preserves the session. `insecure = true` explicitly
+keeps that side unlocked. Hardware bootloader recovery remains available.
+
+An updater must keep the same HID connection while it reads `GetUnlockStatus`,
+sends `UnlockStart`, polls `UnlockPoll` while the user holds the displayed keys,
+and sends `BootloaderJump` after unlocking. A locked jump returns VIA's
+`Unhandled` response (`0xFF`). The updater must then wait for the bootloader to
+appear and confirm the application returns after flashing. The RMK GUI updater
+needs matching support for this unlock sequence.
+
+See the `examples/use_config/nrf52840_ble_split` example for both sides enabled.

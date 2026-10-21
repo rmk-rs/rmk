@@ -1,7 +1,7 @@
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use embassy_time::Instant;
 use embedded_io_async::{Read, Write};
-use rmk_types::protocol::vial::{VIA_FIRMWARE_VERSION, VIA_PROTOCOL_VERSION, ViaCommand, ViaKeyboardInfo};
+use rmk_types::protocol::vial::{VIA_FIRMWARE_VERSION, ViaCommand, ViaKeyboardInfo};
 use vial::process_vial;
 
 use crate::config::{RmkConfig, VialConfig};
@@ -9,9 +9,10 @@ use crate::hid::ViaReport;
 use crate::host::context::KeyboardContext;
 use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
 use crate::keymap::KeyMap;
-use crate::{MACRO_SPACE_SIZE, MAX_MACROS, boot};
+use crate::{MACRO_SPACE_SIZE, MAX_MACROS};
 
 pub(crate) mod keycode_convert;
+pub(crate) mod system;
 mod vial;
 
 pub struct VialService<'a> {
@@ -32,14 +33,19 @@ impl<'a> VialService<'a> {
         report: &mut ViaReport,
         #[cfg(feature = "host_lock")] locker: &crate::host::lock::HostLock<'_>,
     ) {
+        if system::process_system_packet(
+            report,
+            &self.vial_config,
+            #[cfg(feature = "host_lock")]
+            locker,
+        ) {
+            return;
+        }
         let command_id = report.output_data[0];
 
         // Caller pre-fills `input_data` from `output_data`, so individual arms
         // only need to overwrite the bytes they actually change.
         match command_id.into() {
-            ViaCommand::GetProtocolVersion => {
-                BigEndian::write_u16(&mut report.input_data[1..3], VIA_PROTOCOL_VERSION);
-            }
             ViaCommand::GetKeyboardValue => {
                 // Check the second u8
                 match report.output_data[1].try_into() {
@@ -135,10 +141,6 @@ impl<'a> VialService<'a> {
                 warn!("Resetting storage..");
                 self.ctx.reset_storage().await;
                 // TODO: Reboot after a eeprom reset?
-            }
-            ViaCommand::BootloaderJump => {
-                warn!("Bootloader jumping");
-                boot::jump_to_bootloader();
             }
             ViaCommand::DynamicKeymapMacroGetCount => {
                 report.input_data[1] = MAX_MACROS as u8;
@@ -242,17 +244,8 @@ impl<'a> VialService<'a> {
             ViaCommand::DynamicKeymapSetEncoder => {
                 warn!("Keymap set encoder -- not supported");
             }
-            ViaCommand::Vial => {
-                process_vial(
-                    report,
-                    &self.vial_config,
-                    #[cfg(feature = "host_lock")]
-                    locker,
-                    &self.ctx,
-                )
-                .await
-            }
-            ViaCommand::Unhandled => {
+            ViaCommand::Vial => process_vial(report, &self.ctx).await,
+            ViaCommand::Unhandled | ViaCommand::GetProtocolVersion | ViaCommand::BootloaderJump => {
                 info!("Unknown cmd: {:?}", report.output_data);
                 report.input_data[0] = ViaCommand::Unhandled as u8
             }
@@ -343,6 +336,39 @@ mod tests {
             input_data: output_data,
             output_data,
         }
+    }
+
+    #[cfg(feature = "host_lock")]
+    #[test]
+    fn central_bootloader_jump_requires_unlock_in_the_current_session() {
+        use core::sync::atomic::Ordering;
+
+        use crate::event::KeyboardEvent;
+        let mut data = KeymapData::new([[[KeyAction::No; 2]; 2]]);
+        let mut behavior = BehaviorConfig::default();
+        let positional = PositionalConfig::<2, 2>::default();
+        let keymap = block_on(KeyMap::new(&mut data, &mut behavior, &positional));
+        let mut config = RmkConfig::default();
+        config.vial_config.unlock_keys = &[(0, 0), (0, 1)];
+        let service = VialService::new(&keymap, &config);
+        keymap.update_matrix_state(&KeyboardEvent::key(0, 0, true));
+        keymap.update_matrix_state(&KeyboardEvent::key(0, 1, true));
+        let commands = [[0x0b, 0], [0xfe, 6], [0xfe, 7], [0xfe, 5], [0x0b, 0]];
+        let mut input = [0u8; 32 * 5];
+        for (packet, cmd) in input.chunks_mut(32).zip(commands) {
+            packet[..2].copy_from_slice(&cmd);
+        }
+        let mut replies = [0u8; 32 * 5];
+        block_on(service.run_session(&mut input.as_slice(), &mut replies.as_mut_slice()));
+        assert_eq!(replies[0], 0xff);
+        assert_eq!(replies[3 * 32], 1);
+        assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
+
+        // The same service survives USB unplug on a battery-powered keyboard.
+        let mut replies = [0u8; 32];
+        block_on(service.run_session(&mut &input[..32], &mut replies.as_mut_slice()));
+        assert_eq!(replies[0], 0xff);
+        assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
     }
 
     // `output_data` is [u8; 32], so the handler slices `output_data[4..4 + size]`.

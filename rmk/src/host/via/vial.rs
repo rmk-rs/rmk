@@ -2,99 +2,18 @@ use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use rmk_types::action::KeyAction;
 use rmk_types::constants::{MAX_COMBO_KEYS, MAX_COMBOS, MAX_MORSES};
 use rmk_types::morse::{DOUBLE_TAP, HOLD, HOLD_AFTER_TAP, Morse, MorseMode, TAP};
-use rmk_types::protocol::vial::{SettingKey, VIAL_EP_SIZE, VIAL_PROTOCOL_VERSION, VialCommand, VialDynamic};
+use rmk_types::protocol::vial::{SettingKey, VialCommand, VialDynamic};
 
-use crate::config::VialConfig;
 use crate::hid::ViaReport;
 use crate::host::context::KeyboardContext;
 use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
 
 /// Note: vial uses little endian, while via uses big endian
-pub(crate) async fn process_vial<'a>(
-    report: &mut ViaReport,
-    vial_config: &VialConfig<'a>,
-    #[cfg(feature = "host_lock")] locker: &crate::host::lock::HostLock<'_>,
-    ctx: &KeyboardContext<'_>,
-) {
+pub(crate) async fn process_vial(report: &mut ViaReport, ctx: &KeyboardContext<'_>) {
     // report.output_data[0] == 0xFE -> vial commands
     let vial_command = report.output_data[1].into();
     debug!("Received vial command: {:?}", vial_command);
     match vial_command {
-        VialCommand::GetKeyboardId => {
-            // Returns vial protocol version + vial keyboard id
-            LittleEndian::write_u32(&mut report.input_data[0..4], VIAL_PROTOCOL_VERSION);
-            report.input_data[4..12].clone_from_slice(vial_config.vial_keyboard_id);
-            debug!("Vial return: {:?}", report.input_data);
-        }
-        VialCommand::GetSize => {
-            LittleEndian::write_u32(&mut report.input_data[0..4], vial_config.vial_keyboard_def.len() as u32);
-        }
-        VialCommand::GetKeyboardDef => {
-            let page = LittleEndian::read_u16(&report.output_data[2..4]) as usize;
-            let start = page * VIAL_EP_SIZE;
-            let mut end = start + VIAL_EP_SIZE;
-            let vial_keyboard_def = &vial_config.vial_keyboard_def;
-            if end < start || start >= vial_keyboard_def.len() {
-                return;
-            }
-            if end > vial_keyboard_def.len() {
-                end = vial_keyboard_def.len();
-            }
-            vial_keyboard_def[start..end].iter().enumerate().for_each(|(i, v)| {
-                report.input_data[i] = *v;
-            });
-            debug!(
-                "Vial return: page:{} start:{} end: {}, data: {:?}",
-                page, start, end, report.input_data
-            );
-        }
-        VialCommand::GetUnlockStatus => {
-            // Reset all data to 0xFF(it's required!)
-            report.input_data.fill(0xFF);
-            #[cfg(feature = "host_lock")]
-            {
-                // Unlocked
-                report.input_data[0] = locker.is_unlocked() as u8;
-                // Unlock in progress
-                report.input_data[1] = locker.is_unlocking() as u8;
-                // Unlock keys
-                for (idx, (row, col)) in vial_config.unlock_keys.iter().enumerate() {
-                    report.input_data[2 + idx * 2] = *row;
-                    report.input_data[3 + idx * 2] = *col;
-                }
-            }
-            #[cfg(not(feature = "host_lock"))]
-            {
-                // Unlocked
-                report.input_data[0] = 1;
-                // Unlock in progress
-                report.input_data[1] = 0;
-                warn!("Vial lock feature is not enabled");
-            }
-        }
-        VialCommand::UnlockStart => {
-            #[cfg(feature = "host_lock")]
-            locker.unlocking();
-            #[cfg(not(feature = "host_lock"))]
-            error!("Vial lock feature is not enabled");
-        }
-        VialCommand::UnlockPoll => {
-            #[cfg(feature = "host_lock")]
-            {
-                locker.unlocking();
-                report.input_data[0] = locker.is_unlocked() as u8;
-                report.input_data[1] = locker.is_unlocking() as u8;
-                report.input_data[2] = locker.check_unlock();
-            }
-            #[cfg(not(feature = "host_lock"))]
-            error!("Vial lock feature is not enabled");
-        }
-        VialCommand::Lock => {
-            #[cfg(feature = "host_lock")]
-            locker.lock();
-            #[cfg(not(feature = "host_lock"))]
-            error!("Vial lock feature is not enabled");
-        }
         VialCommand::BehaviorSettingQuery => {
             report.input_data.fill(0xFF);
             let value = u16::from_le_bytes([report.output_data[2], report.output_data[3]]);

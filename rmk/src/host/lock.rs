@@ -8,6 +8,16 @@ use rmk_types::protocol::rynk::LockStatus;
 
 use crate::keymap::KeyMap;
 
+pub(crate) trait UnlockKeyState {
+    fn is_pressed(&self, row: u8, col: u8) -> bool;
+}
+
+impl UnlockKeyState for KeyMap<'_> {
+    fn is_pressed(&self, row: u8, col: u8) -> bool {
+        self.read_matrix_key(row, col)
+    }
+}
+
 /// Unlock gate. Interior mutability lets protocol handlers update it through a
 /// shared reference without holding a borrow across an `.await` point.
 pub(crate) struct HostLock<'a> {
@@ -20,11 +30,11 @@ pub(crate) struct HostLock<'a> {
     /// passes 100 ms; Rynk passes 500 ms to tolerate a BLE WebHID round trip.
     window: Duration,
     unlock_keys: &'a [(u8, u8)],
-    keymap: &'a KeyMap<'a>,
+    keys: &'a dyn UnlockKeyState,
 }
 
 impl<'a> HostLock<'a> {
-    pub fn new(unlock_keys: &'a [(u8, u8)], keymap: &'a KeyMap<'a>, insecure: bool, window: Duration) -> Self {
+    pub fn new(unlock_keys: &'a [(u8, u8)], keys: &'a dyn UnlockKeyState, insecure: bool, window: Duration) -> Self {
         Self {
             unlocked: Cell::new(insecure),
             unlocking: Cell::new(false),
@@ -32,7 +42,7 @@ impl<'a> HostLock<'a> {
             insecure,
             window,
             unlock_keys,
-            keymap,
+            keys,
         }
     }
 
@@ -74,13 +84,14 @@ impl<'a> HostLock<'a> {
 
     pub fn lock(&self) {
         self.unlocked.set(false);
+        self.unlocking.set(false);
     }
 
     /// Challenge keys not currently held — no arm, no commit.
     fn remaining_held(&self) -> u8 {
         let mut counter = self.unlock_keys.len() as u8;
         for (row, col) in self.unlock_keys {
-            if self.keymap.read_matrix_key(*row, *col) {
+            if self.keys.is_pressed(*row, *col) {
                 counter -= 1;
             }
         }
