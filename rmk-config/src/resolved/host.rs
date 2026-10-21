@@ -116,8 +116,6 @@ cols = 2
 row_offset = 1
 col_offset = 2
 [split.central.matrix]
-row_pins = ["P0_01", "P0_02"]
-col_pins = ["P0_03", "P0_04"]
 [split.central.host]
 unlock_keys = [[0, 0], [1, 1]]
 [[split.peripheral]]
@@ -126,8 +124,6 @@ cols = 2
 row_offset = 3
 col_offset = 4
 [split.peripheral.matrix]
-row_pins = ["P0_01", "P0_02"]
-col_pins = ["P0_03", "P0_04"]
 [split.peripheral.host]
 unlock_keys = [[0, 1], [1, 0]]
 "#,
@@ -149,11 +145,7 @@ unlock_keys = [[0, 1], [1, 0]]
         });
         assert!(config.peripheral_host(0).unwrap().unwrap().insecure);
         assert!(!config.host().insecure);
-    }
 
-    #[test]
-    fn absent_peripheral_host_does_not_inherit_central_unlock_or_enable_usb() {
-        let mut config = split_config();
         config.split.as_mut().unwrap().peripheral[0].host = None;
         assert!(config.peripheral_host(0).unwrap().is_none());
         config.split.as_mut().unwrap().central.host = None;
@@ -174,16 +166,13 @@ unlock_keys = [[0, 1], [1, 0]]
         let board = &mut config.split.as_mut().unwrap().peripheral[0];
         board.host.as_mut().unwrap().unlock_keys = vec![[0, 0]];
         board.matrix.matrix_type = crate::MatrixType::DirectPin;
-        board.matrix.direct_pins = Some(vec![
-            vec!["_".into(), "P0_01".into()],
-            vec!["P0_02".into(), "P0_03".into()],
-        ]);
+        board.matrix.direct_pins = Some(vec![vec!["_".into(), "P0_01".into()]]);
         assert!(config.peripheral_host(0).is_err());
         config.split.as_mut().unwrap().peripheral[0]
             .host
             .as_mut()
             .unwrap()
-            .unlock_keys = vec![[1, 1]];
+            .unlock_keys = vec![[0, 1]];
         assert!(config.peripheral_host(0).is_ok());
     }
 }

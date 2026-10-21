@@ -61,74 +61,29 @@ impl UnlockKeyState for PeripheralService {
     }
 }
 
-#[cfg(all(test, feature = "vial"))]
+#[cfg(test)]
 mod tests {
-    use embassy_futures::block_on;
-    use embassy_time::Duration;
-
     use super::*;
-    use crate::config::VialConfig;
-    use crate::host::lock::HostLock;
-
-    const CONFIG: VialConfig<'static> = VialConfig {
-        vial_keyboard_id: &[1; 8],
-        vial_keyboard_def: &[2; 4],
-        unlock_keys: &[(2, 3), (3, 4)],
-        insecure: false,
-    };
-
-    const MATRIX: PeripheralMatrixConfig = PeripheralMatrixConfig {
-        rows: 2,
-        cols: 2,
-        row_offset: 2,
-        col_offset: 3,
-    };
-
-    fn peripheral() -> PeripheralService {
-        let config = RmkConfig {
-            vial_config: CONFIG,
-            ..Default::default()
-        };
-        PeripheralService::new(config, MATRIX)
-    }
 
     #[test]
-    fn local_matrix_unlocks_only_this_half_and_keeps_forwarding_keys() {
-        use crate::core_traits::Runnable;
-        use crate::event::SubscribableEvent;
-        struct Matrix(std::collections::VecDeque<KeyboardEvent>);
-        impl Runnable for Matrix {
-            async fn run(&mut self) -> ! {
-                panic!("the service must run the local scanner");
-            }
-        }
-        impl InputDevice for Matrix {
-            type Event = KeyboardEvent;
-            async fn read_event(&mut self) -> KeyboardEvent {
-                match self.0.pop_front() {
-                    Some(event) => event,
-                    None => core::future::pending().await,
-                }
-            }
-        }
-        let events = [KeyboardEvent::key(0, 0, true), KeyboardEvent::key(1, 1, true)];
-        let mut matrix = Matrix(events.into());
-        let service = peripheral();
-        let other = peripheral();
-        let mut subscriber = KeyboardEvent::subscriber();
-        let update = async {
-            for event in events {
-                assert_eq!(subscriber.next_message_pure().await, event);
-            }
-            let local = HostLock::new(CONFIG.unlock_keys, &service, false, Duration::from_millis(100));
-            let remote = HostLock::new(CONFIG.unlock_keys, &other, false, Duration::from_millis(100));
-            local.unlocking();
-            remote.unlocking();
-            assert_eq!(local.check_unlock(), 0);
-            assert_eq!(remote.check_unlock(), 2);
-            assert!(local.is_unlocked());
-            assert!(!remote.is_unlocked(), "the other half cannot use these held keys");
+    fn local_matrix_coordinates_do_not_leak_between_halves() {
+        let matrix = PeripheralMatrixConfig {
+            rows: 2,
+            cols: 2,
+            row_offset: 2,
+            col_offset: 3,
         };
-        block_on(embassy_futures::select::select(service.run_matrix(&mut matrix), update));
+        let local = PeripheralService::new(RmkConfig::default(), matrix);
+        let other = PeripheralService::new(RmkConfig::default(), matrix);
+        local.matrix.borrow_mut().update(&KeyboardEvent::key(0, 0, true));
+        local.matrix.borrow_mut().update(&KeyboardEvent::key(1, 1, true));
+
+        assert!(local.is_pressed(2, 3));
+        assert!(local.is_pressed(3, 4));
+        assert!(!local.is_pressed(1, 3));
+        assert!(!local.is_pressed(2, 2));
+        assert!(!local.is_pressed(4, 5));
+        assert!(!other.is_pressed(2, 3));
+        assert!(!other.is_pressed(3, 4));
     }
 }

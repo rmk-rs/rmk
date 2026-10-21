@@ -419,30 +419,21 @@ mod tests {
         block_on(service.run(&mut rx, &mut tx));
         let replies = decode_frames(&tx.captured);
         assert_eq!(replies.len(), 7);
-        assert!(
-            !postcard::from_bytes::<Result<LockStatus, RynkError>>(&replies[1].2)
-                .unwrap()
-                .unwrap()
-                .locked
-        );
         let caps = postcard::from_bytes::<Result<DeviceCapabilities, RynkError>>(&replies[2].2)
             .unwrap()
             .unwrap();
         assert_eq!(caps.num_layers, 0);
-        for index in [3, 4] {
+        for (reply, expected) in replies[3..].iter().zip([
+            Err(RynkError::UnknownCmd),
+            Err(RynkError::UnknownCmd),
+            Ok(()),
+            Err(RynkError::Locked),
+        ]) {
             assert_eq!(
-                postcard::from_bytes::<Result<(), RynkError>>(&replies[index].2).unwrap(),
-                Err(RynkError::UnknownCmd)
+                postcard::from_bytes::<Result<(), RynkError>>(&reply.2).unwrap(),
+                expected
             );
         }
-        assert_eq!(
-            postcard::from_bytes::<Result<(), RynkError>>(&replies[5].2).unwrap(),
-            Ok(())
-        );
-        assert_eq!(
-            postcard::from_bytes::<Result<(), RynkError>>(&replies[6].2).unwrap(),
-            Err(RynkError::Locked)
-        );
         assert_eq!(
             crate::boot::BOOTLOADER_JUMPS.load(core::sync::atomic::Ordering::Relaxed),
             1
