@@ -8,7 +8,7 @@ mod vial;
 #[cfg(feature = "rynk")]
 pub(crate) type HostGattHandler<'r, 'a> = rynk::HostGattHandler<'r, 'a>;
 #[cfg(feature = "vial")]
-pub(crate) type HostGattHandler = vial::HostGattHandler;
+pub(crate) type HostGattHandler<'r> = vial::HostGattHandler<'r>;
 
 /// Which BLE transport the host is using, so the session routes replies/topics
 /// to the right characteristic. Set only on a config WRITE, never on a CCCD

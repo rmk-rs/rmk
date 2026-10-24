@@ -19,10 +19,6 @@
 // that one is not `cfg(test)`, since `tests/` is a separate target.
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 
-// Internal multi-host configuration adapters are introduced later in the stack.
-#[cfg(all(feature = "_ext_adv", feature = "vial"))]
-compile_error!("internal multi-host Vial configuration is not available at this stage");
-
 // Mutual exclusivity guard
 #[cfg(all(feature = "rynk", feature = "vial"))]
 compile_error!("features `rynk` and `vial` are mutually exclusive");

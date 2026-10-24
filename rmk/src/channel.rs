@@ -100,6 +100,6 @@ pub(crate) fn clear_and_release_report_channel(transport: ConnectionType) {
 pub(crate) static BLE_PROFILE_CHANNEL: Channel<RawMutex, BleProfileAction, 1> = Channel::new();
 
 /// Vial RX from BLE GATT `output_data` writes — one 32-byte chunk per write.
-/// Pushed by `gatt_events_task`, drained by [`crate::ble::host::HostGattHandler::run`].
+/// Only the active profile's connection may send; one BLE session drains it.
 #[cfg(all(feature = "vial", feature = "_ble"))]
 pub(crate) static VIAL_BLE_RX_CHANNEL: Channel<RawMutex, [u8; 32], VIAL_CHANNEL_SIZE> = Channel::new();
