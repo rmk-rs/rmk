@@ -15,6 +15,8 @@ use embassy_futures::join::{join_array, join3, join5};
 use embassy_futures::select::{Either, Either4, select, select3, select4};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
+#[cfg(feature = "rynk")]
+use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::{Receiver, Watch};
 use embassy_time::{Duration, Instant, Timer};
@@ -34,6 +36,8 @@ use crate::ble::battery_service::BleBatteryServer;
 use crate::ble::battery_service::BlePeripheralBatteryServer;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
+#[cfg(all(feature = "host", feature = "rynk"))]
+use crate::ble::host::RynkBleSource;
 #[cfg(feature = "host")]
 use crate::ble::host::{HOST_WRITE_BUFFER_SIZE, HostGattHandler, HostWriteOutcome};
 use crate::ble::led::BleLedReader;
@@ -155,7 +159,15 @@ pub const fn nrf_sdc_memory_size(
 
 /// Max simultaneous `active` receivers: one host task, one GATT write gate and
 /// one report router per connection.
-pub(crate) const ACTIVE_RECEIVERS: usize = HOST_LINKS;
+pub(crate) const ACTIVE_RECEIVERS: usize = HOST_LINKS * if cfg!(feature = "rynk") { 3 } else { 1 };
+
+/// Shared Rynk frame storage for BLE: one buffer and one RX ring for the whole
+/// transport, driven only by the connection whose profile is active.
+#[cfg(all(feature = "host", feature = "rynk"))]
+pub(crate) struct BleConfig {
+    pub(crate) buffer: Mutex<NoopRawMutex, [u8; crate::RYNK_BUFFER_SIZE]>,
+    pub(crate) pipe: embassy_sync::pipe::Pipe<NoopRawMutex, 512>,
+}
 
 /// Max number of L2CAP channels
 const L2CAP_CHANNELS_MAX: usize = CONNECTIONS_MAX * 4; // Signal + att + smp + hid
@@ -398,6 +410,14 @@ async fn run_ble_keyboard<
     profile_manager.update_stack_bonds();
     active.sender().send(crate::state::current_profile());
 
+    // One Rynk buffer and RX ring for the whole BLE transport; only the active
+    // profile's connection drives them.
+    #[cfg(all(feature = "host", feature = "rynk"))]
+    let ble_config = host_service.map(|_| BleConfig {
+        buffer: Mutex::new([0; crate::RYNK_BUFFER_SIZE]),
+        pipe: embassy_sync::pipe::Pipe::new(),
+    });
+
     let mut peripheral = stack.peripheral();
     let runner = stack.runner();
 
@@ -426,6 +446,8 @@ async fn run_ble_keyboard<
                 #[cfg(feature = "host")]
                 host_service,
                 &active,
+                #[cfg(all(feature = "host", feature = "rynk"))]
+                ble_config.as_ref(),
             )
             .await;
             drop(conn);
@@ -686,12 +708,16 @@ pub(crate) async fn ble_task<C: Controller, P: PacketPool, E: EventHandler>(mut 
 ///
 /// This function will handle the GATT events and process them.
 /// This is how we interact with read and write requests.
+#[allow(clippy::too_many_arguments)]
 async fn gatt_events_task(
     server: &Server<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     profile: u8,
     mut profile_info: Option<ProfileInfo>,
     led: &Cell<LedIndicator>,
+    #[cfg(feature = "rynk")] active: Receiver<'_, NoopRawMutex, u8, ACTIVE_RECEIVERS>,
+    #[cfg(all(feature = "host", feature = "rynk"))] ble_config: Option<&BleConfig>,
+    #[cfg(all(feature = "host", feature = "rynk"))] source: &Cell<RynkBleSource>,
 ) {
     let level = server.battery_service.level;
     #[cfg(feature = "split")]
@@ -707,7 +733,17 @@ async fn gatt_events_task(
     let mut passkey_state = PasskeyInputState::new();
 
     #[cfg(feature = "host")]
-    let mut host_gatt_handler = HostGattHandler::new(server);
+    let mut host_gatt_handler = HostGattHandler::new(
+        server,
+        #[cfg(feature = "rynk")]
+        active,
+        #[cfg(feature = "rynk")]
+        profile,
+        #[cfg(all(feature = "host", feature = "rynk"))]
+        ble_config,
+        #[cfg(all(feature = "host", feature = "rynk"))]
+        source,
+    );
 
     loop {
         #[cfg(feature = "passkey_entry")]
@@ -1092,10 +1128,17 @@ async fn serve_keyboard_connection<
     config: &BleBatteryConfig,
     #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
     active: &Watch<NoopRawMutex, u8, ACTIVE_RECEIVERS>,
+    #[cfg(all(feature = "host", feature = "rynk"))] ble_config: Option<&BleConfig>,
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);
     let led = Cell::new(LedIndicator::default());
     let mut report_active = active.receiver().expect("active receiver slots exhausted");
+    #[cfg(feature = "rynk")]
+    let gatt_active = active.receiver().expect("active receiver slots exhausted");
+    #[cfg(feature = "rynk")]
+    let host_active = active.receiver().expect("active receiver slots exhausted");
+    #[cfg(all(feature = "host", feature = "rynk"))]
+    let source = Cell::new(RynkBleSource::None);
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
     #[cfg(feature = "split")]
     let mut ble_peripheral_battery_server = crate::SPLIT_BATTERY_PERIPHERAL_IDS
@@ -1137,7 +1180,19 @@ async fn serve_keyboard_connection<
             set_conn_params(stack, conn).await;
         };
         select3(
-            gatt_events_task(server, conn, profile, bond_info, &led),
+            gatt_events_task(
+                server,
+                conn,
+                profile,
+                bond_info,
+                &led,
+                #[cfg(feature = "rynk")]
+                gatt_active,
+                #[cfg(all(feature = "host", feature = "rynk"))]
+                ble_config,
+                #[cfg(all(feature = "host", feature = "rynk"))]
+                &source,
+            ),
             connection_params,
             battery_task,
         )
@@ -1158,8 +1213,18 @@ async fn serve_keyboard_connection<
     #[cfg(feature = "host")]
     let host_task = async {
         if let Some(service) = host_service {
-            // Restart after a session-fatal TX error so Rynk survives the rest
-            // of the connection.
+            #[cfg(feature = "rynk")]
+            HostGattHandler::run(
+                server,
+                conn,
+                service,
+                host_active,
+                profile,
+                ble_config.expect("BleConfig exists when a host service is set"),
+                &source,
+            )
+            .await;
+            #[cfg(feature = "vial")]
             loop {
                 HostGattHandler::run(server, conn, service).await;
             }

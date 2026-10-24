@@ -1,39 +1,44 @@
-//! Rynk config over BLE GATT — a single per-connection session shared by both
-//! transports: the custom 128-bit `RynkGattService` (native bluest hosts) and
-//! the vendor HID-over-GATT `RynkHidService` (browsers via WebHID).
-//!
-//! A connection is one host on one transport, so [`HostGattHandler::run`] runs ONE
-//! [`RynkService::run_session`]: the inbound [`RYNK_BLE_RX_PIPE`] (both transports
-//! de-frame into it in `gatt_events_task`) is the Rx, and [`RynkBleTx`] routes each
-//! reply/topic to whichever characteristic the host is using ([`RynkBleSource`]).
-//! Both carry the same rynk frames, just fragmented to the transport packet —
-//! MTU-chunked on the custom char, fixed 32-byte reports on the HID char. Returns
-//! on disconnect.
+//! Rynk config over BLE GATT — only the active profile's connection may drive
+//! the shared [`BleConfig`]. Background connections keep HID/LED/battery, but
+//! their config writes are dropped in `handle_write` without an ATT error.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::cell::Cell;
 
+use embassy_futures::select::{Either, select};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::watch::Receiver;
 use embedded_io_async::{ErrorType, Write};
 use heapless::Vec;
 use rmk_types::protocol::rynk::{RYNK_BLE_CHUNK_SIZE, RYNK_HID_REPORT_SIZE};
 use trouble_host::prelude::*;
 
-use super::HostWriteOutcome;
+use super::{HostWriteOutcome, RynkBleSource};
 use crate::ble::ble_server::Server;
-use crate::channel::RYNK_BLE_RX_PIPE;
+use crate::ble::{ACTIVE_RECEIVERS, BleConfig};
 use crate::host::rynk::RynkService;
 use crate::host::transport::HostTransportError;
 
 /// Per-connection GATT write dispatcher for the two Rynk BLE transports.
-pub(crate) struct HostGattHandler {
+pub(crate) struct HostGattHandler<'r, 'a> {
     custom_output_handle: u16,
     custom_input_cccd_handle: u16,
     hid_output_handle: u16,
     hid_input_cccd_handle: u16,
     hid_control_point_handle: u16,
+    active: Receiver<'a, NoopRawMutex, u8, ACTIVE_RECEIVERS>,
+    profile: u8,
+    config: Option<&'r BleConfig>,
+    source: &'r Cell<RynkBleSource>,
 }
 
-impl HostGattHandler {
-    pub(crate) fn new(server: &Server<'_>) -> Self {
+impl<'r, 'a> HostGattHandler<'r, 'a> {
+    pub(crate) fn new(
+        server: &Server<'_>,
+        active: Receiver<'a, NoopRawMutex, u8, ACTIVE_RECEIVERS>,
+        profile: u8,
+        config: Option<&'r BleConfig>,
+        source: &'r Cell<RynkBleSource>,
+    ) -> Self {
         Self {
             custom_output_handle: server.rynk_service.output_data.handle,
             custom_input_cccd_handle: server
@@ -48,6 +53,10 @@ impl HostGattHandler {
                 .cccd_handle
                 .expect("No CCCD for Rynk HID input"),
             hid_control_point_handle: server.rynk_hid_service.hid_control_point.handle,
+            active,
+            profile,
+            config,
+            source,
         }
     }
 
@@ -56,9 +65,7 @@ impl HostGattHandler {
             if !data.is_empty() {
                 if encrypted {
                     debug!("Got Rynk packet ({} bytes)", data.len());
-                    // Await the pipe's backpressure when the consumer falls behind.
-                    RYNK_BLE_RX_PIPE.write_all(data).await;
-                    RynkBleSource::Custom.activate();
+                    self.write_pipe(data, RynkBleSource::Custom).await;
                 } else {
                     warn!("Rynk: dropping {}-byte write on unencrypted link", data.len());
                 }
@@ -71,8 +78,7 @@ impl HostGattHandler {
         } else if handle == self.hid_output_handle {
             if encrypted {
                 if data.len() == RYNK_HID_REPORT_SIZE {
-                    RYNK_BLE_RX_PIPE.write_all(data).await;
-                    RynkBleSource::Hid.activate();
+                    self.write_pipe(data, RynkBleSource::Hid).await;
                 } else {
                     warn!("Wrong Rynk HID report size: {}", data.len());
                 }
@@ -89,52 +95,60 @@ impl HostGattHandler {
         }
     }
 
-    /// Run one Rynk session over `conn`, clearing stale RX bytes and the
-    /// transport selector from a prior connection first.
-    pub(crate) async fn run<'stack, 'server, P: PacketPool>(
+    /// Gate on the active profile, then copy one transport chunk into the
+    /// shared pipe. A switch cancels a blocked write instead of stalling the
+    /// GATT task; the host retries after the profile becomes active again.
+    async fn write_pipe(&mut self, data: &[u8], source: RynkBleSource) {
+        let Some(config) = self.config else {
+            return;
+        };
+        if self.active.try_get_and(|&p| p == self.profile).is_none() {
+            return;
+        }
+        if let Either::Second(()) = select(
+            self.active.changed_and(|&p| p != self.profile),
+            config.pipe.write_all(data),
+        )
+        .await
+        {
+            self.source.set(source);
+        }
+    }
+
+    /// Run Rynk sessions for one connection. The shared buffer is held only
+    /// while this connection is the active profile; switching releases it and
+    /// the next active connection continues with its own handshake flag.
+    pub(crate) async fn run<'s, 'stack, 'server, P: PacketPool>(
         server: &'server Server<'_>,
         conn: &GattConnection<'stack, 'server, P>,
-        service: &RynkService<'_>,
+        service: &'s RynkService<'s>,
+        mut active: Receiver<'_, NoopRawMutex, u8, ACTIVE_RECEIVERS>,
+        profile: u8,
+        config: &BleConfig,
+        source: &Cell<RynkBleSource>,
     ) {
-        RYNK_BLE_RX_PIPE.clear();
-        RynkBleSource::None.activate();
-        let mut rx = &RYNK_BLE_RX_PIPE;
+        let mut handshaked = false;
         let mut tx = RynkBleTx {
             custom_input: server.rynk_service.input_data.clone(),
             hid_input: server.rynk_hid_service.input_data,
+            source,
             conn,
         };
-        service.run_session(&mut rx, &mut tx).await;
-    }
-}
-
-/// Which BLE transport the host is using, so the session routes replies/topics to
-/// the right characteristic. Set only on a config WRITE, never on a CCCD subscribe
-/// — the OS HOGP driver auto-subscribes the HID input CCCD on bond, which would
-/// mis-bind a native session's replies. Reset per connection.
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub(crate) enum RynkBleSource {
-    /// No transport yet — drop topic pushes (no subscriber).
-    None,
-    /// Custom 128-bit `RynkGattService` (native hosts).
-    Custom,
-    /// Vendor HID-over-GATT `RynkHidService` (browsers over WebHID).
-    Hid,
-}
-
-static ACTIVE_SOURCE: AtomicU8 = AtomicU8::new(RynkBleSource::None as u8);
-
-impl RynkBleSource {
-    pub(crate) fn activate(self) {
-        ACTIVE_SOURCE.store(self as u8, Ordering::Relaxed);
-    }
-
-    fn active() -> Self {
-        match ACTIVE_SOURCE.load(Ordering::Relaxed) {
-            v if v == Self::Custom as u8 => Self::Custom,
-            v if v == Self::Hid as u8 => Self::Hid,
-            _ => Self::None,
+        loop {
+            active.get_and(|&p| p == profile).await;
+            let mut buffer = config.buffer.lock().await;
+            // A stale waiter must not clear bytes the new active connection
+            // already wrote into the shared pipe.
+            if active.try_get_and(|&p| p == profile).is_none() {
+                continue;
+            }
+            config.pipe.clear();
+            let mut reader = &config.pipe;
+            select(
+                active.changed_and(|&p| p != profile),
+                service.run_session_with_buffer(&mut reader, &mut tx, &mut buffer, &mut handshaked),
+            )
+            .await;
         }
     }
 }
@@ -145,6 +159,7 @@ impl RynkBleSource {
 struct RynkBleTx<'a, 'b, 'c, P: PacketPool> {
     custom_input: Characteristic<Vec<u8, RYNK_BLE_CHUNK_SIZE>>,
     hid_input: Characteristic<[u8; RYNK_HID_REPORT_SIZE]>,
+    source: &'a Cell<RynkBleSource>,
     conn: &'a GattConnection<'b, 'c, P>,
 }
 
@@ -157,7 +172,7 @@ impl<P: PacketPool> Write for RynkBleTx<'_, '_, '_, P> {
         if buf.is_empty() {
             return Ok(0);
         }
-        match RynkBleSource::active() {
+        match self.source.get() {
             RynkBleSource::Hid => {
                 for chunk in buf.chunks(RYNK_HID_REPORT_SIZE) {
                     let mut report = [0u8; RYNK_HID_REPORT_SIZE];
@@ -196,16 +211,98 @@ impl<P: PacketPool> Write for RynkBleTx<'_, '_, '_, P> {
 
 #[cfg(test)]
 mod tests {
+    use embassy_futures::select::select;
+    use embassy_sync::mutex::Mutex;
+    use embassy_sync::pipe::Pipe;
+    use embassy_sync::watch::Watch;
+    use embassy_time::Timer;
     use rmk_types::protocol::rynk::{Cmd, Deframer, RYNK_HEADER_SIZE, RynkHeader, encode_frame};
 
     use super::*;
+    use crate::test_support::test_block_on as block_on;
+
+    #[test]
+    fn background_profile_writes_are_dropped() {
+        let server = Server::new_default("rmk").unwrap();
+        let ble_config = BleConfig {
+            buffer: Mutex::new([0; crate::RYNK_BUFFER_SIZE]),
+            pipe: Pipe::new(),
+        };
+        let watch = Watch::<NoopRawMutex, u8, ACTIVE_RECEIVERS>::new();
+        watch.sender().send(0);
+        let active = watch.receiver().unwrap();
+        let source = Cell::new(RynkBleSource::None);
+        let mut handler = HostGattHandler::new(&server, active, 1, Some(&ble_config), &source);
+
+        block_on(handler.handle_write(server.rynk_service.output_data.handle, &[0xAA], true));
+
+        let mut buf = [0u8; 1];
+        assert!(ble_config.pipe.try_read(&mut buf).is_err());
+        assert!(matches!(source.get(), RynkBleSource::None));
+    }
+
+    #[test]
+    fn active_profile_writes_reach_the_shared_pipe() {
+        let server = Server::new_default("rmk").unwrap();
+        let ble_config = BleConfig {
+            buffer: Mutex::new([0; crate::RYNK_BUFFER_SIZE]),
+            pipe: Pipe::new(),
+        };
+        let watch = Watch::<NoopRawMutex, u8, ACTIVE_RECEIVERS>::new();
+        watch.sender().send(0);
+        let active = watch.receiver().unwrap();
+        let source = Cell::new(RynkBleSource::None);
+        let mut handler = HostGattHandler::new(&server, active, 0, Some(&ble_config), &source);
+
+        block_on(handler.handle_write(server.rynk_service.output_data.handle, &[0xAA], true));
+
+        let mut buf = [0u8; 1];
+        assert_eq!(ble_config.pipe.try_read(&mut buf).unwrap(), 1);
+        assert_eq!(buf[0], 0xAA);
+        assert!(matches!(source.get(), RynkBleSource::Custom));
+    }
+
+    /// A profile switch must release a write blocked on a full pipe instead of
+    /// stalling the GATT task until the new session drains it.
+    #[test]
+    fn switching_away_cancels_a_blocked_write() {
+        let server = Server::new_default("rmk").unwrap();
+        let ble_config = BleConfig {
+            buffer: Mutex::new([0; crate::RYNK_BUFFER_SIZE]),
+            pipe: Pipe::new(),
+        };
+        let watch = Watch::<NoopRawMutex, u8, ACTIVE_RECEIVERS>::new();
+        watch.sender().send(0);
+        let active = watch.receiver().unwrap();
+        let source = Cell::new(RynkBleSource::None);
+        let mut handler = HostGattHandler::new(&server, active, 0, Some(&ble_config), &source);
+
+        assert_eq!(ble_config.pipe.try_write(&[0x55; 512]).unwrap(), 512);
+        block_on(async {
+            select(
+                handler.handle_write(server.rynk_service.output_data.handle, &[0xAA], true),
+                async {
+                    Timer::after_millis(1).await;
+                    watch.sender().send(1);
+                },
+            )
+            .await;
+        });
+
+        assert!(matches!(source.get(), RynkBleSource::None));
+        let mut buf = [0u8; 513];
+        assert_eq!(ble_config.pipe.try_read(&mut buf).unwrap(), 512);
+    }
 
     #[test]
     fn classifies_rynk_gatt_handles() {
         use crate::test_support::test_block_on as block_on;
 
         let server = Server::new_default("rmk").unwrap();
-        let mut handler = HostGattHandler::new(&server);
+        let watch = Watch::<NoopRawMutex, u8, ACTIVE_RECEIVERS>::new();
+        let active = watch.receiver().unwrap();
+        let source = Cell::new(RynkBleSource::None);
+        let mut handler = HostGattHandler::new(&server, active, 0, None, &source);
 
         assert_eq!(
             block_on(handler.handle_write(server.rynk_service.output_data.handle, &[], true)),
@@ -246,16 +343,15 @@ mod tests {
         .unwrap()
     }
 
-    /// Read one frame back out of `RYNK_BLE_RX_PIPE` via a Deframer (the session's
+    /// Read one frame back out of `pipe` via a Deframer (the session's
     /// reassembler), returning its seq and decoded payload.
-    fn read_one_frame() -> (u8, Vec<u8, 64>) {
+    fn read_one_frame(pipe: &Pipe<NoopRawMutex, 512>) -> (u8, Vec<u8, 64>) {
         use crate::test_support::test_block_on as block_on;
 
-        let rx = &RYNK_BLE_RX_PIPE;
         let mut buf = [0u8; 256];
         let mut df = Deframer::new();
         loop {
-            let n = block_on(rx.read(df.tail(&mut buf)));
+            let n = block_on(pipe.read(df.tail(&mut buf)));
             df.commit(n);
             if let Some(frame_len) = df.next(&mut buf) {
                 let frame = &buf[..frame_len];
@@ -264,11 +360,11 @@ mod tests {
         }
     }
 
-    /// Fragment a frame into zero-padded 32-byte reports fed to `RYNK_BLE_RX_PIPE`
+    /// Fragment a frame into zero-padded 32-byte reports fed to the shared pipe
     /// as `handle_write`'s WebHID arm does; the padding drops out as empty frames.
     #[test]
     fn fragments_reassemble_through_pipe_for_session() {
-        RYNK_BLE_RX_PIPE.clear();
+        let pipe = Pipe::<NoopRawMutex, 512>::new();
         let payload: [u8; 60] = core::array::from_fn(|i| i as u8);
         let mut buf = [0u8; 128];
         let n = cobs_frame(&mut buf, 9, &payload);
@@ -277,10 +373,10 @@ mod tests {
         for chunk in buf[..n].chunks(RYNK_HID_REPORT_SIZE) {
             let mut report = [0u8; RYNK_HID_REPORT_SIZE];
             report[..chunk.len()].copy_from_slice(chunk);
-            assert_eq!(RYNK_BLE_RX_PIPE.try_write(&report).unwrap(), report.len());
+            assert_eq!(pipe.try_write(&report).unwrap(), report.len());
         }
 
-        let (seq, decoded) = read_one_frame();
+        let (seq, decoded) = read_one_frame(&pipe);
         assert_eq!(seq, 9);
         assert_eq!(&decoded[..], &payload[..]);
     }
@@ -289,14 +385,14 @@ mod tests {
     /// skipped by the Deframer, leaving just the frame.
     #[test]
     fn small_frame_drops_padding() {
-        RYNK_BLE_RX_PIPE.clear();
+        let pipe = Pipe::<NoopRawMutex, 512>::new();
         let mut buf = [0u8; 64];
         let n = cobs_frame(&mut buf, 3, &[0xAA, 0xBB]);
         let mut report = [0u8; RYNK_HID_REPORT_SIZE];
         report[..n].copy_from_slice(&buf[..n]);
-        assert_eq!(RYNK_BLE_RX_PIPE.try_write(&report).unwrap(), report.len());
+        assert_eq!(pipe.try_write(&report).unwrap(), report.len());
 
-        let (seq, decoded) = read_one_frame();
+        let (seq, decoded) = read_one_frame(&pipe);
         assert_eq!(seq, 3);
         assert_eq!(&decoded[..], &[0xAA, 0xBB]);
     }

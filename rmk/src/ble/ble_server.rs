@@ -100,8 +100,8 @@ pub(crate) struct DongleEventService {
 /// `heapless::Vec` so each notify only spends MTU − 3 bytes for the bytes it
 /// actually carries (a fixed `[u8; N]` would always send N).
 ///
-/// `gatt_events_task` forwards `output_data` writes into
-/// [`crate::channel::RYNK_BLE_RX_PIPE`] for [`crate::ble::host::HostGattHandler::run`] to drain.
+/// `gatt_events_task` gates `output_data` writes on the active profile and
+/// feeds them into the shared `BleConfig` pipe for `HostGattHandler::run`.
 #[cfg(feature = "rynk")]
 #[gatt_service(uuid = RYNK_SERVICE_UUID)]
 pub(crate) struct RynkGattService {
@@ -114,8 +114,8 @@ pub(crate) struct RynkGattService {
 }
 
 /// Rynk HID-over-GATT service.
-/// `gatt_events_task` feeds the payload into [`crate::channel::RYNK_BLE_RX_PIPE`],
-/// [`crate::ble::host::HostGattHandler::run`] drains the pipe to get data.
+/// `gatt_events_task` gates the payload on the active profile and feeds it into
+/// the shared `BleConfig` pipe, which `HostGattHandler::run` drains.
 #[cfg(feature = "rynk")]
 #[gatt_service(uuid = service::HUMAN_INTERFACE_DEVICE)]
 pub(crate) struct RynkHidService {
