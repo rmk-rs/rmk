@@ -383,19 +383,18 @@ impl Client {
         self.request::<command::GetBleStatus>(&()).await
     }
 
-    /// Switch to a BLE profile by slot. Requires [`DeviceCapabilities::ble_enabled`];
-    /// nothing is sent otherwise.
+    /// Switch BLE profiles without waiting for a reply. Requires [`DeviceCapabilities::ble_enabled`].
+    /// Like [`reboot`](Self::reboot), `Ok(())` only means queued; keep the driver running.
     pub async fn switch_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
         self.require_ble(Cmd::SwitchBleProfile)?;
-        self.request::<command::SwitchBleProfile>(&slot).await
+        self.send_no_reply::<command::SwitchBleProfile>(&slot).await
     }
 
-    /// Clear (unbond) a BLE profile by slot. Clearing the currently connected profile
-    /// drops that connection. Requires [`DeviceCapabilities::ble_enabled`]; nothing is
-    /// sent otherwise.
+    /// Clear a BLE profile without waiting for a reply. Requires [`DeviceCapabilities::ble_enabled`].
+    /// Unlock first; like [`reboot`](Self::reboot), `Ok(())` only means queued.
     pub async fn clear_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
         self.require_ble(Cmd::ClearBleProfile)?;
-        self.request::<command::ClearBleProfile>(&slot).await
+        self.send_no_reply::<command::ClearBleProfile>(&slot).await
     }
 
     /// Read the persisted background-connection setting.

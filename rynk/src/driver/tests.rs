@@ -402,6 +402,37 @@ async fn fire_and_forget_orphan_reply_is_dropped() {
     assert_eq!(got, 42);
 }
 
+#[tokio::test(start_paused = true)]
+async fn profile_commands_do_not_wait_for_replies() {
+    for replies in [false, true] {
+        let mut steps = vec![Step::AwaitWrites(2)];
+        if replies {
+            let mut bytes = reply(Cmd::SwitchBleProfile, 1, ());
+            bytes.extend_from_slice(&reply(Cmd::ClearBleProfile, 2, ()));
+            steps.push(Step::Chunk(bytes));
+        }
+        steps.extend([
+            Step::AwaitWrites(3),
+            Step::Chunk(reply(Cmd::GetWpm, 3, 42u16)),
+            Step::Hang,
+        ]);
+        let (mut client, mut driver) = raw_session(steps);
+        client.capabilities.ble_enabled = true;
+        let got = timeout(
+            Duration::from_secs(1),
+            drive(&mut driver, &client, async {
+                client.switch_ble_profile(1).await.unwrap();
+                client.clear_ble_profile(0).await.unwrap();
+                client.get_wpm().await
+            }),
+        )
+        .await
+        .expect("profile commands must not wait for a reply")
+        .unwrap();
+        assert_eq!(got, 42);
+    }
+}
+
 #[tokio::test]
 async fn topic_queue_overflow_drops_oldest() {
     let mut chunk = Vec::new();
