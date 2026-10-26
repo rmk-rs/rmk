@@ -72,6 +72,18 @@ pub fn rmk_peripheral(attr: TokenStream, item: TokenStream) -> TokenStream {
     parse_split_peripheral_mod(peripheral_id, attr, item_mod).into()
 }
 
+/// Emit the flash-resident physical layout and `[lighting]` statics from
+/// `KEYBOARD_TOML_PATH` for firmware with a hand-written main function.
+///
+/// `#[rmk_keyboard]` emits the same statics as part of full main generation;
+/// boards whose hardware does not fit the generated main (custom matrix
+/// drivers, nonstandard USB bring-up) invoke this at module scope instead and
+/// wire the lighting engine themselves.
+#[proc_macro]
+pub fn rmk_lighting_config(_item: TokenStream) -> TokenStream {
+    codegen::lighting::expand_standalone_lighting_config().into()
+}
+
 /// Keeps a `Runnable` implementation provided by the user or another macro.
 ///
 /// Place this marker below `#[processor]` or `#[input_device]`. The preceding

@@ -34,7 +34,7 @@ via its `wasm` feature, on the web; the `rmkit layout` CLI in
 
 ```rust,no_run
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-// Discover Rynk keyboards by their vendor USB interface, pick one, and open
+// Discover Rynk keyboards by their Rynk HID usage, pick one, and open
 // it (the handshake runs inside `connect`). `rynk-ble` mirrors this flow.
 use embassy_futures::select::{Either, select};
 use rynk::RynkDevice;

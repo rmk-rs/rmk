@@ -96,11 +96,15 @@ mod api;
 mod device;
 mod driver;
 #[cfg(feature = "alloc")]
+pub mod key_topology;
+#[cfg(feature = "alloc")]
 pub mod layout;
 
 pub use device::RynkDevice;
 pub use driver::{Client, Driver, RynkHostError};
 pub use embedded_io_async as io;
+#[cfg(feature = "alloc")]
+pub use key_topology::{KeyId, KeySelector, KeyTopology, LogicalKey, TopologyError};
 #[cfg(feature = "alloc")]
 pub use layout::LayoutInfo;
 pub use rmk_types;
