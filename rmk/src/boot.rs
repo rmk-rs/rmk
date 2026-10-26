@@ -1,4 +1,9 @@
+#[cfg(test)]
+pub(crate) static BOOTLOADER_JUMPS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
 pub fn jump_to_bootloader() {
+    #[cfg(test)]
+    BOOTLOADER_JUMPS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     #[cfg(feature = "adafruit_bl")]
     // Reference: https://github.com/adafruit/Adafruit_nRF52_Bootloader/blob/d6b28e66053eea467166f44875e3c7ec741cb471/src/main.c#L107
     embassy_nrf::pac::POWER

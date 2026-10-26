@@ -35,6 +35,7 @@ steps = [
   { press = [0, 2] },
   { rynk = { cmd = "UnlockPoll", reply = { locked = false, unlocking = false, remaining_keys = 0, key_positions = [[0, 2]] } } },
   { rynk = { cmd = "GetMatrixState", reply = { pressed_bitmap = [4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] } } },
+  { rynk = { cmd = "UnlockPoll", reply = { locked = false, unlocking = false, remaining_keys = 0, key_positions = [[0, 2]] } } },
   { release = [0, 2] },
   { rynk = { cmd = "GetMatrixState", reply = { pressed_bitmap = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] } } },
 ]

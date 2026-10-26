@@ -4,12 +4,11 @@ use heapless::Vec;
 use rmk_types::protocol::rynk::command::GetLayout;
 use rmk_types::protocol::rynk::{LayoutChunk, RYNK_BLE_CHUNK_SIZE, RynkError};
 
-use super::super::RynkService;
 use super::Handle;
 
-impl Handle<GetLayout> for RynkService<'_> {
+impl Handle<GetLayout> for &[u8] {
     async fn handle(&self, offset: u32) -> Result<LayoutChunk, RynkError> {
-        let blob = self.ctx.layout_blob();
+        let blob = self;
         let total_len = blob.len() as u32;
         let start = (offset as usize).min(blob.len());
         let end = (start + RYNK_BLE_CHUNK_SIZE).min(blob.len());

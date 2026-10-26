@@ -8,6 +8,16 @@ use rmk_types::protocol::rynk::LockStatus;
 
 use crate::keymap::KeyMap;
 
+pub(crate) trait UnlockKeyState {
+    fn is_pressed(&self, row: u8, col: u8) -> bool;
+}
+
+impl UnlockKeyState for KeyMap<'_> {
+    fn is_pressed(&self, row: u8, col: u8) -> bool {
+        self.read_matrix_key(row, col)
+    }
+}
+
 /// Unlock gate. Interior mutability lets protocol handlers update it through a
 /// shared reference without holding a borrow across an `.await` point.
 pub(crate) struct HostLock<'a> {
@@ -20,11 +30,11 @@ pub(crate) struct HostLock<'a> {
     /// passes 100 ms; Rynk passes 500 ms to tolerate a BLE WebHID round trip.
     window: Duration,
     unlock_keys: &'a [(u8, u8)],
-    keymap: &'a KeyMap<'a>,
+    keys: &'a dyn UnlockKeyState,
 }
 
 impl<'a> HostLock<'a> {
-    pub fn new(unlock_keys: &'a [(u8, u8)], keymap: &'a KeyMap<'a>, insecure: bool, window: Duration) -> Self {
+    pub fn new(unlock_keys: &'a [(u8, u8)], keys: &'a dyn UnlockKeyState, insecure: bool, window: Duration) -> Self {
         Self {
             unlocked: Cell::new(insecure),
             unlocking: Cell::new(false),
@@ -32,7 +42,7 @@ impl<'a> HostLock<'a> {
             insecure,
             window,
             unlock_keys,
-            keymap,
+            keys,
         }
     }
 
@@ -44,6 +54,15 @@ impl<'a> HostLock<'a> {
     /// `insecure` forces unlocked regardless of the `unlocked` cell.
     pub fn is_unlocked(&self) -> bool {
         self.insecure || self.unlocked.get()
+    }
+
+    /// Consume the authorization before executing one protected command.
+    pub fn take_unlock(&self) -> bool {
+        let allowed = self.is_unlocked();
+        if allowed {
+            self.lock();
+        }
+        allowed
     }
 
     pub fn unlocking(&self) {
@@ -74,13 +93,14 @@ impl<'a> HostLock<'a> {
 
     pub fn lock(&self) {
         self.unlocked.set(false);
+        self.unlocking.set(false);
     }
 
     /// Challenge keys not currently held — no arm, no commit.
     fn remaining_held(&self) -> u8 {
         let mut counter = self.unlock_keys.len() as u8;
         for (row, col) in self.unlock_keys {
-            if self.keymap.read_matrix_key(*row, *col) {
+            if self.keys.is_pressed(*row, *col) {
                 counter -= 1;
             }
         }
@@ -182,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_then_full_hold_unlocks() {
+    fn partial_then_full_hold_unlocks_independently() {
         keymap!(keymap);
         let keys = [(0u8, 0u8), (1u8, 1u8)];
         let lock = HostLock::new(&keys, &keymap, false, WINDOW);
@@ -195,6 +215,19 @@ mod tests {
         keymap.update_matrix_state(&KeyboardEvent::key(1, 1, true));
         assert_eq!(lock.check_unlock(), 0, "all held");
         assert!(lock.is_unlocked(), "unlocked once all keys held");
+        #[cfg(all(feature = "split", any(feature = "vial", feature = "rynk")))]
+        {
+            let keys = crate::host::peripheral::tests::scanned_matrix();
+            let peripheral = HostLock::new(&[(2, 3)], &keys, false, WINDOW);
+            assert!(lock.is_unlocked() && !peripheral.is_unlocked());
+            peripheral.unlocking();
+            assert_eq!(peripheral.check_unlock(), 0);
+            lock.lock();
+            assert!(
+                peripheral.is_unlocked(),
+                "locking the central must not relock its peripheral"
+            );
+        }
     }
 
     #[test]

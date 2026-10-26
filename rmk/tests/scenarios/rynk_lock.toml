@@ -58,7 +58,7 @@ steps = [
 ]
 
 [[test]]
-name = "unlocking_opens_the_gate_and_lock_closes_it_again"
+name = "unlock_authorizes_one_protected_command"
 steps = [
   { rynk = { cmd = "GetMatrixState", error = "Locked" } },
   { press = [0, 1] },
@@ -67,7 +67,6 @@ steps = [
   { release = [0, 1] },
   { release = [0, 2] },
   { rynk = { cmd = "GetMatrixState", reply = { pressed_bitmap = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] } } },
-  { rynk = { cmd = "Lock" } },
   { rynk = { cmd = "GetMatrixState", error = "Locked" } },
 ]
 
@@ -84,6 +83,7 @@ steps = [
   { release = [0, 1] },
   { release = [0, 2] },
   { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 0 }, action = { Single = { Key = { Hid = "B" } } } } } },
+  { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 0 }, action = { Single = { Key = { Hid = "C" } } } }, error = "Locked" } },
   { tap = { pos = [0, 0], duration = 10 } },
 ]
 expect = [["A"], [], ["B"], []]

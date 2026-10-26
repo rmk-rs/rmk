@@ -79,7 +79,7 @@ To remove all host configurator support, set both host protocols to `false` and 
 
 ## Configure Unlock Keys
 
-For security purposes, you can configure unlock keys that must be pressed simultaneously to unlock Vial configuration in Vial. This prevents accidental keymap changes.
+Configure keys that must be held together to authorize protected Vial requests.
 
 ```toml title="keyboard.toml"
 [host]
@@ -89,6 +89,11 @@ unlock_keys = [[0, 0], [0, 1]]  # Keys at (row=0,col=0) and (row=0,col=1)
 ```
 
 With the default `host_lock` feature, `unlock_keys` is the only way to unlock: if it's empty, RMK refuses every unlock request, and locked features such as the Matrix Tester stay unavailable unless you set `insecure = true` (see below). At most 4 positions are allowed.
+
+Each unlock permits one bootloader jump or matrix-state read. Host tools must
+repeat the existing `UnlockStart` / `UnlockPoll` sequence for each protected
+request, including each Matrix Tester poll. Identity and lock-status queries do
+not consume authorization.
 
 ::: tip
 The unlock keys use the physical matrix position (row, column), not the keycode. Make sure to use keys that are easy to press simultaneously but not commonly pressed together accidentally.

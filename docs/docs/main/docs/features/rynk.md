@@ -134,8 +134,9 @@ unlock_keys = [[0, 0], [3, 12]]  # hold (row 0, col 0) and (row 3, col 12)
 
 When you trigger a locked action, the host tool reads the challenge and shows
 "hold these keys". Hold them together; the tool polls briefly until the device
-unlocks, and the session stays unlocked until it ends. Unplugging, a Bluetooth
-disconnect, or an explicit lock re-locks the device.
+unlocks. The next protected command consumes that authorization before it runs;
+another protected command needs another unlock. Identity and lock-status reads
+leave the authorization intact. An explicit lock discards any unused grant.
 
 If you leave `unlock_keys` unset, the locked operations can never be unlocked —
 a safe default, but it means a fresh config can't enter the bootloader over Rynk

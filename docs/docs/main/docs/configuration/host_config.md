@@ -82,3 +82,33 @@ rmk = { version = "0.9", default-features = false, features = [
     "rp2040",
 ] }
 ```
+
+## Split USB bootloader entry
+
+Add unlock keys alongside each side's matrix configuration:
+
+```toml
+[split.central.host]
+unlock_keys = [[0, 0], [0, 1]]
+
+[split.peripheral.host]
+unlock_keys = [[0, 0], [1, 0]]
+```
+
+Coordinates are local to each side, before `row_offset` and `col_offset`. Choose
+up to four physical keys; an empty combination requires `insecure = true`.
+The central's table overrides `[host]` unlock settings. Without it, the existing
+`[host]` settings still apply. The peripheral has its own keys and authorization.
+
+`[split.peripheral.host]` enables USB identity, unlock and bootloader commands
+using the selected Vial or Rynk protocol, even when the central is offline.
+It requires USB support, `split`, `host_lock` (included by `rynk`), and a supported
+bootloader feature such as `adafruit_bl` or `rp2040`. It cannot be combined with
+`dfu_nrf` or `dfu_rp`. Omit the table to keep the peripheral's existing behavior.
+
+Unlock the connected side with the existing protocol commands, then send
+`BootloaderJump` on that connection. Each unlock permits one protected request;
+identity and lock-status queries do not consume it. Keymap editing stays on the
+central. Host tools need to support this unlock sequence.
+
+See `examples/use_config/nrf52840_ble_split` for a complete example.

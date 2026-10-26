@@ -1137,6 +1137,8 @@ pub enum UpdatePolicy {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SplitBoardConfig {
+    /// Local unlock policy; enables the peripheral USB update interface when set.
+    pub host: Option<SplitHostConfig>,
     /// Row number of the split board
     pub rows: usize,
     /// Col number of the split board
@@ -1219,6 +1221,16 @@ fn parse_duration_millis<'de, D: de::Deserializer<'de>>(deserializer: D) -> Resu
             "Invalid duration unit \"{other}\": unit part must be either \"s\" or \"ms\""
         ))),
     }
+}
+
+/// Host authorization local to one split board. Coordinates do not include offsets.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SplitHostConfig {
+    #[serde(default)]
+    pub unlock_keys: Vec<[u8; 2]>,
+    #[serde(default)]
+    pub insecure: bool,
 }
 
 /// Configuration for host tools

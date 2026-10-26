@@ -21,15 +21,11 @@ use crate::storage::{StorageItem, store};
 /// Context shared between Vial and Rynk host services.
 pub(crate) struct KeyboardContext<'a> {
     pub keymap: &'a KeyMap<'a>,
-    pub(crate) layout_blob: &'static [u8],
 }
 
 impl<'a> KeyboardContext<'a> {
     pub fn new(keymap: &'a KeyMap<'a>) -> Self {
-        Self {
-            keymap,
-            layout_blob: &[],
-        }
+        Self { keymap }
     }
 
     pub fn get_action(&self, layer: u8, row: u8, col: u8) -> KeyAction {
@@ -44,11 +40,6 @@ impl<'a> KeyboardContext<'a> {
     /// `(rows, cols, num_layers)`.
     pub fn keymap_dimensions(&self) -> (usize, usize, usize) {
         self.keymap.get_keymap_config()
-    }
-
-    /// The opaque, compressed physical-layout blob served by `GetLayout`.
-    pub fn layout_blob(&self) -> &'static [u8] {
-        self.layout_blob
     }
 
     pub async fn set_action(&self, layer: u8, row: u8, col: u8, action: KeyAction) -> Result<(), ()> {

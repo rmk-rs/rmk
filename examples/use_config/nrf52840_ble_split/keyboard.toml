@@ -107,6 +107,9 @@ battery_adc_pin = "P0_05"
 adc_divider_measured = 2000
 adc_divider_total = 2806
 
+[split.central.host]
+unlock_keys = [[0, 0], [0, 1]]
+
 [split.central.matrix]
 matrix_type = "normal"
 # Default diode direction is col2row; set `row2col = true` if needed.
@@ -126,6 +129,9 @@ ble_addr = [0x7e, 0xfe, 0x73, 0x9e, 0x66, 0xe3]
 battery_adc_pin = "P0_05"
 adc_divider_measured = 2000
 adc_divider_total = 2806
+
+[split.peripheral.host]
+unlock_keys = [[0, 0], [1, 0]]
 
 [split.peripheral.matrix]
 matrix_type = "normal"

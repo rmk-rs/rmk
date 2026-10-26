@@ -8,27 +8,27 @@ use rmk_types::protocol::rynk::RynkError;
 use rmk_types::protocol::rynk::command::{ClearBleProfile, GetBleStatus, SwitchBleProfile};
 use rmk_types::protocol::rynk::command::{GetConnectionStatus, GetConnectionType};
 
-use super::super::RynkService;
 use super::Handle;
+use crate::host::context::KeyboardContext;
 
-impl Handle<GetConnectionType> for RynkService<'_> {
+impl Handle<GetConnectionType> for KeyboardContext<'_> {
     async fn handle(&self, _: ()) -> Result<ConnectionType, RynkError> {
-        Ok(self.ctx.preferred_connection())
+        Ok(self.preferred_connection())
     }
 }
 
 /// `Cmd::GetConnectionStatus` — the same payload the `ConnectionChange`
 /// topic pushes, so a host can recover a missed push.
-impl Handle<GetConnectionStatus> for RynkService<'_> {
+impl Handle<GetConnectionStatus> for KeyboardContext<'_> {
     async fn handle(&self, _: ()) -> Result<ConnectionStatus, RynkError> {
-        Ok(self.ctx.connection_status())
+        Ok(self.connection_status())
     }
 }
 
 #[cfg(feature = "_ble")]
-impl Handle<GetBleStatus> for RynkService<'_> {
+impl Handle<GetBleStatus> for KeyboardContext<'_> {
     async fn handle(&self, _: ()) -> Result<BleStatus, RynkError> {
-        Ok(self.ctx.connection_status().ble)
+        Ok(self.connection_status().ble)
     }
 }
 
@@ -37,7 +37,7 @@ impl Handle<GetBleStatus> for RynkService<'_> {
 /// running observes the queue-full error rather than blocking the
 /// dispatch loop.
 #[cfg(feature = "_ble")]
-impl Handle<SwitchBleProfile> for RynkService<'_> {
+impl Handle<SwitchBleProfile> for KeyboardContext<'_> {
     async fn handle(&self, slot: u8) -> Result<(), RynkError> {
         Self::check_ble_profile_slot(slot)?;
         crate::channel::BLE_PROFILE_CHANNEL
@@ -49,7 +49,7 @@ impl Handle<SwitchBleProfile> for RynkService<'_> {
 /// `Cmd::ClearBleProfile` — wipes the bond at the given slot without
 /// requiring a prior switch (uses [`BleProfileAction::ClearSlot`]).
 #[cfg(feature = "_ble")]
-impl Handle<ClearBleProfile> for RynkService<'_> {
+impl Handle<ClearBleProfile> for KeyboardContext<'_> {
     async fn handle(&self, slot: u8) -> Result<(), RynkError> {
         Self::check_ble_profile_slot(slot)?;
         crate::channel::BLE_PROFILE_CHANNEL
@@ -59,7 +59,7 @@ impl Handle<ClearBleProfile> for RynkService<'_> {
 }
 
 #[cfg(feature = "_ble")]
-impl RynkService<'_> {
+impl KeyboardContext<'_> {
     /// `Invalid` for a BLE profile slot past the configured profile count.
     fn check_ble_profile_slot(slot: u8) -> Result<(), RynkError> {
         if (slot as usize) >= crate::NUM_BLE_PROFILE {

@@ -2,7 +2,9 @@ use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use rmk_types::action::KeyAction;
 use rmk_types::constants::{COMBO_MAX_LENGTH, COMBO_MAX_NUM, MORSE_MAX_NUM};
 use rmk_types::morse::{DOUBLE_TAP, HOLD, HOLD_AFTER_TAP, Morse, MorseMode, TAP};
-use rmk_types::protocol::vial::{SettingKey, VIAL_EP_SIZE, VIAL_PROTOCOL_VERSION, VialCommand, VialDynamic};
+use rmk_types::protocol::vial::{
+    SettingKey, VIAL_EP_SIZE, VIAL_PROTOCOL_VERSION, ViaCommand, VialCommand, VialDynamic,
+};
 
 use crate::config::VialConfig;
 use crate::hid::ViaReport;
@@ -10,11 +12,11 @@ use crate::host::context::KeyboardContext;
 use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
 
 /// Note: vial uses little endian, while via uses big endian
-pub(crate) async fn process_vial<'a>(
+pub(crate) async fn process_vial<const HAS_KEYMAP: bool>(
     report: &mut ViaReport,
-    vial_config: &VialConfig<'a>,
+    vial_config: &VialConfig<'_>,
     #[cfg(feature = "host_lock")] locker: &crate::host::lock::HostLock<'_>,
-    ctx: &KeyboardContext<'_>,
+    ctx: Option<&KeyboardContext<'_>>,
 ) {
     // report.output_data[0] == 0xFE -> vial commands
     let vial_command = report.output_data[1].into();
@@ -25,9 +27,11 @@ pub(crate) async fn process_vial<'a>(
             LittleEndian::write_u32(&mut report.input_data[0..4], VIAL_PROTOCOL_VERSION);
             report.input_data[4..12].clone_from_slice(vial_config.vial_keyboard_id);
             debug!("Vial return: {:?}", report.input_data);
+            return;
         }
         VialCommand::GetSize => {
             LittleEndian::write_u32(&mut report.input_data[0..4], vial_config.vial_keyboard_def.len() as u32);
+            return;
         }
         VialCommand::GetKeyboardDef => {
             let page = LittleEndian::read_u16(&report.output_data[2..4]) as usize;
@@ -47,6 +51,7 @@ pub(crate) async fn process_vial<'a>(
                 "Vial return: page:{} start:{} end: {}, data: {:?}",
                 page, start, end, report.input_data
             );
+            return;
         }
         VialCommand::GetUnlockStatus => {
             // Reset all data to 0xFF(it's required!)
@@ -71,12 +76,14 @@ pub(crate) async fn process_vial<'a>(
                 report.input_data[1] = 0;
                 warn!("Vial lock feature is not enabled");
             }
+            return;
         }
         VialCommand::UnlockStart => {
             #[cfg(feature = "host_lock")]
             locker.unlocking();
             #[cfg(not(feature = "host_lock"))]
             error!("Vial lock feature is not enabled");
+            return;
         }
         VialCommand::UnlockPoll => {
             #[cfg(feature = "host_lock")]
@@ -88,13 +95,26 @@ pub(crate) async fn process_vial<'a>(
             }
             #[cfg(not(feature = "host_lock"))]
             error!("Vial lock feature is not enabled");
+            return;
         }
         VialCommand::Lock => {
             #[cfg(feature = "host_lock")]
             locker.lock();
             #[cfg(not(feature = "host_lock"))]
             error!("Vial lock feature is not enabled");
+            return;
         }
+        _ => {}
+    }
+    if !HAS_KEYMAP {
+        report.input_data[0] = ViaCommand::Unhandled as u8;
+        return;
+    }
+    let Some(ctx) = ctx else {
+        report.input_data[0] = ViaCommand::Unhandled as u8;
+        return;
+    };
+    match vial_command {
         VialCommand::BehaviorSettingQuery => {
             report.input_data.fill(0xFF);
             let value = u16::from_le_bytes([report.output_data[2], report.output_data[3]]);
