@@ -163,3 +163,28 @@ steps = [
   { tap = { pos = [0, 2], duration = 10 } }, # Back on the base layer after C releases.
 ]
 expect = [["C"], ["C", "F"], ["C"], [], ["A"], []]
+
+# A Sticky buffered behind tap-hold must dispatch on both release and timeout.
+[[test]]
+name = "buffered_sticky_dispatches_on_release"
+behavior.morse = { permissive_hold = true, unilateral_tap = false }
+steps = [
+  { press = [1, 1] },
+  { tap = { pos = [0, 4], duration = 10 } },
+  { release = [1, 1] },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["LShift"], ["LShift", "LCtrl"], ["LCtrl"], ["LCtrl", "A"], ["LCtrl"], []]
+
+[[test]]
+name = "buffered_sticky_dispatches_on_timeout"
+behavior.morse = { permissive_hold = true, unilateral_tap = false }
+steps = [
+  { press = [1, 1] },
+  { press = [0, 4] },
+  { delay = 260 },
+  { release = [1, 1] },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { release = [0, 4] },
+]
+expect = [["LShift"], ["LShift", "LCtrl"], ["LCtrl"], ["LCtrl", "A"], ["LCtrl"], []]

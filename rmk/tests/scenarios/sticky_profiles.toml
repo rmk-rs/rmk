@@ -643,3 +643,18 @@ expect = [
   ["LCtrl"], { system = ["SystemSleep"] }, { system = [] }, [], ["A"], [],
   ["LCtrl"], { system = ["SystemSleep"] }, { system = [] }, [], ["A"], [],
 ]
+
+[[test]]
+name = "pairing_source_release_ends_its_sticky_consumer"
+features = ["passkey_entry"]
+behavior.sticky_key.hold_timeout = "100ms"
+steps = [
+  { tap = { pos = [2, 8], duration = 10 } }, # Shift waits for a consumer.
+  { press = [0, 4] }, # Sticky A consumes Shift.
+  { passkey = "begin" },
+  { delay = 150 },
+  { release = [0, 4] }, # End the held A while keyboard reports are captured.
+  { passkey = "end" },
+  { tap = { pos = [0, 2], duration = 10 } }, # Neither A nor Shift may remain held.
+]
+expect = [["LShift"], ["LShift", "A"], ["A"], []]

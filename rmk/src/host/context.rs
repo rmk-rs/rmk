@@ -176,7 +176,7 @@ impl<'a> KeyboardContext<'a> {
         self.keymap.combo_timeout()
     }
 
-    pub fn one_shot_timeout(&self) -> Duration {
+    pub fn one_shot_timeout(&self) -> u16 {
         self.keymap.one_shot_timeout()
     }
 
@@ -204,7 +204,7 @@ impl<'a> KeyboardContext<'a> {
     }
 
     pub async fn set_one_shot_timeout(&self, ms: u16) -> Result<(), ()> {
-        self.keymap.set_one_shot_timeout(Duration::from_millis(ms as u64));
+        self.keymap.set_one_shot_timeout(ms);
         #[cfg(feature = "storage")]
         store(StorageItem::BehaviorConfig(self.keymap.behavior_snapshot())).await?;
         Ok(())
@@ -242,8 +242,7 @@ impl<'a> KeyboardContext<'a> {
     pub async fn set_behavior_config(&self, cfg: BehaviorConfig) -> Result<(), ()> {
         self.keymap
             .set_combo_timeout(Duration::from_millis(cfg.combo_timeout_ms as u64));
-        self.keymap
-            .set_one_shot_timeout(Duration::from_millis(cfg.oneshot_timeout_ms as u64));
+        self.keymap.set_one_shot_timeout(cfg.oneshot_timeout_ms);
         self.keymap.set_tap_interval(cfg.tap_interval_ms);
         self.keymap.set_tap_capslock_interval(cfg.tap_capslock_interval_ms);
         self.keymap.set_morse_default_profile(cfg.morse_default_profile);

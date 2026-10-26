@@ -1,7 +1,7 @@
-# Consumer, system-control and mouse keys each report on their own HID page
-# rather than in the keyboard report, and each sends an all-released report on
-# key up. Three keys, three pages — this file carries its own keyboard instead
-# of the shared board because none of these keys is a fixture anyone else needs.
+# Consumer, system-control and mouse keys each report on their own HID page.
+# Row 2 supplies Sticky copies: either source can release first, and the output
+# must stay held until its last source releases. The same cases also check
+# Sticky timeout while the ordinary source stays down.
 #
 # `MO(1)` at (0,3) adds a second layer for the rollover cases below: layer 1
 # row 1 pairs a plain keycode with its `SHIFTED()` twin, row 2 is four
@@ -21,7 +21,7 @@ map = """
 keys = """
 AudioVolUp  SystemSleep  MouseRight  MO(1)
 LShift      LShift       WM(MouseBtn1, LCtrl)  No
-No          No           No                    No
+SK(AudioVolUp) SK(SystemSleep) SK(MouseBtn1) No
 """
 
 [[keymap.layer]]
@@ -33,19 +33,33 @@ Minus         Kc7           Kc8                     Kc9
 
 [[test]]
 name = "consumer_key_reports_on_the_consumer_page"
+behavior.sticky_key.wait_timeout = "100ms"
 steps = [
+  { press = [2, 0] },
   { press = [0, 0] },
   { release = [0, 0] },
+  { release = [2, 0] },
+  { press = [0, 0] },
+  { tap = { pos = [2, 0], duration = 10 } },
+  { delay = 150 },
+  { release = [0, 0] },
 ]
-expect = [{ consumer = ["AudioVolUp"] }, { consumer = [] }]
+expect = [{ consumer = ["AudioVolUp"] }, { consumer = ["AudioVolUp"] }, { consumer = ["AudioVolUp"] }, { consumer = [] }, { consumer = ["AudioVolUp"] }, { consumer = ["AudioVolUp"] }, { consumer = ["AudioVolUp"] }, { consumer = [] }]
 
 [[test]]
 name = "system_key_reports_on_the_system_control_page"
+behavior.sticky_key.wait_timeout = "100ms"
 steps = [
+  { press = [2, 1] },
   { press = [0, 1] },
   { release = [0, 1] },
+  { release = [2, 1] },
+  { press = [0, 1] },
+  { tap = { pos = [2, 1], duration = 10 } },
+  { delay = 150 },
+  { release = [0, 1] },
 ]
-expect = [{ system = ["SystemSleep"] }, { system = [] }]
+expect = [{ system = ["SystemSleep"] }, { system = ["SystemSleep"] }, { system = ["SystemSleep"] }, { system = [] }, { system = ["SystemSleep"] }, { system = ["SystemSleep"] }, { system = ["SystemSleep"] }, { system = [] }]
 
 [[test]]
 name = "mouse_key_reports_a_movement_delta"
@@ -59,11 +73,18 @@ expect = [{ mouse = { x = 5 } }, { mouse = { } }]
 # click: down before the button, up after it.
 [[test]]
 name = "modifier_on_mouse_key_wraps_the_click"
+behavior.sticky_key.wait_timeout = "100ms"
 steps = [
+  { press = [2, 2] },
   { press = [1, 2] },
   { release = [1, 2] },
+  { release = [2, 2] },
+  { press = [1, 2] },
+  { tap = { pos = [2, 2], duration = 10 } },
+  { delay = 150 },
+  { release = [1, 2] },
 ]
-expect = [["LCtrl"], { mouse = { buttons = 1 } }, { mouse = {} }, []]
+expect = [{ mouse = { buttons = 1 } }, ["LCtrl"], { mouse = { buttons = 1 } }, { mouse = { buttons = 1 } }, [], { mouse = {} }, ["LCtrl"], { mouse = { buttons = 1 } }, { mouse = { buttons = 1 } }, { mouse = { buttons = 1 } }, { mouse = {} }, []]
 
 # `]` and its `SHIFTED()` twin `}` share one HID usage. The report
 # deduplicates held keycodes so the shared usage stays down until the
