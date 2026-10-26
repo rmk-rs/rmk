@@ -1,0 +1,52 @@
+# Newly released consumers join the same lowest-slot selection as pending input releases.
+[layout]
+rows = 1
+cols = 5
+map = "(0,0) (0,1) (0,2) (0,3) (0,4)"
+
+[behavior.sticky_key]
+wait_timeout = "0ms"
+hold_timeout = "0ms"
+
+[behavior.sticky_key.profiles.explicit]
+release_on = []
+
+[behavior.sticky_key.profiles.press]
+release_on = ["after_next_press"]
+ignore = ["MouseBtn1", "MouseBtn2"]
+
+[[keymap.layer]]
+keys = "SK(MouseBtn8, explicit) SK(MouseBtn3, press) SK(MouseBtn2) SK(MouseBtn1, press) A"
+
+[[test]]
+name = "after_press_release_batch_uses_slot_order"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } }, # Reserve slot 0.
+  { tap = { pos = [0, 1], duration = 10 } }, # Independent release in slot 1.
+  { tap = { pos = [0, 2], duration = 10 } }, # Dependent release in slot 2.
+  { tap = { pos = [0, 0], duration = 10 } }, # Cancellation frees slot 0.
+  { tap = { pos = [0, 3], duration = 10 } }, # Slot 2 now depends on reused slot 0.
+  { tap = { pos = [0, 4], duration = 10 } },
+]
+expect = [
+  { mouse = { buttons = 128 } }, { mouse = { buttons = 132 } }, { mouse = { buttons = 134 } },
+  { mouse = { buttons = 6 } }, { mouse = { buttons = 7 } }, ["A"],
+  { mouse = { buttons = 6 } }, { mouse = { buttons = 2 } }, { mouse = {} }, [],
+]
+
+[[test]]
+name = "before_press_release_batch_uses_slot_order"
+behavior.sticky_key.profiles.press.release_on = ["before_next_press"]
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 1], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 0], duration = 10 } },
+  { tap = { pos = [0, 3], duration = 10 } },
+  { tap = { pos = [0, 4], duration = 10 } },
+]
+expect = [
+  { mouse = { buttons = 128 } }, { mouse = { buttons = 132 } }, { mouse = { buttons = 134 } },
+  { mouse = { buttons = 6 } }, { mouse = { buttons = 7 } },
+  { mouse = { buttons = 6 } }, { mouse = { buttons = 2 } }, { mouse = {} }, ["A"], [],
+]

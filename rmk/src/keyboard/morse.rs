@@ -270,11 +270,7 @@ impl<'a> Keyboard<'a> {
             } else {
                 key.action
             };
-            match action {
-                KeyAction::Single(action) => self.process_action(action, key.event).await,
-                KeyAction::Tap(action) => self.process_key_action_tap(action, key.event).await,
-                _ => (),
-            }
+            self.process_non_morse_key(action, key.event, key.press_time()).await;
         }
     }
 
