@@ -454,7 +454,7 @@ impl<'a> Keyboard<'a> {
                 }
 
                 let action = Self::action_from_pattern(self.keymap, key_action, TAP); //tap action
-                self.process_action(action, event).await;
+                self.process_non_morse_key(action, event, event_time).await;
                 // Drop any existing held entry at this position (e.g. an EarlyFired entry left by
                 // a previous quick tap) before inserting the new one. The held buffer assumes one
                 // entry per position; without this the release handler would find the stale entry
@@ -507,7 +507,8 @@ impl<'a> Keyboard<'a> {
                                 };
                                 debug!("Pattern after unilateral tap or flow tap: {:?}", pattern);
                                 let action = Self::action_from_pattern(self.keymap, &held_key.action, pattern);
-                                self.process_action(action, held_key.event).await;
+                                self.process_non_morse_key(action, held_key.event, held_key.press_time())
+                                    .await;
                                 held_key.state = KeyState::ProcessedButReleaseNotReportedYet(action);
                                 // Push back after triggered tap
                                 self.held_buffer.push(held_key);
@@ -550,7 +551,8 @@ impl<'a> Keyboard<'a> {
                                     keyboard_state_updated = true;
                                     debug!("pattern after permissive hold: {:?}", pattern);
                                     let action = Self::action_from_pattern(self.keymap, &action, pattern);
-                                    self.process_action(action, held_key.event).await;
+                                    self.process_non_morse_key(action, held_key.event, held_key.press_time())
+                                        .await;
                                     held_key.state = KeyState::ProcessedButReleaseNotReportedYet(action);
                                     // Push back after triggered hold
                                     self.held_buffer.push(held_key);
@@ -611,7 +613,8 @@ impl<'a> Keyboard<'a> {
                                         && !defer_for_quick_tap
                                     {
                                         debug!("tap prediction {:?} -> {:?}", pattern, action);
-                                        self.process_action(action, held_key.event).await;
+                                        self.process_non_morse_key(action, held_key.event, held_key.press_time())
+                                            .await;
                                         held_key.state = KeyState::ProcessedButReleaseNotReportedYet(action);
                                         resolved = true;
                                     }
@@ -833,9 +836,16 @@ impl<'a> Keyboard<'a> {
     }
 
     async fn process_non_morse_key(&mut self, action: KeyAction, event: KeyboardEvent, at: Instant) {
+        if let KeyAction::Tap(action) = action {
+            self.process_key_action_tap(KeyAction::Single(action), event).await;
+        } else {
+            self.process_resolved_key(action, event, at).await;
+        }
+    }
+
+    async fn process_resolved_key(&mut self, action: KeyAction, event: KeyboardEvent, at: Instant) {
         match action {
-            KeyAction::Single(action) => self.process_action(action, event).await,
-            KeyAction::Tap(action) => self.process_key_action_tap(action, event).await,
+            KeyAction::Single(action) | KeyAction::Tap(action) => self.process_action(action, event).await,
             KeyAction::Sticky(action, profile) => self.process_sticky_key(action, profile, event, at).await,
             _ => (),
         }
@@ -1325,17 +1335,17 @@ impl<'a> Keyboard<'a> {
     }
 
     /// Tap action, send a key when the key is pressed, then release the key.
-    async fn process_key_action_tap(&mut self, action: Action, mut event: KeyboardEvent) {
+    async fn process_key_action_tap(&mut self, action: KeyAction, mut event: KeyboardEvent) {
         debug!("TAP action: {:?}, {:?}", action, event);
 
         if event.pressed {
-            self.process_action(action, event).await;
+            self.process_resolved_key(action, event, Instant::now()).await;
 
             // Wait 10ms, then send release
             Timer::after_millis(10).await;
 
             event.pressed = false;
-            self.process_action(action, event).await;
+            self.process_resolved_key(action, event, Instant::now()).await;
         }
     }
 
@@ -1511,10 +1521,7 @@ impl<'a> Keyboard<'a> {
             self.send_report(report).await;
             yield_now().await;
         }
-        if mods.into_bits() != 0 && !event.pressed {
-            self.send_keyboard_report_with_resolved_modifiers(false).await;
-        }
-        false
+        mods.into_bits() != 0 && !event.pressed
     }
 
     /// Fire pending mouse repeats: recalculate movement with acceleration,
@@ -1633,7 +1640,7 @@ impl<'a> Keyboard<'a> {
         };
         match op {
             // Held for the same 10ms as a tap-hold's tap.
-            MacroOp::Tap(action) => self.process_key_action_tap(action, press).await,
+            MacroOp::Tap(action) => self.process_key_action_tap(KeyAction::Single(action), press).await,
             MacroOp::Press(action) => self.process_action(action, press).await,
             MacroOp::Release(action) => self.process_action(action, release).await,
             // Two reports whose modifiers are the character's own shift and nothing

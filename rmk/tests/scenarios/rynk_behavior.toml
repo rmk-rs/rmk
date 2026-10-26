@@ -128,8 +128,8 @@ expect = [["A"], [], ["X"], [], ["A"], [], ["Y"], []]
 name = "morse_write_changes_the_tap"
 steps = [
   { rynk = { cmd = "SetMorse", payload = { index = 0, config = { profile = { unilateral_tap = false, mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [
-    [2, { Key = { Hid = "A" } }],
-    [3, { Key = { Hid = "B" } }],
+    [2, { Single = { Key = { Hid = "A" } } }],
+    [3, { Single = { Key = { Hid = "B" } } }],
   ] } } } },
   { delay = 150 },
   { tap = { pos = [0, 2], duration = 20 } },
@@ -140,8 +140,8 @@ expect = [["A"], []]
 name = "morse_hold_resolves_after_the_written_timeout"
 steps = [
   { rynk = { cmd = "SetMorse", payload = { index = 0, config = { profile = { unilateral_tap = false, mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [
-    [2, { Key = { Hid = "A" } }],
-    [3, { Key = { Hid = "B" } }],
+    [2, { Single = { Key = { Hid = "A" } } }],
+    [3, { Single = { Key = { Hid = "B" } } }],
   ] } } } },
   { delay = 150 },
   { tap = { pos = [0, 2], duration = 120 } },
@@ -154,18 +154,18 @@ expect = [["B"], []]
 name = "morse_read_returns_what_was_written"
 steps = [
   { rynk = { cmd = "SetMorse", payload = { index = 0, config = { profile = { unilateral_tap = true, enable_flow_tap = false, mode = "PermissiveHold", hold_timeout_ms = 120, gap_timeout_ms = 90 }, actions = [
-    [2, { Key = { Hid = "A" } }],
+    [2, { Single = { Key = { Hid = "A" } } }],
   ] } } } },
   { rynk = { cmd = "GetMorse", payload = 0, reply = { profile = { unilateral_tap = true, enable_flow_tap = false, mode = "PermissiveHold", hold_timeout_ms = 120, gap_timeout_ms = 90 }, actions = [
-    [2, { Key = { Hid = "A" } }],
+    [2, { Single = { Key = { Hid = "A" } } }],
   ] } } },
   { rynk = { cmd = "SetMorse", payload = { index = 0, config = { profile = { unilateral_tap = false, enable_flow_tap = true, mode = "HoldOnOtherPress", hold_timeout_ms = 200, gap_timeout_ms = 150 }, actions = [
-    [2, { Key = { Hid = "B" } }],
-    [3, { Key = { Hid = "C" } }],
+    [2, { Single = { Key = { Hid = "B" } } }],
+    [3, { Single = { Key = { Hid = "C" } } }],
   ] } } } },
   { rynk = { cmd = "GetMorse", payload = 0, reply = { profile = { unilateral_tap = false, enable_flow_tap = true, mode = "HoldOnOtherPress", hold_timeout_ms = 200, gap_timeout_ms = 150 }, actions = [
-    [2, { Key = { Hid = "B" } }],
-    [3, { Key = { Hid = "C" } }],
+    [2, { Single = { Key = { Hid = "B" } } }],
+    [3, { Single = { Key = { Hid = "C" } } }],
   ] } } },
 ]
 
@@ -209,12 +209,12 @@ steps = [
 name = "morse_bulk_reads_back_a_bulk_write"
 steps = [
   { rynk = { cmd = "SetMorseBulk", payload = { start_index = 6, configs = [
-    { profile = { mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [[2, { Key = { Hid = "A" } }]] },
-    { profile = { mode = "Normal", hold_timeout_ms = 90, gap_timeout_ms = 90 }, actions = [[2, { Key = { Hid = "B" } }]] },
+    { profile = { mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [[2, { Single = { Key = { Hid = "A" } } }]] },
+    { profile = { mode = "Normal", hold_timeout_ms = 90, gap_timeout_ms = 90 }, actions = [[2, { Single = { Key = { Hid = "B" } } }]] },
   ] } } },
   { rynk = { cmd = "GetMorseBulk", payload = { start_index = 6 }, reply = { configs = [
-    { profile = { mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [[2, { Key = { Hid = "A" } }]] },
-    { profile = { mode = "Normal", hold_timeout_ms = 90, gap_timeout_ms = 90 }, actions = [[2, { Key = { Hid = "B" } }]] },
+    { profile = { mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [[2, { Single = { Key = { Hid = "A" } } }]] },
+    { profile = { mode = "Normal", hold_timeout_ms = 90, gap_timeout_ms = 90 }, actions = [[2, { Single = { Key = { Hid = "B" } } }]] },
   ] } } },
 ]
 
@@ -232,9 +232,9 @@ steps = [
 name = "morse_bulk_round_trips"
 steps = [
   { rynk = { cmd = "SetMorseBulk", payload = { start_index = 0, configs = [
-    { profile = { mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [[2, { Key = { Hid = "A" } }]] },
+    { profile = { mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [[2, { Single = { Key = { Hid = "A" } } }]] },
   ] } } },
-  { rynk = { cmd = "GetMorse", payload = 0, reply = { profile = { mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [[2, { Key = { Hid = "A" } }]] } } },
+  { rynk = { cmd = "GetMorse", payload = 0, reply = { profile = { mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [[2, { Single = { Key = { Hid = "A" } } }]] } } },
 ]
 
 # All three tables are filled to their compiled capacity, so slot 8 of an 8-slot
@@ -246,7 +246,7 @@ steps = [
   { rynk = { cmd = "GetCombo", payload = 8, error = "Invalid" } },
   { rynk = { cmd = "SetCombo", payload = { index = 8, config = { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "C" } } } } }, error = "Invalid" } },
   { rynk = { cmd = "GetMorse", payload = 8, error = "Invalid" } },
-  { rynk = { cmd = "SetMorse", payload = { index = 8, config = { profile = { mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [[2, { Key = { Hid = "A" } }]] } }, error = "Invalid" } },
+  { rynk = { cmd = "SetMorse", payload = { index = 8, config = { profile = { mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [[2, { Single = { Key = { Hid = "A" } } }]] } }, error = "Invalid" } },
   { rynk = { cmd = "GetFork", payload = 8, error = "Invalid" } },
   { rynk = { cmd = "SetFork", payload = { index = 8, config = { trigger = { Single = { Key = { Hid = "A" } } }, negative_output = { Single = { Key = { Hid = "B" } } }, positive_output = { Single = { Key = { Hid = "C" } } }, match_any = { modifiers = { left_shift = true }, leds = {}, mouse = {} }, match_none = { modifiers = {}, leds = {}, mouse = {} }, kept_modifiers = {}, bindable = true, layers = 0xFFFFFFFF } }, error = "Invalid" } },
 ]

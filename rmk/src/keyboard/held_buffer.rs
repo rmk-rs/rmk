@@ -1,5 +1,5 @@
 use embassy_time::Instant;
-use rmk_types::action::{Action, KeyAction};
+use rmk_types::action::KeyAction;
 use rmk_types::morse::MorsePattern;
 
 use crate::event::{KeyboardEvent, KeyboardEventSource};
@@ -121,12 +121,12 @@ pub enum KeyState {
     /// After flow-tap resolved the key as a tap: the tap action's press HID report
     /// is sent and held while the key is physically held. On release the action is
     /// released and the key is kept as `EarlyFired` so hold_after_tap can continue.
-    FlowTapped(Action),
+    FlowTapped(KeyAction),
 
     /// The corresponding action is already executed (so the Pressed HID report is sent),
     /// but the release HID report is not sent yet (will be sent only when the corresponding
     /// key is really released).
-    ProcessedButReleaseNotReportedYet(Action),
+    ProcessedButReleaseNotReportedYet(KeyAction),
     // The Idle state is represented by the removal from the HeldBuffer
 }
 
@@ -167,6 +167,8 @@ impl HeldKey {
 
 #[cfg(test)]
 mod tests {
+    use rmk_types::action::Action;
+
     use super::*;
 
     fn assert_matches_reference(buffer: &HeldBuffer, expected: &[HeldKey]) {

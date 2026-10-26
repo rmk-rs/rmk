@@ -66,7 +66,7 @@ impl MaxSize for GetMorseBulkResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::Action;
+    use crate::action::{Action, KeyAction};
     use crate::constants::MORSE_SIZE;
     use crate::keycode::HidKeyCode;
     use crate::modifier::ModifierCombination;
@@ -74,13 +74,16 @@ mod tests {
     use crate::protocol::rynk::tests::{assert_max_size_bound, round_trip};
 
     /// Build a `Morse` whose `actions` `LinearMap` is filled to `MORSE_SIZE`
-    /// distinct entries, each using a multi-field `Action` variant so both the
+    /// distinct entries, each using a multi-field `KeyAction` variant so both the
     /// entry count *and* the per-entry encoded size meaningfully exercise the
     /// manual `MaxSize` impl. `MorsePattern::from_u16(0)` panics (the empty
     /// pattern is `0b1`), so patterns start at 1.
     fn full_morse() -> Morse {
         // Use a multi-byte action so MaxSize catches per-entry under-counts.
-        let action = Action::KeyWithModifier(HidKeyCode::A, ModifierCombination::new());
+        let action = KeyAction::Sticky(
+            Action::KeyWithModifier(HidKeyCode::A, ModifierCombination::new()),
+            u8::MAX,
+        );
         let mut m = Morse {
             profile: MorseProfile::const_default(),
             actions: heapless::LinearMap::new(),
@@ -107,7 +110,10 @@ mod tests {
             profile: MorseProfile::const_default(),
             actions: heapless::LinearMap::new(),
         };
-        morse.actions.insert(MorsePattern::from_u16(0b101), Action::No).unwrap();
+        morse
+            .actions
+            .insert(MorsePattern::from_u16(0b101), KeyAction::No)
+            .unwrap();
         round_trip(&SetMorseRequest {
             index: 0,
             config: morse,

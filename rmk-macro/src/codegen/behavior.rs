@@ -112,7 +112,7 @@ fn expand_morse_action_pair(
         }
     }
     let action = parse_key(action_pair.action.to_owned(), names);
-    quote! { (rmk::types::morse::MorsePattern::from_u16(#pattern), #action.to_action()) }
+    quote! { (rmk::types::morse::MorsePattern::from_u16(#pattern), #action) }
 }
 
 fn expand_morse_actions(
@@ -311,27 +311,12 @@ fn expand_morses(
                 panic!("\n❌ keyboard.toml: `tap_actions` and `hold_actions` cannot be used together with `tap`, `hold`, `hold_after_tap`, or `double_tap`.");
             }
 
-            let tap_actions_def = match &morse.tap_actions {
-                Some(tap_actions) => {
-                    let actions = tap_actions.iter().map(|action| {
-                        let parsed_action = parse_key(action.clone(), names);
-                        quote! { #parsed_action }
-                    });
-                    quote! { ::rmk::heapless::Vec::from_iter([#(#actions.to_action()),*]) }
-                }
-                None => quote! { ::rmk::heapless::Vec::new() },
+            let expand_actions = |actions: &Option<Vec<String>>| {
+                let actions = actions.iter().flatten().map(|action| parse_key(action.clone(), names));
+                quote! { ::rmk::heapless::Vec::from_iter([#(#actions),*]) }
             };
-
-            let hold_actions_def = match &morse.hold_actions {
-                Some(hold_actions) => {
-                    let actions = hold_actions.iter().map(|action| {
-                        let parsed_action = parse_key(action.clone(), names);
-                        quote! { #parsed_action }
-                    });
-                    quote! { ::rmk::heapless::Vec::from_iter([#(#actions.to_action()),*]) }
-                }
-                None => quote! { ::rmk::heapless::Vec::new() },
-            };
+            let tap_actions_def = expand_actions(&morse.tap_actions);
+            let hold_actions_def = expand_actions(&morse.hold_actions);
 
             quote! {
                 ::rmk::types::morse::Morse::new_with_actions(
@@ -348,10 +333,10 @@ fn expand_morses(
 
             quote! {
                 ::rmk::types::morse::Morse::new_from_vial(
-                    #tap.to_action(),
-                    #hold.to_action(),
-                    #hold_after_tap.to_action(),
-                    #double_tap.to_action(),
+                    #tap,
+                    #hold,
+                    #hold_after_tap,
+                    #double_tap,
                     #profile,
                 )
             }

@@ -228,20 +228,40 @@ fn tap_capslock_interval_reads_back_its_own_value() {
 }
 
 #[test]
-fn morse_write_changes_the_tap() {
+fn morse_write_preserves_sticky_modifiers_and_layers() {
     test_block_on(async {
-        let mut keyboard = SimKeyboard::builder([[[rmk::td!(0)]]]).build().await;
+        let mut keyboard = SimKeyboard::builder([[[rmk::td!(0), k!(A)]], [[KeyAction::Transparent, k!(C)]]])
+            .build()
+            .await;
         let mut request = dynamic(VialDynamic::DynamicVialMorseSet, 0);
-        for (idx, action) in [k!(A), k!(B), k!(C), k!(D)].into_iter().enumerate() {
-            let start = 4 + idx * 2;
-            request[start..start + 2].copy_from_slice(&to_via_keycode(action).to_le_bytes());
+        let mut reply = dynamic(VialDynamic::DynamicVialMorseGet, 0);
+        reply[0] = 0;
+        for (idx, action) in [osm!(ModifierCombination::LSHIFT), k!(LShift), osl!(1), k!(B)]
+            .into_iter()
+            .enumerate()
+        {
+            let keycode = to_via_keycode(action).to_le_bytes();
+            request[4 + idx * 2..6 + idx * 2].copy_from_slice(&keycode);
+            reply[1 + idx * 2..3 + idx * 2].copy_from_slice(&keycode);
         }
         request[12..14].copy_from_slice(&80u16.to_le_bytes());
+        reply[9..11].copy_from_slice(&80u16.to_le_bytes());
         keyboard.echo_with_status(request);
+        keyboard.host_exchange(dynamic(VialDynamic::DynamicVialMorseGet, 0), reply);
         keyboard
-            .delay(150)
             .tap(0, 0, 20)
-            .expect_keys([HidKeyCode::A])
+            .delay(100)
+            .tap(0, 1, 10)
+            .expect_keys_with_mods(2, [])
+            .expect_keys_with_mods(2, [HidKeyCode::A])
+            .expect_keys_with_mods(2, [])
+            .expect_keys([]);
+        keyboard
+            .tap(0, 0, 10)
+            .tap(0, 0, 10)
+            .delay(100)
+            .tap(0, 1, 10)
+            .expect_keys([HidKeyCode::C])
             .expect_keys([])
             .run()
             .await;

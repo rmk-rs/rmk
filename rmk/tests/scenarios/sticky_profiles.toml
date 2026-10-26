@@ -32,7 +32,7 @@ wait_timeout = "0ms"
 keys = """
 SK(LAlt, alttab)  Tab                            A           MO(1)       SK(A)                  SK(LShift, layerexit)  LCtrl  LAlt  AudioVolUp  TG(1)
 SK(MO(1))         SK(WM(Tab, LAlt), alttab)      MouseBtn1   OSM(LCtrl)  OSM(LCtrl | LShift)    MACRO(0)               SK(LCtrl, alttab)  OSL(1)  SystemSleep  TO(0)
-SK(Again) SK(LAlt) SK(LAlt) DF(1) No LShift RShift OSM(LAlt, alt_tab) OSM(LShift, release) OSL(1, release)
+SK(Again) SK(LAlt) SK(LAlt) DF(1) SK(WM(MouseBtn1,LShift)) LShift RShift OSM(LAlt, alt_tab) OSM(LShift, release) OSL(1, release)
 """
 
 [[keymap.layer]]
@@ -587,14 +587,17 @@ expect = [["LAlt"], { consumer = ["AudioVolUp"] }, { consumer = [] }, [], ["A"],
 # Sticky cleanup must not restore physical Ctrl in the middle of a literal character.
 [[test]]
 name = "text_sticky_cleanup_preserves_character_modifier_isolation"
+behavior.sticky_key.release_on = ["after_next_press"]
 behavior.macro = { macros = [{ operations = [{ operation = "text", text = "a" }] }] }
 steps = [
   { press = [0, 6] },
   { tap = { pos = [0, 5], duration = 10 } },
   { tap = { pos = [1, 5], duration = 10 } },
+  { tap = { pos = [2, 4], duration = 10 } },
+  { tap = { pos = [1, 5], duration = 10 } },
   { release = [0, 6] },
 ]
-expect = [["LCtrl"], ["LCtrl", "LShift"], ["A"], [], ["LCtrl"], []]
+expect = [["LCtrl"], ["LCtrl", "LShift"], ["A"], [], ["LCtrl"], ["LCtrl", "LShift"], { mouse = { buttons = 1 } }, ["A"], { mouse = {} }, [], ["LCtrl"], []]
 
 [[test]]
 name = "macro_consumer_aliases_release_sticky"

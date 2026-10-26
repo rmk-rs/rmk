@@ -1,5 +1,5 @@
 use embassy_time::{Duration, Instant};
-use rmk_types::action::{Action, KeyAction};
+use rmk_types::action::KeyAction;
 use rmk_types::morse::{HOLD, MorseMode, MorsePattern, TAP};
 
 use crate::event::KeyboardEvent;
@@ -22,7 +22,7 @@ impl<'a> Keyboard<'a> {
                 let final_action = Self::try_predict_final_action(self.keymap, &key.action, pattern);
                 if let Some(action) = final_action {
                     debug!("hold prediction {:?} -> {:?}", pattern, action);
-                    self.process_action(action, key.event).await;
+                    self.process_non_morse_key(action, key.event, key.press_time()).await;
                     if let Some(k) = self.held_buffer.find_source_mut(key.event.source) {
                         k.state = KeyState::ProcessedButReleaseNotReportedYet(action);
                     }
@@ -81,12 +81,12 @@ impl<'a> Keyboard<'a> {
                                 && event_time.saturating_duration_since(k.press_time()) <= window
                             {
                                 let tap_action = Self::action_from_pattern(self.keymap, key_action, TAP);
-                                if tap_action != Action::No {
+                                if !tap_action.is_empty() {
                                     debug!("Quick-tap fire: {:?}", tap_action);
                                     k.state = KeyState::ProcessedButReleaseNotReportedYet(tap_action);
                                     k.timeout_time = timeout_time;
                                     self.held_buffer.update_press_time(event.source, event_time);
-                                    self.process_action(tap_action, event).await;
+                                    self.process_non_morse_key(tap_action, event, event_time).await;
                                     return;
                                 }
                             }
@@ -158,7 +158,7 @@ impl<'a> Keyboard<'a> {
                         if !hold
                             && pattern.is_all_taps()
                             && let Some(action) = final_action
-                            && action != Action::No
+                            && !action.is_empty()
                             && let Some(window) = Self::quick_tap_window(self.keymap, &k.action)
                         {
                             let stashed_action = k.action;
@@ -233,17 +233,17 @@ impl<'a> Keyboard<'a> {
                         let _ = self.held_buffer.remove_if(|k| k.event.source == event.source);
                         // Process the release action
                         debug!("[morse] Releasing morse key: {:?}", event);
-                        self.process_action(action, event).await;
+                        self.process_non_morse_key(action, event, event_time).await;
                     }
                     KeyState::FlowTapped(action) => {
                         // Flow-tap fired the tap action and is holding it down; release it now.
                         debug!("[morse] Releasing flow-tapped morse key: {:?}", event);
-                        self.process_action(action, event).await;
+                        self.process_non_morse_key(action, event, event_time).await;
                         // If the key has a hold-after-tap action, keep it in the buffer as if it
                         // had been early-fired so a re-press within the gap timeout continues into
                         // hold-after-tap (the tap-then-hold repeat). Without this a flow-tapped
                         // tap leaves no trace and the next press-and-hold resolves as a fresh hold.
-                        if Self::action_from_pattern(self.keymap, key_action, TAP.followed_by_hold()) != Action::No {
+                        if !Self::action_from_pattern(self.keymap, key_action, TAP.followed_by_hold()).is_empty() {
                             let now = Instant::now();
                             let timeout = Self::morse_timeout(self.keymap, key_action, false);
                             if let Some(k) = self.held_buffer.find_source_mut(event.source) {
@@ -284,18 +284,18 @@ impl<'a> Keyboard<'a> {
         })
     }
 
-    pub fn action_from_pattern(keymap: &KeyMap, keyAction: &KeyAction, pattern: MorsePattern) -> Action {
+    pub fn action_from_pattern(keymap: &KeyMap, keyAction: &KeyAction, pattern: MorsePattern) -> KeyAction {
         match keyAction {
             KeyAction::TapHold(tap_action, hold_action, _) => match pattern {
-                TAP => *tap_action,
-                HOLD => *hold_action,
-                _ => Action::No,
+                TAP => KeyAction::Single(*tap_action),
+                HOLD => KeyAction::Single(*hold_action),
+                _ => KeyAction::No,
             },
             KeyAction::Morse(idx) => keymap
                 .get_morse(*idx as usize)
-                .map(|morse| morse.get(pattern).unwrap_or(Action::No))
-                .unwrap_or(Action::No),
-            _ => Action::No,
+                .map(|morse| morse.get(pattern).unwrap_or(KeyAction::No))
+                .unwrap_or(KeyAction::No),
+            _ => KeyAction::No,
         }
     }
 
@@ -418,7 +418,7 @@ impl<'a> Keyboard<'a> {
     /// Checks if the given pattern can fire its action early even though longer
     /// continuations exist. Returns Some(action) when the hold continuation has
     /// the same action and the tap continuation is not configured.
-    pub fn check_early_fire(keymap: &KeyMap, key_action: &KeyAction, pattern: MorsePattern) -> Option<Action> {
+    pub fn check_early_fire(keymap: &KeyMap, key_action: &KeyAction, pattern: MorsePattern) -> Option<KeyAction> {
         match key_action {
             KeyAction::Morse(idx) => {
                 let morse = keymap.get_morse(*idx as usize)?;
@@ -437,13 +437,13 @@ impl<'a> Keyboard<'a> {
         keymap: &KeyMap,
         keyAction: &KeyAction,
         pattern_start: MorsePattern,
-    ) -> Option<Action> {
+    ) -> Option<KeyAction> {
         match keyAction {
             KeyAction::TapHold(tap_action, hold_action, _) => {
                 if pattern_start.last_is_hold() {
-                    Some(*hold_action)
+                    Some(KeyAction::Single(*hold_action))
                 } else {
-                    Some(*tap_action)
+                    Some(KeyAction::Single(*tap_action))
                 }
             }
             KeyAction::Morse(idx) => keymap

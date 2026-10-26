@@ -9,7 +9,7 @@ use heapless::LinearMap;
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 
-use crate::action::Action;
+use crate::action::KeyAction;
 use crate::constants::MORSE_SIZE;
 
 // ---------------------------------------------------------------------------
@@ -412,16 +412,16 @@ pub struct Morse {
     pub profile: MorseProfile,
     /// The list of pattern -> action pairs, which can be triggered
     #[serde(with = "morse_actions_serde")]
-    #[cfg_attr(feature = "wasm", tsify(type = "[number, Action][]"))]
-    pub actions: LinearMap<MorsePattern, Action, MORSE_SIZE>,
+    #[cfg_attr(feature = "wasm", tsify(type = "[number, KeyAction][]"))]
+    pub actions: LinearMap<MorsePattern, KeyAction, MORSE_SIZE>,
 }
 
 impl MaxSize for Morse {
     // The custom serializer in `morse_actions_serde` (below) emits the
-    // `LinearMap` as `Vec<(u16, Action), MORSE_SIZE>` on the wire — keep that
+    // `LinearMap` as `Vec<(u16, KeyAction), MORSE_SIZE>` on the wire — keep that
     // shape in sync with the helper type parameter here.
     const POSTCARD_MAX_SIZE: usize =
-        MorseProfile::POSTCARD_MAX_SIZE + crate::heapless_vec_max_size::<(u16, Action), MORSE_SIZE>();
+        MorseProfile::POSTCARD_MAX_SIZE + crate::heapless_vec_max_size::<(u16, KeyAction), MORSE_SIZE>();
 }
 
 #[cfg(feature = "defmt")]
@@ -441,21 +441,32 @@ impl PartialEq for Morse {
         if self.profile != other.profile || self.actions.len() != other.actions.len() {
             return false;
         }
-        self.actions.iter().all(|(k, v)| other.actions.get(k) == Some(v))
+        self.actions
+            .iter()
+            .all(|(k, v)| other.actions.get(k).is_some_and(|other| same_output(*v, *other)))
     }
 }
 
 impl Eq for Morse {}
 
+fn same_output(left: KeyAction, right: KeyAction) -> bool {
+    left == right
+        && match (left, right) {
+            (KeyAction::Sticky(_, a), KeyAction::Sticky(_, b))
+            | (KeyAction::TapHold(_, _, a), KeyAction::TapHold(_, _, b)) => a == b,
+            _ => true,
+        }
+}
+
 /// Wire format note: `Morse` uses a custom serde impl for the `LinearMap`
-/// of actions. The on-wire shape is `(MorseProfile, Vec<(u16, Action)>)`.
+/// of actions. The on-wire shape is `(MorseProfile, Vec<(u16, KeyAction)>)`.
 /// The `morse_wire_format` test below pins this contract.
 impl Morse {
     pub fn new_from_vial(
-        tap: Action,
-        hold: Action,
-        hold_after_tap: Action,
-        double_tap: Action,
+        tap: KeyAction,
+        hold: KeyAction,
+        hold_after_tap: KeyAction,
+        double_tap: KeyAction,
         profile: MorseProfile,
     ) -> Self {
         let mut result = Self {
@@ -463,24 +474,20 @@ impl Morse {
             ..Default::default()
         };
 
-        if tap != Action::No {
-            _ = result.actions.insert(TAP, tap);
-        }
-        if hold != Action::No {
-            _ = result.actions.insert(HOLD, hold);
-        }
-        if double_tap != Action::No {
-            _ = result.actions.insert(DOUBLE_TAP, double_tap);
-        }
-        if hold_after_tap != Action::No {
-            _ = result.actions.insert(HOLD_AFTER_TAP, hold_after_tap);
+        for (pattern, action) in [
+            (TAP, tap),
+            (HOLD, hold),
+            (DOUBLE_TAP, double_tap),
+            (HOLD_AFTER_TAP, hold_after_tap),
+        ] {
+            let _ = result.put(pattern, action);
         }
         result
     }
 
     pub fn new_with_actions(
-        tap_actions: heapless::Vec<Action, MORSE_SIZE>,
-        hold_actions: heapless::Vec<Action, MORSE_SIZE>,
+        tap_actions: heapless::Vec<KeyAction, MORSE_SIZE>,
+        hold_actions: heapless::Vec<KeyAction, MORSE_SIZE>,
         profile: MorseProfile,
     ) -> Self {
         let mut result = Self {
@@ -488,16 +495,12 @@ impl Morse {
             ..Default::default()
         };
 
-        let mut pattern = 0b1u16;
-        for item in tap_actions.iter() {
-            pattern <<= 1;
-            let _ = result.put(MorsePattern::from_u16(pattern), *item);
-        }
-
-        let mut pattern = 0b1u16;
-        for item in hold_actions.iter() {
-            pattern <<= 1;
-            let _ = result.put(MorsePattern::from_u16(pattern | 0b1), *item);
+        for (actions, hold) in [(tap_actions, 0), (hold_actions, 1)] {
+            let mut pattern = 0b10u16;
+            for action in actions {
+                let _ = result.put(MorsePattern::from_u16(pattern | hold), action);
+                pattern <<= 1;
+            }
         }
 
         result
@@ -511,7 +514,7 @@ impl Morse {
         max_length
     }
 
-    pub fn try_predict_final_action(&self, pattern_start: MorsePattern) -> Option<Action> {
+    pub fn try_predict_final_action(&self, pattern_start: MorsePattern) -> Option<KeyAction> {
         if !self.actions.contains_key(&pattern_start) {
             return None;
         }
@@ -532,22 +535,22 @@ impl Morse {
         }
         self.actions
             .get(&pattern.followed_by_hold())
-            .is_some_and(|a| *a == *current_action)
+            .is_some_and(|a| same_output(*a, *current_action))
     }
 
     pub fn has_pattern_or_continuation(&self, pattern: MorsePattern) -> bool {
         self.actions.iter().any(|(p, _)| p.starts_with(pattern))
     }
 
-    pub fn get(&self, pattern: MorsePattern) -> Option<Action> {
+    pub fn get(&self, pattern: MorsePattern) -> Option<KeyAction> {
         self.actions.get(&pattern).copied()
     }
 
     /// Insert or update an action for the given pattern.
     ///
-    /// An `Action::No` removes the pattern. Returns `Err((pattern, action))` if the map is full.
-    pub fn put(&mut self, pattern: MorsePattern, action: Action) -> Result<(), (MorsePattern, Action)> {
-        if action != Action::No {
+    /// An empty action removes the pattern. Returns `Err((pattern, action))` if the map is full.
+    pub fn put(&mut self, pattern: MorsePattern, action: KeyAction) -> Result<(), (MorsePattern, KeyAction)> {
+        if !action.is_empty() {
             self.actions.insert(pattern, action).map(|_| ())
         } else {
             let _ = self.actions.remove(&pattern);
@@ -563,46 +566,20 @@ mod morse_actions_serde {
 
     use super::*;
 
-    pub fn serialize<S>(map: &LinearMap<MorsePattern, Action, MORSE_SIZE>, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(map: &LinearMap<MorsePattern, KeyAction, MORSE_SIZE>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         // Convert to Vec for serialization
-        let vec: heapless::Vec<(u16, Action), MORSE_SIZE> = map.iter().map(|(k, v)| (k.to_u16(), *v)).collect();
+        let vec: heapless::Vec<(u16, KeyAction), MORSE_SIZE> = map.iter().map(|(k, v)| (k.to_u16(), *v)).collect();
         vec.serialize(serializer)
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<LinearMap<MorsePattern, Action, MORSE_SIZE>, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<LinearMap<MorsePattern, KeyAction, MORSE_SIZE>, D::Error>
     where
         D: Deserializer<'de>,
     {
-        use core::fmt;
-
-        use serde::de::{SeqAccess, Visitor};
-
-        struct VecVisitor;
-
-        impl<'de> Visitor<'de> for VecVisitor {
-            type Value = heapless::Vec<(u16, Action), MORSE_SIZE>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                write!(formatter, "a sequence of (u16, Action) tuples")
-            }
-
-            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-            where
-                A: SeqAccess<'de>,
-            {
-                let mut vec = heapless::Vec::new();
-                while let Some(elem) = seq.next_element::<(u16, Action)>()? {
-                    vec.push(elem)
-                        .map_err(|_| serde::de::Error::custom("Vec capacity exceeded"))?;
-                }
-                Ok(vec)
-            }
-        }
-
-        let vec = deserializer.deserialize_seq(VecVisitor)?;
+        let vec = heapless::Vec::<(u16, KeyAction), MORSE_SIZE>::deserialize(deserializer)?;
         let mut map = LinearMap::new();
         for (pattern, action) in vec {
             if pattern == 0 {
@@ -621,96 +598,49 @@ mod tests {
 
     use super::*;
     use crate::action::Action;
+    use crate::action::KeyAction::Single;
     use crate::keycode::{HidKeyCode, KeyCode};
 
     #[test]
-    fn test_linear_map_serde_empty() {
-        let morse = Morse::default();
-
-        let mut buffer = [0u8; 128];
-        let serialized = postcard::to_slice(&morse, &mut buffer).unwrap();
-        let deserialized: Morse = postcard::from_bytes(serialized).unwrap();
-
-        assert_eq!(morse.actions.len(), deserialized.actions.len());
-        assert_eq!(morse.actions.len(), 0);
-    }
-
-    #[test]
-    fn test_linear_map_serde_single_entry() {
-        let mut morse = Morse::default();
-        morse.actions.insert(TAP, Action::Key(KeyCode::Hid(HidKeyCode::A))).ok();
-
-        let mut buffer = [0u8; 128];
-        let serialized = postcard::to_slice(&morse, &mut buffer).unwrap();
-        let deserialized: Morse = postcard::from_bytes(serialized).unwrap();
-
-        assert_eq!(morse.actions.len(), deserialized.actions.len());
-        assert_eq!(
-            deserialized.actions.get(&TAP),
-            Some(&Action::Key(KeyCode::Hid(HidKeyCode::A)))
-        );
-    }
-
-    #[test]
-    fn test_linear_map_serde_multiple_entries() {
-        let mut morse = Morse::default();
-        morse.actions.insert(TAP, Action::Key(KeyCode::Hid(HidKeyCode::A))).ok();
-        morse
-            .actions
-            .insert(HOLD, Action::Key(KeyCode::Hid(HidKeyCode::B)))
-            .ok();
-        morse
-            .actions
-            .insert(DOUBLE_TAP, Action::Key(KeyCode::Hid(HidKeyCode::C)))
-            .ok();
-        morse
-            .actions
-            .insert(HOLD_AFTER_TAP, Action::Key(KeyCode::Hid(HidKeyCode::D)))
-            .ok();
-
-        let mut buffer = [0u8; 128];
-        let serialized = postcard::to_slice(&morse, &mut buffer).unwrap();
-        let deserialized: Morse = postcard::from_bytes(serialized).unwrap();
-
-        assert_eq!(morse.actions.len(), deserialized.actions.len());
-        assert_eq!(morse.actions.len(), 4);
-
-        assert_eq!(
-            deserialized.actions.get(&TAP),
-            Some(&Action::Key(KeyCode::Hid(HidKeyCode::A)))
-        );
-        assert_eq!(
-            deserialized.actions.get(&HOLD),
-            Some(&Action::Key(KeyCode::Hid(HidKeyCode::B)))
-        );
-        assert_eq!(
-            deserialized.actions.get(&DOUBLE_TAP),
-            Some(&Action::Key(KeyCode::Hid(HidKeyCode::C)))
-        );
-        assert_eq!(
-            deserialized.actions.get(&HOLD_AFTER_TAP),
-            Some(&Action::Key(KeyCode::Hid(HidKeyCode::D)))
-        );
-    }
-
-    #[test]
-    fn test_linear_map_serde_with_profile() {
+    fn morse_round_trips_empty_single_multiple_and_sticky_outputs() {
+        let key = |code| Single(Action::Key(KeyCode::Hid(code)));
+        let single = [(TAP, key(HidKeyCode::A))];
+        let multiple = [
+            (TAP, key(HidKeyCode::A)),
+            (HOLD, key(HidKeyCode::B)),
+            (DOUBLE_TAP, key(HidKeyCode::C)),
+            (HOLD_AFTER_TAP, key(HidKeyCode::D)),
+        ];
+        let sticky = [
+            (TAP, KeyAction::Sticky(Action::LayerOn(1), 0)),
+            (HOLD_AFTER_TAP, KeyAction::Sticky(Action::LayerOn(1), 1)),
+        ];
+        let default = MorseProfile::default();
+        let custom = MorseProfile::new(Some(true), Some(MorseMode::PermissiveHold), Some(200), Some(150));
+        for (profile, actions) in [
+            (default, &[] as &[(MorsePattern, KeyAction)]),
+            (default, &single),
+            (default, &multiple),
+            (custom, &multiple),
+            (custom, &sticky),
+        ] {
+            let morse = Morse {
+                profile,
+                actions: actions.iter().copied().collect(),
+            };
+            let mut buffer = [0u8; Morse::POSTCARD_MAX_SIZE];
+            let bytes = postcard::to_slice(&morse, &mut buffer).unwrap();
+            assert_eq!(postcard::from_bytes::<Morse>(bytes).unwrap(), morse);
+        }
         let mut morse = Morse {
-            profile: MorseProfile::new(Some(true), Some(MorseMode::PermissiveHold), Some(200), Some(150)),
-            ..Default::default()
+            actions: sticky.into_iter().collect(),
+            ..Morse::default()
         };
-        morse.actions.insert(TAP, Action::Key(KeyCode::Hid(HidKeyCode::H))).ok();
-        morse
-            .actions
-            .insert(HOLD, Action::Key(KeyCode::Hid(HidKeyCode::I)))
-            .ok();
-
-        let mut buffer = [0u8; 128];
-        let serialized = postcard::to_slice(&morse, &mut buffer).unwrap();
-        let deserialized: Morse = postcard::from_bytes(serialized).unwrap();
-
-        assert_eq!(morse.profile, deserialized.profile);
-        assert_eq!(morse.actions.len(), deserialized.actions.len());
+        assert!(!morse.can_fire_early(TAP));
+        let previous = morse.clone();
+        morse.put(HOLD_AFTER_TAP, sticky[0].1).unwrap();
+        assert!(morse.can_fire_early(TAP));
+        assert_ne!(morse, previous);
     }
 
     #[test]
@@ -872,7 +802,7 @@ mod tests {
     }
 
     /// Pins the on-wire shape of `Morse`:
-    ///   `(MorseProfile, Vec<(u16, Action)>)`
+    ///   `(MorseProfile, Vec<(u16, KeyAction)>)`
     ///
     /// `Morse` uses a custom serde impl for the `LinearMap` of actions; this
     /// test verifies a Morse value can be reconstructed by manually
@@ -883,7 +813,10 @@ mod tests {
 
         // Build a Morse with known data
         let mut morse = Morse::default();
-        morse.actions.insert(MorsePattern::from_u16(0b11), Action::No).unwrap();
+        morse
+            .actions
+            .insert(MorsePattern::from_u16(0b11), KeyAction::No)
+            .unwrap();
 
         // Serialize the whole Morse
         let mut buf = [0u8; 256];
@@ -895,12 +828,12 @@ mod tests {
             postcard::take_from_bytes(bytes).expect("should deserialize MorseProfile first");
         assert_eq!(profile, MorseProfile::const_default());
 
-        // 2. actions: Vec<(u16, Action)> — which is what the custom serde produces
-        let (actions, rest): (heapless::Vec<(u16, Action), MORSE_SIZE>, &[u8]) =
+        // 2. actions: Vec<(u16, KeyAction)> — which is what the custom serde produces
+        let (actions, rest): (heapless::Vec<(u16, KeyAction), MORSE_SIZE>, &[u8]) =
             postcard::take_from_bytes(rest).expect("should deserialize actions vec second");
         assert!(rest.is_empty(), "no trailing bytes should remain");
 
         assert_eq!(actions.len(), 1);
-        assert_eq!(actions[0], (0b11u16, Action::No));
+        assert_eq!(actions[0], (0b11u16, KeyAction::No));
     }
 }

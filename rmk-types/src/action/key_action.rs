@@ -49,7 +49,10 @@ impl KeyAction {
     }
 
     pub fn is_empty(&self) -> bool {
-        matches!(self, KeyAction::No)
+        matches!(
+            self,
+            KeyAction::No | KeyAction::Single(Action::No) | KeyAction::Tap(Action::No)
+        )
     }
 }
 
