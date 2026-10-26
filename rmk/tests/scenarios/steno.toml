@@ -6,11 +6,11 @@ features = ["steno"]
 
 [layout]
 rows = 1
-cols = 3
-map = "(0,0) (0,1) (0,2)"
+cols = 4
+map = "(0,0) (0,1) (0,2) (0,3)"
 
 [[keymap.layer]]
-keys = "STN(S1) STN(T) STN(P)"
+keys = "STN(S1) STN(T) STN(P) STN(S1)"
 
 [[test]]
 name = "steno_key_sets_its_chord_bit"
@@ -39,5 +39,26 @@ expect = [
   { steno = ["S1", "T", "P"] },
   { steno = ["T", "P"] },
   { steno = ["P"] },
+  { steno = [] },
+]
+
+# The documented layout repeats S1: releasing one position must not clear
+# the other held position or end the stroke before its next key arrives.
+[[test]]
+name = "shared_steno_key_stays_down_until_last_release"
+steps = [
+  { press = [0, 0] },
+  { press = [0, 3] },
+  { release = [0, 0] },
+  { press = [0, 1] },
+  { release = [0, 1] },
+  { release = [0, 3] },
+]
+expect = [
+  { steno = ["S1"] },
+  { steno = ["S1"] },
+  { steno = ["S1"] },
+  { steno = ["S1", "T"] },
+  { steno = ["S1"] },
   { steno = [] },
 ]

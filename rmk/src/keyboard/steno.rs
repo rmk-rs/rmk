@@ -14,17 +14,22 @@ use rmk_types::steno::StenoKey;
 
 use crate::hid::{Report, StenoReport};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct StenoChord {
     /// Live bitmap of currently-held steno keys. Stored such that
     /// `state.to_be_bytes()` already has the wire-format bit order:
     /// chart index 0 = MSB of the first byte.
     state: u64,
+    /// Several physical keys may map to one steno key, such as the number bar.
+    held: [u8; 64],
 }
 
 impl StenoChord {
     pub(crate) const fn new() -> Self {
-        Self { state: 0 }
+        Self {
+            state: 0,
+            held: [0; 64],
+        }
     }
 
     /// Update live state for a steno key event. Returns a report reflecting
@@ -35,10 +40,15 @@ impl StenoChord {
             return None;
         }
         let mask = 1u64 << (63 - idx);
+        let held = &mut self.held[idx as usize];
         if pressed {
+            *held = held.saturating_add(1);
             self.state |= mask;
         } else {
-            self.state &= !mask;
+            *held = held.saturating_sub(1);
+            if *held == 0 {
+                self.state &= !mask;
+            }
         }
         Some(Report::StenoReport(StenoReport {
             keys: self.state.to_be_bytes(),
