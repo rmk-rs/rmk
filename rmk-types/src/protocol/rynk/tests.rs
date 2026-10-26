@@ -303,10 +303,10 @@ fn exemplars() -> Exemplars {
         ModifierCombination::LSHIFT,
         true,
     );
-    // Pins Morse's custom serde shape: (MorseProfile, Vec<(u16, Action)>).
+    // Pins Morse's custom serde shape: (MorseProfile, Vec<(u16, KeyAction)>).
     let mut morse_actions = heapless::LinearMap::new();
     morse_actions
-        .insert(TAP, Action::Key(KeyCode::Hid(HidKeyCode::A)))
+        .insert(TAP, KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A))))
         .unwrap();
     let morse = Morse {
         profile: MorseProfile::const_default(),

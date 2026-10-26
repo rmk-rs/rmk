@@ -100,7 +100,7 @@ mod tests {
     /// Vial's four fixed actions, a partly filled table, and raw morse patterns.
     #[test]
     fn morse_round_trips_through_a_storage_value() {
-        let key = |k| Action::Key(KeyCode::Hid(k));
+        let key = |k| rmk_types::action::KeyAction::Single(Action::Key(KeyCode::Hid(k)));
 
         let vial = Morse::new_from_vial(
             key(HidKeyCode::A),

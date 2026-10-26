@@ -275,19 +275,19 @@ pub(crate) async fn process_vial<'a>(
                         // Pack morse data into report
                         LittleEndian::write_u16(
                             &mut report.input_data[1..3],
-                            to_via_keycode(morse.get(TAP).map_or(KeyAction::No, KeyAction::Single)),
+                            to_via_keycode(morse.get(TAP).unwrap_or(KeyAction::No)),
                         );
                         LittleEndian::write_u16(
                             &mut report.input_data[3..5],
-                            to_via_keycode(morse.get(HOLD).map_or(KeyAction::No, KeyAction::Single)),
+                            to_via_keycode(morse.get(HOLD).unwrap_or(KeyAction::No)),
                         );
                         LittleEndian::write_u16(
                             &mut report.input_data[5..7],
-                            to_via_keycode(morse.get(DOUBLE_TAP).map_or(KeyAction::No, KeyAction::Single)),
+                            to_via_keycode(morse.get(DOUBLE_TAP).unwrap_or(KeyAction::No)),
                         );
                         LittleEndian::write_u16(
                             &mut report.input_data[7..9],
-                            to_via_keycode(morse.get(HOLD_AFTER_TAP).map_or(KeyAction::No, KeyAction::Single)),
+                            to_via_keycode(morse.get(HOLD_AFTER_TAP).unwrap_or(KeyAction::No)),
                         );
                         let timeout_ms = morse.profile.hold_timeout_ms().unwrap_or(250);
                         LittleEndian::write_u16(&mut report.input_data[9..11], timeout_ms);
@@ -311,10 +311,10 @@ pub(crate) async fn process_vial<'a>(
 
                         let _ = ctx
                             .update_morse(morse_idx, |morse: &mut Morse| {
-                                let _ = morse.put(TAP, tap.to_action());
-                                let _ = morse.put(DOUBLE_TAP, double_tap.to_action());
-                                let _ = morse.put(HOLD, hold.to_action());
-                                let _ = morse.put(HOLD_AFTER_TAP, hold_after_tap.to_action());
+                                let _ = morse.put(TAP, tap);
+                                let _ = morse.put(DOUBLE_TAP, double_tap);
+                                let _ = morse.put(HOLD, hold);
+                                let _ = morse.put(HOLD_AFTER_TAP, hold_after_tap);
                                 morse.profile.set_hold_timeout_ms(timeout_ms);
                                 morse.profile.set_gap_timeout_ms(timeout_ms);
                             })

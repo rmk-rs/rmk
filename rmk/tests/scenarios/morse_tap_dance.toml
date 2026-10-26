@@ -395,3 +395,31 @@ steps = [
   { release = [3, 6] },
 ]
 expect = [["LShift"], ["LShift", "D"], ["LShift"], []]
+
+[[test]]
+name = "sticky_tap_from_vial_style_morse"
+behavior.morse.morses = [{ tap = "OSM(LShift)", hold = "LShift" }]
+steps = [
+  { tap = { pos = [1, 2], duration = 10 } },
+  { tap = { pos = [1, 0], duration = 10 } },
+]
+expect = [["LShift"], ["LShift", "A"], ["LShift"], []]
+
+[[test]]
+name = "sticky_tap_from_action_lists"
+behavior.morse.morses = [{ tap_actions = ["OSM(LShift)"], hold_actions = ["OSL(1)"] }]
+steps = [
+  { tap = { pos = [1, 2], duration = 10 } },
+  { tap = { pos = [1, 0], duration = 10 } },
+]
+expect = [["LShift"], ["LShift", "A"], ["LShift"], []]
+
+[[test]]
+name = "sticky_profile_from_morse_patterns"
+behavior.sticky_key.profiles.press.release_on = ["after_next_press"]
+behavior.morse.morses = [{ morse_actions = [{ pattern = "0", action = "OSM(LShift, press)" }, { pattern = "1", action = "OSL(1)" }] }]
+steps = [
+  { tap = { pos = [1, 2], duration = 10 } },
+  { tap = { pos = [1, 0], duration = 10 } },
+]
+expect = [["LShift"], ["LShift", "A"], ["A"], []]
