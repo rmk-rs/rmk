@@ -164,9 +164,8 @@ where
         + ControllerCmdSync<LeRand>,
 {
     async fn run(&mut self) -> ! {
-        // Seeding through a reference keeps the controller out of the future across the await.
-        crate::ble::rng::seed_from_hardware(self.controller.as_ref().expect("Dongle::run called twice")).await;
         let controller = self.controller.take().expect("Dongle::run called twice");
+        crate::ble::rng::init(&controller).await;
         let mut resources = DongleBleResources::new();
         let stack = trouble_host::new(controller, &mut resources)
             .set_random_address(Address::random(self.address))

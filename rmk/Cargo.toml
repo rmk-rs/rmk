@@ -227,7 +227,7 @@ nrf52832_ble = ["_nrf_ble", "_no_usb"]
 nrf52811_ble = ["_nrf_ble", "_no_usb"]
 ## Enable feature if you want to use nRF52810 with BLE.
 nrf52810_ble = ["_nrf_ble", "_no_usb"]
-_nrf_ble = ["_ble", "dep:embassy-nrf"]
+_nrf_ble = ["_ble", "dep:embassy-nrf", "dep:p256-cortex-m4", "dep:zeroize"]
 
 ## Enable feature if you want to use ESP32C3 with BLE.
 esp32c3_ble = ["_esp_ble", "_no_usb"]
@@ -237,13 +237,13 @@ esp32c6_ble = ["_esp_ble", "_no_usb"]
 esp32h2_ble = ["_esp_ble", "_no_usb"]
 ## Enable feature if you want to use ESP32S3 with BLE.
 esp32s3_ble = ["_esp_ble"]
-_esp_ble = ["_ble", "dep:esp-hal"]
+_esp_ble = ["_ble", "dep:esp-hal", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
 
 ## Enable feature if you want to use RP2040W with BLE.
-pico_w_ble = ["_ble", "_no_subrating", "dep:embassy-rp"]
+pico_w_ble = ["_ble", "_no_subrating", "dep:embassy-rp", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
 
 ## Enable feature if you want to use SF32LB52x with BLE.
-sf32lb52x_ble = ["_ble"]
+sf32lb52x_ble = ["_ble", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
 
 ## Enable passkey entry support for BLE pairing
 passkey_entry = ["_ble", "rmk-types/passkey_entry"]
@@ -301,7 +301,7 @@ ssd1306 = { version = "0.10", optional = true, features = ["async"] }
 # BLE dependencies
 bt-hci = { version = "0.11", optional = true }
 embassy-crypto = { git = "https://github.com/embassy-rs/embassy.git", rev = "bd35bd7a7d19147c8bcae9c2eda99b25e597294c", optional = true }
-embassy-crypto-rustcrypto = { git = "https://github.com/embassy-rs/embassy.git", rev = "bd35bd7a7d19147c8bcae9c2eda99b25e597294c", optional = true, features = ["embassy-crypto-aes128-ecb", "embassy-crypto-aes128-cmac", "embassy-crypto-p256-ecdh"] }
+embassy-crypto-rustcrypto = { git = "https://github.com/embassy-rs/embassy.git", rev = "bd35bd7a7d19147c8bcae9c2eda99b25e597294c", optional = true, features = ["embassy-crypto-aes128-ecb", "embassy-crypto-aes128-cmac"] }
 rand_chacha = { version = "0.9", default-features = false, optional = true }
 trouble-host = { git = "https://github.com/embassy-rs/trouble", rev = "8cca99e5c217e7b4d5da0f12c9725b93623dc4d3", default-features = false, features = [
     "peripheral",
@@ -336,8 +336,11 @@ document-features = "0.2"
 # Architecture specific dependencies
 [target.'cfg(all(target_arch = "arm", target_os = "none"))'.dependencies]
 cortex-m = { version = "0.7" }
+p256-cortex-m4 = { version = "0.1.0-alpha.6", default-features = false, optional = true }
+zeroize = { version = "1", default-features = false, optional = true }
 
 [dev-dependencies]
+embassy-crypto-rustcrypto = { git = "https://github.com/embassy-rs/embassy.git", rev = "bd35bd7a7d19147c8bcae9c2eda99b25e597294c", features = ["embassy-crypto-p256-ecdh"] }
 critical-section = { version = "1.2", features = ["std"] }
 embedded-hal-mock = { version = "0.11.1", features = ["embedded-hal-async"] }
 # A hack for enabling 'std' feature in testing, ref: https://github.com/rust-lang/cargo/issues/2911

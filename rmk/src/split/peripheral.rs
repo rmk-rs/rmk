@@ -68,7 +68,7 @@ pub async fn run_rmk_split_peripheral<
 
     #[cfg(feature = "_ble")]
     {
-        crate::ble::rng::seed_from_hardware(&controller).await;
+        crate::ble::rng::init(&controller).await;
         // Exactly one link — the central.
         let mut resources: HostResources<DefaultPacketPool, 1, 4> = HostResources::new();
         let stack = trouble_host::new(controller, &mut resources)

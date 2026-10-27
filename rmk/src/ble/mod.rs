@@ -49,6 +49,8 @@ pub(crate) mod device_info;
 #[cfg(feature = "host")]
 pub(crate) mod host;
 pub(crate) mod led;
+#[cfg(all(feature = "_nrf_ble", target_arch = "arm", target_os = "none"))]
+mod p256;
 pub mod passkey;
 pub(crate) mod profile;
 pub(crate) mod rng;
@@ -154,9 +156,8 @@ where
         let preferred = crate::state::load_preferred_connection().await;
         crate::state::set_preferred_connection(preferred);
 
-        // Seeding through a reference keeps the controller out of the future across the await.
-        rng::seed_from_hardware(self.controller.as_ref().expect("BleTransport::run called twice")).await;
         let controller = self.controller.take().expect("BleTransport::run called twice");
+        rng::init(&controller).await;
         // Exactly one link — the host.
         let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
             HostResources::new();
@@ -195,9 +196,8 @@ impl<
         let preferred = crate::state::load_preferred_connection().await;
         crate::state::set_preferred_connection(preferred);
 
-        // Seeding through a reference keeps the controller out of the future across the await.
-        rng::seed_from_hardware(self.controller.as_ref().expect("BleTransport::run called twice")).await;
         let controller = self.controller.take().expect("BleTransport::run called twice");
+        rng::init(&controller).await;
 
         let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
             HostResources::new();
