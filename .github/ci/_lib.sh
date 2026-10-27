@@ -67,6 +67,7 @@ RMK_TEST_FEATURESETS=(
     "split,dfu_nrf,dfu_split,storage,async_matrix,embassy-nrf/nrf52840"
     "vial,host_lock,_no_usb,steno,passkey_entry"
     "rynk,_ble,split,async_matrix,storage"
+    "_ble,_ext_adv,split,storage,async_matrix"
     "dongle,_ble,storage,custom_message"
     "dongle,vial,_ble,storage,custom_message"
 )
