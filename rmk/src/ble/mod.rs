@@ -28,6 +28,8 @@ use crate::ble::battery_service::BleBatteryServer;
 use crate::ble::battery_service::BlePeripheralBatteryServer;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
+#[cfg(feature = "rynk")]
+use crate::ble::host::BleConfig;
 #[cfg(feature = "host")]
 use crate::ble::host::{HOST_WRITE_BUFFER_SIZE, HostGattHandler, HostWriteOutcome};
 use crate::ble::led::BleLedReader;
@@ -415,6 +417,9 @@ async fn run_ble_keyboard<
     profile_manager.load_bonded_devices().await;
     profile_manager.update_stack_bonds();
 
+    #[cfg(feature = "rynk")]
+    let host_config = host_service.map(BleConfig::new);
+
     let mut peripheral = stack.peripheral();
     let runner = stack.runner();
 
@@ -431,7 +436,9 @@ async fn run_ble_keyboard<
                 profile,
                 &profile_manager,
                 config,
-                #[cfg(feature = "host")]
+                #[cfg(feature = "rynk")]
+                host_config.as_ref(),
+                #[cfg(feature = "vial")]
                 host_service,
             )
             .await;
@@ -691,7 +698,7 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     profile: u8,
     profiles: &ProfileManager<'_, '_, C, DefaultPacketPool, BOND_SLOTS>,
-    #[cfg(feature = "rynk")] host: &HostGattHandler<'_>,
+    #[cfg(feature = "rynk")] host: &HostGattHandler<'_, '_>,
 ) {
     let level = &server.battery_service.level;
     #[cfg(feature = "split")]
@@ -1081,14 +1088,15 @@ async fn serve_keyboard_connection<
     profile: u8,
     profiles: &ProfileManager<'_, '_, C, DefaultPacketPool, BOND_SLOTS>,
     config: &BleBatteryConfig,
-    #[cfg(feature = "host")] host_service: Option<&crate::host::HostService<'_>>,
+    #[cfg(feature = "rynk")] host_config: Option<&BleConfig<'_>>,
+    #[cfg(feature = "vial")] host_service: Option<&crate::host::HostService<'_>>,
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);
-    #[cfg(feature = "rynk")]
-    let host = HostGattHandler::new(server);
     let mut status = CONNECTION_STATUS
         .receiver()
         .expect("connection status subscriber capacity exceeded");
+    #[cfg(feature = "rynk")]
+    let host = HostGattHandler::new(server, profile, host_config);
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
     #[cfg(feature = "split")]
     let mut ble_peripheral_battery_server = crate::SPLIT_BATTERY_PERIPHERAL_IDS
@@ -1155,15 +1163,12 @@ async fn serve_keyboard_connection<
         }
     };
 
-    #[cfg(feature = "host")]
+    #[cfg(feature = "rynk")]
+    let host_task = host.run(conn);
+    #[cfg(feature = "vial")]
     let host_task = async {
         if let Some(service) = host_service {
-            // Restart after a session-fatal TX error so Rynk survives the rest
-            // of the connection.
             loop {
-                #[cfg(feature = "rynk")]
-                host.run(conn, service).await;
-                #[cfg(feature = "vial")]
                 HostGattHandler::run(server, conn, service).await;
             }
         } else {
@@ -1190,7 +1195,7 @@ async fn serve_keyboard_connection<
             conn,
             profile,
             profiles,
-            #[cfg(all(feature = "host", feature = "rynk"))]
+            #[cfg(feature = "rynk")]
             &host,
         ),
         connection_params,
