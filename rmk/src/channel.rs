@@ -1,8 +1,10 @@
 //! Exposed channels which can be used to share data across devices & processors
 
-use core::future::poll_fn;
+use core::future::{Future, poll_fn};
+use core::pin::pin;
+use core::task::Poll;
 
-use embassy_sync::channel::{Channel, TrySendError};
+use embassy_sync::channel::Channel;
 #[cfg(feature = "_ble")]
 use embassy_sync::signal::Signal;
 pub use embassy_sync::{blocking_mutex, channel, pubsub, zerocopy_channel};
@@ -50,22 +52,25 @@ fn active_report_channel() -> Option<(ConnectionType, &'static ReportChannel)> {
 }
 
 /// Reports generated while no transport is selected are dropped on the floor.
-pub(crate) async fn send_hid_report(mut report: Report) {
+pub(crate) async fn send_hid_report(report: Report) {
     let Some((transport, ch)) = active_report_channel() else {
         return;
     };
+    #[cfg(feature = "_ble")]
+    let profile = crate::state::current_profile();
 
-    loop {
-        match ch.try_send(report) {
-            Ok(()) => return,
-            Err(TrySendError::Full(r)) => report = r,
-        }
-
-        poll_fn(|cx| ch.poll_ready_to_send(cx)).await;
+    let mut send = pin!(ch.send(report));
+    poll_fn(|cx| {
         if crate::state::active_transport() != Some(transport) {
-            return;
+            return Poll::Ready(());
         }
-    }
+        #[cfg(feature = "_ble")]
+        if transport == ConnectionType::Ble && crate::state::current_profile() != profile {
+            return Poll::Ready(());
+        }
+        send.as_mut().poll(cx)
+    })
+    .await;
 }
 
 /// Never waits for queue space, so a steno send cannot stall the keyboard

@@ -5,13 +5,14 @@ use bt_hci::{cmd::le::LeSetPhy, controller::ControllerCmdAsync};
 use embassy_futures::select::{Either, select, select_array};
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::Watch;
+use rmk_types::ble::{BleState, BleStatus};
 use trouble_host::prelude::*;
 use trouble_host::{BondInformation, LongTermKey};
 
 use super::ble_server::CCCD_TABLE_SIZE;
 use crate::NUM_BLE_PROFILE;
 use crate::channel::BLE_PROFILE_CHANNEL;
-use crate::state::{current_profile, set_ble_bonded, set_ble_profile};
+use crate::state::{current_profile, set_ble_bonded, set_ble_status};
 #[cfg(feature = "storage")]
 use crate::storage::{StorageItem, StorageKey, StorageValue, read, store};
 
@@ -157,7 +158,11 @@ where
                 debug!("Loaded default active profile",);
                 0
             };
-        set_ble_profile(profile, self.bond_info(profile).is_some());
+        set_ble_status(BleStatus {
+            profile,
+            state: BleState::Inactive,
+            bonded: self.bond_info(profile).is_some(),
+        });
     }
 
     /// Read the live bond stored in `profile`.
@@ -293,8 +298,13 @@ where
                 BleProfileAction::ClearSlot(slot) => return Some(slot),
             };
             if profile != current {
-                set_ble_profile(profile, self.bond_info(profile).is_some());
+                set_ble_status(BleStatus {
+                    profile,
+                    state: BleState::Inactive,
+                    bonded: self.bond_info(profile).is_some(),
+                });
                 self.update_stack_bonds();
+                crate::channel::BLE_REPORT_CHANNEL.clear();
                 self.updated_active_profile.signal(());
                 info!("Switched to BLE profile: {}", profile);
             }
@@ -420,7 +430,7 @@ mod tests {
         use crate::config::StorageConfig;
         use crate::core_traits::Runnable;
         use crate::storage::{Storage, StorageKey, StorageValue, async_flash_wrapper, read};
-        use crate::test_support::{InMemoryFlash, clear_flash_channel, reset_connection_status};
+        use crate::test_support::{InMemoryFlash, clear_flash_channel, set_connection_status};
 
         with_manager::<2>(|manager| {
             clear_flash_channel();
@@ -466,7 +476,7 @@ mod tests {
                 drop(storage);
 
                 clear_flash_channel();
-                reset_connection_status();
+                set_connection_status(Default::default());
                 let mut restored: TestManager<'_, '_, 2> = ProfileManager::new(manager.stack);
                 let mut storage = Box::pin(Storage::new(async_flash_wrapper(reboot), &StorageConfig::default())).await;
                 select(restored.load_bonded_devices(), storage.run()).await;
