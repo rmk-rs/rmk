@@ -6,7 +6,7 @@ mod rynk;
 mod vial;
 
 #[cfg(feature = "rynk")]
-pub(crate) type HostGattHandler = rynk::HostGattHandler;
+pub(crate) type HostGattHandler<'r> = rynk::HostGattHandler<'r>;
 #[cfg(feature = "vial")]
 pub(crate) type HostGattHandler = vial::HostGattHandler;
 

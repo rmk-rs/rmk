@@ -691,6 +691,7 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     profile: u8,
     profiles: &ProfileManager<'_, '_, C, DefaultPacketPool, BOND_SLOTS>,
+    #[cfg(feature = "rynk")] host: &HostGattHandler<'_>,
 ) {
     let level = &server.battery_service.level;
     #[cfg(feature = "split")]
@@ -705,8 +706,8 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
     #[cfg(feature = "passkey_entry")]
     let mut passkey_state = PasskeyInputState::new();
 
-    #[cfg(feature = "host")]
-    let mut host_gatt_handler = HostGattHandler::new(server);
+    #[cfg(feature = "vial")]
+    let mut host = HostGattHandler::new(server);
 
     loop {
         #[cfg(feature = "passkey_entry")]
@@ -839,7 +840,7 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
                             }
                         } else {
                             #[cfg(feature = "host")]
-                            match host_gatt_handler.handle_write(event.handle(), data, encrypted).await {
+                            match host.handle_write(event.handle(), data, encrypted).await {
                                 HostWriteOutcome::Handled => {}
                                 HostWriteOutcome::CccdUpdated => cccd_updated = true,
                                 HostWriteOutcome::ControlPoint => control_point_write = true,
@@ -1083,6 +1084,8 @@ async fn serve_keyboard_connection<
     #[cfg(feature = "host")] host_service: Option<&crate::host::HostService<'_>>,
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);
+    #[cfg(feature = "rynk")]
+    let host = HostGattHandler::new(server);
     let mut status = CONNECTION_STATUS
         .receiver()
         .expect("connection status subscriber capacity exceeded");
@@ -1158,6 +1161,9 @@ async fn serve_keyboard_connection<
             // Restart after a session-fatal TX error so Rynk survives the rest
             // of the connection.
             loop {
+                #[cfg(feature = "rynk")]
+                host.run(conn, service).await;
+                #[cfg(feature = "vial")]
                 HostGattHandler::run(server, conn, service).await;
             }
         } else {
@@ -1179,7 +1185,14 @@ async fn serve_keyboard_connection<
     let dongle_event_task = core::future::pending::<()>();
 
     select6(
-        gatt_events_task(server, conn, profile, profiles),
+        gatt_events_task(
+            server,
+            conn,
+            profile,
+            profiles,
+            #[cfg(all(feature = "host", feature = "rynk"))]
+            &host,
+        ),
         connection_params,
         battery_task,
         writer_task,
