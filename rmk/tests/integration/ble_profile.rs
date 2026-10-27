@@ -11,14 +11,11 @@ use crate::simulator::SimKeyboard;
 const USER0: KeyAction = KeyAction::Single(Action::User(0));
 
 #[test]
-fn held_profile_key_clears_its_bond_after_5s() {
+fn held_profile_key_requests_pairing_after_5s() {
     test_block_on(async {
         let mut keyboard = SimKeyboard::builder([[[USER0]]]).build().await;
         keyboard.press(0, 0).delay(5100).release(0, 0).run().await;
-        assert_eq!(
-            keyboard.ble_profile_actions(),
-            ["ClearSlot(0)", "Switch(0)", "Switch(0)"]
-        );
+        assert_eq!(keyboard.ble_profile_actions(), ["Pair(0)", "Switch(0)"]);
     });
 }
 
@@ -43,7 +40,7 @@ fn intervening_key_cancels_the_hold() {
 // Typing over a held profile key cancels the gesture: the key stays down past
 // the 5s mark, so only the intervening press can disarm it.
 #[test]
-fn key_pressed_while_the_profile_key_is_down_cancels_the_bond_clear() {
+fn key_pressed_while_the_profile_key_is_down_cancels_pairing() {
     test_block_on(async {
         let mut keyboard = SimKeyboard::builder([[[USER0, k!(A)]]]).build().await;
         keyboard

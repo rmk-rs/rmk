@@ -1,5 +1,7 @@
 //! Manage BLE profiles and bonding information
 
+use core::cell::Cell;
+
 #[cfg(feature = "_ble")]
 use bt_hci::{cmd::le::LeSetPhy, controller::ControllerCmdAsync};
 use embassy_futures::select::{Either, select, select_array};
@@ -89,6 +91,7 @@ impl Default for ProfileInfo {
 #[derive(Debug)]
 pub(crate) enum BleProfileAction {
     Switch(u8),
+    Pair(u8),
     Previous,
     Next,
     ClearBond,
@@ -120,6 +123,7 @@ pub(crate) struct ProfileManager<
 {
     profiles: [Watch<crate::RawMutex, ProfileInfo, 1>; SLOTS],
     updated_active_profile: Signal<crate::RawMutex, ()>,
+    pub(crate) repairing: Cell<Option<u8>>,
     /// BLE stack
     stack: &'b Stack<'s, C, P>,
 }
@@ -135,6 +139,7 @@ where
         Self {
             profiles: [const { Watch::new() }; SLOTS],
             updated_active_profile: Signal::new(),
+            repairing: Cell::new(None),
             stack,
         }
     }
@@ -166,7 +171,16 @@ where
 
     /// Read the live bond stored in `profile`.
     pub(crate) fn bond_info(&self, profile: u8) -> Option<ProfileInfo> {
+        if self.repairing.get() == Some(profile) {
+            return None;
+        }
         self.profiles.get(profile as usize)?.try_get_and(|info| !info.removed)
+    }
+
+    /// Change pairing mode after the slot's previous connection has finished.
+    pub(crate) fn set_pairing(&self, profile: Option<u8>) {
+        self.repairing.set(profile);
+        self.update_stack_bonds();
     }
 
     /// Check if the `identity` is the bonded dongle's identity.
@@ -214,13 +228,17 @@ where
         let Some(state) = self.profiles.get(info.slot_num as usize) else {
             return;
         };
+        let pairing_complete = self.repairing.get() == Some(info.slot_num);
         let old = state.try_get();
-        if old.as_ref() == Some(&info) {
+        if old.as_ref() == Some(&info) && !pairing_complete {
             return;
         }
         let bond_changed = old.as_ref().is_none_or(|old| old.removed || old.info != info.info);
         state.sender().send(info);
-        if bond_changed {
+        if pairing_complete {
+            self.repairing.set(None);
+        }
+        if bond_changed || pairing_complete {
             self.update_stack_bonds();
         }
     }
@@ -264,6 +282,9 @@ where
 
     /// Clear bonding information of the specified slot.
     pub(crate) fn clear_bond(&self, slot: u8) {
+        if self.repairing.get() == Some(slot) {
+            self.repairing.set(None);
+        }
         if let Some(state) = self.profiles.get(slot as usize) {
             state.sender().send(ProfileInfo {
                 slot_num: slot,
@@ -355,6 +376,30 @@ mod tests {
             manager.update_profile_cccd_table(1, second.cccd_table.clone());
             assert_eq!(manager.bond_info(0), Some(first));
             assert_eq!(manager.bond_info(1), Some(second));
+        });
+    }
+
+    #[test]
+    fn repairing_retains_old_bond_until_replacement() {
+        with_manager::<2>(|manager| {
+            let old = ProfileInfo::default();
+            manager.set_bond(old.clone());
+            manager.set_pairing(Some(0));
+            assert!(manager.bond_info(0).is_none());
+            manager.set_pairing(None);
+            assert_eq!(manager.bond_info(0), Some(old.clone()));
+
+            manager.set_pairing(Some(0));
+            let mut replacement = old;
+            replacement.info.ltk = LongTermKey(42);
+            manager.set_bond(replacement.clone());
+            assert_eq!(manager.repairing.get(), None);
+            assert_eq!(manager.bond_info(0), Some(replacement));
+
+            manager.set_pairing(Some(0));
+            manager.clear_bond(0);
+            assert_eq!(manager.repairing.get(), None);
+            assert!(manager.bond_info(0).is_none());
         });
     }
 
