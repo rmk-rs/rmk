@@ -2,9 +2,8 @@
 use bt_hci::cmd::le::LeSubrateRequest;
 #[cfg(feature = "_ext_adv")]
 use bt_hci::cmd::le::{
-    LeAddDeviceToFilterAcceptList, LeClearAdvSets, LeClearFilterAcceptList, LeExtCreateConn,
-    LeReadNumberOfSupportedAdvSets, LeSetAdvSetRandomAddr, LeSetExtAdvData, LeSetExtAdvEnable, LeSetExtAdvParams,
-    LeSetExtScanEnable, LeSetExtScanParams, LeSetExtScanResponseData,
+    LeClearAdvSets, LeReadNumberOfSupportedAdvSets, LeSetAdvSetRandomAddr, LeSetExtAdvData, LeSetExtAdvParams,
+    LeSetExtScanResponseData,
 };
 use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
@@ -34,6 +33,8 @@ use crate::ble::led::BleLedReader;
 #[cfg(feature = "passkey_entry")]
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
 use crate::ble::profile::{BOND_SLOTS, ProfileInfo, ProfileManager, UPDATED_PROFILES};
+#[cfg(feature = "split")]
+use crate::ble::scan::CentralController;
 use crate::ble::sleep::{report_activity, request_sleep};
 use crate::channel::{BLE_REPORT_CHANNEL, LED_SIGNAL};
 use crate::config::{BleBatteryConfig, DeviceConfig, RmkConfig};
@@ -63,50 +64,77 @@ pub(crate) mod sleep;
 #[cfg(all(feature = "subrating", feature = "_no_subrating"))]
 compile_error!("You may not enable feature `subrating` on unsupported platforms!");
 
-/// Controller commands for extended advertising, scanning and connecting.
+#[cfg(all(feature = "pico_w_ble", feature = "_ext_adv"))]
+compile_error!("Pico W does not support extended HCI advertising commands");
+
+/// Controller commands used by RMK's advertising backend.
+#[doc(hidden)]
 #[cfg(feature = "_ext_adv")]
-pub(crate) trait ExtAdvCmds:
-    for<'t> ControllerCmdSync<LeSetExtAdvData<'t>>
+pub trait AdvController:
+    Controller
+    + for<'t> ControllerCmdSync<LeSetExtAdvData<'t>>
     + ControllerCmdSync<LeClearAdvSets>
     + ControllerCmdSync<LeSetExtAdvParams>
     + ControllerCmdSync<LeSetAdvSetRandomAddr>
     + ControllerCmdSync<LeReadNumberOfSupportedAdvSets>
-    + for<'t> ControllerCmdSync<LeSetExtAdvEnable<'t>>
     + for<'t> ControllerCmdSync<LeSetExtScanResponseData<'t>>
-    + ControllerCmdSync<LeSetExtScanParams>
-    + ControllerCmdSync<LeSetExtScanEnable>
-    + ControllerCmdSync<LeClearFilterAcceptList>
-    + ControllerCmdSync<LeAddDeviceToFilterAcceptList>
-    + ControllerCmdAsync<LeExtCreateConn>
 {
 }
 
 #[cfg(feature = "_ext_adv")]
-impl<T> ExtAdvCmds for T where
-    T: for<'t> ControllerCmdSync<LeSetExtAdvData<'t>>
+impl<T> AdvController for T where
+    T: Controller
+        + for<'t> ControllerCmdSync<LeSetExtAdvData<'t>>
         + ControllerCmdSync<LeClearAdvSets>
         + ControllerCmdSync<LeSetExtAdvParams>
         + ControllerCmdSync<LeSetAdvSetRandomAddr>
         + ControllerCmdSync<LeReadNumberOfSupportedAdvSets>
-        + for<'t> ControllerCmdSync<LeSetExtAdvEnable<'t>>
         + for<'t> ControllerCmdSync<LeSetExtScanResponseData<'t>>
-        + ControllerCmdSync<LeSetExtScanParams>
-        + ControllerCmdSync<LeSetExtScanEnable>
-        + ControllerCmdSync<LeClearFilterAcceptList>
-        + ControllerCmdSync<LeAddDeviceToFilterAcceptList>
-        + ControllerCmdAsync<LeExtCreateConn>
 {
 }
 
 #[cfg(not(feature = "_ext_adv"))]
-pub(crate) trait ExtAdvCmds {}
+#[doc(hidden)]
+pub trait AdvController: Controller {}
 
 #[cfg(not(feature = "_ext_adv"))]
-impl<T> ExtAdvCmds for T {}
+impl<T: Controller> AdvController for T {}
 
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
 /// own — see [`crate::dongle::Dongle`].
-const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + 1;
+const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + NUM_HOST_LINKS;
+
+/// Host connections supported by the keyboard runtime.
+#[doc(hidden)]
+pub const NUM_HOST_LINKS: usize = 1;
+
+/// Calculate SDC memory
+#[doc(hidden)]
+pub const fn calculate_sdc_memory_size(
+    central_links: usize,
+    peripheral_links: usize,
+    packet_size: usize,
+    tx_buffers: u8,
+    rx_buffers: u8,
+) -> usize {
+    // SDC_MEM_PER_{CENTRAL,PERIPHERAL}_LINK plus their shared-memory bounds.
+    let buffers = (tx_buffers as usize + rx_buffers as usize) * (packet_size + 15) - 84;
+    let links = central_links * (803 + buffers + 21) + peripheral_links * (923 + buffers + 17);
+    let advertising = (5184 + 31 * 18) / 10; // SDC_MEM_PER_ADV_SET(31).
+    // SDC_MEM_SCAN[_EXT](3) and SDC_MEM_INITIATOR.
+    let scanning = if central_links > 0 {
+        408 + 3 * if cfg!(feature = "_ext_adv") { 320 } else { 104 } + 384
+    } else {
+        0
+    };
+    let subrating = if cfg!(feature = "subrating") {
+        12 + (central_links + peripheral_links) * 60
+    } else {
+        0
+    };
+    let filter_accept_list = 4 + 8 * 8; // SDC_MEM_FAL(8).
+    (links + advertising + scanning + subrating + filter_accept_list + 7) & !7
+}
 
 /// Max number of L2CAP channels
 const L2CAP_CHANNELS_MAX: usize = CONNECTIONS_MAX * 4; // Signal + att + smp + hid
@@ -189,11 +217,10 @@ where
 #[cfg(not(feature = "split"))]
 impl<'a, C> Runnable for BleTransport<'a, C>
 where
-    C: Controller
+    C: AdvController
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeRand>
-        + ExtAdvCmds,
+        + ControllerCmdSync<LeRand>,
 {
     async fn run(&mut self) -> ! {
         // Load the preferred connection from storage
@@ -228,18 +255,16 @@ where
 #[cfg(feature = "split")]
 impl<
     'a,
-    #[cfg(not(feature = "subrating"))] C: Controller
+    #[cfg(not(feature = "subrating"))] C: AdvController
+        + CentralController
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>
-        + ControllerCmdSync<LeRand>
-        + ExtAdvCmds,
-    #[cfg(feature = "subrating")] C: Controller
+        + ControllerCmdSync<LeRand>,
+    #[cfg(feature = "subrating")] C: AdvController
+        + CentralController
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>
         + ControllerCmdSync<LeRand>
-        + ExtAdvCmds
         + ControllerCmdAsync<LeSubrateRequest>,
 > Runnable for BleTransport<'a, C>
 {
@@ -293,7 +318,7 @@ impl<
 /// serves forever, joined with the stack runner and the sleep manager.
 async fn run_ble_keyboard<
     #[cfg(feature = "host")] 'r,
-    C: Controller + ExtAdvCmds + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    C: AdvController + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 >(
     stack: &Stack<'_, C, DefaultPacketPool>,
     device_config: &DeviceConfig<'static>,
@@ -378,7 +403,7 @@ async fn run_ble_keyboard<
             let timeout = deadline.saturating_duration_since(now);
 
             match select(
-                advertise(&mut peripheral, &server.server, adv, timeout),
+                advertise(&mut peripheral, &server.server, adv, None, timeout),
                 profile_manager.update_profile(),
             )
             .await

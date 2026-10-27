@@ -369,18 +369,10 @@ mod tests {
     use crate::test_support::{drain_flash_channel, test_block_on};
 
     #[test]
-    fn profile_zero_uses_the_base_address() {
+    fn profile_addresses_are_stable_and_distinct() {
         let base = [1, 2, 3, 4, 5, 0xC6];
         assert_eq!(profile_address(base, 0), base);
-    }
-
-    #[test]
-    fn only_addr3_changes() {
-        assert_eq!(profile_address([1, 2, 3, 4, 5, 0xC6], 2), [1, 2, 3, 6, 5, 0xC6]);
-    }
-
-    #[test]
-    fn profile_addresses_are_distinct() {
+        assert_eq!(profile_address(base, 2), [1, 2, 3, 6, 5, 0xC6]);
         for byte in [0, 0xFF] {
             let base = [1, 2, 3, byte, 5, 0xC6];
             for profile in 0..=crate::NUM_BLE_PROFILE as u8 {

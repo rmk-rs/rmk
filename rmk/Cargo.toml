@@ -226,7 +226,7 @@ nrf52832_ble = ["_nrf_ble", "_no_usb"]
 nrf52811_ble = ["_nrf_ble", "_no_usb"]
 ## Enable feature if you want to use nRF52810 with BLE.
 nrf52810_ble = ["_nrf_ble", "_no_usb"]
-_nrf_ble = ["_ble", "dep:embassy-nrf"]
+_nrf_ble = ["_ble", "_ext_adv", "dep:embassy-nrf"]
 
 ## Enable feature if you want to use ESP32C3 with BLE.
 esp32c3_ble = ["_esp_ble", "_no_usb"]
@@ -236,7 +236,7 @@ esp32c6_ble = ["_esp_ble", "_no_usb"]
 esp32h2_ble = ["_esp_ble", "_no_usb"]
 ## Enable feature if you want to use ESP32S3 with BLE.
 esp32s3_ble = ["_esp_ble"]
-_esp_ble = ["_ble", "dep:esp-hal"]
+_esp_ble = ["_ble", "_ext_adv", "dep:esp-hal"]
 
 ## Enable feature if you want to use RP2040W with BLE.
 pico_w_ble = ["_ble", "_no_subrating", "dep:embassy-rp"]
@@ -248,10 +248,18 @@ sf32lb52x_ble = ["_ble"]
 passkey_entry = ["_ble", "rmk-types/passkey_entry"]
 
 ## Enable feature if you want to use trouble BLE stack
-_ble = ["dep:trouble-host", "dep:bt-hci", "dep:embassy-crypto", "dep:embassy-crypto-rustcrypto", "dep:rand_chacha", "storage", "rmk-types/_ble"]
+_ble = [
+    "dep:trouble-host",
+    "dep:bt-hci",
+    "dep:embassy-crypto",
+    "dep:embassy-crypto-rustcrypto",
+    "dep:rand_chacha",
+    "storage",
+    "rmk-types/_ble",
+]
 
 ## Internal support for extended advertising, scanning and connecting.
-_ext_adv = ["trouble-host?/per-connection-address"]
+_ext_adv = ["trouble-host?/extended-advertising"]
 
 [dependencies]
 rmk-macro = { version = "=0.8.0", path = "../rmk-macro" }
@@ -341,6 +349,7 @@ cortex-m = { version = "0.7" }
 
 [dev-dependencies]
 critical-section = { version = "1.2", features = ["std"] }
+embassy-crypto-rustcrypto = { git = "https://github.com/embassy-rs/embassy.git", rev = "bd35bd7a7d19147c8bcae9c2eda99b25e597294c", features = ["embassy-crypto-p256-ecdh"] }
 embedded-hal-mock = { version = "0.11.1", features = ["embedded-hal-async"] }
 # A hack for enabling 'std' feature in testing, ref: https://github.com/rust-lang/cargo/issues/2911
 rmk = { path = ".", default-features = false, features = ["std", "log"] }

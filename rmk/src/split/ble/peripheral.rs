@@ -198,8 +198,8 @@ async fn init_subrating_host_feature<C: Controller + ControllerCmdSync<LeSetHost
 pub async fn initialize_nrf_ble_split_peripheral_and_run<
     'b,
     's: 'b,
-    #[cfg(feature = "subrating")] C: Controller + ControllerCmdSync<LeSetHostFeature>,
-    #[cfg(not(feature = "subrating"))] C: Controller,
+    #[cfg(feature = "subrating")] C: crate::ble::AdvController + ControllerCmdSync<LeSetHostFeature>,
+    #[cfg(not(feature = "subrating"))] C: crate::ble::AdvController,
 >(
     id: usize,
     stack: &'b Stack<'s, C, DefaultPacketPool>,
@@ -282,7 +282,7 @@ pub async fn initialize_nrf_ble_split_peripheral_and_run<
 
 /// Reconnect to the saved central, falling back to seeking any central when it
 /// does not answer.
-async fn split_peripheral_advertise<'a, 'b, C: Controller>(
+async fn split_peripheral_advertise<'a, 'b, C: crate::ble::AdvController>(
     id: usize,
     central_addr: Option<[u8; 6]>,
     peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
@@ -290,11 +290,11 @@ async fn split_peripheral_advertise<'a, 'b, C: Controller>(
 ) -> Result<GattConnection<'a, 'b, DefaultPacketPool>, BleHostError<C::Error>> {
     if let Some(addr) = central_addr {
         let directed = Adv::Directed(Address::random(addr));
-        match advertise(peripheral, &server.server, directed, Duration::from_secs(10)).await {
+        match advertise(peripheral, &server.server, directed, None, Duration::from_secs(10)).await {
             Err(BleHostError::BleHost(Error::Timeout)) => warn!("[adv] Try update central_addr"),
             result => return result,
         }
     }
     let seeking = Adv::SplitPeripheral { id: id as u8 };
-    advertise(peripheral, &server.server, seeking, Duration::from_secs(300)).await
+    advertise(peripheral, &server.server, seeking, None, Duration::from_secs(300)).await
 }

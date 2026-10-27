@@ -37,6 +37,7 @@ nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "a22ca716c807496
     "nrf52832",
 ] }
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "a22ca716c807496f98ae8d95cba5622b9fdd8a00", default-features = false, features = [
+    "central",
     "defmt",
     "peripheral",
     "nrf52832",

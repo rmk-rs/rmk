@@ -1,12 +1,32 @@
 //! Passive scanning, shared by the split central and the dongle.
 
+#[cfg(not(feature = "_ext_adv"))]
 use bt_hci::cmd::le::LeSetScanParams;
+#[cfg(feature = "_ext_adv")]
+use bt_hci::cmd::le::{LeExtCreateConn, LeSetExtScanParams};
+#[cfg(feature = "_ext_adv")]
+use bt_hci::controller::ControllerCmdAsync;
 use bt_hci::controller::ControllerCmdSync;
 use embassy_time::{Duration, Timer};
 use trouble_host::prelude::*;
 
 #[cfg(feature = "_ext_adv")]
-use crate::ble::ExtAdvCmds;
+pub(crate) trait CentralController:
+    Controller + ControllerCmdSync<LeSetExtScanParams> + ControllerCmdAsync<LeExtCreateConn>
+{
+}
+
+#[cfg(feature = "_ext_adv")]
+impl<C: Controller + ControllerCmdSync<LeSetExtScanParams> + ControllerCmdAsync<LeExtCreateConn>> CentralController
+    for C
+{
+}
+
+#[cfg(not(feature = "_ext_adv"))]
+pub(crate) trait CentralController: Controller + ControllerCmdSync<LeSetScanParams> {}
+
+#[cfg(not(feature = "_ext_adv"))]
+impl<C: Controller + ControllerCmdSync<LeSetScanParams>> CentralController for C {}
 
 /// Split central: the radio is shared with the host link and the peripheral
 /// connections, so it can spare only 30ms of every 100ms.
@@ -33,40 +53,36 @@ pub(crate) fn scan_config(window: Duration) -> ScanConfig<'static> {
 /// End the session with [`ScanSession::stop`], which waits for the controller to
 /// confirm. Dropping it only signals the cancel, and the controller refuses an
 /// initiator until the runner has issued the stop.
-pub(crate) async fn start_scan<'a, C: Controller + ControllerCmdSync<LeSetScanParams>>(
+pub(crate) async fn start_scan<'a, C: CentralController>(
     stack: &'a Stack<'_, C, DefaultPacketPool>,
     window: Duration,
     filter_accept_list: &[Address],
-) -> ScanSession<'a, false> {
+) -> ScanSession<'a, { cfg!(feature = "_ext_adv") }> {
     let config = ScanConfig {
         filter_accept_list,
         ..scan_config(window)
     };
     loop {
         let mut central = stack.central();
-        match Scanner::new(&mut central).scan(&config).await {
+        let mut scanner = Scanner::new(&mut central);
+        #[cfg(feature = "_ext_adv")]
+        let scan = scanner.scan_ext(&config);
+        #[cfg(not(feature = "_ext_adv"))]
+        let scan = scanner.scan(&config);
+        match scan.await {
             Ok(session) => return session,
             Err(_) => Timer::after_millis(500).await,
         }
     }
 }
 
-/// Extended-command counterpart of [`start_scan`], with the same stop and retry behavior.
-#[cfg(feature = "_ext_adv")]
-pub(crate) async fn start_scan_ext<'a, C: Controller + ExtAdvCmds>(
-    stack: &'a Stack<'_, C, DefaultPacketPool>,
-    window: Duration,
-    filter_accept_list: &[Address],
-) -> ScanSession<'a, true> {
-    let config = ScanConfig {
-        filter_accept_list,
-        ..scan_config(window)
-    };
-    loop {
-        let mut central = stack.central();
-        match Scanner::new(&mut central).scan_ext(&config).await {
-            Ok(session) => return session,
-            Err(_) => Timer::after_millis(500).await,
-        }
-    }
+pub(crate) async fn connect<'a, C: CentralController>(
+    central: &mut Central<'a, C, DefaultPacketPool>,
+    config: &ConnectConfig<'_>,
+) -> Result<Connection<'a, DefaultPacketPool>, BleHostError<C::Error>> {
+    #[cfg(feature = "_ext_adv")]
+    let connect = central.connect_ext(config);
+    #[cfg(not(feature = "_ext_adv"))]
+    let connect = central.connect(config);
+    connect.await
 }

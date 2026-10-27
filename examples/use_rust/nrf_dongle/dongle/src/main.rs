@@ -38,7 +38,6 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
     mpsl.run().await
 }
 
-const SDC_MEM_SIZE: usize = 5960;
 const FLASH_START_ADDR: usize = 0x120000;
 const FLASH_SECTORS: u8 = 6;
 
@@ -54,11 +53,14 @@ fn build_sdc<'d, const N: usize>(
 ) -> Result<nrf_sdc::SoftdeviceController<'d>, nrf_sdc::Error> {
     sdc::Builder::new()?
         .support_scan()
+        .support_ext_scan()
+        .support_ext_central()
         .support_central()
         .support_dle_central()
         .support_phy_update_central()
         .support_le_2m_phy()
         // One keyboard, one link.
+        .peripheral_count(0)?
         .central_count(1)?
         .buffer_cfg(
             DefaultPacketPool::MTU as u16,
@@ -142,7 +144,8 @@ async fn main(spawner: Spawner) {
     );
 
     let mut rng = cracen::Cracen::new_blocking(p.CRACEN);
-    let mut sdc_mem = sdc::Mem::<SDC_MEM_SIZE>::new();
+    let mut sdc_mem =
+        sdc::Mem::<{ rmk::ble::calculate_sdc_memory_size(1, 0, DefaultPacketPool::MTU, L2CAP_TXQ, L2CAP_RXQ) }>::new();
     let sdc = unwrap!(build_sdc(sdc_p, &mut rng, mpsl, &mut sdc_mem));
     info!("SDC built (central only)");
     static EP_OUT_BUFFER: StaticCell<[u8; 2048]> = StaticCell::new();

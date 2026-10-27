@@ -48,8 +48,8 @@ use crate::state::update_status;
 /// * `address` - (optional) The BLE address of this peripheral
 /// * `serial` - (optional) serial port used to send peripheral split message. This argument is enabled only for serial split now
 pub async fn run_rmk_split_peripheral<
-    #[cfg(all(feature = "_ble", feature = "subrating"))] C: Controller + ControllerCmdSync<LeRand> + ControllerCmdSync<LeSetHostFeature>,
-    #[cfg(all(feature = "_ble", not(feature = "subrating")))] C: Controller + ControllerCmdSync<LeRand>,
+    #[cfg(all(feature = "_ble", feature = "subrating"))] C: crate::ble::AdvController + ControllerCmdSync<LeRand> + ControllerCmdSync<LeSetHostFeature>,
+    #[cfg(all(feature = "_ble", not(feature = "subrating")))] C: crate::ble::AdvController + ControllerCmdSync<LeRand>,
     #[cfg(not(feature = "_ble"))] S: Write + Read,
 >(
     #[cfg(feature = "_ble")] id: usize,
