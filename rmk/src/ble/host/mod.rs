@@ -8,10 +8,12 @@ mod vial;
 #[cfg(feature = "rynk")]
 pub(crate) type HostGattHandler<'r, 'a> = rynk::HostGattHandler<'r, 'a>;
 #[cfg(feature = "vial")]
-pub(crate) type HostGattHandler = vial::HostGattHandler;
+pub(crate) type HostGattHandler<'r, 'a> = vial::HostGattHandler<'r, 'a>;
 
 #[cfg(feature = "rynk")]
 pub(crate) type BleConfig<'a> = rynk::BleConfig<'a>;
+#[cfg(feature = "vial")]
+pub(crate) type BleConfig<'a> = vial::BleConfig<'a>;
 
 #[cfg(feature = "rynk")]
 pub(crate) const HOST_WRITE_BUFFER_SIZE: usize = rmk_types::protocol::rynk::RYNK_BLE_CHUNK_SIZE;

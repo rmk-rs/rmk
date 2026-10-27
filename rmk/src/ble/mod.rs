@@ -28,10 +28,8 @@ use crate::ble::battery_service::BleBatteryServer;
 use crate::ble::battery_service::BlePeripheralBatteryServer;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
-#[cfg(feature = "rynk")]
-use crate::ble::host::BleConfig;
 #[cfg(feature = "host")]
-use crate::ble::host::{HOST_WRITE_BUFFER_SIZE, HostGattHandler, HostWriteOutcome};
+use crate::ble::host::{BleConfig, HOST_WRITE_BUFFER_SIZE, HostGattHandler, HostWriteOutcome};
 use crate::ble::led::BleLedReader;
 #[cfg(feature = "passkey_entry")]
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
@@ -417,7 +415,7 @@ async fn run_ble_keyboard<
     profile_manager.load_bonded_devices().await;
     profile_manager.update_stack_bonds();
 
-    #[cfg(feature = "rynk")]
+    #[cfg(feature = "host")]
     let host_config = host_service.map(BleConfig::new);
 
     let mut peripheral = stack.peripheral();
@@ -436,10 +434,8 @@ async fn run_ble_keyboard<
                 profile,
                 &profile_manager,
                 config,
-                #[cfg(feature = "rynk")]
+                #[cfg(feature = "host")]
                 host_config.as_ref(),
-                #[cfg(feature = "vial")]
-                host_service,
             )
             .await;
             drop(conn);
@@ -698,7 +694,7 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     profile: u8,
     profiles: &ProfileManager<'_, '_, C, DefaultPacketPool, BOND_SLOTS>,
-    #[cfg(feature = "rynk")] host: &HostGattHandler<'_, '_>,
+    #[cfg(feature = "host")] host: &HostGattHandler<'_, '_>,
 ) {
     let level = &server.battery_service.level;
     #[cfg(feature = "split")]
@@ -712,9 +708,6 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
 
     #[cfg(feature = "passkey_entry")]
     let mut passkey_state = PasskeyInputState::new();
-
-    #[cfg(feature = "vial")]
-    let mut host = HostGattHandler::new(server);
 
     loop {
         #[cfg(feature = "passkey_entry")]
@@ -1088,14 +1081,13 @@ async fn serve_keyboard_connection<
     profile: u8,
     profiles: &ProfileManager<'_, '_, C, DefaultPacketPool, BOND_SLOTS>,
     config: &BleBatteryConfig,
-    #[cfg(feature = "rynk")] host_config: Option<&BleConfig<'_>>,
-    #[cfg(feature = "vial")] host_service: Option<&crate::host::HostService<'_>>,
+    #[cfg(feature = "host")] host_config: Option<&BleConfig<'_>>,
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);
     let mut status = CONNECTION_STATUS
         .receiver()
         .expect("connection status subscriber capacity exceeded");
-    #[cfg(feature = "rynk")]
+    #[cfg(feature = "host")]
     let host = HostGattHandler::new(server, profile, host_config);
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
     #[cfg(feature = "split")]
@@ -1163,18 +1155,8 @@ async fn serve_keyboard_connection<
         }
     };
 
-    #[cfg(feature = "rynk")]
+    #[cfg(feature = "host")]
     let host_task = host.run(conn);
-    #[cfg(feature = "vial")]
-    let host_task = async {
-        if let Some(service) = host_service {
-            loop {
-                HostGattHandler::run(server, conn, service).await;
-            }
-        } else {
-            core::future::pending::<()>().await;
-        }
-    };
     #[cfg(not(feature = "host"))]
     let host_task = core::future::pending::<()>();
 
@@ -1195,7 +1177,7 @@ async fn serve_keyboard_connection<
             conn,
             profile,
             profiles,
-            #[cfg(feature = "rynk")]
+            #[cfg(feature = "host")]
             &host,
         ),
         connection_params,
