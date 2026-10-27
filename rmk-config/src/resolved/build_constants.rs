@@ -127,15 +127,45 @@ impl crate::KeyboardTomlConfig {
                 }
             }
         }
+        let mut event_config = self.event.clone();
+        if active_features.contains(&"_ble") {
+            let num_host_links = if active_features.contains(&"_ext_adv") {
+                rmk.ble_profiles_num + usize::from(active_features.contains(&"dongle"))
+            } else {
+                1
+            };
+            event_config.battery_status.subs += num_host_links.saturating_sub(1);
+            if !split_battery_peripheral_ids.is_empty() {
+                event_config.peripheral_battery.subs += num_host_links;
+            }
+        }
+
+        // Each PointingDevice subscribes to the sleep state. Devices built by
+        // hand in Rust are declared under `[event.sleep_state]` instead.
+        event_config.sleep_state.subs += self.pointing_device_count();
+
+        // Every link subscribes to the outgoing queue, so a central needs one
+        // slot per split peripheral on top of its link toward the dongle.
+        if active_features.contains(&"custom_message") && active_features.contains(&"split") {
+            event_config.custom_message_out.subs += split_peripherals_num;
+        }
+
+        // Dynamically size dfu_cmd subscribers: 1 (central) + N (peripherals).
+        // The base count of 1 covers the central; each peripheral adds one.
+        if active_features.contains(&"dfu_split") {
+            event_config.dfu_cmd.subs += split_peripherals_num;
+            event_config.dfu_cmd.pubs += 1; // Split-Loop as second publisher (USB-Proxy is first)
+        }
+
         // Build event channels
         macro_rules! event_channels {
             ($($field:ident),* $(,)?) => {
                 vec![$(
                     EventChannel {
                         name: stringify!($field).to_string(),
-                        channel_size: self.event.$field.channel_size,
-                        pubs: self.event.$field.pubs,
-                        subs: self.event.$field.subs,
+                        channel_size: event_config.$field.channel_size,
+                        pubs: event_config.$field.pubs,
+                        subs: event_config.$field.subs,
                     },
                 )*]
             };
@@ -169,41 +199,6 @@ impl crate::KeyboardTomlConfig {
         // Auto-bump subscriber counts based on enabled feature flags.
         // Declarations live in subscriber_default.toml.
         apply_feature_subscriber_bumps(&mut events, active_features);
-
-        // Each PointingDevice subscribes to the sleep state. Devices built by
-        // hand in Rust are declared under `[event.sleep_state]` instead.
-        let pointing_devices = self.pointing_device_count();
-        if pointing_devices > 0
-            && let Some(event) = events.iter_mut().find(|event| event.name == "sleep_state")
-        {
-            event.subs += pointing_devices;
-        }
-
-        // Every link subscribes to the outgoing queue, so a central needs one
-        // slot per split peripheral on top of its link toward the dongle.
-        if active_features.contains(&"custom_message")
-            && active_features.contains(&"split")
-            && let Some(event) = events.iter_mut().find(|event| event.name == "custom_message_out")
-        {
-            event.subs += split_peripherals_num;
-        }
-
-        // Dynamically size dfu_cmd subscribers: 1 (central) + N (peripherals).
-        // The base count of 1 covers the central; each peripheral adds one.
-        if active_features.contains(&"dfu_split")
-            && let Some(event) = events.iter_mut().find(|e| e.name == "dfu_cmd")
-        {
-            event.subs += split_peripherals_num;
-            event.pubs += 1; // Split-Loop as second publisher (USB-Proxy is first)
-        }
-
-        if !split_battery_peripheral_ids.is_empty()
-            && active_features.contains(&"split")
-            && active_features.contains(&"_ble")
-            && let Some(event) = events.iter_mut().find(|event| event.name == "peripheral_battery")
-        {
-            event.subs += 1;
-        }
 
         // Only validate passkey settings when the build will emit passkey constants.
         let passkey = if active_features.contains(&"passkey_entry") {
@@ -443,8 +438,11 @@ mod tests {
     }
 
     #[test]
-    fn split_ble_reserves_peripheral_battery_subscriber_only_with_battery_ids() {
+    fn ble_battery_subscribers_cover_each_host_link() {
         let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
+        config.rmk.ble_profiles_num = 5;
+        config.event.battery_status.subs = 2;
+        config.event.peripheral_battery.subs = 3;
         config.split = Some(SplitConfig {
             peripheral: vec![SplitBoardConfig {
                 battery: Some(BatteryTomlConfig {
@@ -457,18 +455,24 @@ mod tests {
         });
         config.auto_calculate_parameters();
 
-        let base = config.build_constants(&[]).unwrap();
-        let split_ble = config.build_constants(&["split", "_ble"]).unwrap();
-        let subs = |constants: &BuildConstants| {
-            constants
-                .events
-                .iter()
-                .find(|event| event.name == "peripheral_battery")
-                .unwrap()
-                .subs
-        };
-
-        assert_eq!(subs(&split_ble), subs(&base) + 1);
+        let cases: &[(&[&str], usize, usize)] = &[
+            (&[], 3, 3),
+            (&["_ble"], 4, 3),
+            (&["_ble", "_ext_adv"], 8, 3),
+            (&["split", "_ble"], 5, 4),
+            (&["split", "_ble", "_ext_adv"], 9, 8),
+            (&["split", "_ble", "_ext_adv", "dongle"], 11, 9),
+        ];
+        for &(features, battery_status_subs, peripheral_battery_subs) in cases {
+            let constants = config.build_constants(features).unwrap();
+            for (name, expected) in [
+                ("battery_status", battery_status_subs),
+                ("peripheral_battery", peripheral_battery_subs),
+            ] {
+                let event = constants.events.iter().find(|event| event.name == name).unwrap();
+                assert_eq!(event.subs, expected, "{features:?}: {name}");
+            }
+        }
     }
 
     #[test]

@@ -93,11 +93,10 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                 quote! {}
             };
             let ble_addr = get_ble_addr(hardware, peripheral_id);
-            let central_links = if peripheral_id.is_some() { 0 } else { peri_num };
-            let peripheral_links = if peripheral_id.is_some() {
-                quote! { 1 }
+            let (central_links, peripheral_links) = if peripheral_id.is_some() {
+                (0, quote! { 1 })
             } else {
-                quote! { ::rmk::ble::NUM_HOST_LINKS }
+                (peri_num, quote! { ::rmk::ble::NUM_HOST_LINKS })
             };
             let ble_init = match &communication {
                 CommunicationConfig::Ble(_) | CommunicationConfig::Both(_, _) => quote! {
@@ -213,6 +212,25 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
             } else {
                 quote! {}
             };
+            let ble_config = if peripheral_id.is_none() {
+                let (minimum, activities) = match chip.chip.as_str() {
+                    "esp32c3" | "esp32s3" => (6usize, 1usize + usize::from(peri_num > 0)),
+                    _ => (2usize, 0usize),
+                };
+                let capacity = if activities == 0 {
+                    quote! { ::rmk::ble::CONNECTIONS_MAX }
+                } else {
+                    quote! { ::rmk::ble::CONNECTIONS_MAX + #activities }
+                };
+                quote! {
+                    ::esp_radio::ble::Config::default().with_max_connections(
+                        ::core::cmp::max(#minimum, #capacity)
+                            .try_into().expect("too many BLE controller activities")
+                    )
+                }
+            } else {
+                quote! { Default::default() }
+            };
             quote! {
                 ::esp_println::logger::init_logger_from_env();
                 let p = ::esp_hal::init(::esp_hal::Config::default().with_cpu_clock(::esp_hal::clock::CpuClock::max()));
@@ -220,7 +238,7 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                 let timg0 = ::esp_hal::timer::timg::TimerGroup::new(p.TIMG0);
                 ::esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
                 #adc_entropy_init
-                let connector = ::esp_radio::ble::controller::BleConnector::new(p.BT, Default::default()).unwrap();
+                let connector = ::esp_radio::ble::controller::BleConnector::new(p.BT, #ble_config).unwrap();
                 let ble_controller: ::bt_hci::controller::ExternalController<_, 64> = ::bt_hci::controller::ExternalController::new(connector);
                 let ble_addr = #ble_addr;
             }

@@ -117,13 +117,19 @@ pub trait CentralCmds: ControllerCmdSync<LeSetScanParams> {}
 #[cfg(not(feature = "ext_adv"))]
 impl<T: ControllerCmdSync<LeSetScanParams>> CentralCmds for T {}
 
+/// Host and dongle connections: one per profile on extended-HCI controllers.
+#[doc(hidden)]
+pub const NUM_HOST_LINKS: usize = if cfg!(feature = "ext_adv") {
+    crate::ble::profile::BOND_SLOTS
+} else {
+    1
+};
+const _: () = core::assert!(NUM_HOST_LINKS <= u8::MAX as usize, "BLE host capacity must fit in u8");
+
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
 /// own — see [`crate::dongle::Dongle`].
-const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + NUM_HOST_LINKS;
-
-/// Host connections supported by the keyboard runtime.
 #[doc(hidden)]
-pub const NUM_HOST_LINKS: usize = 1;
+pub const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + NUM_HOST_LINKS;
 
 /// Default SDC Link Layer TX/RX packet size, in bytes.
 pub const SDC_PACKET_SIZE: usize = 251;
