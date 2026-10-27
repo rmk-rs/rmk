@@ -33,7 +33,7 @@ embassy-rp = { version = "0.10", features = [
 ] }
 embassy-time = { version = "0.5", features = ["defmt"] }
 
-bt-hci = { version = "0.10", features = ["defmt"] }
+bt-hci = { version = "0.11", features = ["defmt"] }
 cortex-m-rt = "0.7.5"
 cyw43 = { version = "0.7", features = ["defmt", "firmware-logs", "bluetooth"] }
 cyw43-pio = { version = "0.10.0", features = ["defmt"] }
@@ -68,10 +68,8 @@ opt-level = "z"         # optimize for binary size
 overflow-checks = false
 lto = "fat"
 
-# cyw43 needs bt-hci 0.10, which is only available from embassy git (crates.io cyw43
-# 0.7.0 still depends on an older bt-hci). Pin the whole embassy graph to the same
-# rev so there's a single copy of each embassy crate (otherwise the git and crates.io
-# `embassy-time` native libs collide via `links`, and shared types diverge).
+# Use cyw43's bt-hci-transport support from embassy git. Keep the patched
+# embassy crates at one revision so shared types and native links agree.
 [patch.crates-io]
 cyw43 = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
 cyw43-pio = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }

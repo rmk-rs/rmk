@@ -36,7 +36,7 @@ esp-radio = { version = "1.0.0-beta.1", features = ["esp32s3", "unstable", "ble"
 esp-rtos = { version = "0.4", features = ["esp32s3", "esp-radio", "embassy"] }
 esp-storage = { version = "0.10", features = ["embedded-storage", "esp32s3"] }
 
-bt-hci = { version = "0.10" }
+bt-hci = { version = "0.11" }
 
 [build-dependencies]
 cc = "1.2.9"
@@ -61,3 +61,7 @@ incremental = false
 lto = 'thin'
 opt-level = 3
 overflow-checks = false
+
+# Xtensa LLVM cannot allocate registers for P-256 multiplication at opt-level 3.
+[profile.release.package.embassy-crypto-rustcrypto]
+opt-level = "s"

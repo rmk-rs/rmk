@@ -19,7 +19,7 @@ mod vial_router;
 use core::cell::Cell;
 use core::ops::ControlFlow;
 
-use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
+use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::{AddrKind, BdAddr, LeAdvEventKind, Status};
 use embassy_futures::join::join3;
@@ -160,9 +160,18 @@ where
     C: Controller
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetScanParams>,
+        + ControllerCmdSync<LeSetScanParams>
+        + ControllerCmdSync<LeRand>,
 {
     async fn run(&mut self) -> ! {
+        // Seeding through a reference keeps the controller out of the future across the await.
+        if let Err(e) =
+            crate::ble::rng::seed_from_hardware(self.controller.as_ref().expect("Dongle::run called twice")).await
+        {
+            error!("[ble] failed to seed the RNG, rebooting: {:?}", e);
+            Timer::after_millis(100).await;
+            crate::boot::reboot_keyboard();
+        }
         let controller = self.controller.take().expect("Dongle::run called twice");
         let mut resources = DongleBleResources::new();
         let stack = trouble_host::new(controller, &mut resources)

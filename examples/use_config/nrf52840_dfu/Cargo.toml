@@ -41,18 +41,18 @@ embassy-nrf = { version = "0.11", features = [
     "time",
 ] }
 embassy-time = { version = "0.5", features = ["tick-hz-32_768", "defmt"] }
-nrf-mpsl = { version = "0.4.0", features = [
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "a22ca716c807496f98ae8d95cba5622b9fdd8a00", features = [
     "defmt",
     "nrf52840",
 ] }
-nrf-sdc = { version = "0.4.0", features = [
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "a22ca716c807496f98ae8d95cba5622b9fdd8a00", features = [
     "defmt",
     "peripheral",
     "central",
     "nrf52840",
 ] }
 
-bt-hci = { version = "0.10", features = ["defmt"] }
+bt-hci = { version = "0.11", features = ["defmt"] }
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = { version = "0.7.5", features = ["set-vtor"] }
 defmt = "1"

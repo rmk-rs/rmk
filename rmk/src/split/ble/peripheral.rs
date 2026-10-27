@@ -183,8 +183,7 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitWriter for BleSplitPeripheralDrive
 async fn init_subrating_host_feature<C: Controller + ControllerCmdSync<LeSetHostFeature>>(
     stack: &Stack<'_, C, impl PacketPool>,
 ) {
-    const CONN_SUBRATING_HOST_BIT: u8 = 38;
-    let cmd = LeSetHostFeature::new(CONN_SUBRATING_HOST_BIT, 1);
+    let cmd = LeSetHostFeature::new(bt_hci::param::LeHostFeature::CONN_SUBRATING, true);
     if let Err(e) = stack.command(cmd).await {
         error!("[split_peri] error setting subrating host feature flag: {:?}", e);
     }

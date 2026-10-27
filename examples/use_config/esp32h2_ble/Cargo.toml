@@ -36,7 +36,7 @@ esp-radio = { version = "1.0.0-beta.1", features = ["esp32h2", "unstable", "ble"
 esp-rtos = { version = "0.4", features = ["esp32h2", "esp-radio", "embassy"] }
 esp-storage = { version = "0.10", features = ["embedded-storage", "esp32h2"] }
 
-bt-hci = { version = "0.10" }
+bt-hci = { version = "0.11" }
 
 [build-dependencies]
 cc = "1.2.9"

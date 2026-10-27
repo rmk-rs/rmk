@@ -330,6 +330,7 @@ mod tests {
         ProfileManager<'b, 's, ExternalController<TestTransport, 1>, DefaultPacketPool, SLOTS>;
 
     fn with_manager<const SLOTS: usize>(test: impl FnOnce(&mut TestManager<'_, '_, SLOTS>)) {
+        crate::ble::rng::seed([7; 32]);
         let mut resources = HostResources::<DefaultPacketPool, 1, 1>::new();
         let stack = trouble_host::new(ExternalController::<_, 1>::new(TestTransport), &mut resources).build();
         let mut manager = ProfileManager::new(&stack);
