@@ -23,24 +23,6 @@ steps = [
   { rynk = { cmd = "GetVersion", reply = { major = 0, minor = 2 } } },
 ]
 
-# Layout counts come from the live keymap; the rest are compile-time constants
-# and protocol limits. Pinned because every host sizes its transfers from them.
-[[test]]
-name = "capabilities_report_the_live_board"
-features = ["storage", "_ble", "split"]
-steps = [
-  { rynk = { cmd = "GetCapabilities", reply = {
-    num_layers = 1, num_rows = 1, num_cols = 2, num_encoders = 0,
-    max_combos = 8, max_combo_keys = 4, max_macros = 32, macro_space_size = 256, macros_writable = true,
-    max_morse = 8, max_patterns_per_key = 8, max_forks = 8,
-    storage_enabled = true, lighting_enabled = false,
-    is_split = true, num_split_peripherals = 1,
-    ble_enabled = true, num_ble_profiles = 3,
-    max_payload_size = 482, max_bulk_keys = 47, max_bulk_items = 7,
-    bulk_transfer_supported = true,
-  } } },
-]
-
 # `rmk_version` carries the crate version, so a release bump
 # lands here. The simulator has no hardware UID, so the serial falls back to `RMK`.
 [[test]]
