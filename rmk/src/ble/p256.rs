@@ -3,9 +3,9 @@ use embassy_crypto::driver::{P256Ecdh, P256Point, P256Scalar};
 use p256_cortex_m4::{PublicKey, SecretKey};
 use zeroize::Zeroizing;
 
-struct Driver;
+struct P256Driver;
 
-impl P256Ecdh for Driver {
+impl P256Ecdh for P256Driver {
     fn public_key(k: &P256Scalar) -> Result<P256Point, Error> {
         let secret = Zeroizing::new(SecretKey::from_bytes(k.0.as_slice()).map_err(|_| Error::InvalidKey)?);
         let public = secret.public_key();
@@ -26,4 +26,4 @@ impl P256Ecdh for Driver {
     }
 }
 
-embassy_crypto::p256_ecdh_impl!(Driver);
+embassy_crypto::p256_ecdh_impl!(P256Driver);

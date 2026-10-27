@@ -56,9 +56,9 @@ pub(crate) fn seed(bytes: [u8; 32]) {
     RNG.lock(|rng| *rng.borrow_mut() = Some(ChaCha12Rng::from_seed(bytes)));
 }
 
-struct Driver;
+struct RngDriver;
 
-impl embassy_crypto::driver::Rng for Driver {
+impl embassy_crypto::driver::Rng for RngDriver {
     fn fill_bytes(buf: &mut [u8]) {
         RNG.lock(|rng| {
             rng.borrow_mut()
@@ -71,23 +71,23 @@ impl embassy_crypto::driver::Rng for Driver {
 
 // The std self-dependency must not register a second driver in the unit-test binary.
 #[cfg(any(not(feature = "std"), test))]
-embassy_crypto::rng_impl!(Driver);
+embassy_crypto::rng_impl!(RngDriver);
 
 #[cfg(test)]
 mod tests {
     use embassy_crypto::driver::Rng;
 
-    use super::{Driver, seed};
+    use super::{RngDriver, seed};
 
     #[test]
     fn same_seed_gives_same_bytes() {
         let mut first = [0; 32];
         seed([7; 32]);
-        Driver::fill_bytes(&mut first);
+        RngDriver::fill_bytes(&mut first);
 
         let mut second = [0; 32];
         seed([7; 32]);
-        Driver::fill_bytes(&mut second);
+        RngDriver::fill_bytes(&mut second);
 
         assert_eq!(first, second);
         assert_ne!(first, [0; 32]);
