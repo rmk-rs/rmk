@@ -62,6 +62,7 @@ lto = 'thin'
 opt-level = 3
 overflow-checks = false
 
-# Xtensa LLVM cannot allocate registers for P-256 multiplication at opt-level 3.
+# Work around Xtensa register scavenging with forced frame pointers.
+# https://github.com/espressif/llvm-project/issues/134
 [profile.release.package.embassy-crypto-rustcrypto]
 opt-level = "s"

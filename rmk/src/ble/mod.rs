@@ -155,12 +155,7 @@ where
         crate::state::set_preferred_connection(preferred);
 
         // Seeding through a reference keeps the controller out of the future across the await.
-        if let Err(e) = rng::seed_from_hardware(self.controller.as_ref().expect("BleTransport::run called twice")).await
-        {
-            error!("[ble] failed to seed the RNG, rebooting: {:?}", e);
-            Timer::after_millis(100).await;
-            crate::boot::reboot_keyboard();
-        }
+        rng::seed_from_hardware(self.controller.as_ref().expect("BleTransport::run called twice")).await;
         let controller = self.controller.take().expect("BleTransport::run called twice");
         // Exactly one link — the host.
         let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
@@ -201,12 +196,7 @@ impl<
         crate::state::set_preferred_connection(preferred);
 
         // Seeding through a reference keeps the controller out of the future across the await.
-        if let Err(e) = rng::seed_from_hardware(self.controller.as_ref().expect("BleTransport::run called twice")).await
-        {
-            error!("[ble] failed to seed the RNG, rebooting: {:?}", e);
-            Timer::after_millis(100).await;
-            crate::boot::reboot_keyboard();
-        }
+        rng::seed_from_hardware(self.controller.as_ref().expect("BleTransport::run called twice")).await;
         let controller = self.controller.take().expect("BleTransport::run called twice");
 
         let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =

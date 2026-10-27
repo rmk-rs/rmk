@@ -5,7 +5,6 @@
 
 use core::cell::RefCell;
 
-use bt_hci::cmd;
 use bt_hci::cmd::le::LeRand;
 use bt_hci::controller::ControllerCmdSync;
 // Link the software AES-128 and P-256 drivers.
@@ -20,37 +19,36 @@ static RNG: Mutex<CriticalSectionRawMutex, RefCell<Option<ChaCha12Rng>>> = Mutex
 
 /// ESP: the hardware RNG is true random while Bluetooth is on, which it is by now.
 #[cfg(feature = "_esp_ble")]
-pub(crate) async fn seed_from_hardware<C: ControllerCmdSync<LeRand>>(
-    _controller: &C,
-) -> Result<(), cmd::Error<C::Error>> {
+pub(crate) async fn seed_from_hardware<C: ControllerCmdSync<LeRand>>(_controller: &C) {
     let mut bytes = [0; 32];
     esp_hal::rng::Rng::new().read(&mut bytes);
     seed(bytes);
-    Ok(())
 }
 
 /// Pico W: the ring oscillator, because the CYW43439 only answers through the host runner.
 #[cfg(feature = "pico_w_ble")]
-pub(crate) async fn seed_from_hardware<C: ControllerCmdSync<LeRand>>(
-    _controller: &C,
-) -> Result<(), cmd::Error<C::Error>> {
+pub(crate) async fn seed_from_hardware<C: ControllerCmdSync<LeRand>>(_controller: &C) {
     let mut bytes = [0; 32];
     embassy_rp::clocks::RoscRng.fill_bytes(&mut bytes);
     seed(bytes);
-    Ok(())
 }
 
 /// nRF: the SoftDevice Controller owns the chip's RNG and runs `LE Rand` directly.
 #[cfg(not(any(feature = "_esp_ble", feature = "pico_w_ble")))]
-pub(crate) async fn seed_from_hardware<C: ControllerCmdSync<LeRand>>(
-    controller: &C,
-) -> Result<(), cmd::Error<C::Error>> {
+pub(crate) async fn seed_from_hardware<C: trouble_host::Controller + ControllerCmdSync<LeRand>>(controller: &C) {
     let mut bytes = [0; 32];
     for chunk in bytes.as_chunks_mut::<8>().0 {
-        *chunk = controller.exec(&LeRand::new()).await?;
+        match ControllerCmdSync::exec(controller, &LeRand::new()).await {
+            Ok(random) => *chunk = random,
+            Err(e) => {
+                error!("[ble] failed to seed the RNG, rebooting: {:?}", e);
+                embassy_time::Timer::after_millis(100).await;
+                crate::boot::reboot_keyboard();
+                return;
+            }
+        }
     }
     seed(bytes);
-    Ok(())
 }
 
 /// Seeds the generator with `bytes`. Tests have no hardware, so they pass a constant.
