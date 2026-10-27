@@ -270,8 +270,8 @@ where
         }
     }
 
-    /// Apply one profile action, then let the connection loop restart.
-    pub(crate) async fn update_profile(&self) {
+    /// Apply a profile switch, or return a slot to clear after its connection stops.
+    pub(crate) async fn update_profile(&self) -> Option<u8> {
         loop {
             let action = BLE_PROFILE_CHANNEL.receive().await;
             let current = current_profile();
@@ -289,14 +289,8 @@ where
                     let next = current + 1;
                     if next >= NUM_BLE_PROFILE as u8 { 0 } else { next }
                 }
-                BleProfileAction::ClearBond => {
-                    self.clear_bond(current);
-                    return;
-                }
-                BleProfileAction::ClearSlot(slot) => {
-                    self.clear_bond(slot);
-                    return;
-                }
+                BleProfileAction::ClearBond => return Some(current),
+                BleProfileAction::ClearSlot(slot) => return Some(slot),
             };
             if profile != current {
                 set_ble_profile(profile, self.bond_info(profile).is_some());
@@ -304,7 +298,7 @@ where
                 self.updated_active_profile.signal(());
                 info!("Switched to BLE profile: {}", profile);
             }
-            return;
+            return None;
         }
     }
 }
@@ -406,7 +400,9 @@ mod tests {
                     });
                 }
                 BLE_PROFILE_CHANNEL.send(ClearBond).await;
-                manager.update_profile().await;
+                let slot = manager.update_profile().await.expect("clear requested");
+                assert!(manager.bond_info(slot).is_some());
+                manager.clear_bond(slot);
             });
             assert_eq!(current_profile(), 1);
             assert!(!current_ble_status().bonded);
