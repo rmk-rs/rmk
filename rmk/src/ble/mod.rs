@@ -20,6 +20,7 @@ use rmk_types::ble::BleState;
 use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
 use trouble_host::prelude::*;
+use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 
 use crate::ble::adv::{Adv, advertise};
 use crate::ble::battery_service::BleBatteryServer;
@@ -38,12 +39,12 @@ use crate::channel::{BLE_REPORT_CHANNEL, LED_SIGNAL};
 use crate::config::{BleBatteryConfig, DeviceConfig, RmkConfig};
 use crate::core_traits::Runnable;
 use crate::event::SubscribableEvent;
-use crate::hid::{HidWriterTrait, run_led_reader};
+use crate::hid::{HidWriterTrait, Report, run_led_reader};
 #[cfg(feature = "split")]
 use crate::split::PeripheralMatrixConfig;
 #[cfg(feature = "split")]
 use crate::split::ble::central::{run_peripheral_session, scan_and_connect_peripherals};
-use crate::state::set_ble_state;
+use crate::state::{set_ble_state, subscribe_connection_status};
 
 pub(crate) mod adv;
 pub(crate) mod battery_service;
@@ -637,7 +638,9 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
             }
             GattConnectionEvent::Encrypted { security_level, .. } => {
                 info!("[gatt] encrypted: {:?}", security_level);
-                set_ble_state(BleState::Connected);
+                if profile == crate::state::current_profile() {
+                    set_ble_state(BleState::Connected);
+                }
             }
             GattConnectionEvent::PhyUpdateFailed { .. } | GattConnectionEvent::ConnectionParamsUpdateFailed { .. } => {
                 warn!("[gatt] link parameter update failed");
@@ -682,7 +685,9 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
                             if data_len == 1 {
                                 let led_indicator = LedIndicator::from_bits(data[0]);
                                 debug!("Got keyboard state: {:?}", led_indicator);
-                                LED_SIGNAL.signal(led_indicator);
+                                if profile == crate::state::current_profile() {
+                                    LED_SIGNAL.signal(led_indicator);
+                                }
                             } else {
                                 warn!("Wrong keyboard state data: {:?}", data);
                             }
@@ -737,7 +742,7 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
                             debug!("Write GATT Event to Unknown: {:?}", event.handle());
                         }
 
-                        if control_point_write {
+                        if control_point_write && profile == crate::state::current_profile() {
                             info!("Write GATT Event to Control Point: {:?}", event.handle());
                             // Forward an HID Control Point write to sleep management.
                             // HID Class spec opcodes for the HID Control Point characteristic:
@@ -935,20 +940,18 @@ pub(crate) async fn set_conn_params<
 
 /// Serve one host connection until its GATT Disconnected event.
 async fn serve_keyboard_connection<
-    'a,
-    'b,
-    #[cfg(feature = "host")] 'r,
     C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 >(
-    server: &'b Server<'_>,
-    conn: &GattConnection<'a, 'b, DefaultPacketPool>,
+    server: &Server<'_>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
     stack: &Stack<'_, C, DefaultPacketPool>,
     profile: u8,
     profiles: &ProfileManager<'_, '_, C, DefaultPacketPool, BOND_SLOTS>,
     config: &BleBatteryConfig,
-    #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
+    #[cfg(feature = "host")] host_service: Option<&crate::host::HostService<'_>>,
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);
+    let mut status = subscribe_connection_status();
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
     #[cfg(feature = "split")]
     let mut ble_peripheral_battery_server = crate::SPLIT_BATTERY_PERIPHERAL_IDS
@@ -991,9 +994,26 @@ async fn serve_keyboard_connection<
 
     let writer_task = async {
         loop {
-            let report = BLE_REPORT_CHANNEL.receive().await;
-            if let Err(e) = ble_hid_server.write_report(&report).await {
-                error!("Failed to send report: {:?}", e);
+            status.get_and(|s| s.ble.profile == profile).await;
+            while let Either::Second(report) = select(
+                status.get_and(|s| s.ble.profile != profile),
+                BLE_REPORT_CHANNEL.receive(),
+            )
+            .await
+            {
+                if let Err(e) = ble_hid_server.write_report(&report).await {
+                    error!("Failed to send report: {:?}", e);
+                }
+            }
+            for report in [
+                Report::KeyboardReport(Default::default()),
+                Report::MouseReport(Default::default()),
+                Report::MediaKeyboardReport(MediaKeyboardReport { usage_id: 0 }),
+                Report::SystemControlReport(SystemControlReport { usage_id: 0 }),
+                #[cfg(feature = "steno")]
+                Report::StenoReport(Default::default()),
+            ] {
+                let _ = ble_hid_server.write_report(&report).await;
             }
         }
     };
@@ -1119,7 +1139,7 @@ mod tests {
     use rmk_types::ble::{BleState, BleStatus};
 
     use crate::event::{Axis, AxisEvent, AxisValType, KeyboardEvent, PointingEvent, SubscribableEvent, publish_event};
-    use crate::state::{current_ble_status, set_ble_profile, set_ble_state};
+    use crate::state::{current_ble_status, set_ble_state, set_ble_status};
     use crate::test_support::test_block_on as block_on;
 
     #[cfg(all(feature = "dongle", feature = "custom_message"))]
@@ -1158,7 +1178,11 @@ mod tests {
     fn set_ble_state_preserves_current_profile() {
         let _guard = ble_status_test_lock().lock().unwrap();
 
-        set_ble_profile(2, true);
+        set_ble_status(BleStatus {
+            profile: 2,
+            state: BleState::Inactive,
+            bonded: true,
+        });
         set_ble_state(BleState::Advertising);
 
         assert_eq!(
@@ -1172,12 +1196,19 @@ mod tests {
     }
 
     #[test]
-    fn set_ble_profile_resets_state_when_profile_changes() {
+    fn selecting_an_unconnected_profile_sets_inactive() {
         let _guard = ble_status_test_lock().lock().unwrap();
 
-        set_ble_profile(1, false);
-        set_ble_state(BleState::Connected);
-        set_ble_profile(3, true);
+        set_ble_status(BleStatus {
+            profile: 1,
+            state: BleState::Connected,
+            bonded: false,
+        });
+        set_ble_status(BleStatus {
+            profile: 3,
+            state: BleState::Inactive,
+            bonded: true,
+        });
 
         assert_eq!(
             current_ble_status(),
