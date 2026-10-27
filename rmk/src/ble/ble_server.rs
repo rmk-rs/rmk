@@ -29,7 +29,7 @@ use rmk_types::protocol::rynk::{
 
 /// Field order is the attribute order: append, never insert, so a bonded host's
 /// cached GATT table survives a firmware update that adds a service.
-#[gatt_server]
+#[gatt_server(connections_max = crate::ble::NUM_HOST_LINKS)]
 pub(crate) struct Server {
     pub(crate) battery_service: BatteryService,
     #[cfg(feature = "split")]
