@@ -35,6 +35,8 @@ use crate::ble::led::BleLedReader;
 #[cfg(feature = "passkey_entry")]
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
 use crate::ble::profile::{BOND_SLOTS, ProfileInfo, ProfileManager};
+#[cfg(feature = "split")]
+use crate::ble::scan::CentralController;
 use crate::ble::sleep::{report_activity, request_sleep};
 use crate::channel::{BLE_REPORT_CHANNEL, LED_SIGNAL};
 use crate::config::{BleBatteryConfig, DeviceConfig, RmkConfig};
@@ -65,6 +67,9 @@ pub(crate) mod sleep;
 
 #[cfg(all(feature = "subrating", feature = "_no_subrating"))]
 compile_error!("You may not enable feature `subrating` on unsupported platforms!");
+
+#[cfg(all(feature = "pico_w_ble", feature = "_ext_adv"))]
+compile_error!("Pico W does not support extended HCI advertising commands");
 
 /// Additional HCI commands required for extended advertising.
 #[doc(hidden)]
@@ -99,7 +104,39 @@ impl<T> ExtAdvCmds for T {}
 
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
 /// own — see [`crate::dongle::Dongle`].
-const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + 1;
+const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + NUM_HOST_LINKS;
+
+/// Host connections supported by the keyboard runtime.
+#[doc(hidden)]
+pub const NUM_HOST_LINKS: usize = 1;
+
+/// Calculate SDC memory
+#[doc(hidden)]
+pub const fn calculate_sdc_memory_size(
+    central_links: usize,
+    peripheral_links: usize,
+    packet_size: usize,
+    tx_buffers: u8,
+    rx_buffers: u8,
+) -> usize {
+    // SDC_MEM_PER_{CENTRAL,PERIPHERAL}_LINK plus their shared-memory bounds.
+    let buffers = (tx_buffers as usize + rx_buffers as usize) * (packet_size + 15) - 84;
+    let links = central_links * (803 + buffers + 21) + peripheral_links * (923 + buffers + 17);
+    let advertising = (5184 + 31 * 18) / 10; // SDC_MEM_PER_ADV_SET(31).
+    // SDC_MEM_SCAN[_EXT](3) and SDC_MEM_INITIATOR.
+    let scanning = if central_links > 0 {
+        408 + 3 * if cfg!(feature = "_ext_adv") { 320 } else { 104 } + 384
+    } else {
+        0
+    };
+    let subrating = if cfg!(feature = "subrating") {
+        12 + (central_links + peripheral_links) * 60
+    } else {
+        0
+    };
+    let filter_accept_list = 4 + 8 * 8; // SDC_MEM_FAL(8).
+    (links + advertising + scanning + subrating + filter_accept_list + 7) & !7
+}
 
 /// Max number of L2CAP channels
 const L2CAP_CHANNELS_MAX: usize = CONNECTIONS_MAX * 4; // Signal + att + smp + hid
@@ -215,17 +252,15 @@ where
 #[cfg(feature = "split")]
 impl<
     'a,
-    #[cfg(not(feature = "subrating"))] C: Controller
+    #[cfg(not(feature = "subrating"))] C: CentralController
         + ExtAdvCmds
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>
         + ControllerCmdSync<LeRand>,
-    #[cfg(feature = "subrating")] C: Controller
+    #[cfg(feature = "subrating")] C: CentralController
         + ExtAdvCmds
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<bt_hci::cmd::le::LeSetScanParams>
         + ControllerCmdSync<LeRand>
         + ControllerCmdAsync<LeSubrateRequest>,
 > Runnable for BleTransport<'a, C>

@@ -227,7 +227,7 @@ nrf52832_ble = ["_nrf_ble", "_no_usb"]
 nrf52811_ble = ["_nrf_ble", "_no_usb"]
 ## Enable feature if you want to use nRF52810 with BLE.
 nrf52810_ble = ["_nrf_ble", "_no_usb"]
-_nrf_ble = ["_ble", "dep:embassy-nrf", "dep:p256-cortex-m4", "dep:zeroize"]
+_nrf_ble = ["_ble", "_ext_adv", "dep:embassy-nrf", "dep:p256-cortex-m4", "dep:zeroize"]
 
 ## Enable feature if you want to use ESP32C3 with BLE.
 esp32c3_ble = ["_esp_ble", "_no_usb"]
@@ -237,10 +237,20 @@ esp32c6_ble = ["_esp_ble", "_no_usb"]
 esp32h2_ble = ["_esp_ble", "_no_usb"]
 ## Enable feature if you want to use ESP32S3 with BLE.
 esp32s3_ble = ["_esp_ble"]
-_esp_ble = ["_ble", "dep:esp-hal", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
+_esp_ble = [
+    "_ble",
+    "_ext_adv",
+    "dep:esp-hal",
+    "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh",
+]
 
 ## Enable feature if you want to use RP2040W with BLE.
-pico_w_ble = ["_ble", "_no_subrating", "dep:embassy-rp", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
+pico_w_ble = [
+    "_ble",
+    "_no_subrating",
+    "dep:embassy-rp",
+    "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh",
+]
 
 ## Enable feature if you want to use SF32LB52x with BLE.
 sf32lb52x_ble = ["_ble", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
@@ -249,10 +259,18 @@ sf32lb52x_ble = ["_ble", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
 passkey_entry = ["_ble", "rmk-types/passkey_entry"]
 
 ## Enable feature if you want to use trouble BLE stack
-_ble = ["dep:trouble-host", "dep:bt-hci", "dep:embassy-crypto", "dep:embassy-crypto-rustcrypto", "dep:rand_chacha", "storage", "rmk-types/_ble"]
+_ble = [
+    "dep:trouble-host",
+    "dep:bt-hci",
+    "dep:embassy-crypto",
+    "dep:embassy-crypto-rustcrypto",
+    "dep:rand_chacha",
+    "storage",
+    "rmk-types/_ble",
+]
 
 ## Internal support for extended advertising, scanning and connecting.
-_ext_adv = ["trouble-host?/per-connection-address"]
+_ext_adv = ["trouble-host?/extended-advertising"]
 
 [dependencies]
 rmk-macro = { version = "=0.8.0", path = "../rmk-macro" }
@@ -343,8 +361,8 @@ p256-cortex-m4 = { version = "0.1.0-alpha.6", default-features = false, optional
 zeroize = { version = "1", default-features = false, optional = true }
 
 [dev-dependencies]
-embassy-crypto-rustcrypto = { git = "https://github.com/embassy-rs/embassy.git", rev = "bd35bd7a7d19147c8bcae9c2eda99b25e597294c", features = ["embassy-crypto-p256-ecdh"] }
 critical-section = { version = "1.2", features = ["std"] }
+embassy-crypto-rustcrypto = { git = "https://github.com/embassy-rs/embassy.git", rev = "bd35bd7a7d19147c8bcae9c2eda99b25e597294c", features = ["embassy-crypto-p256-ecdh"] }
 embedded-hal-mock = { version = "0.11.1", features = ["embedded-hal-async"] }
 # A hack for enabling 'std' feature in testing, ref: https://github.com/rust-lang/cargo/issues/2911
 rmk = { path = ".", default-features = false, features = ["std", "log"] }
