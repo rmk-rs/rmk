@@ -33,13 +33,6 @@ pub(crate) enum Adv<'a> {
     DongleSeeking,
 }
 
-/// The advertisement and local address selected for a profile.
-pub(crate) struct AdvRequest<'a> {
-    pub(crate) adv: Adv<'a>,
-    pub(crate) profile: u8,
-    pub(crate) addr: [u8; 6],
-}
-
 impl Adv<'_> {
     /// Encode into `buf`, which the returned advertisement borrows.
     fn build<'b>(&self, buf: &'b mut [u8; 31]) -> Result<Advertisement<'b>, Error> {
@@ -107,13 +100,13 @@ impl Adv<'_> {
 
     /// All variants use legacy PDUs, which require the 1M primary PHY.
     fn params(&self) -> AdvertisementParameters {
-        let (phy, interval) = match self {
-            Self::Host { .. } | Self::HostReconnect => (PhyKind::Le1M, Duration::from_millis(200)),
-            _ => (PhyKind::Le1M, Duration::from_millis(50)),
+        let interval = match self {
+            Self::Host { .. } | Self::HostReconnect => Duration::from_millis(200),
+            _ => Duration::from_millis(50),
         };
         AdvertisementParameters {
-            primary_phy: phy,
-            secondary_phy: phy,
+            primary_phy: PhyKind::Le1M,
+            secondary_phy: PhyKind::Le1M,
             tx_power: TxPower::Plus8dBm,
             interval_min: interval,
             interval_max: interval,
@@ -122,25 +115,21 @@ impl Adv<'_> {
     }
 }
 
-#[cfg(feature = "_ext_adv")]
-fn advertisement_set<'b>(req: &AdvRequest<'_>, buf: &'b mut [u8; 31]) -> Result<AdvertisementSet<'b>, Error> {
-    Ok(AdvertisementSet {
-        params: req.adv.params(),
-        data: req.adv.build(buf)?,
-        address: Some(BdAddr::new(req.addr)),
-    })
-}
-
 /// Advertise using the profile's local address and return its incoming connection.
 #[cfg(feature = "_ext_adv")]
 pub(crate) async fn advertise_profile<'a, 'b, C: Controller + ExtAdvCmds, const ATT: usize, const CONN: usize>(
     peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
     server: &'b AttributeServer<'_, NoopRawMutex, DefaultPacketPool, ATT, CONN>,
-    req: &AdvRequest<'_>,
+    adv: Adv<'_>,
+    addr: [u8; 6],
     timeout: Duration,
 ) -> Result<GattConnection<'a, 'b, DefaultPacketPool>, BleHostError<C::Error>> {
     let mut buf = [0; 31];
-    let sets = [advertisement_set(req, &mut buf)?];
+    let sets = [AdvertisementSet {
+        params: adv.params(),
+        data: adv.build(&mut buf)?,
+        address: Some(BdAddr::new(addr)),
+    }];
     let mut handles = AdvertisementSet::handles(&sets);
     let advertiser = peripheral.advertise_ext(&sets, &mut handles).await?;
     let conn = with_timeout(timeout, advertiser.accept())
@@ -202,13 +191,11 @@ mod tests {
         assert!(scan_data.is_empty());
     }
 
-    #[cfg(feature = "_ext_adv")]
     #[test]
-    fn advertisement_set_uses_profile_address() {
+    fn legacy_advertisement_parameters() {
         use embassy_time::Duration;
-        use trouble_host::prelude::{Address, BdAddr, PhyKind};
+        use trouble_host::prelude::{Address, PhyKind};
 
-        let addr = [1, 2, 3, 4, 5, 0xC6];
         for (adv, interval_ms) in [
             (Adv::Host { name: "RMK" }, 200),
             (Adv::HostReconnect, 200),
@@ -216,14 +203,11 @@ mod tests {
             (Adv::SplitPeripheral { id: 0 }, 50),
             (Adv::DongleSeeking, 50),
         ] {
-            let req = super::AdvRequest { adv, profile: 1, addr };
-            let mut buf = [0; 31];
-            let set = super::advertisement_set(&req, &mut buf).unwrap();
-            assert_eq!(set.address, Some(BdAddr::new(addr)));
-            assert_eq!(set.params.primary_phy, PhyKind::Le1M);
-            assert_eq!(set.params.secondary_phy, PhyKind::Le1M);
-            assert_eq!(set.params.interval_min, Duration::from_millis(interval_ms));
-            assert_eq!(set.params.interval_max, Duration::from_millis(interval_ms));
+            let params = adv.params();
+            assert_eq!(params.primary_phy, PhyKind::Le1M);
+            assert_eq!(params.secondary_phy, PhyKind::Le1M);
+            assert_eq!(params.interval_min, Duration::from_millis(interval_ms));
+            assert_eq!(params.interval_max, Duration::from_millis(interval_ms));
         }
     }
 
