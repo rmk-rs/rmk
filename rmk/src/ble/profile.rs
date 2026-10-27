@@ -92,6 +92,7 @@ impl Default for ProfileInfo {
 pub(crate) enum BleProfileAction {
     Switch(u8),
     Pair(u8),
+    SetBackgroundConnections(bool),
     Previous,
     Next,
     ClearBond,
@@ -124,6 +125,7 @@ pub(crate) struct ProfileManager<
     profiles: [Watch<crate::RawMutex, ProfileInfo, 1>; SLOTS],
     updated_active_profile: Signal<crate::RawMutex, ()>,
     pub(crate) repairing: Cell<Option<u8>>,
+    pub(crate) background_connections: Cell<bool>,
     /// BLE stack
     stack: &'b Stack<'s, C, P>,
 }
@@ -140,6 +142,7 @@ where
             profiles: [const { Watch::new() }; SLOTS],
             updated_active_profile: Signal::new(),
             repairing: Cell::new(None),
+            background_connections: Cell::new(super::NUM_HOST_LINKS > 1),
             stack,
         }
     }
@@ -147,6 +150,13 @@ where
     /// Load stored bonding information
     #[cfg(feature = "storage")]
     pub(crate) async fn load_bonded_devices(&mut self) {
+        self.background_connections.set(
+            super::NUM_HOST_LINKS > 1
+                && !matches!(
+                    read(StorageKey::BleBackgroundConnections).await,
+                    Ok(Some(StorageValue::BleBackgroundConnections(false)))
+                ),
+        );
         for (slot, state) in self.profiles.iter_mut().enumerate() {
             *state = match read(StorageKey::BondInfo(slot as u8)).await {
                 Ok(Some(StorageValue::BondInfo(info))) if !info.removed => Watch::new_with(info),
