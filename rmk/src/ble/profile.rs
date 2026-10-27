@@ -11,7 +11,6 @@ use trouble_host::{BondInformation, LongTermKey};
 
 use super::ble_server::CCCD_TABLE_SIZE;
 use crate::NUM_BLE_PROFILE;
-use crate::channel::BLE_PROFILE_CHANNEL;
 use crate::state::{current_profile, set_ble_bonded, set_ble_status};
 #[cfg(feature = "storage")]
 use crate::storage::{StorageItem, StorageKey, StorageValue, read, store};
@@ -275,42 +274,17 @@ where
         }
     }
 
-    /// Apply a profile switch, or return a slot to clear after its connection stops.
-    pub(crate) async fn update_profile(&self) -> Option<u8> {
-        loop {
-            let action = BLE_PROFILE_CHANNEL.receive().await;
-            let current = current_profile();
-            let profile = match action {
-                BleProfileAction::Switch(profile) if profile == current => continue,
-                BleProfileAction::Switch(profile) => profile,
-                BleProfileAction::Previous | BleProfileAction::Next if NUM_BLE_PROFILE == 0 => continue,
-                BleProfileAction::Previous => {
-                    if current == 0 {
-                        NUM_BLE_PROFILE as u8 - 1
-                    } else {
-                        current - 1
-                    }
-                }
-                BleProfileAction::Next => {
-                    let next = current + 1;
-                    if next >= NUM_BLE_PROFILE as u8 { 0 } else { next }
-                }
-                BleProfileAction::ClearBond => return Some(current),
-                BleProfileAction::ClearSlot(slot) => return Some(slot),
-            };
-            if profile != current {
-                set_ble_status(BleStatus {
-                    profile,
-                    state: BleState::Inactive,
-                    bonded: self.bond_info(profile).is_some(),
-                });
-                self.update_stack_bonds();
-                crate::channel::BLE_REPORT_CHANNEL.clear();
-                self.updated_active_profile.signal(());
-                info!("Switched to BLE profile: {}", profile);
-            }
-            return None;
-        }
+    /// Apply a selected profile outside the cancellable action wait.
+    pub(crate) fn switch_profile(&self, profile: u8, state: BleState) {
+        set_ble_status(BleStatus {
+            profile,
+            state,
+            bonded: self.bond_info(profile).is_some(),
+        });
+        self.update_stack_bonds();
+        crate::channel::BLE_REPORT_CHANNEL.clear();
+        self.updated_active_profile.signal(());
+        info!("Switched to BLE profile: {}", profile);
     }
 }
 
@@ -385,9 +359,9 @@ mod tests {
     }
 
     #[test]
-    fn profile_actions_update_selection_and_stack_bonds() {
-        use super::BleProfileAction::{ClearBond, Next, Previous, Switch};
-        use crate::channel::BLE_PROFILE_CHANNEL;
+    fn profile_switches_update_selection_and_stack_bonds() {
+        use rmk_types::ble::BleState;
+
         use crate::state::{current_ble_status, current_profile};
 
         with_manager::<2>(|manager| {
@@ -400,9 +374,8 @@ mod tests {
                 manager.set_bond(info);
             }
             test_block_on(async {
-                for (action, selected) in [(Switch(1), 1), (Previous, 0), (Next, 1)] {
-                    BLE_PROFILE_CHANNEL.send(action).await;
-                    manager.update_profile().await;
+                for selected in [1, 0, 1] {
+                    manager.switch_profile(selected, BleState::Inactive);
                     assert_eq!(current_profile(), selected);
                     assert!(current_ble_status().bonded);
                     manager.stack.with_bond_information(|bonds| {
@@ -410,10 +383,7 @@ mod tests {
                         assert_eq!(bonds[0].ltk, LongTermKey(selected.into()));
                     });
                 }
-                BLE_PROFILE_CHANNEL.send(ClearBond).await;
-                let slot = manager.update_profile().await.expect("clear requested");
-                assert!(manager.bond_info(slot).is_some());
-                manager.clear_bond(slot);
+                manager.clear_bond(1);
             });
             assert_eq!(current_profile(), 1);
             assert!(!current_ble_status().bonded);
@@ -424,44 +394,9 @@ mod tests {
     }
 
     #[test]
-    fn cycling_uses_available_host_profiles() {
-        use embassy_futures::join::join;
-
-        use super::BleProfileAction::{ClearSlot, Next, Previous};
-        use crate::channel::BLE_PROFILE_CHANNEL;
-        use crate::state::current_profile;
-
-        with_manager::<{ super::BOND_SLOTS }>(|manager| {
-            crate::test_support::set_connection_status(Default::default());
-            BLE_PROFILE_CHANNEL.clear();
-            test_block_on(async {
-                if crate::NUM_BLE_PROFILE == 0 {
-                    for action in [Previous, Next] {
-                        let (clear_slot, ()) = join(manager.update_profile(), async {
-                            BLE_PROFILE_CHANNEL.send(action).await;
-                            BLE_PROFILE_CHANNEL.send(ClearSlot(0)).await;
-                        })
-                        .await;
-                        assert_eq!(clear_slot, Some(0));
-                        assert_eq!(current_profile(), 0);
-                    }
-                } else {
-                    BLE_PROFILE_CHANNEL.send(Previous).await;
-                    manager.update_profile().await;
-                    assert_eq!(current_profile(), crate::NUM_BLE_PROFILE as u8 - 1);
-                    BLE_PROFILE_CHANNEL.send(Next).await;
-                    manager.update_profile().await;
-                    assert_eq!(current_profile(), 0);
-                }
-            });
-        });
-    }
-
-    #[test]
     fn profile_state_is_restored_from_storage() {
         use embassy_futures::select::{select, select3};
 
-        use crate::channel::BLE_PROFILE_CHANNEL;
         use crate::config::StorageConfig;
         use crate::core_traits::Runnable;
         use crate::storage::{Storage, StorageKey, StorageValue, async_flash_wrapper, read};
@@ -479,8 +414,7 @@ mod tests {
             manager.set_bond(host.clone());
             manager.clear_bond(0);
             test_block_on(async {
-                BLE_PROFILE_CHANNEL.send(super::BleProfileAction::Switch(1)).await;
-                manager.update_profile().await;
+                manager.switch_profile(1, rmk_types::ble::BleState::Inactive);
                 let flash = InMemoryFlash::<16_384, 4_096, 1>::new();
                 let reboot = flash.clone();
                 let mut storage = Box::pin(Storage::new(async_flash_wrapper(flash), &StorageConfig::default())).await;
