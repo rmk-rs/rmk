@@ -14,13 +14,14 @@ use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
 use panic_probe as _;
+use rmk::ble::SDC_PACKET_SIZE;
 use rmk::config::StorageConfig;
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::futures::future::join;
 use rmk::matrix::direct_pin::DirectPinMatrix;
+use rmk::run_all;
 use rmk::split::peripheral::run_rmk_split_peripheral;
 use rmk::storage::new_storage_without_keymap;
-use rmk::{DefaultPacketPool, PacketPool, run_all};
 use static_cell::StaticCell;
 
 type RandomSource = cracen::Cracen<'static, Blocking>;
@@ -42,8 +43,8 @@ const SDC_MEM_SIZE: usize = 5760;
 const FLASH_START_ADDR: usize = 0x100000;
 const FLASH_SECTORS: u8 = 6;
 
-const L2CAP_TXQ: u8 = 4;
-const L2CAP_RXQ: u8 = 4;
+const SDC_TX_BUFFERS: u8 = 4;
+const SDC_RX_BUFFERS: u8 = 4;
 
 fn build_sdc<'d, const N: usize>(
     p: nrf_sdc::Peripherals<'d>,
@@ -56,10 +57,10 @@ fn build_sdc<'d, const N: usize>(
         .support_peripheral()
         .peripheral_count(1)?
         .buffer_cfg(
-            DefaultPacketPool::MTU as u16,
-            DefaultPacketPool::MTU as u16,
-            L2CAP_TXQ,
-            L2CAP_RXQ,
+            SDC_PACKET_SIZE as u16,
+            SDC_PACKET_SIZE as u16,
+            SDC_TX_BUFFERS,
+            SDC_RX_BUFFERS,
         )?
         .build(p, rng, mpsl, mem)
 }

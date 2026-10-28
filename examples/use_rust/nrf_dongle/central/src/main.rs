@@ -18,7 +18,7 @@ use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
 use panic_probe as _;
-use rmk::ble::BleTransport;
+use rmk::ble::{BleTransport, SDC_PACKET_SIZE, SDC_RX_BUFFERS, SDC_TX_BUFFERS};
 use rmk::config::{BehaviorConfig, DeviceConfig, LockConfig, PositionalConfig, RmkConfig, StorageConfig};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::host::HostService;
@@ -45,10 +45,6 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
     mpsl.run().await
 }
 
-const L2CAP_TXQ: u8 = 3;
-const L2CAP_RXQ: u8 = 3;
-const L2CAP_MTU: usize = 251;
-
 const RYNK_UNLOCK_KEYS: &[(u8, u8)] = &[(0, 1), (0, 2)];
 
 /// Both roles: peripheral toward the dongle/host, central toward the split half.
@@ -69,7 +65,12 @@ fn build_sdc<'d, const N: usize>(
         .support_le_2m_phy()
         .central_count(1)?
         .peripheral_count(1)?
-        .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
+        .buffer_cfg(
+            SDC_PACKET_SIZE as u16,
+            SDC_PACKET_SIZE as u16,
+            SDC_TX_BUFFERS,
+            SDC_RX_BUFFERS,
+        )?
         .build(p, rng, mpsl, mem)
 }
 

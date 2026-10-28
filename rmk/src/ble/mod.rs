@@ -125,7 +125,14 @@ const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + NUM_HOST_LINKS;
 #[doc(hidden)]
 pub const NUM_HOST_LINKS: usize = 1;
 
-/// Calculate SDC memory
+/// Default SDC Link Layer TX/RX packet size, in bytes.
+pub const SDC_PACKET_SIZE: usize = 251;
+/// Default number of SDC TX packet buffers per connection.
+pub const SDC_TX_BUFFERS: u8 = 3;
+/// Default number of SDC RX packet buffers per connection.
+pub const SDC_RX_BUFFERS: u8 = 3;
+
+/// Calculate SDC memory using the same packet size and buffer counts as the controller.
 #[doc(hidden)]
 pub const fn calculate_sdc_memory_size(
     central_links: usize,

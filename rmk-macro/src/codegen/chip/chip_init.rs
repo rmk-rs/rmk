@@ -126,7 +126,7 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                         p.PPI_CH27, p.PPI_CH28, p.PPI_CH29,
                     );
                     let mut rng = ::embassy_nrf::rng::Rng::new(p.RNG, Irqs);
-                    let mut sdc_mem = ::nrf_sdc::Mem::<{ ::rmk::ble::calculate_sdc_memory_size(#central_links, #peripheral_links, L2CAP_MTU, L2CAP_TXQ, L2CAP_RXQ) }>::new();
+                    let mut sdc_mem = ::nrf_sdc::Mem::<{ ::rmk::ble::calculate_sdc_memory_size(#central_links, #peripheral_links, SDC_PACKET_SIZE, SDC_TX_BUFFERS, SDC_RX_BUFFERS) }>::new();
                     let ble_controller = ::defmt::unwrap!(build_sdc(sdc_p, &mut rng, &*mpsl, &mut sdc_mem));
                     let ble_addr = #ble_addr;
                 },

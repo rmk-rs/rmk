@@ -18,7 +18,7 @@ use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
 use panic_probe as _;
-use rmk::ble::BleTransport;
+use rmk::ble::{BleTransport, SDC_PACKET_SIZE, SDC_RX_BUFFERS, SDC_TX_BUFFERS};
 use rmk::config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::host::HostService;
@@ -44,15 +44,6 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
     mpsl.run().await
 }
 
-/// How many outgoing L2CAP buffers per link
-const L2CAP_TXQ: u8 = 3;
-
-/// How many incoming L2CAP buffers per link
-const L2CAP_RXQ: u8 = 3;
-
-/// Size of L2CAP packets
-const L2CAP_MTU: usize = 251;
-
 fn build_sdc<'d, const N: usize>(
     p: nrf_sdc::Peripherals<'d>,
     rng: &'d mut rng::Rng<Async>,
@@ -67,7 +58,12 @@ fn build_sdc<'d, const N: usize>(
         .support_le_2m_phy()
         .central_count(0)?
         .peripheral_count(rmk::ble::NUM_HOST_LINKS as u8)?
-        .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
+        .buffer_cfg(
+            SDC_PACKET_SIZE as u16,
+            SDC_PACKET_SIZE as u16,
+            SDC_TX_BUFFERS,
+            SDC_RX_BUFFERS,
+        )?
         .build(p, rng, mpsl, mem)
 }
 
@@ -108,7 +104,15 @@ async fn main(spawner: Spawner) {
     );
     let mut rng = rng::Rng::new(p.RNG, Irqs);
     let mut sdc_mem = sdc::Mem::<
-        { rmk::ble::calculate_sdc_memory_size(0, rmk::ble::NUM_HOST_LINKS, L2CAP_MTU, L2CAP_TXQ, L2CAP_RXQ) },
+        {
+            rmk::ble::calculate_sdc_memory_size(
+                0,
+                rmk::ble::NUM_HOST_LINKS,
+                SDC_PACKET_SIZE,
+                SDC_TX_BUFFERS,
+                SDC_RX_BUFFERS,
+            )
+        },
     >::new();
     let sdc = unwrap!(build_sdc(sdc_p, &mut rng, mpsl, &mut sdc_mem));
 
