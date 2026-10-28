@@ -251,8 +251,8 @@ passkey_entry = ["_ble", "rmk-types/passkey_entry"]
 ## Enable feature if you want to use trouble BLE stack
 _ble = ["dep:trouble-host", "dep:bt-hci", "dep:embassy-crypto", "dep:embassy-crypto-rustcrypto", "dep:rand_chacha", "storage", "rmk-types/_ble"]
 
-## Internal support for extended advertising, scanning and connecting.
-_ext_adv = ["trouble-host?/per-connection-address"]
+## Enable extended HCI advertising. Disabled by default; requires controller support.
+ext_adv = ["_ble", "trouble-host?/per-connection-address"]
 
 [dependencies]
 rmk-macro = { version = "=0.8.0", path = "../rmk-macro" }

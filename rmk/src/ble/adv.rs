@@ -123,7 +123,7 @@ pub(crate) async fn advertise<'a, 'b, C: Controller + ExtAdvCmds, const ATT: usi
     timeout: Duration,
 ) -> Result<GattConnection<'a, 'b, DefaultPacketPool>, BleHostError<C::Error>> {
     let mut buf = [0; 31];
-    #[cfg(feature = "_ext_adv")]
+    #[cfg(feature = "ext_adv")]
     let advertiser = {
         let sets = [AdvertisementSet {
             params: adv.params(),
@@ -133,7 +133,7 @@ pub(crate) async fn advertise<'a, 'b, C: Controller + ExtAdvCmds, const ATT: usi
         let mut handles = AdvertisementSet::handles(&sets);
         peripheral.advertise_ext(&sets, &mut handles).await?
     };
-    #[cfg(not(feature = "_ext_adv"))]
+    #[cfg(not(feature = "ext_adv"))]
     let advertiser = {
         let _ = address;
         peripheral.advertise(&adv.params(), adv.build(&mut buf)?).await?

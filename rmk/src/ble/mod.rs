@@ -1,6 +1,6 @@
 #[cfg(feature = "subrating")]
 use bt_hci::cmd::le::LeSubrateRequest;
-#[cfg(feature = "_ext_adv")]
+#[cfg(feature = "ext_adv")]
 use bt_hci::cmd::le::{
     LeClearAdvSets, LeReadNumberOfSupportedAdvSets, LeSetAdvSetRandomAddr, LeSetExtAdvData, LeSetExtAdvParams,
     LeSetExtScanResponseData,
@@ -68,7 +68,7 @@ compile_error!("You may not enable feature `subrating` on unsupported platforms!
 
 /// Additional HCI commands required for extended advertising.
 #[doc(hidden)]
-#[cfg(feature = "_ext_adv")]
+#[cfg(feature = "ext_adv")]
 pub trait ExtAdvCmds:
     for<'t> ControllerCmdSync<LeSetExtAdvData<'t>>
     + ControllerCmdSync<LeClearAdvSets>
@@ -79,7 +79,7 @@ pub trait ExtAdvCmds:
 {
 }
 
-#[cfg(feature = "_ext_adv")]
+#[cfg(feature = "ext_adv")]
 impl<T> ExtAdvCmds for T where
     T: for<'t> ControllerCmdSync<LeSetExtAdvData<'t>>
         + ControllerCmdSync<LeClearAdvSets>
@@ -90,11 +90,11 @@ impl<T> ExtAdvCmds for T where
 {
 }
 
-#[cfg(not(feature = "_ext_adv"))]
+#[cfg(not(feature = "ext_adv"))]
 #[doc(hidden)]
 pub trait ExtAdvCmds {}
 
-#[cfg(not(feature = "_ext_adv"))]
+#[cfg(not(feature = "ext_adv"))]
 impl<T> ExtAdvCmds for T {}
 
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
