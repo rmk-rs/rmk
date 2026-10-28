@@ -164,7 +164,7 @@ async fn main(_spawner: Spawner) {
         pid: 0x4644,
         manufacturer: "RMK & SiFli-rs",
         product_name: "RMK SF32LB52",
-        serial_number: rmk::config::build_serial_number("000002"),
+        serial_number: "000002",
     };
 
     let vial_config = VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(0, 0), (0, 3)]);
