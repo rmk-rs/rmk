@@ -52,10 +52,7 @@ fn build_sdc<'d, const N: usize>(
     mem: &'d mut sdc::Mem<N>,
 ) -> Result<nrf_sdc::SoftdeviceController<'d>, nrf_sdc::Error> {
     sdc::Builder::new()?
-        .support_scan()
-        .support_ext_scan()
         .support_ext_central()
-        .support_central()
         .support_dle_central()
         .support_phy_update_central()
         .support_le_2m_phy()

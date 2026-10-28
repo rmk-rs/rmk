@@ -66,7 +66,6 @@ fn build_sdc<'d, const N: usize>(
     mem: &'d mut sdc::Mem<N>,
 ) -> Result<nrf_sdc::SoftdeviceController<'d>, nrf_sdc::Error> {
     sdc::Builder::new()?
-        .support_adv()
         .support_ext_adv()
         .support_peripheral()
         .support_dle_peripheral()
@@ -159,7 +158,17 @@ async fn main(spawner: Spawner) {
     );
 
     let mut rng = cracen::Cracen::new_blocking(p.CRACEN);
-    let mut sdc_mem = sdc::Mem::<{ rmk::ble::calculate_sdc_memory_size(0, rmk::ble::NUM_HOST_LINKS, DefaultPacketPool::MTU, L2CAP_TXQ, L2CAP_RXQ) }>::new();
+    let mut sdc_mem = sdc::Mem::<
+        {
+            rmk::ble::calculate_sdc_memory_size(
+                0,
+                rmk::ble::NUM_HOST_LINKS,
+                DefaultPacketPool::MTU,
+                L2CAP_TXQ,
+                L2CAP_RXQ,
+            )
+        },
+    >::new();
     let sdc = unwrap!(build_sdc(sdc_p, &mut rng, mpsl, &mut sdc_mem));
     info!("SDC built");
     info!("BLE stack ready");
