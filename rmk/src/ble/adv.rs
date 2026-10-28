@@ -100,7 +100,7 @@ impl Adv<'_> {
     /// All variants use legacy PDUs, which require the 1M primary PHY.
     fn params(&self) -> AdvertisementParameters {
         let interval = match self {
-            Self::Host { .. } | Self::HostReconnect => Duration::from_millis(200),
+            Self::Host { .. } => Duration::from_millis(200),
             _ => Duration::from_millis(50),
         };
         AdvertisementParameters {
