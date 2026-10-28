@@ -1,9 +1,11 @@
+#[cfg(not(feature = "ext_adv"))]
+use bt_hci::cmd::le::LeSetScanParams;
 #[cfg(feature = "subrating")]
 use bt_hci::cmd::le::LeSubrateRequest;
 #[cfg(feature = "ext_adv")]
 use bt_hci::cmd::le::{
-    LeClearAdvSets, LeReadNumberOfSupportedAdvSets, LeSetAdvSetRandomAddr, LeSetExtAdvData, LeSetExtAdvParams,
-    LeSetExtScanResponseData,
+    LeClearAdvSets, LeExtCreateConn, LeReadNumberOfSupportedAdvSets, LeSetAdvSetRandomAddr, LeSetExtAdvData,
+    LeSetExtAdvParams, LeSetExtScanParams, LeSetExtScanResponseData,
 };
 use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
@@ -35,8 +37,6 @@ use crate::ble::led::BleLedReader;
 #[cfg(feature = "passkey_entry")]
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
 use crate::ble::profile::{BOND_SLOTS, ProfileInfo, ProfileManager};
-#[cfg(feature = "split")]
-use crate::ble::scan::CentralController;
 use crate::ble::sleep::{report_activity, request_sleep};
 use crate::channel::{BLE_REPORT_CHANNEL, LED_SIGNAL};
 use crate::config::{BleBatteryConfig, DeviceConfig, RmkConfig};
@@ -101,6 +101,21 @@ pub trait ExtAdvCmds {}
 
 #[cfg(not(feature = "ext_adv"))]
 impl<T> ExtAdvCmds for T {}
+
+/// Additional HCI commands required for central scanning and connecting.
+#[doc(hidden)]
+#[cfg(feature = "ext_adv")]
+pub trait CentralCmds: ControllerCmdSync<LeSetExtScanParams> + ControllerCmdAsync<LeExtCreateConn> {}
+
+#[cfg(feature = "ext_adv")]
+impl<T> CentralCmds for T where T: ControllerCmdSync<LeSetExtScanParams> + ControllerCmdAsync<LeExtCreateConn> {}
+
+#[cfg(not(feature = "ext_adv"))]
+#[doc(hidden)]
+pub trait CentralCmds: ControllerCmdSync<LeSetScanParams> {}
+
+#[cfg(not(feature = "ext_adv"))]
+impl<T: ControllerCmdSync<LeSetScanParams>> CentralCmds for T {}
 
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
 /// own — see [`crate::dongle::Dongle`].
@@ -252,12 +267,14 @@ where
 #[cfg(feature = "split")]
 impl<
     'a,
-    #[cfg(not(feature = "subrating"))] C: CentralController
+    #[cfg(not(feature = "subrating"))] C: Controller
+        + CentralCmds
         + ExtAdvCmds
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<LeRand>,
-    #[cfg(feature = "subrating")] C: CentralController
+    #[cfg(feature = "subrating")] C: Controller
+        + CentralCmds
         + ExtAdvCmds
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>

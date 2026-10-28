@@ -1,32 +1,9 @@
 //! Passive scanning, shared by the split central and the dongle.
 
-#[cfg(not(feature = "ext_adv"))]
-use bt_hci::cmd::le::LeSetScanParams;
-#[cfg(feature = "ext_adv")]
-use bt_hci::cmd::le::{LeExtCreateConn, LeSetExtScanParams};
-#[cfg(feature = "ext_adv")]
-use bt_hci::controller::ControllerCmdAsync;
-use bt_hci::controller::ControllerCmdSync;
 use embassy_time::{Duration, Timer};
 use trouble_host::prelude::*;
 
-#[cfg(feature = "ext_adv")]
-pub(crate) trait CentralController:
-    Controller + ControllerCmdSync<LeSetExtScanParams> + ControllerCmdAsync<LeExtCreateConn>
-{
-}
-
-#[cfg(feature = "ext_adv")]
-impl<C: Controller + ControllerCmdSync<LeSetExtScanParams> + ControllerCmdAsync<LeExtCreateConn>> CentralController
-    for C
-{
-}
-
-#[cfg(not(feature = "ext_adv"))]
-pub(crate) trait CentralController: Controller + ControllerCmdSync<LeSetScanParams> {}
-
-#[cfg(not(feature = "ext_adv"))]
-impl<C: Controller + ControllerCmdSync<LeSetScanParams>> CentralController for C {}
+use crate::ble::CentralCmds;
 
 /// Split central: the radio is shared with the host link and the peripheral
 /// connections, so it can spare only 30ms of every 100ms.
@@ -53,7 +30,7 @@ pub(crate) fn scan_config(window: Duration) -> ScanConfig<'static> {
 /// End the session with [`ScanSession::stop`], which waits for the controller to
 /// confirm. Dropping it only signals the cancel, and the controller refuses an
 /// initiator until the runner has issued the stop.
-pub(crate) async fn start_scan<'a, C: CentralController>(
+pub(crate) async fn start_scan<'a, C: Controller + CentralCmds>(
     stack: &'a Stack<'_, C, DefaultPacketPool>,
     window: Duration,
     filter_accept_list: &[Address],
@@ -76,7 +53,7 @@ pub(crate) async fn start_scan<'a, C: CentralController>(
     }
 }
 
-pub(crate) async fn connect<'a, C: CentralController>(
+pub(crate) async fn connect<'a, C: Controller + CentralCmds>(
     central: &mut Central<'a, C, DefaultPacketPool>,
     config: &ConnectConfig<'_>,
 ) -> Result<Connection<'a, DefaultPacketPool>, BleHostError<C::Error>> {

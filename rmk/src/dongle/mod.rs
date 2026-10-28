@@ -39,8 +39,8 @@ use vial_router as router;
 
 use crate::ble::adv::Adv;
 use crate::ble::profile::{ProfileInfo, ProfileManager};
-use crate::ble::scan::{CentralController, DONGLE_SCAN_WINDOW, connect, scan_config, start_scan};
-use crate::ble::wait_for_stack_started;
+use crate::ble::scan::{DONGLE_SCAN_WINDOW, connect, scan_config, start_scan};
+use crate::ble::{CentralCmds, wait_for_stack_started};
 use crate::channel::send_hid_report;
 use crate::core_traits::Runnable;
 #[cfg(feature = "custom_message")]
@@ -178,7 +178,8 @@ impl<'a, C> Dongle<'a, C> {
 
 impl<C> Runnable for Dongle<'_, C>
 where
-    C: CentralController
+    C: Controller
+        + CentralCmds
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<LeRand>,
@@ -226,7 +227,7 @@ struct DongleCentral<'b, 's: 'b, C: Controller + ControllerCmdAsync<LeSetPhy>> {
 
 impl<'b, 's: 'b, C> DongleCentral<'b, 's, C>
 where
-    C: CentralController + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    C: Controller + CentralCmds + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 {
     /// Publish current `DongleState` if it is a change.
     fn set_state(&self, state: DongleState) {

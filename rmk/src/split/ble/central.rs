@@ -11,9 +11,9 @@ use trouble_host::prelude::*;
 
 use super::GattSplitMessage;
 use crate::ble::adv::Adv;
-use crate::ble::scan::{CentralController, SPLIT_CENTRAL_SCAN_WINDOW, connect, scan_config, start_scan};
+use crate::ble::scan::{SPLIT_CENTRAL_SCAN_WINDOW, connect, scan_config, start_scan};
 use crate::ble::sleep::report_activity;
-use crate::ble::{update_ble_phy, update_conn_params, wait_for_stack_started};
+use crate::ble::{CentralCmds, update_ble_phy, update_conn_params, wait_for_stack_started};
 use crate::event::{EventSubscriber, SleepStateEvent, SubscribableEvent};
 use crate::split::ble::PeerAddress;
 use crate::split::driver::{PeripheralManager, SplitDriverError, SplitReader, SplitWriter, set_peripheral_connected};
@@ -44,7 +44,7 @@ const CUSTOM_TO_PERIPHERAL_UUID: u128 = 0x5f2a7c15_9b3e_4a51_8d76_2c1e4b8a6f03;
 
 /// Scan for peripheral addresses, connect them, and hand each connection to
 /// that slot's session; sessions report back on `ended`.
-pub(crate) async fn scan_and_connect_peripherals<'a, C: CentralController>(
+pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + CentralCmds>(
     stack: &'a Stack<'_, C, DefaultPacketPool>,
     conns: &[Channel<NoopRawMutex, Connection<'a, DefaultPacketPool>, 1>; crate::SPLIT_PERIPHERALS_NUM],
     ended: &Channel<NoopRawMutex, usize, { crate::SPLIT_PERIPHERALS_NUM }>,
