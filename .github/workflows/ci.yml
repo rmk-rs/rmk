@@ -1,347 +1,90 @@
-name: CI
-
+name: nRF52832 Flash Attribution
 on:
-  push:
-    branches: ["main"]
-  pull_request:
   workflow_dispatch:
-
+permissions:
+  contents: read
 concurrency:
+  group: nrf52832-flash-attribution-${{ github.ref }}
   cancel-in-progress: true
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  format:
+  profile:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rustfmt
-      - run: .github/ci/format.sh
-
-  # Verify every Cargo.lock is in sync with its Cargo.toml. Catches the
-  # case where a deps bump in rmk/rmk-types is merged without refreshing
-  # example lockfiles (see scripts/fetch_all.sh).
-  fetch-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - run: bash scripts/fetch_all.sh --check
-
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt, llvm-tools
-          targets: thumbv6m-none-eabi,thumbv7m-none-eabi,thumbv7em-none-eabi,thumbv7em-none-eabihf,thumbv8m.main-none-eabihf,riscv32imc-unknown-none-elf,riscv32imac-unknown-none-elf
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-check
-          # check.sh redirects cargo artifacts to target/ci/ via --target-dir
-          # (so cargo-batch can share compilation across manifests). Tell
-          # rust-cache about it, otherwise it only caches the per-crate
-          # target/ dirs which stay empty.
-          cache-directories: |
-            target/ci
-      - name: Install cargo-batch
-        run: cargo install --locked --git https://github.com/embassy-rs/cargo-batch cargo --bin cargo-batch
-      - run: .github/ci/check.sh
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt, llvm-tools
-          targets: thumbv6m-none-eabi,thumbv7m-none-eabi,thumbv7em-none-eabi,thumbv7em-none-eabihf,thumbv8m.main-none-eabihf,riscv32imc-unknown-none-elf,riscv32imac-unknown-none-elf
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-test
-          # test.sh writes to target/ci/test via CARGO_TARGET_DIR; cache it
-          # explicitly so rust-cache doesn't miss it.
-          cache-directories: |
-            target/ci
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: nextest@0.9
-      - name: Install cargo-expand
-        run: cargo install --locked cargo-expand
-      - run: .github/ci/test.sh
-
-  # Host tooling lives in its own workspace, so it gets its own job.
-  host:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-          targets: wasm32-unknown-unknown
-      - name: Install host system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
-      # host.sh runs wasm-pack to verify JS/.d.ts package generation.
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-pack
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-host
-          cache-directories: |
-            target/ci
-      - run: .github/ci/host.sh
-
-  qemu-rynk:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: riscv32imac-unknown-none-elf
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-qemu-rynk
-      - name: Install QEMU
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-riscv libdbus-1-dev pkg-config
-          qemu-system-riscv32 --version
-      - name: Run QEMU Rynk behavior verifier
-        working-directory: examples/use_rust/qemu-riscv-rynk
-        run: python3 run.py
-
-  # Discover buildable examples for the matrix
-  discover:
-    runs-on: ubuntu-latest
-    outputs:
-      stable: ${{ steps.discover.outputs.stable }}
-      esp: ${{ steps.discover.outputs.esp }}
-    steps:
-      - uses: actions/checkout@v6
-      - id: discover
-        run: .github/ci/discover.sh
-
-  # Build each stable-toolchain example in parallel.
-  # Entries with bloat==true also compare binary sizes against the base branch.
-  build:
-    needs: discover
-    runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       CLANG_PATH: /usr/bin/clang-21
       LIBCLANG_PATH: /usr/lib/llvm-21/lib
     strategy:
       fail-fast: false
-      # Leave runner slots for format/check/test/build-esp.
-      max-parallel: 15
+      max-parallel: 2
       matrix:
-        include: ${{ fromJson(needs.discover.outputs.stable) }}
+        include:
+          - variant: main
+            revision: 80b412eba18dca2063b080e4208b56e1a04dfafc
+          - variant: legacy-updated
+            revision: d15e4eb4e9d3d2dc9e18602ce79db616546a3e04
+          - variant: legacy-multirole
+            revision: d15e4eb4e9d3d2dc9e18602ce79db616546a3e04
+          - variant: extended
+            revision: 3d2efcd0094bcab1b2005fc30f0425e337691f7b
     steps:
       - uses: actions/checkout@v6
         with:
-          # Bloat entries need full history for git worktree to base revision.
-          # Shallow clone is fast for this repo, so always fetch full history.
-          fetch-depth: 0
+          ref: ${{ matrix.revision }}
+          path: firmware
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-build-${{ matrix.target }}
-      - name: Install target and tools
+          workspaces: firmware/examples/use_config/nrf52832_ble -> target
+          shared-key: nrf52832-flash-attribution
+      - name: Install build tools
         run: |
-          rustup target add ${{ matrix.target }}
-          cargo install flip-link 2>/dev/null || true
-      # RMK builds trouble's P-256 assembly on nRF, and cc-rs compiles it with
-      # the ARM cross compiler — it has no clang fallback for -none-eabi.
-      - name: Install ARM GCC
-        if: contains(matrix.dir, 'nrf')
-        run: |
+          rustup target add thumbv7em-none-eabihf
+          cargo install flip-link --locked
           sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-dev
-      - name: Build
-        working-directory: ${{ matrix.dir }}
+      - name: Isolate multirole library selection
+        if: matrix.variant == 'legacy-multirole'
+        working-directory: firmware
         run: |
-          # Deny warnings so a stray lint (e.g. an unused import) fails CI here
-          # instead of slipping through. For bloat examples an undenied warning
-          # gets replayed onto stdout by `cargo size` and corrupts the size parser.
-          export RUSTFLAGS="-D warnings"
-          # For bloat examples, remap source paths so the absolute workspace
-          # prefix doesn't affect binary size (panic messages embed file!() paths).
-          if [[ "${{ matrix.bloat }}" == "true" ]]; then
-            export RUSTFLAGS="$RUSTFLAGS --remap-path-prefix=$GITHUB_WORKSPACE=/rmk-build"
-          fi
-          cargo build --release
-
-      # ── Bloat: size + bloaty diff HEAD vs BASE, upload data ──
-      - name: Install bloat tools
-        if: github.event_name == 'pull_request' && matrix.bloat
-        run: |
-          rustup component add llvm-tools
-          cargo install cargo-binutils 2>/dev/null || true
-          # bloaty isn't in apt; extract the pre-built binary from the Docker image
-          # used by carlosperate/bloaty-action.
-          id=$(docker create ghcr.io/carlosperate/bloaty-action:latest)
-          sudo docker cp "$id:/usr/local/bin/bloaty" /usr/local/bin/bloaty
-          docker rm "$id" >/dev/null
-
-      - name: Measure sizes and compare with base
-        if: github.event_name == 'pull_request' && matrix.bloat
-        working-directory: ${{ matrix.dir }}
-        env:
-          BLOAT_BINS: ${{ matrix.bloat_bins }}
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('examples/use_config/nrf52832_ble/Cargo.toml')
+          s = p.read_text()
+          start = s.index('nrf-sdc = ')
+          end = s.index('] }', start)
+          section = s[start:end]
+          assert '"central"' not in section
+          section = section.replace('    "peripheral",', '    "central",\n    "peripheral",')
+          p.write_text(s[:start] + section + s[end:])
+          p = Path('rmk-macro/src/codegen/chip/bind_interrupt.rs')
+          s = p.read_text()
+          start = s.index('BoardConfig::UniBody(_) => quote! {')
+          end = s.index('},', start)
+          section = s[start:end]
+          assert '.central_count(0)?' not in section
+          section = section.replace('.peripheral_count(1)?', '.central_count(0)?\n                    .peripheral_count(1)?')
+          p.write_text(s[:start] + section + s[end:])
+          PY
+      - name: Build one nRF52832 firmware with a link map
+        working-directory: firmware/examples/use_config/nrf52832_ble
         run: |
           set -euo pipefail
-
-          # Determine which binaries to size.
-          if [[ -n "$BLOAT_BINS" ]]; then
-            IFS=',' read -ra bins <<< "$BLOAT_BINS"
-          else
-            bins=(default)
-          fi
-
-          # ── Build BASE ──
-          base_sha=$(git -C "$GITHUB_WORKSPACE" merge-base HEAD origin/main)
-          worktree=$(mktemp -d)
-          git -C "$GITHUB_WORKSPACE" worktree add --detach "$worktree" "$base_sha"
-          trap 'git -C "$GITHUB_WORKSPACE" worktree remove --force "$worktree" 2>/dev/null; rm -rf "$worktree"' EXIT
-
-          # Remap source paths so that HEAD and BASE binaries use the same
-          # virtual prefix.  Without this, absolute paths embedded by panic
-          # messages (file!() macro) differ in length between $GITHUB_WORKSPACE
-          # and the temp worktree, producing false size diffs in .rodata/.text.
-          # HEAD also keeps `-D warnings` so RUSTFLAGS matches the Build step
-          # above and cargo reuses the binary; BASE uses the default lint level
-          # so a pre-existing warning on main doesn't fail this PR.
-          head_remap="-D warnings --remap-path-prefix=$GITHUB_WORKSPACE=/rmk-build"
-          base_remap="--remap-path-prefix=$worktree=/rmk-build"
-
-          base_dir="$worktree/${{ matrix.dir }}"
-          if [[ -d "$base_dir" ]]; then
-            (cd "$base_dir" && RUSTFLAGS="$base_remap" cargo build --release)
-          fi
-
-          # ── Output directory ──
-          safe_name=$(echo "${{ matrix.dir }}" | tr '/' '_')
-          outdir="$GITHUB_WORKSPACE/bloat-data/$safe_name"
-          mkdir -p "$outdir"
-
-          for bin in "${bins[@]}"; do
-            bin_flag=""
-            bin_label=""
-            bin_suffix=""
-            if [[ "$bin" != "default" ]]; then
-              bin_flag="--bin $bin"
-              bin_label="$bin"
-              bin_suffix="-$bin"
-            fi
-
-            # cargo size for HEAD — extract text/data/bss/total
-            # RUSTFLAGS must match the Build step so cargo reuses the existing binary.
-            # cargo replays cached build warnings on stdout; keep only the size table.
-            RUSTFLAGS="$head_remap" cargo size --release $bin_flag 2>/dev/null | awk '$1 ~ /^(text|[0-9]+)$/' > "$outdir/size-head${bin_suffix}.txt"
-            read -r h_text h_data h_bss head_size < <(awk 'NR==2 {print $1, $2, $3, $4}' "$outdir/size-head${bin_suffix}.txt")
-
-            # cargo size + bloaty for BASE
-            if [[ -d "$base_dir" ]]; then
-              (cd "$base_dir" && RUSTFLAGS="$base_remap" cargo size --release $bin_flag 2>/dev/null) | awk '$1 ~ /^(text|[0-9]+)$/' > "$outdir/size-base${bin_suffix}.txt"
-              read -r b_text b_data b_bss base_size < <(awk 'NR==2 {print $1, $2, $3, $4}' "$outdir/size-base${bin_suffix}.txt")
-
-              # Section diffs
-              d_text=$((h_text - b_text))
-              d_data=$((h_data - b_data))
-              d_bss=$((h_bss - b_bss))
-
-              # Find ELF paths for bloaty
-              head_target_dir="target/${{ matrix.target }}/release"
-              base_target_dir="$base_dir/target/${{ matrix.target }}/release"
-              if [[ -n "$bin_label" ]]; then
-                head_elf="$head_target_dir/$bin_label"
-                base_elf="$base_target_dir/$bin_label"
-              else
-                head_elf=$(find "$head_target_dir" -maxdepth 1 -type f -executable ! -name "*.d" ! -name "*.rlib" ! -name "build-script-*" | head -1)
-                base_elf=$(find "$base_target_dir" -maxdepth 1 -type f -executable ! -name "*.d" ! -name "*.rlib" ! -name "build-script-*" | head -1)
-              fi
-              if [[ -f "$head_elf" && -f "$base_elf" ]]; then
-                bloaty "$head_elf" -- "$base_elf" > "$outdir/bloaty${bin_suffix}.txt" 2>&1 || true
-              fi
-            else
-              base_size=0; d_text=0; d_data=0; d_bss=0
-              echo "(base not available)" > "$outdir/size-base${bin_suffix}.txt"
-            fi
-
-            # Format: dir|bin_label|base_total|head_total|text_diff|data_diff|bss_diff
-            echo "${{ matrix.dir }}|${bin_label}|${base_size}|${head_size}|${d_text}|${d_data}|${d_bss}" >> "$outdir/size-data.txt"
-          done
-
-          echo "Size data:"
-          cat "$outdir/size-data.txt"
-
-      - name: Upload bloat data
-        if: github.event_name == 'pull_request' && matrix.bloat
-        uses: actions/upload-artifact@v7
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          export RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE/firmware=/rmk-build"
+          cargo rustc --release --bin rmk-nrf52832 -- -C "link-arg=-Map=$GITHUB_WORKSPACE/output/firmware.map"
+          elf=target/thumbv7em-none-eabihf/release/rmk-nrf52832
+          cp "$elf" "$GITHUB_WORKSPACE/output/firmware.elf"
+          arm-none-eabi-size "$elf" > "$GITHUB_WORKSPACE/output/size.txt"
+          arm-none-eabi-nm -S --defined-only --size-sort "$elf" > "$GITHUB_WORKSPACE/output/symbols.txt"
+          arm-none-eabi-readelf -SW "$elf" > "$GITHUB_WORKSPACE/output/sections.txt"
+          cargo tree --locked > "$GITHUB_WORKSPACE/output/dependencies.txt"
+          cp Cargo.lock "$GITHUB_WORKSPACE/output/Cargo.lock"
+          git -C "$GITHUB_WORKSPACE/firmware" rev-parse HEAD > "$GITHUB_WORKSPACE/output/revision.txt"
+          git -C "$GITHUB_WORKSPACE/firmware" diff > "$GITHUB_WORKSPACE/output/variant.patch"
+          rustc -Vv > "$GITHUB_WORKSPACE/output/toolchain.txt"
+          cat "$GITHUB_WORKSPACE/output/size.txt"
+      - uses: actions/upload-artifact@v7
         with:
-          name: bloat-${{ hashFiles('bloat-data/*/size-data.txt') }}
-          path: bloat-data/
-          retention-days: 1
-
-  # Assemble bloat report from matrix artifacts and save for the comment workflow
-  bloat-report:
-    if: github.event_name == 'pull_request'
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v7
-        with:
-          path: bloat-artifacts
-          pattern: bloat-*
-          merge-multiple: true
-      - name: Generate report
-        run: |
-          report=$(.github/ci/bloat-report.sh bloat-artifacts)
-          mkdir -p bloat-comment
-          echo "${{ github.event.pull_request.number }}" > bloat-comment/pr-number.txt
-          echo "$report" > bloat-comment/report.md
-      - name: Upload comment data
-        uses: actions/upload-artifact@v7
-        with:
-          name: bloat-comment
-          path: bloat-comment/
-          retention-days: 1
-
-  # Build ESP/xtensa examples (separate toolchain)
-  build-esp:
-    needs: discover
-    if: fromJson(needs.discover.outputs.esp)[0] != null
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: cargo-bins/cargo-binstall@main
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: ci-build-esp
-          # Both esp examples share one target dir (target-esp/, set in the
-          # build step); point rust-cache at it so per-dep artifacts survive.
-          workspaces: |
-            examples/use_config/esp32s3_ble -> ../../../target-esp
-            examples/use_rust/esp32s3_ble -> ../../../target-esp
-      - name: Install espup and esp toolchain
-        run: |
-          cargo binstall --force espup -y
-          espup install
-      - name: Build ESP examples
-        run: |
-          source "$HOME/export-esp.sh"
-          export CARGO_TARGET_DIR="$PWD/target-esp"
-          for dir in examples/use_rust/esp32s3_ble examples/use_config/esp32s3_ble; do
-            (cd "$dir" && CARGO_UNSTABLE_BUILD_STD=alloc,core cargo +esp build --release)
-          done
+          name: nrf52832-${{ matrix.variant }}
+          path: output/
+          retention-days: 7
