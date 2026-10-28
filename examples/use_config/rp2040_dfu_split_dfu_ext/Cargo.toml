@@ -13,7 +13,7 @@ name = "peripheral"
 path = "src/peripheral.rs"
 
 [dependencies]
-rmk = { path = "../../../rmk", features = ["dfu_rp", "dfu_ext", "dfu_split", "split", "storage"] }
+rmk = { path = "../../../rmk", features = ["dfu_rp", "dfu_ext", "dfu_split", "split"] }
 
 embassy-embedded-hal = { version = "0.6" }
 embassy-executor = { version = "0.10", features = ["defmt", "platform-cortex-m", "executor-thread"] }

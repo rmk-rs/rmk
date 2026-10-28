@@ -22,7 +22,7 @@ path = "src/peripheral.rs"
 skip-cyw43-firmware = []
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "pico_w_ble", "rp2040", "split"] }
+rmk = { path = "../../../rmk", features = ["pico_w_ble", "rp2040", "split"] }
 
 embassy-executor = { version = "0.10", features = [
     "defmt",

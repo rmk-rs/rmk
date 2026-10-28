@@ -18,13 +18,9 @@ name = "peripheral"
 path = "src/peripheral.rs"
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = [
-    "defmt",
+rmk = { path = "../../../rmk", features = [
     "dfu_rp",
     "split",
-    "storage",
-    "vial",
-    "watchdog",
 ] }
 
 embassy-embedded-hal = { version = "0.6" }

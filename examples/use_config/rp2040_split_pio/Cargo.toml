@@ -19,7 +19,7 @@ name = "peripheral"
 path = "src/peripheral.rs"
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "split", "rp2040"] }
+rmk = { path = "../../../rmk", features = ["split", "rp2040"] }
 
 embassy-executor = { version = "0.10", features = [
     "defmt",

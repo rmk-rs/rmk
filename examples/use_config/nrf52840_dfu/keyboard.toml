@@ -11,6 +11,9 @@ usb_enable = true
 row_pins = ["P0_02", "P0_03", "P0_04", "P0_05"]
 col_pins = ["P0_06", "P0_07", "P0_08"]
 
+[host]
+unlock_keys = [[0, 0], [0, 1]]
+
 [layout]
 rows = 4
 cols = 3

@@ -15,14 +15,10 @@ test = false
 bench = false
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = [
-    "defmt",
+rmk = { path = "../../../rmk", features = [
     "dfu_ext",
     "dfu_nrf",
     "adafruit_bl",
-    "storage",
-    "vial",
-    "watchdog",
 ] }
 
 embassy-boot = { version = "0.7" }

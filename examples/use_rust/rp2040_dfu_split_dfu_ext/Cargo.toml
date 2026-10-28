@@ -29,8 +29,8 @@ embassy-time = { version = "0.5", features = ["defmt"] }
 cortex-m-rt = { version = "0.7.5", features = ["set-vtor"] }
 defmt = "1"
 defmt-rtt = "1"
-embedded-storage = { version = "0.3", default-features = false }
-embedded-storage-async = { version = "0.4", default-features = false }
+embedded-storage = { version = "0.3" }
+embedded-storage-async = { version = "0.4" }
 panic-probe = { version = "1", features = ["print-defmt"] }
 portable-atomic = { version = "1", features = ["critical-section"] }
 static_cell = "2"

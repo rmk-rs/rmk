@@ -23,7 +23,7 @@ name = "peripheral2"
 path = "src/peripheral2.rs"
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "nrf52840_ble", "split", "async_matrix", "adafruit_bl"] }
+rmk = { path = "../../../rmk", features = ["nrf52840_ble", "split", "async_matrix", "adafruit_bl"] }
 
 embassy-executor = { version = "0.10", features = [
     "defmt",

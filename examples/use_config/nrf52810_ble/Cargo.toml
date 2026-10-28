@@ -15,7 +15,7 @@ test = false
 bench = false
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "nrf52810_ble"] }
+rmk = { path = "../../../rmk", features = ["nrf52810_ble"] }
 
 embassy-executor = { version = "0.10", features = [
     "defmt",

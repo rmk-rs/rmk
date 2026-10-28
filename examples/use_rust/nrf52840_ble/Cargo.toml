@@ -15,7 +15,7 @@ test = false
 bench = false
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "async_matrix", "nrf52840_ble", "adafruit_bl"] }
+rmk = { path = "../../../rmk", features = ["async_matrix", "nrf52840_ble", "adafruit_bl"] }
 
 embassy-executor = { version = "0.10", features = [
     "defmt",

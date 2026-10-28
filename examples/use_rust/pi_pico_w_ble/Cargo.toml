@@ -18,7 +18,7 @@ bench = false
 skip-cyw43-firmware = []
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "pico_w_ble", "rp2040"] }
+rmk = { path = "../../../rmk", features = ["pico_w_ble", "rp2040"] }
 
 embassy-executor = { version = "0.10", features = [
     "defmt",

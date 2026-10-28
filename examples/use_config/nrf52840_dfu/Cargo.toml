@@ -15,17 +15,13 @@ test = false
 bench = false
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = [
-    "defmt",
+rmk = { path = "../../../rmk", features = [
     "dfu_nrf",
     "adafruit_bl",
     "nrf52840_ble",
-    "storage",
-    "vial",
-    "watchdog",
 ] }
 
-embassy-boot = { version = "0.7", default-features = false }
+embassy-boot = { version = "0.7" }
 embassy-executor = { version = "0.10", features = [
     "defmt",
     "platform-cortex-m",

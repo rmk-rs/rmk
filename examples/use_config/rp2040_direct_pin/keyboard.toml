@@ -17,6 +17,9 @@ direct_pins = [
     ["PIN_9", "PIN_10", "_"],
 ]
 
+[host]
+unlock_keys = [[0, 0], [0, 1]]
+
 [layout]
 rows = 4
 cols = 3

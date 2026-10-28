@@ -15,7 +15,7 @@ test = false
 bench = false
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "async_matrix", "nrf52832_ble"] }
+rmk = { path = "../../../rmk", features = ["async_matrix", "nrf52832_ble"] }
 
 embassy-executor = { version = "0.10", features = [
     "defmt",
@@ -36,7 +36,7 @@ nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "9cf87fa7883b89b
     "critical-section-impl",
     "nrf52832",
 ] }
-nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "9cf87fa7883b89b2d4dc7cd94864da7927bd858c", default-features = false, features = [
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "9cf87fa7883b89b2d4dc7cd94864da7927bd858c", features = [
     "defmt",
     "peripheral",
     "nrf52832",

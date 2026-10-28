@@ -50,11 +50,11 @@ defmt = "1"
 defmt-rtt = "1"
 embedded-graphics = "0.8"
 embedded-hal = "1.0"
-lcd-async = { version = "0.1", default-features = false }
+lcd-async = { version = "0.1" }
 panic-probe = { version = "1", features = ["print-defmt"] }
 portable-atomic = { version = "1" }
 rand_chacha = { version = "0.3", default-features = false }
-rand_core = { version = "0.6", default-features = false }
+rand_core = { version = "0.6" }
 sifli-hal = { git = "https://github.com/OpenSiFli/sifli-rs", rev = "8b9da60c616a945d444fdd18b80c773f903d2796", features = [
     "defmt",
     "sf32lb52x",

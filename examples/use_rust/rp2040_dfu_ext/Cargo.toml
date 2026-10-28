@@ -15,13 +15,9 @@ test = false
 bench = false
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = [
-    "defmt",
+rmk = { path = "../../../rmk", features = [
     "dfu_ext",
     "dfu_rp",
-    "storage",
-    "vial",
-    "watchdog",
 ] }
 
 embassy-embedded-hal = { version = "0.6" }
@@ -42,7 +38,7 @@ embassy-time = { version = "0.5", features = ["defmt"] }
 cortex-m-rt = { version = "0.7.5", features = ["set-vtor"] } # <-- set-vtor necessary for embassy-boot
 defmt = "1"
 defmt-rtt = "1"
-embedded-storage = { version = "0.3", default-features = false }
+embedded-storage = { version = "0.3" }
 panic-probe = { version = "1", features = ["print-defmt"] }
 portable-atomic = { version = "1", features = ["critical-section"] }
 static_cell = "2"

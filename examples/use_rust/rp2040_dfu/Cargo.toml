@@ -15,12 +15,8 @@ test = false
 bench = false
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = [
-    "defmt",
+rmk = { path = "../../../rmk", features = [
     "dfu_rp",
-    "storage",
-    "vial",
-    "watchdog",
 ] }
 
 embassy-embedded-hal = { version = "0.6" }
