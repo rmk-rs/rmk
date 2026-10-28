@@ -12,6 +12,7 @@ use trouble_host::prelude::*;
 #[cfg(feature = "storage")]
 use super::PeerAddress;
 use super::{GattSplitMessage, SplitMessage};
+use crate::ble::ExtAdvCmds;
 use crate::ble::adv::{Adv, advertise};
 #[cfg(feature = "custom_message")]
 use crate::custom_message::{CustomMessage, CustomMessageTarget, forward};
@@ -199,8 +200,8 @@ async fn init_subrating_host_feature<C: Controller + ControllerCmdSync<LeSetHost
 pub async fn initialize_nrf_ble_split_peripheral_and_run<
     'b,
     's: 'b,
-    #[cfg(feature = "subrating")] C: crate::ble::AdvController + ControllerCmdSync<LeSetHostFeature>,
-    #[cfg(not(feature = "subrating"))] C: crate::ble::AdvController,
+    #[cfg(feature = "subrating")] C: Controller + ExtAdvCmds + ControllerCmdSync<LeSetHostFeature>,
+    #[cfg(not(feature = "subrating"))] C: Controller + ExtAdvCmds,
 >(
     id: usize,
     stack: &'b Stack<'s, C, DefaultPacketPool>,
@@ -283,7 +284,7 @@ pub async fn initialize_nrf_ble_split_peripheral_and_run<
 
 /// Reconnect to the saved central, falling back to seeking any central when it
 /// does not answer.
-async fn split_peripheral_advertise<'a, 'b, C: crate::ble::AdvController>(
+async fn split_peripheral_advertise<'a, 'b, C: Controller + ExtAdvCmds>(
     id: usize,
     central_addr: Option<[u8; 6]>,
     peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,

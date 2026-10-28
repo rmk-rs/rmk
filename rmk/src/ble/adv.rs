@@ -6,7 +6,7 @@ use trouble_host::prelude::appearance::human_interface_device::KEYBOARD;
 use trouble_host::prelude::service::{BATTERY, HUMAN_INTERFACE_DEVICE};
 use trouble_host::prelude::*;
 
-use crate::ble::AdvController;
+use crate::ble::ExtAdvCmds;
 
 /// Company identifier marking an advertisement as RMK's own.
 const RMK_ADV_COMPANY_ID: u16 = 0x5253;
@@ -115,7 +115,7 @@ impl Adv<'_> {
 }
 
 /// Advertise with an optional local address override and accept a connection within `timeout`.
-pub(crate) async fn advertise<'a, 'b, C: AdvController, const ATT: usize, const CONN: usize>(
+pub(crate) async fn advertise<'a, 'b, C: Controller + ExtAdvCmds, const ATT: usize, const CONN: usize>(
     peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
     server: &'b AttributeServer<'_, NoopRawMutex, DefaultPacketPool, ATT, CONN>,
     adv: Adv<'_>,
