@@ -18,13 +18,9 @@ jobs:
       max-parallel: 2
       matrix:
         include:
-          - variant: main
-            revision: 80b412eba18dca2063b080e4208b56e1a04dfafc
-          - variant: legacy-updated
-            revision: d15e4eb4e9d3d2dc9e18602ce79db616546a3e04
-          - variant: legacy-multirole
-            revision: d15e4eb4e9d3d2dc9e18602ce79db616546a3e04
-          - variant: extended
+          - variant: pool-control
+            revision: 3d2efcd0094bcab1b2005fc30f0425e337691f7b
+          - variant: pool-bss
             revision: 3d2efcd0094bcab1b2005fc30f0425e337691f7b
     steps:
       - uses: actions/checkout@v6
@@ -42,29 +38,44 @@ jobs:
           sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-dev
-      - name: Isolate multirole library selection
-        if: matrix.variant == 'legacy-multirole'
-        working-directory: firmware
+      - uses: actions/checkout@v6
+        with:
+          repository: embassy-rs/trouble
+          ref: 8cca99e5c217e7b4d5da0f12c9725b93623dc4d3
+          path: trouble
+      - name: Use the same local dependency source in both builds
         run: |
-          python3 - <<'PY'
+          cat >> firmware/examples/use_config/nrf52832_ble/Cargo.toml <<'TOML'
+
+          [patch."https://github.com/embassy-rs/trouble"]
+          trouble-host = { path = "../../../../trouble/host" }
+          TOML
+      - name: Make packet pool initialization all zero
+        if: matrix.variant == 'pool-bss'
+        run: |
+          python3 - <<'PYCODE'
           from pathlib import Path
-          p = Path('examples/use_config/nrf52832_ble/Cargo.toml')
+          p = Path('trouble/host/src/packet_pool.rs')
           s = p.read_text()
-          start = s.index('nrf-sdc = ')
-          end = s.index('] }', start)
-          section = s[start:end]
-          assert '"central"' not in section
-          section = section.replace('    "peripheral",', '    "central",\n    "peripheral",')
-          p.write_text(s[:start] + section + s[end:])
-          p = Path('rmk-macro/src/codegen/chip/bind_interrupt.rs')
-          s = p.read_text()
-          start = s.index('BoardConfig::UniBody(_) => quote! {')
-          end = s.index('},', start)
-          section = s[start:end]
-          assert '.central_count(0)?' not in section
-          section = section.replace('.peripheral_count(1)?', '.central_count(0)?\n                    .peripheral_count(1)?')
-          p.write_text(s[:start] + section + s[end:])
-          PY
+          changes = {
+              'free: bool': 'allocated: bool',
+              'free: true': 'allocated: false',
+              'if packet.free {': 'if !packet.allocated {',
+              'packet.free = false;': 'packet.allocated = true;',
+              'self.packets[p_ref.idx].free = true;': 'self.packets[p_ref.idx].allocated = false;',
+              'filter(|p| p.free)': 'filter(|p| !p.allocated)',
+          }
+          for before, after in changes.items():
+              assert s.count(before) == 1, before
+              s = s.replace(before, after)
+          old = '        assert!(b2.is_none());'
+          new = old + '\n        assert_eq!(pool.available(), 0);\n\n        pool.free(&a1.unwrap());\n        assert_eq!(pool.available(), 1);\n        assert!(pool.alloc().is_some());\n        assert!(pool.alloc().is_none());'
+          assert s.count(old) == 1
+          p.write_text(s.replace(old, new))
+          PYCODE
+      - name: Test packet allocation, exhaustion and reuse
+        if: matrix.variant == 'pool-bss'
+        run: cargo test --manifest-path trouble/host/Cargo.toml --lib --no-default-features --features log,peripheral,central,gatt,derive,security,default-packet-pool packet_pool::tests
       - name: Build one nRF52832 firmware with a link map
         working-directory: firmware/examples/use_config/nrf52832_ble
         run: |
@@ -82,6 +93,8 @@ jobs:
           git -C "$GITHUB_WORKSPACE/firmware" rev-parse HEAD > "$GITHUB_WORKSPACE/output/revision.txt"
           git -C "$GITHUB_WORKSPACE/firmware" diff > "$GITHUB_WORKSPACE/output/variant.patch"
           rustc -Vv > "$GITHUB_WORKSPACE/output/toolchain.txt"
+          git -C "$GITHUB_WORKSPACE/trouble" diff > "$GITHUB_WORKSPACE/output/dependency.patch"
+          cp "$GITHUB_WORKSPACE/trouble/host/src/packet_pool.rs" "$GITHUB_WORKSPACE/output/packet_pool.rs"
           cat "$GITHUB_WORKSPACE/output/size.txt"
       - uses: actions/upload-artifact@v7
         with:
