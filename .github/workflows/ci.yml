@@ -115,7 +115,7 @@ jobs:
       - name: Install QEMU
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-misc libdbus-1-dev pkg-config
+          sudo apt-get install -y qemu-system-riscv libdbus-1-dev pkg-config
           qemu-system-riscv32 --version
       - name: Run QEMU Rynk behavior verifier
         working-directory: examples/use_rust/qemu-riscv-rynk
@@ -137,6 +137,9 @@ jobs:
   build:
     needs: discover
     runs-on: ubuntu-latest
+    env:
+      CLANG_PATH: /usr/bin/clang-21
+      LIBCLANG_PATH: /usr/lib/llvm-21/lib
     strategy:
       fail-fast: false
       # Leave runner slots for format/check/test/build-esp.
@@ -160,7 +163,10 @@ jobs:
       # the ARM cross compiler — it has no clang fallback for -none-eabi.
       - name: Install ARM GCC
         if: contains(matrix.dir, 'nrf')
-        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi
+        run: |
+          sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi libnewlib-dev
       - name: Build
         working-directory: ${{ matrix.dir }}
         run: |
