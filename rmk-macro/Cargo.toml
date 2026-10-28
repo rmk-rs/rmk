@@ -14,6 +14,8 @@ proc-macro = true
 doctest = false
 
 [features]
+## Select extended HCI commands when initializing BLE controllers.
+ext_adv = []
 ## Enable hardware watchdog code generation
 watchdog = []
 ## Validate `STN()` steno key names against the Plover HID chart. Forwarded by

@@ -42,6 +42,7 @@ RMK_FEATURESETS=(
     "vial,_ble,_no_usb,steno,passkey_entry"
     "split,async_matrix"
     "split,async_matrix,_ble"
+    "split,async_matrix,ext_adv"
     "split,vial,async_matrix"
     "split,vial,async_matrix,_ble"
     "split,vial,storage"
@@ -68,6 +69,7 @@ RMK_TEST_FEATURESETS=(
     "vial,host_lock,_no_usb,steno,passkey_entry"
     "rynk,_ble,split,async_matrix,storage"
     "_ble,ext_adv,split,storage,async_matrix"
+    "dongle,vial,_ble,ext_adv,storage,custom_message"
     "dongle,_ble,storage,custom_message"
     "dongle,vial,_ble,storage,custom_message"
 )

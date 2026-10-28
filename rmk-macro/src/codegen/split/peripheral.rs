@@ -222,6 +222,12 @@ fn expand_bind_interrupt_for_split_peripheral(
                 quote! {}
             };
 
+            let support_adv = if cfg!(feature = "ext_adv") {
+                quote! { .support_ext_adv() }
+            } else {
+                quote! { .support_adv() }
+            };
+
             let clock_power_handler = if usb_enabled {
                 quote! {
                     CLOCK_POWER => ::nrf_sdc::mpsl::ClockInterruptHandler, ::embassy_nrf::usb::vbus_detect::InterruptHandler;
@@ -268,15 +274,14 @@ fn expand_bind_interrupt_for_split_peripheral(
                     mem: &'d mut ::nrf_sdc::Mem<N>,
                 ) -> Result<::nrf_sdc::SoftdeviceController<'d>, ::nrf_sdc::Error> {
                     ::nrf_sdc::Builder::new()?
-                        .support_adv()
+                        #support_adv
                         .support_peripheral()
                         .support_dle_peripheral()
-                        .support_dle_central()
-                        .support_phy_update_central()
                         .support_phy_update_peripheral()
                         #support_subrating
                         .support_le_2m_phy()
                         #tx_power
+                        .central_count(0)?
                         .peripheral_count(1)?
                         .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
                         .build(p, rng, mpsl, mem)

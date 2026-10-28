@@ -19,7 +19,7 @@ mod vial_router;
 use core::cell::Cell;
 use core::ops::ControlFlow;
 
-use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
+use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::{AddrKind, BdAddr, LeAdvEventKind, Status};
 use embassy_futures::join::join3;
@@ -39,7 +39,7 @@ use vial_router as router;
 
 use crate::ble::adv::Adv;
 use crate::ble::profile::{ProfileInfo, ProfileManager};
-use crate::ble::scan::{DONGLE_SCAN_WINDOW, scan_config, start_scan};
+use crate::ble::scan::{CentralController, DONGLE_SCAN_WINDOW, connect, scan_config, start_scan};
 use crate::ble::wait_for_stack_started;
 use crate::channel::send_hid_report;
 use crate::core_traits::Runnable;
@@ -108,16 +108,12 @@ impl ScanHandler {
             bonded_asked: Signal::new(),
         }
     }
-}
-
-impl EventHandler for ScanHandler {
-    fn on_adv_reports(&self, mut it: LeAdvReportsIter<'_>) {
-        while let Some(Ok(report)) = it.next() {
-            let bonded = self.bonded_addr.lock(|addr| addr.get()) == Some(report.addr);
-            if Adv::decode(report.data) == Some(Adv::DongleSeeking) {
-                debug!("[dongle] seeking keyboard {:?} rssi {}", report.addr, report.rssi);
-                self.seeking_keyboard
-                    .signal(((report.addr_kind, report.addr), report.rssi));
+    fn on_reports<'a>(&self, reports: impl Iterator<Item = (Address, &'a [u8], i8, bool)>) {
+        for (address, data, rssi, directed) in reports {
+            let bonded = self.bonded_addr.lock(|addr| addr.get()) == Some(address.addr);
+            if Adv::decode(data) == Some(Adv::DongleSeeking) {
+                debug!("[dongle] seeking keyboard {:?} rssi {}", address.addr, rssi);
+                self.seeking_keyboard.signal(((address.kind, address.addr), rssi));
                 // Seeking again means it cleared its bond; the reconnect will re-pair.
                 if bonded {
                     self.bonded_asked.signal(());
@@ -125,11 +121,36 @@ impl EventHandler for ScanHandler {
             } else if bonded {
                 self.bonded_seen.signal(());
                 // Directed advertisements are only reported to their target: us.
-                if report.event_kind == LeAdvEventKind::AdvDirectInd {
+                if directed {
                     self.bonded_asked.signal(());
                 }
             }
         }
+    }
+}
+
+impl EventHandler for ScanHandler {
+    fn on_adv_reports(&self, it: LeAdvReportsIter<'_>) {
+        self.on_reports(it.map_while(Result::ok).map(|report| {
+            (
+                Address::new(report.addr_kind, report.addr),
+                report.data,
+                report.rssi,
+                report.event_kind == LeAdvEventKind::AdvDirectInd,
+            )
+        }));
+    }
+
+    #[cfg(feature = "ext_adv")]
+    fn on_ext_adv_reports(&self, it: bt_hci::param::LeExtAdvReportsIter<'_>) {
+        self.on_reports(it.map_while(Result::ok).map(|report| {
+            (
+                Address::new(report.addr_kind, report.addr),
+                report.data,
+                report.rssi,
+                report.event_kind.directed(),
+            )
+        }));
     }
 }
 
@@ -157,10 +178,9 @@ impl<'a, C> Dongle<'a, C> {
 
 impl<C> Runnable for Dongle<'_, C>
 where
-    C: Controller
+    C: CentralController
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetScanParams>
         + ControllerCmdSync<LeRand>,
 {
     async fn run(&mut self) -> ! {
@@ -206,10 +226,7 @@ struct DongleCentral<'b, 's: 'b, C: Controller + ControllerCmdAsync<LeSetPhy>> {
 
 impl<'b, 's: 'b, C> DongleCentral<'b, 's, C>
 where
-    C: Controller
-        + ControllerCmdAsync<LeSetPhy>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeSetScanParams>,
+    C: CentralController + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 {
     /// Publish current `DongleState` if it is a change.
     fn set_state(&self, state: DongleState) {
@@ -273,7 +290,7 @@ where
             },
         };
         // If the keyboard is absent the attempt times out; the caller's loop retries.
-        match with_timeout(Duration::from_secs(15), central.connect(&config)).await {
+        match with_timeout(Duration::from_secs(15), connect(&mut central, &config)).await {
             Ok(Ok(conn)) => Some(conn),
             Ok(Err(e)) => {
                 #[cfg(feature = "defmt")]
@@ -801,7 +818,10 @@ async fn release_held_keys() {
 #[cfg(test)]
 mod tests {
     use bt_hci::FromHciBytes;
-    use bt_hci::param::LeAdvReports;
+    #[cfg(not(feature = "ext_adv"))]
+    use bt_hci::param::LeAdvReports as RawReports;
+    #[cfg(feature = "ext_adv")]
+    use bt_hci::param::LeExtAdvReports as RawReports;
 
     use super::*;
 
@@ -816,16 +836,24 @@ mod tests {
     /// A host advertisement carries no RMK payload; flags alone stand in for it.
     const HOST_DATA: &[u8] = &[0x02, 0x01, 0x06];
 
-    /// One legacy advertising report as the controller lays it out:
-    /// count, kind, address kind, address, data length, data, rssi.
+    /// Deliver the same legacy PDU through the selected HCI report format.
     fn report(handler: &ScanHandler, event_kind: u8, addr: [u8; 6], data: &[u8]) {
-        let mut bytes: heapless::Vec<u8, 64> = heapless::Vec::new();
-        bytes.extend_from_slice(&[1, event_kind, 1]).unwrap();
-        bytes.extend_from_slice(&addr).unwrap();
-        bytes.push(data.len() as u8).unwrap();
-        bytes.extend_from_slice(data).unwrap();
-        bytes.push(0xC0).unwrap(); // rssi
-        let (reports, _) = LeAdvReports::from_hci_bytes(&bytes).unwrap();
+        let mut bytes = std::vec![1];
+        #[cfg(not(feature = "ext_adv"))]
+        bytes.extend([event_kind, 1]);
+        #[cfg(feature = "ext_adv")]
+        bytes.extend([if event_kind == ADV_DIRECT_IND { 0x15 } else { 0x13 }, 0, 1]);
+        bytes.extend_from_slice(&addr);
+        #[cfg(feature = "ext_adv")]
+        bytes.extend([1, 0, 0xFF, 0x7F, 0xC0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        bytes.push(data.len() as u8);
+        bytes.extend_from_slice(data);
+        #[cfg(not(feature = "ext_adv"))]
+        bytes.push(0xC0);
+        let (reports, _) = RawReports::from_hci_bytes(&bytes).unwrap();
+        #[cfg(feature = "ext_adv")]
+        handler.on_ext_adv_reports(reports.iter());
+        #[cfg(not(feature = "ext_adv"))]
         handler.on_adv_reports(reports.iter());
     }
 

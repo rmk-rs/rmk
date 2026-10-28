@@ -1,6 +1,6 @@
 #[cfg(feature = "subrating")]
 use bt_hci::cmd::le::LeSubrateRequest;
-use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy, LeSetScanParams};
+use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use embassy_futures::select::{Either, Either3, select, select3};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -11,7 +11,7 @@ use trouble_host::prelude::*;
 
 use super::GattSplitMessage;
 use crate::ble::adv::Adv;
-use crate::ble::scan::{SPLIT_CENTRAL_SCAN_WINDOW, scan_config, start_scan};
+use crate::ble::scan::{CentralController, SPLIT_CENTRAL_SCAN_WINDOW, connect, scan_config, start_scan};
 use crate::ble::sleep::report_activity;
 use crate::ble::{update_ble_phy, update_conn_params, wait_for_stack_started};
 use crate::event::{EventSubscriber, SleepStateEvent, SubscribableEvent};
@@ -44,7 +44,7 @@ const CUSTOM_TO_PERIPHERAL_UUID: u128 = 0x5f2a7c15_9b3e_4a51_8d76_2c1e4b8a6f03;
 
 /// Scan for peripheral addresses, connect them, and hand each connection to
 /// that slot's session; sessions report back on `ended`.
-pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + ControllerCmdSync<LeSetScanParams>>(
+pub(crate) async fn scan_and_connect_peripherals<'a, C: CentralController>(
     stack: &'a Stack<'_, C, DefaultPacketPool>,
     conns: &[Channel<NoopRawMutex, Connection<'a, DefaultPacketPool>, 1>; crate::SPLIT_PERIPHERALS_NUM],
     ended: &Channel<NoopRawMutex, usize, { crate::SPLIT_PERIPHERALS_NUM }>,
@@ -90,7 +90,7 @@ pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + ControllerC
                 },
             };
             info!("Start connecting, {} peripheral(s) pending", pending.len());
-            let connected = match with_timeout(Duration::from_secs(15), central.connect(&config)).await {
+            let connected = match with_timeout(Duration::from_secs(15), connect(&mut central, &config)).await {
                 Ok(Ok(conn)) => {
                     let peer = conn.peer_address();
                     if let Some(&(id, addr)) = pending.iter().find(|(_, addr)| Address::random(*addr) == peer) {
@@ -180,16 +180,27 @@ async fn wait_until_wakeup(ended: &Channel<NoopRawMutex, usize, { crate::SPLIT_P
 // This handler is used to handle the scan result.
 pub(crate) struct ScanHandler;
 
-impl EventHandler for ScanHandler {
-    fn on_adv_reports(&self, mut it: LeAdvReportsIter<'_>) {
-        while let Some(Ok(report)) = it.next() {
-            let Some(Adv::SplitPeripheral { id }) = Adv::decode(report.data) else {
+impl ScanHandler {
+    fn on_reports<'a>(&self, reports: impl Iterator<Item = (BdAddr, &'a [u8])>) {
+        for (addr, data) in reports {
+            let Some(Adv::SplitPeripheral { id }) = Adv::decode(data) else {
                 continue;
             };
-            info!("Found split peripheral: id={:?}, addr={:?}", id, report.addr);
-            PERIPHERAL_FOUND.signal((id, report.addr));
+            info!("Found split peripheral: id={:?}, addr={:?}", id, addr);
+            PERIPHERAL_FOUND.signal((id, addr));
             break;
         }
+    }
+}
+
+impl EventHandler for ScanHandler {
+    #[cfg(feature = "ext_adv")]
+    fn on_ext_adv_reports(&self, it: bt_hci::param::LeExtAdvReportsIter<'_>) {
+        self.on_reports(it.map_while(Result::ok).map(|report| (report.addr, report.data)));
+    }
+
+    fn on_adv_reports(&self, it: LeAdvReportsIter<'_>) {
+        self.on_reports(it.map_while(Result::ok).map(|report| (report.addr, report.data)));
     }
 }
 
@@ -198,12 +209,8 @@ impl EventHandler for ScanHandler {
 /// report back so the radio reconnects or rediscovers the peripheral.
 pub(crate) async fn run_peripheral_session<
     'a,
-    #[cfg(not(feature = "subrating"))] C: Controller
-        + ControllerCmdSync<LeSetScanParams>
-        + ControllerCmdAsync<LeSetPhy>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(not(feature = "subrating"))] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
     #[cfg(feature = "subrating")] C: Controller
-        + ControllerCmdSync<LeSetScanParams>
         + ControllerCmdAsync<LeSetPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdAsync<LeSubrateRequest>,
@@ -639,5 +646,38 @@ async fn update_conn_params_on_sleep_change<
         }
 
         sleeping = sleep_events.next_event().await.0;
+    }
+}
+
+#[cfg(all(test, feature = "ext_adv"))]
+mod tests {
+    use bt_hci::FromHciBytes;
+    use bt_hci::param::{BdAddr, LeExtAdvReports};
+    use trouble_host::prelude::EventHandler;
+
+    use super::{PERIPHERAL_FOUND, ScanHandler};
+
+    #[test]
+    fn extended_reports_discover_only_split_peripherals() {
+        for (data, expected_id) in [
+            (&[0x02, 0x01, 0x04, 0x05, 0xFF, 0x53, 0x52, 0x00, 0x02][..], Some(2)),
+            (&[0x04, 0xFF, 0x53, 0x52, 0x01][..], None),
+            (&[0x05, 0xFF, 0x4C, 0x00, 0x00, 0x02][..], None),
+        ] {
+            // One legacy ADV_IND carried in an LE Extended Advertising Report.
+            let mut bytes = std::vec![
+                1, 0x13, 0, 1, 1, 2, 3, 4, 5, 0xC6, 1, 0, 0xFF, 0x7F, 0xC0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ];
+            bytes.push(data.len() as u8);
+            bytes.extend_from_slice(data);
+            let (reports, rest) = LeExtAdvReports::from_hci_bytes(&bytes).unwrap();
+            assert!(rest.is_empty());
+            PERIPHERAL_FOUND.reset();
+            ScanHandler.on_ext_adv_reports(reports.iter());
+            assert_eq!(
+                PERIPHERAL_FOUND.try_take(),
+                expected_id.map(|id| (id, BdAddr::new([1, 2, 3, 4, 5, 0xC6])))
+            );
+        }
     }
 }

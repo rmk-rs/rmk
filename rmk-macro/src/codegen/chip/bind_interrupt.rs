@@ -208,10 +208,21 @@ pub(crate) fn bind_interrupt_default(
                 quote! {}
             };
 
+            let support_adv = if cfg!(feature = "ext_adv") {
+                quote! { .support_ext_adv() }
+            } else {
+                quote! { .support_adv() }
+            };
+
             // nrf-sdc interrupt config
             let nrf_sdc_config = match &board {
                 BoardConfig::Split(_) => {
                     let num_peri = board.get_num_peripheral() as u8;
+                    let support_central = if cfg!(feature = "ext_adv") {
+                        quote! { .support_ext_central() }
+                    } else {
+                        quote! { .support_scan().support_central() }
+                    };
                     let support_subrating = if is_feature_enabled(&get_rmk_features(), "subrating")
                     {
                         quote! { .support_connection_subrating_central() }
@@ -220,9 +231,8 @@ pub(crate) fn bind_interrupt_default(
                     };
                     quote! {
                         ::nrf_sdc::Builder::new()?
-                        .support_scan()
-                        .support_central()
-                        .support_adv()
+                        #support_central
+                        #support_adv
                         .support_peripheral()
                         .support_dle_peripheral()
                         .support_dle_central()
@@ -232,20 +242,21 @@ pub(crate) fn bind_interrupt_default(
                         .support_le_2m_phy()
                         #tx_power
                         .central_count(#num_peri)?
-                        .peripheral_count(1)?
+                        .peripheral_count(::rmk::ble::NUM_HOST_LINKS as u8)?
                         .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
                         .build(p, rng, mpsl, mem)
                     }
                 }
                 BoardConfig::UniBody(_) => quote! {
                     ::nrf_sdc::Builder::new()?
-                    .support_adv()
+                    #support_adv
                     .support_peripheral()
                     .support_dle_peripheral()
                     .support_phy_update_peripheral()
                     .support_le_2m_phy()
                     #tx_power
-                    .peripheral_count(1)?
+                    .central_count(0)?
+                    .peripheral_count(::rmk::ble::NUM_HOST_LINKS as u8)?
                     .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
                     .build(p, rng, mpsl, mem)
                 },
