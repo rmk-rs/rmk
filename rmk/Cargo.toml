@@ -253,7 +253,7 @@ _ble = ["dep:trouble-host", "dep:bt-hci", "dep:embassy-crypto", "dep:embassy-cry
 
 ## Enable extended HCI advertising, scanning and connecting. Disabled by default.
 ## Requires controller support; nRF SDC needs its `central` and `peripheral` features.
-ext_adv = ["_ble", "trouble-host?/extended-advertising", "rmk-macro/ext_adv"]
+ext_adv = ["_ble", "trouble-host?/per-connection-address", "rmk-macro/ext_adv"]
 
 [dependencies]
 rmk-macro = { version = "=0.8.0", path = "../rmk-macro" }
