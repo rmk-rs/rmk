@@ -138,9 +138,9 @@ pub const fn calculate_sdc_memory_size(
     let buffers = (tx_buffers as usize + rx_buffers as usize) * (packet_size + 15) - 84;
     let links = central_links * (803 + buffers + 21) + peripheral_links * (923 + buffers + 17);
     let advertising = (5184 + 31 * 18) / 10; // SDC_MEM_PER_ADV_SET(31).
-    // SDC_MEM_SCAN[_EXT](3) and SDC_MEM_INITIATOR.
+    // SDC_MEM_SCAN[_EXT](3); scanning and initiating run sequentially.
     let scanning = if central_links > 0 {
-        408 + 3 * if cfg!(feature = "ext_adv") { 320 } else { 104 } + 384
+        408 + 3 * if cfg!(feature = "ext_adv") { 320 } else { 104 }
     } else {
         0
     };

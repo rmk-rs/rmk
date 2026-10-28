@@ -46,7 +46,6 @@ nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "9cf87fa7883b89b
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "9cf87fa7883b89b2d4dc7cd94864da7927bd858c", default-features = false, features = [
     "defmt",
     "peripheral",
-    "central",
     "nrf54lm20-app-s",
 ] }
 

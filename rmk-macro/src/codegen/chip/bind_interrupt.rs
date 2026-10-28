@@ -221,7 +221,7 @@ pub(crate) fn bind_interrupt_default(
                     let support_central = if cfg!(feature = "ext_adv") {
                         quote! { .support_ext_central() }
                     } else {
-                        quote! { .support_scan().support_central() }
+                        quote! { .support_central() }
                     };
                     let support_subrating = if is_feature_enabled(&get_rmk_features(), "subrating")
                     {

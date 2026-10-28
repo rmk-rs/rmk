@@ -15,7 +15,7 @@ test = false
 bench = false
 
 [dependencies]
-rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "async_matrix", "nrf52840_ble", "ext_adv", "adafruit_bl"] }
+rmk = { path = "../../../rmk", default-features = false, features = ["defmt", "storage", "vial", "watchdog", "async_matrix", "nrf52840_ble", "adafruit_bl"] }
 
 embassy-executor = { version = "0.10", features = [
     "defmt",
@@ -40,7 +40,6 @@ nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "9cf87fa7883b89b
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "9cf87fa7883b89b2d4dc7cd94864da7927bd858c", features = [
     "defmt",
     "peripheral",
-    "central",
     "nrf52840",
 ] }
 

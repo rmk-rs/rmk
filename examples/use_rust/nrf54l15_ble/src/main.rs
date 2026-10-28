@@ -43,7 +43,6 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
     mpsl.run().await
 }
 
-const SDC_MEM_SIZE: usize = 5688;
 const FLASH_START_ADDR: usize = 0x100000;
 const FLASH_SECTORS: u8 = 6;
 
@@ -64,7 +63,8 @@ fn build_sdc<'d, const N: usize>(
         // .support_dle_peripheral()
         // .support_phy_update_peripheral()
         // .support_le_2m_phy()
-        .peripheral_count(1)?
+        .central_count(0)?
+        .peripheral_count(rmk::ble::NUM_HOST_LINKS as u8)?
         .buffer_cfg(
             DefaultPacketPool::MTU as u16,
             DefaultPacketPool::MTU as u16,
@@ -148,7 +148,17 @@ async fn main(spawner: Spawner) {
     );
 
     let mut rng = cracen::Cracen::new_blocking(p.CRACEN);
-    let mut sdc_mem = sdc::Mem::<SDC_MEM_SIZE>::new();
+    let mut sdc_mem = sdc::Mem::<
+        {
+            rmk::ble::calculate_sdc_memory_size(
+                0,
+                rmk::ble::NUM_HOST_LINKS,
+                DefaultPacketPool::MTU,
+                L2CAP_TXQ,
+                L2CAP_RXQ,
+            )
+        },
+    >::new();
     let sdc = unwrap!(build_sdc(sdc_p, &mut rng, mpsl, &mut sdc_mem));
     info!("SDC built");
     info!("BLE stack ready");
