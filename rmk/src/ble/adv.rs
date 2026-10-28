@@ -135,9 +135,7 @@ pub(crate) async fn advertise<'a, 'b, C: AdvController, const ATT: usize, const 
     };
     #[cfg(not(feature = "_ext_adv"))]
     let advertiser = {
-        if address.is_some() {
-            return Err(Error::ExtendedAdvertisingNotSupported.into());
-        }
+        let _ = address;
         peripheral.advertise(&adv.params(), adv.build(&mut buf)?).await?
     };
     let conn = with_timeout(timeout, advertiser.accept())
