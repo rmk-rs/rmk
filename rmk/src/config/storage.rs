@@ -2,7 +2,8 @@
 #[derive(Clone, Copy, Debug)]
 pub struct StorageConfig {
     /// Start address of local storage, MUST BE start of a sector.
-    /// If start_addr is set to 0(this is the default value), the last `num_sectors` sectors will be used.
+    /// Zero selects the last `num_sectors` sectors, except on nRF BLE builds
+    /// without DFU, where it selects `0x60000`.
     pub start_addr: usize,
     // Number of sectors used for storage, >= 2.
     pub num_sectors: u8,
