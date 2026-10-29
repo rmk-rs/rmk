@@ -1,6 +1,6 @@
 use core::cell::Cell;
 
-use embassy_sync::watch::{Receiver, Watch};
+use embassy_sync::watch::Watch;
 use rmk_types::ble::{BleState, BleStatus};
 use rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
 
@@ -14,16 +14,6 @@ pub(crate) static CONNECTION_STATUS: Watch<
     ConnectionStatus,
     { crate::CONNECTION_STATUS_CHANGE_EVENT_SUB_SIZE },
 > = Watch::new_with(ConnectionStatus::new());
-
-pub(crate) fn subscribe_connection_status()
--> Receiver<'static, RawMutex, ConnectionStatus, { crate::CONNECTION_STATUS_CHANGE_EVENT_SUB_SIZE }> {
-    let mut receiver = CONNECTION_STATUS
-        .receiver()
-        .expect("connection status subscriber capacity exceeded");
-    // Preserve change-only subscriptions; get_and can still read the current value.
-    let _ = receiver.try_get();
-    receiver
-}
 
 pub(crate) fn active_transport() -> Option<ConnectionType> {
     current_connection_status().decide_active()
