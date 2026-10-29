@@ -44,7 +44,7 @@ use crate::hid::{HidWriterTrait, Report, run_led_reader};
 use crate::split::PeripheralMatrixConfig;
 #[cfg(feature = "split")]
 use crate::split::ble::central::{run_peripheral_session, scan_and_connect_peripherals};
-use crate::state::{set_ble_state, subscribe_connection_status};
+use crate::state::{CONNECTION_STATUS, set_ble_state};
 
 pub(crate) mod adv;
 pub(crate) mod battery_service;
@@ -951,7 +951,9 @@ async fn serve_keyboard_connection<
     #[cfg(feature = "host")] host_service: Option<&crate::host::HostService<'_>>,
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);
-    let mut status = subscribe_connection_status();
+    let mut status = CONNECTION_STATUS
+        .receiver()
+        .expect("connection status subscriber capacity exceeded");
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
     #[cfg(feature = "split")]
     let mut ble_peripheral_battery_server = crate::SPLIT_BATTERY_PERIPHERAL_IDS

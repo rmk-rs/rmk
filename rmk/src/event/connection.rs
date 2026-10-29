@@ -26,8 +26,11 @@ impl super::SubscribableEvent for ConnectionStatusChangeEvent {
     type Subscriber = ConnectionStatusSubscriber;
 
     fn subscriber() -> Self::Subscriber {
-        ConnectionStatusSubscriber {
-            receiver: crate::state::subscribe_connection_status(),
-        }
+        let mut receiver = crate::state::CONNECTION_STATUS
+            .receiver()
+            .expect("connection status subscriber capacity exceeded");
+        // Only report changes that occur after subscribing.
+        let _ = receiver.try_get();
+        ConnectionStatusSubscriber { receiver }
     }
 }
