@@ -1,8 +1,7 @@
 //! Rynk host service — RMK-native protocol server.
 //!
-//! `RynkService` owns the global keyboard state and dispatch policy. Each
-//! [`run_session`](RynkService::run_session) creates its own authorization gate
-//! ([`HostLock`]) and topic subscriptions, so transports never share either.
+//! `RynkService` dispatches requests against the keyboard state. Each connection
+//! owns its framing, authorization and topic subscriptions until disconnection.
 
 mod handlers;
 mod topics;
@@ -30,7 +29,7 @@ pub struct RynkService<'a> {
     ctx: KeyboardContext<'a>,
     /// Device identity served by `GetDeviceInfo`.
     device: DeviceConfig<'static>,
-    /// Policy copied into each session's authorization gate.
+    /// Policy copied into each connection's authorization gate.
     lock_config: LockConfig,
 }
 
@@ -75,11 +74,14 @@ impl<'a> RynkService<'a> {
         }
     }
 
-    /// Serve one inbound message: on success the reply frame replaces the
-    /// payload in place; on error the caller answers with the error envelope.
-    async fn dispatch(&self, locker: &HostLock<'_>, msg: &mut RynkMessage<'_>) -> Result<(), RynkError> {
+    /// Process one request and encode its response in place.
+    async fn dispatch(
+        &self,
+        locker: &HostLock<'_>,
+        msg: &mut RynkMessage<'_>,
+        #[cfg(feature = "_ble")] profile_action: &mut Option<crate::ble::profile::BleProfileAction>,
+    ) -> Result<(), RynkError> {
         let cmd = msg.header().cmd;
-
         if self.requires_unlock(cmd) && !locker.is_unlocked() {
             return Err(RynkError::Locked);
         }
@@ -126,10 +128,26 @@ impl<'a> RynkService<'a> {
             Cmd::GetConnectionStatus => serve::<command::GetConnectionStatus, _>(self, msg).await,
             #[cfg(feature = "_ble")]
             Cmd::GetBleStatus => serve::<command::GetBleStatus, _>(self, msg).await,
+
             #[cfg(feature = "_ble")]
-            Cmd::SwitchBleProfile => serve::<command::SwitchBleProfile, _>(self, msg).await,
-            #[cfg(feature = "_ble")]
-            Cmd::ClearBleProfile => serve::<command::ClearBleProfile, _>(self, msg).await,
+            cmd @ (Cmd::SwitchBleProfile | Cmd::ClearBleProfile) => {
+                use crate::ble::profile::BleProfileAction;
+
+                let target_profile_id: u8 = msg.decode_request()?;
+                if usize::from(target_profile_id) >= crate::NUM_BLE_PROFILE {
+                    return Err(RynkError::Invalid);
+                }
+                if crate::channel::BLE_PROFILE_CHANNEL.is_full() {
+                    return Err(RynkError::NotReady);
+                }
+                msg.encode_response(&())?;
+                *profile_action = Some(if cmd == Cmd::SwitchBleProfile {
+                    BleProfileAction::Switch(target_profile_id)
+                } else {
+                    BleProfileAction::ClearSlot(target_profile_id)
+                });
+                Ok(())
+            }
 
             Cmd::GetCurrentLayer => serve::<command::GetCurrentLayer, _>(self, msg).await,
             Cmd::GetMatrixState => serve::<command::GetMatrixState, _>(self, msg).await,
@@ -147,10 +165,10 @@ impl<'a> RynkService<'a> {
         }
     }
 
-    /// Drive one rynk session based on embedded-io `rx`/`tx`.
-    ///
-    /// Owns frame reassembly/dispatch; transport setup and reconnect stay outside.
-    pub async fn run_session<R: Read, T: Write>(&self, rx: &mut R, tx: &mut T) {
+    /// Serve requests and topic updates until the connection ends.
+    pub async fn run<R: Read, T: Write>(&self, rx: &mut R, tx: &mut T) {
+        let mut buf = [0u8; RYNK_BUFFER_SIZE];
+        let mut handshaked = false;
         let locker = HostLock::new(
             self.lock_config.unlock_keys,
             self.ctx.keymap,
@@ -158,10 +176,7 @@ impl<'a> RynkService<'a> {
             RYNK_UNLOCK_WINDOW,
         );
         let mut topics = TopicSubscribers::new();
-        let mut buf = [0u8; RYNK_BUFFER_SIZE];
         let mut df = Deframer::new();
-        // Mute topics until the client completes the version handshake.
-        let mut handshaked = false;
 
         loop {
             // Serve all frames already in the buffer.
@@ -177,9 +192,18 @@ impl<'a> RynkService<'a> {
                     // Hosts never send topic-range cmds; drop without a reply.
                     warn!("Rynk: dropping topic-range request {:?}", cmd);
                 } else {
-                    let served = self.dispatch(&locker, &mut msg).await;
+                    #[cfg(feature = "_ble")]
+                    let mut profile_action = None;
+                    let served = self
+                        .dispatch(
+                            &locker,
+                            &mut msg,
+                            #[cfg(feature = "_ble")]
+                            &mut profile_action,
+                        )
+                        .await;
                     // The version handshake completes on GetCapabilities.
-                    handshaked |= cmd == Cmd::GetCapabilities;
+                    handshaked |= cmd == Cmd::GetCapabilities && served.is_ok();
                     let written = match served {
                         Ok(()) => tx.write_all(msg.frame()).await,
                         Err(error) => {
@@ -200,6 +224,11 @@ impl<'a> RynkService<'a> {
                     };
                     if written.is_err() {
                         return;
+                    }
+                    #[cfg(feature = "_ble")]
+                    if let Some(action) = profile_action {
+                        // A profile action may close this connection.
+                        crate::channel::BLE_PROFILE_CHANNEL.send(action).await;
                     }
                 }
                 df.unpark_pending(&mut buf, parked);
@@ -366,7 +395,7 @@ mod tests {
                 chunks: VecDeque::from([req(Cmd::GetDeviceInfo.raw(), 0)]),
             };
             let mut tx = VecWrite { captured: Vec::new() };
-            block_on(service.run_session(&mut rx, &mut tx));
+            block_on(service.run(&mut rx, &mut tx));
 
             let frames = decode_frames(&tx.captured);
             assert_eq!(frames.len(), 1);
@@ -380,7 +409,7 @@ mod tests {
     /// A second session over the same service starts locked again. The gate
     /// itself lives in `tests/scenarios/rynk_lock.toml`, which holds the
     /// challenge with real matrix input; only the session boundary needs a
-    /// second `run_session`, which one timeline cannot express.
+    /// second `run`, which one timeline cannot express.
     #[test]
     fn a_new_session_starts_locked_again() {
         let mut behavior = BehaviorConfig::default();
@@ -409,7 +438,7 @@ mod tests {
         chunks.push_back(req(Cmd::GetMatrixState.raw(), 1));
         let mut rx = ChunkRead { chunks };
         let mut tx = VecWrite { captured: Vec::new() };
-        block_on(service.run_session(&mut rx, &mut tx));
+        block_on(service.run(&mut rx, &mut tx));
 
         let resp = decode_frames(&tx.captured);
         assert!(
@@ -423,7 +452,7 @@ mod tests {
         chunks2.push_back(req(Cmd::GetMatrixState.raw(), 0));
         let mut rx2 = ChunkRead { chunks: chunks2 };
         let mut tx2 = VecWrite { captured: Vec::new() };
-        block_on(service.run_session(&mut rx2, &mut tx2));
+        block_on(service.run(&mut rx2, &mut tx2));
 
         let resp2 = decode_frames(&tx2.captured);
         assert_eq!(resp2.len(), 1);
@@ -464,8 +493,8 @@ mod tests {
         let mut tx_b = VecWrite { captured: Vec::new() };
 
         block_on(join(
-            service.run_session(&mut rx_a, &mut tx_a),
-            service.run_session(&mut rx_b, &mut tx_b),
+            service.run(&mut rx_a, &mut tx_a),
+            service.run(&mut rx_b, &mut tx_b),
         ));
 
         let responses_a = decode_frames(&tx_a.captured);
@@ -525,7 +554,7 @@ mod tests {
         let mut rx = ChunkRead { chunks };
         let mut tx = VecWrite { captured: Vec::new() };
 
-        block_on(service.run_session(&mut rx, &mut tx));
+        block_on(service.run(&mut rx, &mut tx));
 
         let resp = decode_frames(&tx.captured);
         assert_eq!(resp.len(), 2, "both coalesced frames are served");
@@ -560,7 +589,7 @@ mod tests {
         let mut rx = ChunkRead { chunks };
         let mut tx = VecWrite { captured: Vec::new() };
 
-        block_on(service.run_session(&mut rx, &mut tx));
+        block_on(service.run(&mut rx, &mut tx));
 
         let resp = decode_frames(&tx.captured);
         assert_eq!(resp.len(), 2, "the split frame completes and is served");
@@ -591,7 +620,7 @@ mod tests {
         let mut rx = ChunkRead { chunks };
         let mut tx = VecWrite { captured: Vec::new() };
 
-        block_on(service.run_session(&mut rx, &mut tx));
+        block_on(service.run(&mut rx, &mut tx));
 
         let expected = rmk_types::protocol::rynk::bulk_key_capacity(reply_capacity);
         assert!(
@@ -627,7 +656,7 @@ mod tests {
         let mut rx = ChunkRead { chunks };
         let mut tx = VecWrite { captured: Vec::new() };
 
-        block_on(service.run_session(&mut rx, &mut tx));
+        block_on(service.run(&mut rx, &mut tx));
 
         let resp = decode_frames(&tx.captured);
         assert_eq!(resp.len(), 1, "the request is answered despite the squeeze");
