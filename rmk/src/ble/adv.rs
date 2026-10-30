@@ -115,6 +115,7 @@ impl Adv<'_> {
 }
 
 /// Advertise with an optional local address override and accept a connection within `timeout`.
+/// The timeout includes controller setup.
 pub(crate) async fn advertise<'a, 'b, C: Controller + ExtAdvCmds, const ATT: usize, const CONN: usize>(
     peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
     server: &'b AttributeServer<'_, NoopRawMutex, DefaultPacketPool, ATT, CONN>,
@@ -122,26 +123,28 @@ pub(crate) async fn advertise<'a, 'b, C: Controller + ExtAdvCmds, const ATT: usi
     address: Option<BdAddr>,
     timeout: Duration,
 ) -> Result<GattConnection<'a, 'b, DefaultPacketPool>, BleHostError<C::Error>> {
-    let mut buf = [0; 31];
-    #[cfg(feature = "ext_adv")]
-    let advertiser = {
-        let sets = [AdvertisementSet {
-            params: adv.params(),
-            data: adv.build(&mut buf)?,
-            address,
-        }];
-        let mut handles = AdvertisementSet::handles(&sets);
-        peripheral.advertise_ext(&sets, &mut handles).await?
-    };
-    #[cfg(not(feature = "ext_adv"))]
-    let advertiser = {
-        let _ = address;
-        peripheral.advertise(&adv.params(), adv.build(&mut buf)?).await?
-    };
-    let conn = with_timeout(timeout, advertiser.accept())
-        .await
-        .map_err(|_| Error::Timeout)??;
-    Ok(conn.with_attribute_server(server)?)
+    with_timeout(timeout, async {
+        let mut buf = [0; 31];
+        #[cfg(feature = "ext_adv")]
+        let advertiser = {
+            let sets = [AdvertisementSet {
+                params: adv.params(),
+                data: adv.build(&mut buf)?,
+                address,
+            }];
+            let mut handles = AdvertisementSet::handles(&sets);
+            peripheral.advertise_ext(&sets, &mut handles).await?
+        };
+        #[cfg(not(feature = "ext_adv"))]
+        let advertiser = {
+            let _ = address;
+            peripheral.advertise(&adv.params(), adv.build(&mut buf)?).await?
+        };
+        let conn = advertiser.accept().await?;
+        Ok(conn.with_attribute_server(server)?)
+    })
+    .await
+    .map_err(|_| Error::Timeout)?
 }
 
 #[cfg(test)]

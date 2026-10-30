@@ -2,6 +2,7 @@ use core::sync::atomic::Ordering;
 
 use embassy_futures::join::join;
 use embassy_futures::select::{Either, select};
+use embassy_sync::watch::Receiver;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
@@ -114,6 +115,7 @@ fn add_peripheral_battery_level<M: embassy_sync::blocking_mutex::raw::RawMutex, 
 }
 
 pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
+    last_key: Receiver<'static, crate::RawMutex, u32, { super::NUM_HOST_LINKS }>,
     battery_level: Characteristic<u8>,
     conn: &'conn GattConnection<'stack, 'server, P>,
     sub: <BatteryStatusEvent as SubscribableEvent>::Subscriber,
@@ -125,6 +127,9 @@ impl<'stack, 'server, 'conn, P: PacketPool> BleBatteryServer<'stack, 'server, 'c
             battery_level: server.battery_service.level,
             conn,
             sub: BatteryStatusEvent::subscriber(),
+            last_key: LAST_KEY_TIMESTAMP
+                .receiver()
+                .expect("battery activity receiver slots exhausted"),
         }
     }
 }
@@ -206,7 +211,7 @@ impl<P: PacketPool> BleBatteryServer<'_, '_, '_, P> {
 
             // Wait until there are both battery status update and key pressing or timeout
             let (battery_status, last_press) =
-                join(self.sub.next_message_pure(), select(timeout, LAST_KEY_TIMESTAMP.wait())).await;
+                join(self.sub.next_message_pure(), select(timeout, self.last_key.changed())).await;
 
             // Then check the value last press time
             let last_press = match last_press {
