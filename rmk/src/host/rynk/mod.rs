@@ -1,8 +1,8 @@
 //! Rynk host service — RMK-native protocol server.
 //!
 //! `RynkService` owns the global keyboard state and dispatch policy. Each
-//! [`run_session`](RynkService::run_session) creates its own authorization gate
-//! ([`HostLock`]) and topic subscriptions, so transports never share either.
+//! transport owns its frame buffer. Authorization and topic subscriptions
+//! belong to the session future and are dropped when it ends or is cancelled.
 
 mod handlers;
 mod topics;
@@ -149,8 +149,26 @@ impl<'a> RynkService<'a> {
 
     /// Drive one rynk session based on embedded-io `rx`/`tx`.
     ///
-    /// Owns frame reassembly/dispatch; transport setup and reconnect stay outside.
+    /// Creates a buffer for transports that own only one session (USB and the
+    /// test simulator). BLE uses [`run_session_with_buffer`](Self::run_session_with_buffer)
+    /// so active connections can share one buffer across switches.
     pub async fn run_session<R: Read, T: Write>(&self, rx: &mut R, tx: &mut T) {
+        let mut buf = [0u8; RYNK_BUFFER_SIZE];
+        let mut handshaked = false;
+        self.run_session_with_buffer(rx, tx, &mut buf, &mut handshaked).await;
+    }
+
+    /// Drive one Rynk session using a transport-owned frame buffer.
+    ///
+    /// `handshaked` lives with the connection. A new session recreates its lock,
+    /// subscriptions and deframer without repeating that connection's handshake.
+    pub(crate) async fn run_session_with_buffer<R: Read, T: Write>(
+        &self,
+        rx: &mut R,
+        tx: &mut T,
+        buf: &mut [u8; RYNK_BUFFER_SIZE],
+        handshaked: &mut bool,
+    ) {
         let locker = HostLock::new(
             self.lock_config.unlock_keys,
             self.ctx.keymap,
@@ -158,18 +176,15 @@ impl<'a> RynkService<'a> {
             RYNK_UNLOCK_WINDOW,
         );
         let mut topics = TopicSubscribers::new();
-        let mut buf = [0u8; RYNK_BUFFER_SIZE];
         let mut df = Deframer::new();
-        // Mute topics until the client completes the version handshake.
-        let mut handshaked = false;
 
         loop {
             // Serve all frames already in the buffer.
             // Because the input/output shares a same buffer, while a frame is
             // being served, the pipelined tail behind it is parked at the end
             // of the buffer, so back-to-back requests all get answers.
-            while let Some(req_len) = df.next(&mut buf) {
-                let parked = df.park_pending(&mut buf);
+            while let Some(req_len) = df.next(buf) {
+                let parked = df.park_pending(buf);
                 let reply_capacity = buf.len() - parked;
                 let mut msg = RynkMessage::from_decoded(&mut buf[..reply_capacity], req_len);
                 let cmd = msg.header().cmd;
@@ -179,7 +194,7 @@ impl<'a> RynkService<'a> {
                 } else {
                     let served = self.dispatch(&locker, &mut msg).await;
                     // The version handshake completes on GetCapabilities.
-                    handshaked |= cmd == Cmd::GetCapabilities;
+                    *handshaked |= cmd == Cmd::GetCapabilities;
                     let written = match served {
                         Ok(()) => tx.write_all(msg.frame()).await,
                         Err(error) => {
@@ -202,27 +217,27 @@ impl<'a> RynkService<'a> {
                         return;
                     }
                 }
-                df.unpark_pending(&mut buf, parked);
+                df.unpark_pending(buf, parked);
             }
 
             // A half-received frame must be finished first.
             // If the buffer is empty, race a read against the next topic.
             if df.has_pending() {
-                match rx.read(df.tail(&mut buf)).await {
+                match rx.read(df.tail(buf)).await {
                     Ok(0) | Err(_) => return,
                     Ok(n) => df.commit(n),
                 }
             } else {
-                match select(rx.read(df.tail(&mut buf)), topics.next_event()).await {
+                match select(rx.read(df.tail(buf)), topics.next_event()).await {
                     Either::First(Ok(0)) | Either::First(Err(_)) => return,
                     Either::First(Ok(n)) => df.commit(n),
                     Either::Second(event) => {
                         // Not handshaked yet: drain the event but don't forward it.
-                        if !handshaked {
+                        if !*handshaked {
                             continue;
                         }
                         // The buffer is empty here, so encoding the topic is safe.
-                        match event.encode(&mut buf) {
+                        match event.encode(buf) {
                             Ok(n) => {
                                 if tx.write_all(&buf[..n]).await.is_err() {
                                     return;

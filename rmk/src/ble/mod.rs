@@ -29,7 +29,7 @@ use crate::ble::battery_service::BlePeripheralBatteryServer;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
 #[cfg(feature = "host")]
-use crate::ble::host::{HOST_WRITE_BUFFER_SIZE, HostGattHandler, HostWriteOutcome};
+use crate::ble::host::{BleConfig, HOST_WRITE_BUFFER_SIZE, HostGattHandler, HostWriteOutcome};
 use crate::ble::led::BleLedReader;
 #[cfg(feature = "passkey_entry")]
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
@@ -406,6 +406,9 @@ async fn run_ble_keyboard<
     profile_manager.load_bonded_devices().await;
     profile_manager.update_stack_bonds();
 
+    #[cfg(feature = "host")]
+    let host_config = host_service.map(BleConfig::new);
+
     let mut peripheral = stack.peripheral();
     let runner = stack.runner();
 
@@ -423,7 +426,7 @@ async fn run_ble_keyboard<
                 &profile_manager,
                 config,
                 #[cfg(feature = "host")]
-                host_service,
+                host_config.as_ref(),
             )
             .await;
             drop(conn);
@@ -603,6 +606,7 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     profile: u8,
     profiles: &ProfileManager<'_, '_, C, DefaultPacketPool, BOND_SLOTS>,
+    #[cfg(feature = "host")] host: &HostGattHandler<'_, '_>,
 ) {
     let level = &server.battery_service.level;
     #[cfg(feature = "split")]
@@ -616,9 +620,6 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
 
     #[cfg(feature = "passkey_entry")]
     let mut passkey_state = PasskeyInputState::new();
-
-    #[cfg(feature = "host")]
-    let mut host_gatt_handler = HostGattHandler::new(server);
 
     loop {
         #[cfg(feature = "passkey_entry")]
@@ -751,7 +752,7 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
                             }
                         } else {
                             #[cfg(feature = "host")]
-                            match host_gatt_handler.handle_write(event.handle(), data, encrypted).await {
+                            match host.handle_write(event.handle(), data, encrypted).await {
                                 HostWriteOutcome::Handled => {}
                                 HostWriteOutcome::CccdUpdated => cccd_updated = true,
                                 HostWriteOutcome::ControlPoint => control_point_write = true,
@@ -969,12 +970,14 @@ async fn serve_keyboard_connection<
     profile: u8,
     profiles: &ProfileManager<'_, '_, C, DefaultPacketPool, BOND_SLOTS>,
     config: &BleBatteryConfig,
-    #[cfg(feature = "host")] host_service: Option<&crate::host::HostService<'_>>,
+    #[cfg(feature = "host")] host_config: Option<&BleConfig<'_>>,
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);
     let mut status = CONNECTION_STATUS
         .receiver()
         .expect("connection status subscriber capacity exceeded");
+    #[cfg(feature = "host")]
+    let host = HostGattHandler::new(server, profile, host_config);
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
     #[cfg(feature = "split")]
     let mut ble_peripheral_battery_server = crate::SPLIT_BATTERY_PERIPHERAL_IDS
@@ -1042,17 +1045,7 @@ async fn serve_keyboard_connection<
     };
 
     #[cfg(feature = "host")]
-    let host_task = async {
-        if let Some(service) = host_service {
-            // Restart after a session-fatal TX error so Rynk survives the rest
-            // of the connection.
-            loop {
-                HostGattHandler::run(server, conn, service).await;
-            }
-        } else {
-            core::future::pending::<()>().await;
-        }
-    };
+    let host_task = host.run(conn);
     #[cfg(not(feature = "host"))]
     let host_task = core::future::pending::<()>();
 
@@ -1068,7 +1061,14 @@ async fn serve_keyboard_connection<
     let dongle_event_task = core::future::pending::<()>();
 
     select6(
-        gatt_events_task(server, conn, profile, profiles),
+        gatt_events_task(
+            server,
+            conn,
+            profile,
+            profiles,
+            #[cfg(feature = "host")]
+            &host,
+        ),
         connection_params,
         battery_task,
         writer_task,
