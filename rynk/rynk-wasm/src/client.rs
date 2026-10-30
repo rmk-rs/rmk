@@ -24,8 +24,8 @@ use rynk::rmk_types::led_indicator::LedIndicator;
 use rynk::rmk_types::morse::Morse;
 use rynk::rmk_types::protocol::rynk::{
     BehaviorConfig, DeviceCapabilities, DeviceInfo, GetComboBulkResponse, GetKeymapBulkResponse, GetMorseBulkResponse,
-    LockStatus, MatrixState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest, SetKeymapBulkRequest,
-    SetMorseBulkRequest, StorageResetMode,
+    LockStatus, MatrixState, MorseHoldTriggerPositionState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest,
+    SetKeymapBulkRequest, SetMorseBulkRequest, SetMorseHoldTriggerPositionsRequest, StorageResetMode,
 };
 use rynk::{Client, Driver, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
 use wasm_bindgen::prelude::*;
@@ -160,6 +160,8 @@ endpoints! {
     set_morse(index: u8, config: Morse) -> (),
     get_morse_bulk(start_index: u8) -> GetMorseBulkResponse,
     set_morse_bulk(request: SetMorseBulkRequest) -> (),
+    get_morse_hold_trigger_positions() -> MorseHoldTriggerPositionState,
+    set_morse_hold_trigger_positions(request: SetMorseHoldTriggerPositionsRequest) -> (),
     read_macro(index: u8) -> Vec<MacroOp>,
     // behavior
     get_behavior() -> BehaviorConfig,
