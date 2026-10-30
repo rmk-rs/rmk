@@ -1,6 +1,6 @@
 use quote::{format_ident, quote};
 use rmk_config::EncoderPhase;
-use rmk_config::resolved::hardware::{ChipModel, EncoderConfig, EncoderResolution};
+use rmk_config::resolved::hardware::{ChipModel, EncoderConfig};
 
 use super::Initializer;
 use crate::codegen::chip::gpio::convert_gpio_str_to_input_pin;
@@ -55,12 +55,12 @@ pub(crate) fn expand_encoder_device(
             }
             EncoderPhase::Resolution => {
                 // When phase is "resolution", ensure resolution and reverse are set
-                let resolution = match encoder.resolution.clone().expect(
-                    "`resolution` field needs to be set when the encoder's mode is 'resolution'",
-                ) {
-                    EncoderResolution::Value(r) => r,
-                    EncoderResolution::Derived { detent, pulse } => pulse * 4 / detent,
-                };
+                let resolution = encoder
+                    .resolution
+                    .as_ref()
+                    .expect("`resolution` field needs to be set when the encoder's mode is 'resolution'")
+                    .value()
+                    .unwrap_or_else(|e| panic!("\n\u{274c} keyboard.toml: {e}"));
                 let reverse = encoder.reverse.unwrap_or(false);
 
                 quote! {
