@@ -11,11 +11,11 @@ use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
 use embassy_futures::join::{join_array, join5};
-use embassy_futures::select::{Either, Either3, select, select3, select5};
+use embassy_futures::select::{Either, Either4, select, select4, select5};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use rmk_types::ble::BleState;
 use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
@@ -447,6 +447,7 @@ async fn run_ble_keyboard<
         let mut host_connections: [Option<Connection<'_, DefaultPacketPool>>; BOND_SLOTS] =
             core::array::from_fn(|_| None);
         let mut advertising_paused = false;
+        let mut pairing_deadline = Instant::MIN;
         Timer::after_millis(10).await;
 
         loop {
@@ -488,9 +489,23 @@ async fn run_ble_keyboard<
                 .await
             };
 
+            let pairing_timeout = async {
+                if profile_manager.repairing.get().is_none() {
+                    return core::future::pending().await;
+                }
+                Timer::at(pairing_deadline).await;
+            };
+
             // Consume queued wake input before a profile action can cancel the connection flow.
-            match select3(connect, ProfileChange::receive(profile_id), completed.receive()).await {
-                Either3::First(Ok(gatt_conn)) => {
+            match select4(
+                connect,
+                profile_manager.receive_change(profile_id),
+                completed.receive(),
+                pairing_timeout,
+            )
+            .await
+            {
+                Either4::First(Ok(gatt_conn)) => {
                     // A replaced advertisement can still deliver a late connection.
                     #[cfg(feature = "ext_adv")]
                     if gatt_conn.raw().local_address() != local_address {
@@ -498,7 +513,8 @@ async fn run_ble_keyboard<
                         disconnect(&gatt_conn).await;
                         continue;
                     }
-                    if let Some(bond) = profile_manager.bond_info(profile_id)
+                    let bond_info = profile_manager.bond_info(profile_id);
+                    if let Some(bond) = &bond_info
                         && !bond.info.identity.match_identity(&gatt_conn.raw().peer_identity())
                     {
                         warn!("[ble] peer does not match its profile");
@@ -513,64 +529,77 @@ async fn run_ble_keyboard<
                         disconnect(&gatt_conn).await;
                         continue;
                     }
-                    if let Err(e) = gatt_conn.raw().set_bondable(true) {
+                    if let Err(e) = gatt_conn.raw().set_bondable(bond_info.is_none()) {
                         error!("Set bondable error: {:?}", e);
+                        disconnect(&gatt_conn).await;
+                        continue;
                     }
                     host_connections[profile_id as usize] = Some(gatt_conn.raw().clone());
                     accepted_connections.send((gatt_conn, profile_id)).await;
                 }
-                Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
+                Either4::First(Err(BleHostError::BleHost(Error::Timeout))) => {
                     advertising_paused = true;
                     set_ble_state(BleState::Inactive);
                     request_sleep();
                 }
-                Either3::First(Err(e)) => {
+                Either4::First(Err(e)) => {
                     #[cfg(feature = "defmt")]
                     let e = defmt::Debug2Format(&e);
                     error!("Advertise error: {:?}", e);
                     Timer::after_millis(200).await;
                 }
-                Either3::Second(Some(change)) => {
+                Either4::Second(Some(change)) => {
                     report_activity();
                     advertising_paused = false;
                     match change {
                         ProfileChange::ClearBond(slot) => {
-                            if let Some(conn) = &host_connections[slot as usize] {
-                                conn.disconnect();
-                            }
-                            while host_connections[slot as usize].is_some() {
-                                let ended = completed.receive().await;
-                                host_connections[ended as usize].take();
-                                if ended == profile_id {
-                                    set_ble_state(BleState::Inactive);
-                                }
-                            }
+                            disconnect_profile(slot, &mut host_connections, &completed).await;
                             profile_manager.clear_bond(slot);
                         }
-                        ProfileChange::SwitchTo(slot) => {
-                            if NUM_HOST_LINKS == 1
-                                && let Some(conn) = &host_connections[profile_id as usize]
-                            {
-                                conn.disconnect();
+                        ProfileChange::SwitchTo(slot) | ProfileChange::Pair(slot) => {
+                            if slot != profile_id {
+                                if let Some(pairing) = profile_manager.repairing.get() {
+                                    disconnect_profile(pairing, &mut host_connections, &completed).await;
+                                    profile_manager.set_pairing(None);
+                                }
+                                if NUM_HOST_LINKS == 1
+                                    && let Some(conn) = &host_connections[profile_id as usize]
+                                {
+                                    conn.disconnect();
+                                }
+                                let state = if host_connections[slot as usize]
+                                    .as_ref()
+                                    .is_some_and(|conn| conn.security_level().is_ok_and(|level| level.encrypted()))
+                                {
+                                    BleState::Connected
+                                } else {
+                                    BleState::Inactive
+                                };
+                                profile_manager.switch_profile(slot, state);
                             }
-                            let state = if host_connections[slot as usize]
-                                .as_ref()
-                                .is_some_and(|conn| conn.security_level().is_ok_and(|level| level.encrypted()))
-                            {
-                                BleState::Connected
-                            } else {
-                                BleState::Inactive
-                            };
-                            profile_manager.switch_profile(slot, state);
+                            if matches!(change, ProfileChange::Pair(_)) {
+                                disconnect_profile(slot, &mut host_connections, &completed).await;
+                                profile_manager.set_pairing(Some(slot));
+                                pairing_deadline = Instant::now() + Duration::from_secs(300);
+                            }
                         }
                     }
                 }
-                Either3::Second(None) => {}
-                Either3::Third(ended) => {
+                Either4::Second(None) => {}
+                Either4::Third(ended) => {
                     host_connections[ended as usize].take();
                     if ended == profile_id {
                         set_ble_state(BleState::Inactive);
                         advertising_paused = false;
+                    }
+                }
+                Either4::Fourth(()) => {
+                    if let Some(pairing) = profile_manager.repairing.get() {
+                        disconnect_profile(pairing, &mut host_connections, &completed).await;
+                        profile_manager.set_pairing(None);
+                        advertising_paused = true;
+                        set_ble_state(BleState::Inactive);
+                        request_sleep();
                     }
                 }
             }
@@ -934,11 +963,34 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
                 #[cfg(not(feature = "passkey_entry"))]
                 warn!("[gatt] PassKeyInput event, should not happen")
             }
-            GattConnectionEvent::BondLost => warn!("[gatt] BondLost"),
+            GattConnectionEvent::BondLost => {
+                warn!("[gatt] BondLost");
+                if profile_manager.bond_info(profile_id).is_some() {
+                    conn.raw().disconnect();
+                }
+            }
             GattConnectionEvent::OobRequest => warn!("[gatt] OobRequest"),
         }
     }
     info!("[gatt] task finished");
+}
+
+/// Reclaim the slot only after its worker has consumed Disconnected.
+async fn disconnect_profile(
+    profile_id: u8,
+    links: &mut [Option<Connection<'_, DefaultPacketPool>>; BOND_SLOTS],
+    completed: &Channel<NoopRawMutex, u8, NUM_HOST_LINKS>,
+) {
+    if let Some(conn) = &links[profile_id as usize] {
+        conn.disconnect();
+    }
+    while links[profile_id as usize].is_some() {
+        let ended = completed.receive().await;
+        links[ended as usize].take();
+        if ended == crate::state::current_profile() {
+            set_ble_state(BleState::Inactive);
+        }
+    }
 }
 
 /// Drop the link and wait for it to actually go down.
