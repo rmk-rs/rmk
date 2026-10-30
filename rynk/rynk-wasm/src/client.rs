@@ -178,4 +178,6 @@ endpoints! {
     get_ble_status() -> BleStatus,
     switch_ble_profile(slot: u8) -> (),
     clear_ble_profile(slot: u8) -> (),
+    get_ble_background_connections() -> bool,
+    set_ble_background_connections(enabled: bool) -> (),
 }

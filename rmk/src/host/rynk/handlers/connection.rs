@@ -5,7 +5,9 @@ use rmk_types::ble::BleStatus;
 use rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rmk_types::protocol::rynk::RynkError;
 #[cfg(feature = "_ble")]
-use rmk_types::protocol::rynk::command::{ClearBleProfile, GetBleStatus, SwitchBleProfile};
+use rmk_types::protocol::rynk::command::{
+    ClearBleProfile, GetBleBackgroundConnections, GetBleStatus, SetBleBackgroundConnections, SwitchBleProfile,
+};
 use rmk_types::protocol::rynk::command::{GetConnectionStatus, GetConnectionType};
 
 use super::super::RynkService;
@@ -54,6 +56,33 @@ impl Handle<ClearBleProfile> for RynkService<'_> {
         Self::check_ble_profile_slot(slot)?;
         crate::channel::BLE_PROFILE_CHANNEL
             .try_send(crate::ble::profile::BleProfileAction::ClearSlot(slot))
+            .map_err(|_| RynkError::NotReady)
+    }
+}
+
+#[cfg(feature = "_ble")]
+impl Handle<GetBleBackgroundConnections> for RynkService<'_> {
+    async fn handle(&self, _: ()) -> Result<bool, RynkError> {
+        use crate::storage::{StorageKey, StorageValue, read};
+
+        Ok(crate::ble::NUM_HOST_LINKS > 1
+            && !matches!(
+                read(StorageKey::BleBackgroundConnections)
+                    .await
+                    .map_err(|_| RynkError::StorageFault)?,
+                Some(StorageValue::BleBackgroundConnections(false))
+            ))
+    }
+}
+
+#[cfg(feature = "_ble")]
+impl Handle<SetBleBackgroundConnections> for RynkService<'_> {
+    async fn handle(&self, enabled: bool) -> Result<(), RynkError> {
+        if enabled && crate::ble::NUM_HOST_LINKS <= 1 {
+            return Err(RynkError::Invalid);
+        }
+        crate::channel::BLE_PROFILE_CHANNEL
+            .try_send(crate::ble::profile::BleProfileAction::SetBackgroundConnections(enabled))
             .map_err(|_| RynkError::NotReady)
     }
 }

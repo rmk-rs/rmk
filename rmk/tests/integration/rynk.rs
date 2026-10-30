@@ -92,6 +92,37 @@ fn payload<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> T {
     serde_json::from_str(json).unwrap_or_else(|e| panic!("rynk {what} payload `{json}`: {e}"))
 }
 
+#[cfg(feature = "_ble")]
+#[test]
+fn background_connection_setting_checks_capacity_before_queueing() {
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[k!(A)]]]).build().await;
+        let can_enable = rmk::ble::NUM_HOST_LINKS > 1;
+        let reply = if can_enable {
+            RynkReply::Ok("null")
+        } else {
+            RynkReply::Err(RynkError::Invalid)
+        };
+        keyboard
+            .rynk::<command::SetBleBackgroundConnections>("true", reply)
+            .delay(10)
+            .run()
+            .await;
+        if can_enable {
+            assert_eq!(keyboard.ble_profile_actions(), ["SetBackgroundConnections(true)"]);
+        } else {
+            assert!(keyboard.ble_profile_actions().is_empty());
+        }
+
+        keyboard
+            .rynk::<command::SetBleBackgroundConnections>("false", RynkReply::Ok("null"))
+            .delay(10)
+            .run()
+            .await;
+        assert_eq!(keyboard.ble_profile_actions(), ["SetBackgroundConnections(false)"]);
+    });
+}
+
 // Connection capacity depends on the feature set, so these handshake cases use
 // Rust expectations while the fixed endpoint payloads stay in TOML scenarios.
 #[cfg(all(feature = "storage", feature = "_ble", feature = "split"))]
