@@ -121,7 +121,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
                                         ack_offset, chunk_offset
                                     );
                                 }
-                                Either::First(Ok(_)) => {}
+                                Either::First(Ok(other)) => self.process_peripheral_message(other).await,
                                 Either::First(Err(e)) => {
                                     error!("dfu_split: read error: {:?}", e);
                                     break false;
@@ -163,7 +163,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
                 let crc = loop {
                     match select(self.transceiver.read(), Timer::at(deadline)).await {
                         Either::First(Ok(SplitMessage::FirmwareCrcReport(crc))) => break Some(crc),
-                        Either::First(Ok(_)) => {}
+                        Either::First(Ok(other)) => self.process_peripheral_message(other).await,
                         Either::First(Err(e)) => {
                             error!("dfu_split: read error: {:?}", e);
                             break None;
@@ -210,7 +210,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
                             publish_event(crate::event::DfuStatusEvent::new(rmk_types::dfu::DfuStatus::Finished));
                             break;
                         }
-                        Either::First(Ok(_)) => {}
+                        Either::First(Ok(other)) => self.process_peripheral_message(other).await,
                         Either::First(Err(e)) => {
                             error!("dfu_split: FirmwareUpdateConfirm error {:?}", e);
                             break;
@@ -272,7 +272,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
         let hash = loop {
             match select(self.transceiver.read(), Timer::at(deadline)).await {
                 Either::First(Ok(SplitMessage::FirmwareHashResponse(h))) => break Some(h),
-                Either::First(Ok(_)) => {}
+                Either::First(Ok(other)) => self.process_peripheral_message(other).await,
                 Either::First(Err(e)) => {
                     error!("read error: {:?}", e);
                     break None;
@@ -377,7 +377,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
                                     ack_offset, offset_bytes
                                 );
                             }
-                            Either::First(Ok(other)) => warn!("dfu_split: unexpected message: {:?}", other),
+                            Either::First(Ok(other)) => self.process_peripheral_message(other).await,
                             Either::First(Err(e)) => {
                                 error!("dfu_split: FirmwareChunkAck error {:?}", e);
                                 break false;
@@ -418,7 +418,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
             let peripheral_crc = loop {
                 match select(self.transceiver.read(), Timer::at(deadline)).await {
                     Either::First(Ok(SplitMessage::FirmwareCrcReport(crc))) => break Some(crc),
-                    Either::First(Ok(_)) => {}
+                    Either::First(Ok(other)) => self.process_peripheral_message(other).await,
                     Either::First(Err(e)) => {
                         error!("dfu_split: FirmwareCrcReport error {:?}", e);
                         break None;
@@ -442,7 +442,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
                             publish_event(crate::event::DfuStatusEvent::new(rmk_types::dfu::DfuStatus::Finished));
                             return;
                         }
-                        Either::First(Ok(_)) => {}
+                        Either::First(Ok(other)) => self.process_peripheral_message(other).await,
                         Either::First(Err(e)) => {
                             error!("dfu_split: FirmwareCrcOk error {:?}", e);
                             return;
@@ -463,5 +463,78 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
 
         error!("dfu_split: all {} update attempts failed", MAX_ATTEMPTS);
         publish_event(crate::event::DfuStatusEvent::new(rmk_types::dfu::DfuStatus::Error));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use super::*;
+    use crate::event::{KeyboardEvent, SubscribableEvent};
+    use crate::split::PeripheralMatrixConfig;
+    use crate::split::driver::SplitDriverError;
+    use crate::test_support::test_block_on as block_on;
+
+    static FIRMWARE: [u8; 4] = [1, 2, 3, 4];
+
+    /// Answers each DFU request like a peripheral would, but reports a key
+    /// press/release just before the reply, as happens when the user types
+    /// on the peripheral during a firmware push.
+    struct FakePeripheral {
+        inbox: VecDeque<SplitMessage>,
+    }
+
+    impl SplitReader for FakePeripheral {
+        async fn read(&mut self) -> Result<SplitMessage, SplitDriverError> {
+            match self.inbox.pop_front() {
+                Some(msg) => Ok(msg),
+                None => core::future::pending().await,
+            }
+        }
+    }
+
+    impl SplitWriter for FakePeripheral {
+        async fn write(&mut self, message: &SplitMessage) -> Result<usize, SplitDriverError> {
+            match *message {
+                SplitMessage::FirmwareChunk { offset, len, data } => {
+                    self.inbox.push_back(SplitMessage::Key(KeyboardEvent::key(0, 1, true)));
+                    self.inbox.push_back(SplitMessage::FirmwareChunkAck {
+                        offset,
+                        crc: crate::crc32::crc32(&data.0[..len as usize]),
+                    });
+                }
+                SplitMessage::FirmwareUpdateComplete => {
+                    self.inbox.push_back(SplitMessage::Key(KeyboardEvent::key(0, 1, false)));
+                    self.inbox
+                        .push_back(SplitMessage::FirmwareCrcReport(crate::crc32::crc32(&FIRMWARE)));
+                }
+                SplitMessage::FirmwareCrcOk => self.inbox.push_back(SplitMessage::FirmwareUpdateConfirm),
+                _ => {}
+            }
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn peripheral_keys_are_forwarded_during_firmware_push() {
+        crate::dfu::set_firmware_update_data(0, &FIRMWARE, crate::crc32::crc32(&FIRMWARE)).unwrap();
+        let mut key_sub = KeyboardEvent::subscriber();
+        let mut manager = PeripheralManager::new(
+            FakePeripheral { inbox: VecDeque::new() },
+            0,
+            PeripheralMatrixConfig {
+                rows: 1,
+                cols: 2,
+                row_offset: 0,
+                col_offset: 2,
+            },
+            UpdatePolicy::Force,
+        );
+
+        block_on(manager.check_firmware_update());
+
+        assert_eq!(key_sub.try_next_message_pure(), Some(KeyboardEvent::key(0, 3, true)));
+        assert_eq!(key_sub.try_next_message_pure(), Some(KeyboardEvent::key(0, 3, false)));
     }
 }
