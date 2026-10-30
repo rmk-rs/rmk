@@ -4,8 +4,8 @@
 #   Layer 0: OSM(LShift)          OSL(1)  A  TH(B, C)  OSM(LCtrl)  WM(B, LGui)
 #   Layer 1: OSM(LShift | LCtrl)  No      C  D         E           F
 #
-# Two more shared-board positions are used below: MouseWheelUp@(0,8) and
-# the plain layer key MO(1)@(3,0).
+# Three more shared-board positions are used below: MouseWheelUp@(0,8),
+# MouseBtn1@(4,13) and the plain layer key MO(1)@(3,0).
 #
 # Tests inherit the one-shot defaults (timeout 1000ms, activate_on_keypress and
 # quick_release both false) unless they carry a `behavior.one_shot*` delta.
@@ -315,6 +315,28 @@ expect = [
   ["LShift", "A"],
   [],
 ]
+
+# A mouse report can't carry modifiers, so a pending OSM is held in the
+# keyboard report around the click, like `WM` on a mouse key.
+[[test]]
+name = "osm_wraps_mouse_click"
+steps = [
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [4, 13], duration = 10 } },
+]
+expect = [["LCtrl"], { mouse = { buttons = 1 } }, { mouse = {} }, []]
+
+# With activate_on_keypress the OSM is already down on the host; the click
+# that consumes it must still release it.
+[[test]]
+name = "osm_activate_on_keypress_released_after_mouse_click"
+behavior.one_shot_modifiers = { activate_on_keypress = true }
+steps = [
+  { tap = { pos = [0, 4], duration = 10 } },
+  { tap = { pos = [4, 13], duration = 10 } },
+  { delay = 1500 },  # past the one-shot timeout
+]
+expect = [["LCtrl"], ["LCtrl"], { mouse = { buttons = 1 } }, { mouse = {} }, []]
 
 # Quick-release mode (quick_release = true): the modifier drops on key PRESS,
 # so each key report is followed by an unmodified one.
