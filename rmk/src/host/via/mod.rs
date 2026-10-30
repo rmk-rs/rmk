@@ -1,4 +1,4 @@
-use byteorder::{BigEndian, ByteOrder, LittleEndian};
+use byteorder::{BigEndian, ByteOrder};
 use embassy_time::Instant;
 use embedded_io_async::{Read, Write};
 use rmk_types::protocol::vial::{VIA_FIRMWARE_VERSION, VIA_PROTOCOL_VERSION, ViaCommand, ViaKeyboardInfo};
@@ -209,37 +209,46 @@ impl<'a> VialService<'a> {
                 report.input_data[1] = self.ctx.keymap_dimensions().2 as u8;
             }
             ViaCommand::DynamicKeymapGetBuffer => {
-                let offset = BigEndian::read_u16(&report.output_data[1..3]);
-                // size <= 28
-                let size = report.output_data[3];
+                let offset = BigEndian::read_u16(&report.output_data[1..3]) as usize;
+                let size = report.output_data[3] as usize;
                 debug!("Getting keymap buffer, offset: {}, size: {}", offset, size);
-                let mut idx = 4;
-                let start = (offset / 2) as usize;
-                let count = (size / 2) as usize;
-                for i in 0..count {
-                    let a = self.ctx.get_action_flat(start + i);
-                    let kc = to_via_keycode(a);
-                    BigEndian::write_u16(&mut report.input_data[idx..idx + 2], kc);
-                    idx += 2;
+                // `offset` and `size` count bytes of the keymap laid out as big-endian keycodes.
+                if size <= 28 {
+                    for (pos, byte) in (offset..).zip(&mut report.input_data[4..4 + size]) {
+                        *byte = to_via_keycode(self.ctx.get_action_flat(pos / 2)).to_be_bytes()[pos % 2];
+                    }
+                } else {
+                    report.input_data[0] = 0xFF;
                 }
             }
             ViaCommand::DynamicKeymapSetBuffer => {
                 debug!("Dynamic keymap set buffer");
-                let offset = BigEndian::read_u16(&report.output_data[1..3]);
-                // size <= 28
-                let size = report.output_data[3];
-                let mut idx = 4;
-                let (rows, cols, _) = self.ctx.keymap_dimensions();
-                for i in 0..(size as usize) {
-                    let via_keycode = LittleEndian::read_u16(&report.output_data[idx..idx + 2]);
-                    let action = from_via_keycode(via_keycode);
-                    let flat_index = offset as usize + i;
-                    let (layer, in_layer) = (flat_index / (rows * cols), flat_index % (rows * cols));
-                    let _ = self
-                        .ctx
-                        .set_action(layer as u8, (in_layer / cols) as u8, (in_layer % cols) as u8, action)
-                        .await;
-                    idx += 2;
+                let offset = BigEndian::read_u16(&report.output_data[1..3]) as usize;
+                let size = report.output_data[3] as usize;
+                if size <= 28 {
+                    let (rows, cols, layers) = self.ctx.keymap_dimensions();
+                    let end = (offset + size).min(layers * rows * cols * 2);
+                    for flat_index in offset / 2..end.div_ceil(2) {
+                        let old = to_via_keycode(self.ctx.get_action_flat(flat_index)).to_be_bytes();
+                        let mut new = old;
+                        for (i, byte) in new.iter_mut().enumerate() {
+                            let pos = flat_index * 2 + i;
+                            if (offset..end).contains(&pos) {
+                                *byte = report.output_data[4 + pos - offset];
+                            }
+                        }
+                        if new == old {
+                            continue;
+                        }
+                        let action = from_via_keycode(u16::from_be_bytes(new));
+                        let (layer, in_layer) = (flat_index / (rows * cols), flat_index % (rows * cols));
+                        let _ = self
+                            .ctx
+                            .set_action(layer as u8, (in_layer / cols) as u8, (in_layer % cols) as u8, action)
+                            .await;
+                    }
+                } else {
+                    report.input_data[0] = 0xFF;
                 }
             }
             ViaCommand::DynamicKeymapGetEncoder => {
