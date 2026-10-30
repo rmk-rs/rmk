@@ -1,71 +1,108 @@
 //! Vial over BLE GATT.
 //!
-//! [`HostGattHandler::run`] owns the per-connection lifecycle: clear the
-//! inbound chunk channel, construct 32-byte HID-report Rx/Tx adapters around
-//! the GATT plumbing, and call [`VialService::run_session`] once.
+//! Only the active profile's connection may write the global
+//! [`VIAL_BLE_RX_CHANNEL`]; a service-wide mutex serialises the one BLE session
+//! across profile switches. Background writes are dropped without an ATT error.
 
+use embassy_futures::select::select;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::mutex::Mutex;
 use embedded_io_async::{ErrorType, Read, Write};
 use trouble_host::prelude::*;
 
 use super::HostWriteOutcome;
-use crate::ble::ble_server::Server;
+use crate::ble::ble_server::{Server, VialGattService};
 use crate::channel::VIAL_BLE_RX_CHANNEL;
 use crate::host::transport::HostTransportError;
 use crate::host::via::VialService;
+use crate::state::{CONNECTION_STATUS, current_profile};
 
-/// Per-connection GATT write dispatcher for Vial over HID.
-pub(crate) struct HostGattHandler {
-    output_handle: u16,
-    input_cccd_handle: u16,
-    control_point_handle: u16,
+pub(crate) struct BleConfig<'s> {
+    service: &'s VialService<'s>,
+    lock: Mutex<NoopRawMutex, ()>,
 }
 
-impl HostGattHandler {
-    pub(crate) fn new(server: &Server<'_>) -> Self {
+impl<'s> BleConfig<'s> {
+    pub(crate) fn new(service: &'s VialService<'s>) -> Self {
         Self {
-            output_handle: server.vial_service.output_data.handle,
-            input_cccd_handle: server
-                .vial_service
-                .input_data
-                .cccd_handle
-                .expect("No CCCD for Vial input"),
-            control_point_handle: server.vial_service.hid_control_point.handle,
+            service,
+            lock: Mutex::new(()),
+        }
+    }
+}
+
+/// Per-connection GATT write dispatcher for Vial over HID.
+pub(crate) struct HostGattHandler<'a, 's> {
+    hid: &'a VialGattService,
+    profile: u8,
+    config: Option<&'a BleConfig<'s>>,
+}
+
+impl<'a, 's> HostGattHandler<'a, 's> {
+    pub(crate) fn new(server: &'a Server<'_>, profile: u8, config: Option<&'a BleConfig<'s>>) -> Self {
+        Self {
+            hid: &server.vial_service,
+            profile,
+            config,
         }
     }
 
-    pub(crate) async fn handle_write(&mut self, handle: u16, data: &[u8], _encrypted: bool) -> HostWriteOutcome {
-        if handle == self.output_handle {
-            if data.len() == 32 {
+    pub(crate) async fn handle_write(&self, handle: u16, data: &[u8], _encrypted: bool) -> HostWriteOutcome {
+        if handle == self.hid.output_data.handle {
+            if let Ok(message) = data.try_into() {
                 debug!("Got Vial packet: {:?}", data);
-                let mut message = [0u8; 32];
-                message.copy_from_slice(data);
-                VIAL_BLE_RX_CHANNEL.send(message).await;
+                let mut status = CONNECTION_STATUS
+                    .receiver()
+                    .expect("connection status subscriber capacity exceeded");
+                // A switch drops a chunk that could not be queued yet; the
+                // host retries once the profile is active again.
+                let _ = select(
+                    status.get_and(|s| s.ble.profile != self.profile),
+                    VIAL_BLE_RX_CHANNEL.send(message),
+                )
+                .await;
             } else {
                 warn!("Wrong Vial packet data: {:?}", data);
             }
             HostWriteOutcome::Handled
-        } else if handle == self.input_cccd_handle {
+        } else if handle == self.hid.input_data.cccd_handle.expect("No CCCD for Vial input") {
             HostWriteOutcome::CccdUpdated
-        } else if handle == self.control_point_handle {
+        } else if handle == self.hid.hid_control_point.handle {
             HostWriteOutcome::ControlPoint
         } else {
             HostWriteOutcome::Unhandled
         }
     }
 
-    /// Run one Vial session over `conn`, clearing stale RX chunks first.
-    pub(crate) async fn run<'stack, 'server, P: PacketPool>(
-        server: &'server Server<'_>,
-        conn: &GattConnection<'stack, 'server, P>,
-        service: &VialService<'_>,
-    ) {
-        VIAL_BLE_RX_CHANNEL.clear();
-        let mut rx = VialBleRx;
-        let mut tx = VialBleTx {
-            input_data: server.vial_service.input_data,
-            conn,
+    /// Run the one BLE Vial session. The mutex prevents the old and new active
+    /// connections from draining the global channel at the same time.
+    pub(crate) async fn run<P: PacketPool>(&self, conn: &GattConnection<'_, '_, P>) {
+        let Some(config) = self.config else {
+            return core::future::pending().await;
         };
-        service.run_session(&mut rx, &mut tx).await;
+        let mut status = CONNECTION_STATUS
+            .receiver()
+            .expect("connection status subscriber capacity exceeded");
+        loop {
+            status.get_and(|s| s.ble.profile == self.profile).await;
+            let _guard = config.lock.lock().await;
+            // A stale waiter must not clear chunks the new active connection
+            // already queued.
+            if current_profile() != self.profile {
+                continue;
+            }
+            VIAL_BLE_RX_CHANNEL.clear();
+            let mut rx = VialBleRx;
+            let mut tx = VialBleTx {
+                input_data: self.hid.input_data,
+                conn,
+            };
+            select(
+                status.get_and(|s| s.ble.profile != self.profile),
+                config.service.run_session(&mut rx, &mut tx),
+            )
+            .await;
+        }
     }
 }
 
@@ -124,6 +161,7 @@ impl<P: PacketPool> Write for VialBleTx<'_, '_, '_, P> {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
@@ -131,7 +169,7 @@ mod tests {
         use crate::test_support::test_block_on as block_on;
 
         let server = Server::new_default("rmk").unwrap();
-        let mut handler = HostGattHandler::new(&server);
+        let handler = HostGattHandler::new(&server, 0, None);
 
         assert_eq!(
             block_on(handler.handle_write(server.vial_service.output_data.handle, &[], true)),
