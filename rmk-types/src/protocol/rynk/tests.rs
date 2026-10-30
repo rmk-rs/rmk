@@ -245,9 +245,10 @@ fn exemplars() -> Exemplars {
         num_split_peripherals: 12,
         ble_enabled: false,
         num_ble_profiles: 13,
-        max_payload_size: 14,
-        max_bulk_keys: 15,
-        max_bulk_items: 16,
+        max_ble_connections: 14,
+        max_payload_size: 15,
+        max_bulk_keys: 16,
+        max_bulk_items: 17,
         bulk_transfer_supported: true,
     };
     // Ascending version/id values; distinct strings so a field swap shows.
@@ -510,7 +511,7 @@ fn wire_values_locked() {
         ("Macro{[Tap(A),Delay(300),Char(a),Pause]}", encode(&ex.macro_ops)),
         // --- Status / system responses ---
         ("MatrixState{[0x05,0x00,0x20]}", encode(&ex.matrix)),
-        ("DeviceCapabilities{1..16}", encode(&ex.capabilities)),
+        ("DeviceCapabilities{1..17}", encode(&ex.capabilities)),
         ("DeviceInfo{1.2.3,4,5,RMK,..}", encode(&ex.device_info)),
         ("BehaviorConfig{50..120}", encode(&ex.behavior)),
         (
@@ -672,7 +673,7 @@ fn wire_frames_locked() {
             encode_frame(Cmd::GetCapabilities, SEQ, &())
         ),
         (
-            "GetCapabilities reply Ok(DeviceCapabilities{1..16})",
+            "GetCapabilities reply Ok(DeviceCapabilities{1..17})",
             encode_frame(
                 Cmd::GetCapabilities,
                 SEQ,
@@ -1241,6 +1242,7 @@ mod protocol_reference {
              A [dongle](../features/dongle) relays these frames untouched, so a host talks to the dongle's USB interface exactly as it would to the keyboard.\n\n\
              ## Sizing and bulk transfer\n\n\
              Each peer holds one frame in a buffer of `rynk_buffer_size` bytes (a `[rmk]` option, see [RMK config](../configuration/rmk_config#rynk-protocol-configuration)). The largest payload a frame can carry is what remains after COBS overhead, the delimiter, and the {header_size}-byte header; the firmware reports it as `DeviceCapabilities.max_payload_size`. Read the capabilities and size requests from them rather than assuming a fixed limit.\n\n\
+             `DeviceCapabilities::max_ble_connections` reports the simultaneous BLE host capacity (0 without BLE, 1 in Legacy mode).\n\n\
              `DeviceCapabilities` also advertises `bulk_transfer_supported` and the paging strides `max_bulk_keys` (worst-case keys per `GetKeymapBulk` page) and `max_bulk_items` (worst-case entries per `GetComboBulk`/`GetMorseBulk` page). A bulk read names a start — for the keymap `(layer, row, col)`, read forward through the flat row-major, layer-major keymap; for combos and morses a slot index — and returns as many consecutive entries as fit in one payload, or fewer at the end. A host pages by advancing its start by the stride; a short page ends the read. A bulk write carries a start plus a list of entries and is packed by encoded size up to `max_payload_size`. A reply that does not fit beside other pipelined requests answers `Busy`; retry once they complete.\n\n\
              `GetLayout` serves the compressed layout blob {ble_chunk} bytes per call: the request is a byte offset and `LayoutChunk` carries `total_len` plus that page's bytes. `GetMacro`/`SetMacro` move one whole macro per call, a `MacroOp` list indexed below `max_macros`; every macro shares one buffer of `macro_space_size` bytes, in the list's postcard encoding plus a length prefix per slot, so a write that no longer fits answers `Invalid`; `macros_writable` is false on a firmware without storage, whose `SetMacro` answers `Unimplemented`.\n\n\
              ## Errors\n\n\
