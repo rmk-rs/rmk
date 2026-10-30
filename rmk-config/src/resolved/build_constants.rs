@@ -134,6 +134,7 @@ impl crate::KeyboardTomlConfig {
             } else {
                 1
             };
+            event_config.connection_status_change.subs += num_host_links;
             event_config.battery_status.subs += num_host_links.saturating_sub(1);
             if !split_battery_peripheral_ids.is_empty() {
                 event_config.peripheral_battery.subs += num_host_links;
