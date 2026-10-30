@@ -97,27 +97,14 @@ impl Read for WasmReader {
 /// Write half of the JS byte link.
 pub struct WasmWriter {
     link: JsByteLink,
-    /// In-flight `send()`, parked so a cancelled `write` drains it instead of
-    /// starting a second one: JS promises do not cancel, and two live sends
-    /// interleave their bytes.
-    send: Option<JsFuture>,
+    /// In-flight `send()` and its length, parked so the driver's retry of a
+    /// cancelled `write` finishes it instead of sending the bytes again: JS
+    /// promises do not cancel.
+    send: Option<(JsFuture, usize)>,
 }
 
 impl ErrorType for WasmWriter {
     type Error = ErrorKind;
-}
-
-impl WasmWriter {
-    /// Waits until no `send` is in flight, clearing the parked one only once it
-    /// resolves so a cancel here re-parks it rather than dropping it.
-    async fn drain(&mut self) -> Result<(), ErrorKind> {
-        if let Some(send) = self.send.as_mut() {
-            let done = send.await;
-            self.send = None;
-            done.map_err(|_| ErrorKind::Other)?;
-        }
-        Ok(())
-    }
 }
 
 impl Write for WasmWriter {
@@ -125,12 +112,17 @@ impl Write for WasmWriter {
         if buf.is_empty() {
             return Ok(0);
         }
-        self.drain().await?; // a cancelled `write` leaves its send running
-        self.send = Some(JsFuture::from(
-            self.link.send(Uint8Array::from(buf)).map_err(|_| ErrorKind::Other)?,
-        ));
-        self.drain().await?;
-        Ok(buf.len())
+        if self.send.is_none() {
+            let send = self.link.send(Uint8Array::from(buf)).map_err(|_| ErrorKind::Other)?;
+            self.send = Some((JsFuture::from(send), buf.len()));
+        }
+        let (send, len) = self.send.as_mut().unwrap();
+        let done = send.await;
+        let len = *len;
+        // Cleared only once the send resolves, so a cancel above re-parks it.
+        self.send = None;
+        done.map_err(|_| ErrorKind::Other)?;
+        Ok(len)
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
@@ -174,9 +166,9 @@ mod tests {
     }
 
     /// The wasm pump drops `Driver::run` — mid-frame — whenever a call it was
-    /// carrying resolves. Cancelling cannot stop the JS `send` that write had
-    /// started, so a second one on top of it interleaves both frames into bytes the
-    /// firmware can only discard.
+    /// carrying resolves, and the next run retries that write. Cancelling cannot
+    /// stop the JS `send` it had started, so the retry must finish that send
+    /// rather than put the frame on the wire a second time.
     #[wasm_bindgen_test]
     async fn write_is_cancel_safe() {
         let sent = Rc::new(RefCell::new(String::new()));
@@ -187,6 +179,7 @@ mod tests {
         // no gap inside it for the next send to slip into.
         let cancel_immediately = ready(());
         select(writer.write(b"AB"), cancel_immediately).await;
+        assert_eq!(writer.write(b"AB").await.unwrap(), 2);
         writer.write(b"CD").await.unwrap();
 
         assert_eq!(sent.take(), "ABCD");

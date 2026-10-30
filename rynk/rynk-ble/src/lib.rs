@@ -10,6 +10,7 @@ use std::time::Duration;
 use async_stream::stream;
 use bluest::{Adapter, Characteristic, Device, DeviceId, Uuid};
 use futures_util::StreamExt;
+use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use rynk::io::{ErrorKind, Read, Write};
 use rynk::rmk_types::protocol::rynk::RYNK_BLE_CHUNK_SIZE;
@@ -68,6 +69,10 @@ impl Read for BleReader {
 pub struct BleWriter {
     output: Characteristic,
     write_chunk: usize,
+    /// In-flight GATT write and its length, parked so the driver's retry of a
+    /// cancelled `write` finishes it instead of writing the chunk again: the OS
+    /// carries out a write once it is issued.
+    pending: Option<(BoxFuture<'static, bluest::Result<()>>, usize)>,
 }
 
 impl rynk::io::ErrorType for BleWriter {
@@ -82,8 +87,18 @@ impl Write for BleWriter {
         if buf.is_empty() {
             return Ok(0);
         }
-        let n = buf.len().min(self.write_chunk);
-        self.output.write_without_response(&buf[..n]).await.map_err(|e| {
+        if self.pending.is_none() {
+            let n = buf.len().min(self.write_chunk);
+            let (output, chunk) = (self.output.clone(), buf[..n].to_vec());
+            let write = async move { output.write_without_response(&chunk).await };
+            self.pending = Some((Box::pin(write), n));
+        }
+        let (write, n) = self.pending.as_mut().unwrap();
+        let done = write.await;
+        let n = *n;
+        // Cleared only once the write resolves, so a cancel above re-parks it.
+        self.pending = None;
+        done.map_err(|e| {
             // Preserve the GATT error detail before the driver reduces it to `ErrorKind`.
             log::warn!("rynk-ble: gatt write: {e}");
             std::io::Error::other("gatt write")
@@ -221,7 +236,11 @@ impl BleDevice {
                 pending: Vec::new(),
                 _adapter: self.adapter,
             },
-            BleWriter { output, write_chunk },
+            BleWriter {
+                output,
+                write_chunk,
+                pending: None,
+            },
         ))
     }
 }

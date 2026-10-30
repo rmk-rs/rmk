@@ -403,6 +403,67 @@ async fn fire_and_forget_orphan_reply_is_dropped() {
 }
 
 #[tokio::test]
+async fn fire_and_forget_resolves_once_written() {
+    // Nothing pumps the driver once the call resolves (the wasm client's
+    // per-call select), so the frame must already be on the wire by then.
+    let (client, mut driver) = raw_session(vec![Step::Hang]);
+    drive(&mut driver, &client, client.reboot()).await.unwrap();
+    assert_eq!(*driver.writer.writes.borrow(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelled_run_resumes_half_written_frame() {
+    /// Takes at most 20 bytes per `write`, like a BLE link, and parks the
+    /// first `write` that starts once `stall_at` bytes are out. A cancelled
+    /// `write` commits nothing.
+    struct ChunkedWrite {
+        sent: Vec<u8>,
+        stall_at: Option<usize>,
+    }
+
+    impl embedded_io_async::ErrorType for ChunkedWrite {
+        type Error = ErrorKind;
+    }
+
+    impl Write for ChunkedWrite {
+        async fn write(&mut self, buf: &[u8]) -> Result<usize, ErrorKind> {
+            if self.stall_at.is_some_and(|at| self.sent.len() >= at) {
+                self.stall_at = None;
+                std::future::pending::<()>().await;
+            }
+            let n = buf.len().min(20);
+            self.sent.extend_from_slice(&buf[..n]);
+            Ok(n)
+        }
+
+        async fn flush(&mut self) -> Result<(), ErrorKind> {
+            Ok(())
+        }
+    }
+
+    let (client, session) = raw_session(vec![Step::Hang]);
+    // Stall after the leading 0x00 and the frame's first chunk.
+    let writer = ChunkedWrite {
+        sent: Vec::new(),
+        stall_at: Some(21),
+    };
+    let mut driver = Driver::new(session.reader, writer);
+    let req = SetKeymapBulkRequest {
+        layer: 0,
+        start_row: 0,
+        start_col: 0,
+        actions: (0..16).map(KeyAction::Morse).collect(),
+    };
+    client.send_frame(Cmd::SetKeymapBulk, 1, &req).await.unwrap();
+    for _ in 0..2 {
+        assert!(timeout(Duration::from_millis(10), driver.run(&client)).await.is_err());
+    }
+    let mut wire = vec![0];
+    wire.extend_from_slice(&frame(Cmd::SetKeymapBulk, 1, &req));
+    assert_eq!(driver.writer.sent, wire);
+}
+
+#[tokio::test]
 async fn topic_queue_overflow_drops_oldest() {
     let mut chunk = Vec::new();
     for i in 0..=TOPIC_QUEUE_CAPACITY as u8 {
