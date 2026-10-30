@@ -7,21 +7,21 @@ use serde::{Deserialize, Serialize};
 /// UUIDs (6) and the appearance (4) claim the rest of its 31 bytes.
 pub const BLE_ADV_NAME_MAX_LEN: usize = 16;
 
-/// BLE state (what the BLE subsystem is currently doing).
+/// Connection and advertising state of the selected BLE profile; background links are not reflected here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum BleState {
-    /// The BLE is advertising.
+    /// The selected profile is advertising.
     Advertising,
-    /// The BLE is connected.
+    /// The selected profile has an encrypted host connection.
     Connected,
-    /// The BLE is not in use (USB mode or sleep mode, default).
+    /// The selected profile is idle, with no host connection ready for input.
     Inactive,
 }
 
-/// Unified BLE status: active profile, connection state, and whether that profile currently has bond information.
+/// Selected BLE profile, its connection state, and whether it currently has bond information.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
