@@ -2,7 +2,7 @@
 use core::future::Future;
 use core::sync::atomic::Ordering;
 
-use embassy_usb::class::hid::ReadError;
+use embassy_usb::class::hid::device::ReadError;
 use embassy_usb::driver::EndpointError;
 use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
