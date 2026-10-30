@@ -128,6 +128,27 @@ const _: () = core::assert!(NUM_HOST_LINKS <= u8::MAX as usize, "BLE host capaci
 #[doc(hidden)]
 pub const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + NUM_HOST_LINKS;
 
+/// Calculate ESP BLE controller capacity for central and peripheral links.
+#[doc(hidden)]
+#[cfg(feature = "_esp_ble")]
+pub const fn calculate_esp_ble_capacity(central_links: usize, peripheral_links: usize) -> u8 {
+    let mut capacity = central_links + peripheral_links;
+    let limit = if cfg!(any(feature = "esp32c3_ble", feature = "esp32s3_ble")) {
+        // C3/S3 share activity slots between connections, scanning, and advertising.
+        capacity += (central_links > 0) as usize + (peripheral_links > 0) as usize;
+        10
+    } else if cfg!(feature = "esp32h2_ble") {
+        35
+    } else {
+        70
+    };
+    assert!(
+        capacity > 0 && capacity <= limit,
+        "BLE controller capacity is outside the chip's limits"
+    );
+    capacity as u8
+}
+
 /// Default SDC Link Layer TX/RX packet size, in bytes.
 pub const SDC_PACKET_SIZE: usize = 251;
 /// Default number of SDC TX packet buffers per connection.
