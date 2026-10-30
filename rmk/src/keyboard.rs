@@ -659,11 +659,14 @@ impl<'a> Keyboard<'a> {
                             held_key.action
                         };
 
-                        // Note: Morse like actions are not expected here.
-                        assert!(!action.is_morse());
                         debug!("Tap Key {:?} now press down, action: {:?}", held_key.event, action);
                         self.process_key_action_inner(&action, held_key.event, held_key.press_time)
                             .await;
+                        // A key that became a morse key on the new layer is undecided now,
+                        // so the keys pressed after it stay buffered.
+                        if action.is_morse() {
+                            decision_for_current_key = KeyBehaviorDecision::Ignore;
+                        }
                     }
                 }
                 _ => (),
