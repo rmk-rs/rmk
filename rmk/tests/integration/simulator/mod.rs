@@ -377,7 +377,7 @@ impl SimKeyboard {
             }
             let service = rmk::host::HostService::new(keymap, rmk_config);
             let (mut rx, mut tx): (&Link, &Link) = (&to_device, &from_device);
-            service.run_session(&mut rx, &mut tx).await;
+            service.run(&mut rx, &mut tx).await;
         };
         #[cfg(not(feature = "host"))]
         let session = core::future::pending::<()>();
