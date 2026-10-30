@@ -283,6 +283,7 @@ where
             let profile = match action {
                 BleProfileAction::Switch(profile) if profile == current => continue,
                 BleProfileAction::Switch(profile) => profile,
+                BleProfileAction::Previous | BleProfileAction::Next if NUM_BLE_PROFILE == 0 => continue,
                 BleProfileAction::Previous => {
                     if current == 0 {
                         NUM_BLE_PROFILE as u8 - 1
@@ -419,6 +420,40 @@ mod tests {
             assert!(manager.bond_info(1).is_none());
             assert!(manager.bond_info(0).is_some());
             manager.stack.with_bond_information(|bonds| assert!(bonds.is_empty()));
+        });
+    }
+
+    #[test]
+    fn cycling_uses_available_host_profiles() {
+        use embassy_futures::join::join;
+
+        use super::BleProfileAction::{ClearSlot, Next, Previous};
+        use crate::channel::BLE_PROFILE_CHANNEL;
+        use crate::state::current_profile;
+
+        with_manager::<{ super::BOND_SLOTS }>(|manager| {
+            crate::test_support::set_connection_status(Default::default());
+            BLE_PROFILE_CHANNEL.clear();
+            test_block_on(async {
+                if crate::NUM_BLE_PROFILE == 0 {
+                    for action in [Previous, Next] {
+                        let (clear_slot, ()) = join(manager.update_profile(), async {
+                            BLE_PROFILE_CHANNEL.send(action).await;
+                            BLE_PROFILE_CHANNEL.send(ClearSlot(0)).await;
+                        })
+                        .await;
+                        assert_eq!(clear_slot, Some(0));
+                        assert_eq!(current_profile(), 0);
+                    }
+                } else {
+                    BLE_PROFILE_CHANNEL.send(Previous).await;
+                    manager.update_profile().await;
+                    assert_eq!(current_profile(), crate::NUM_BLE_PROFILE as u8 - 1);
+                    BLE_PROFILE_CHANNEL.send(Next).await;
+                    manager.update_profile().await;
+                    assert_eq!(current_profile(), 0);
+                }
+            });
         });
     }
 

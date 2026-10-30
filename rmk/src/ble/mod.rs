@@ -33,6 +33,8 @@ use crate::ble::host::{HOST_WRITE_BUFFER_SIZE, HostGattHandler, HostWriteOutcome
 use crate::ble::led::BleLedReader;
 #[cfg(feature = "passkey_entry")]
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
+#[cfg(feature = "dongle")]
+use crate::ble::profile::DONGLE_PROFILE;
 use crate::ble::profile::{BOND_SLOTS, ProfileInfo, ProfileManager};
 use crate::ble::sleep::{report_activity, request_sleep};
 use crate::channel::{BLE_REPORT_CHANNEL, LED_SIGNAL};
@@ -121,6 +123,10 @@ pub const NUM_HOST_LINKS: usize = if cfg!(feature = "ext_adv") {
 } else {
     1
 };
+const _: () = core::assert!(
+    BOND_SLOTS > 0,
+    "BLE requires at least one bond slot; set ble_profiles_num > 0 or enable dongle"
+);
 const _: () = core::assert!(NUM_HOST_LINKS <= u8::MAX as usize, "BLE host capacity must fit in u8");
 
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
@@ -435,131 +441,107 @@ async fn run_ble_keyboard<
     }));
 
     let connection_loop = async {
-        let mut links: [Option<Connection<'_, DefaultPacketPool>>; BOND_SLOTS] = core::array::from_fn(|_| None);
+        // Deadline of advertising: 300s
         let mut deadline = Instant::now() + Duration::from_secs(300);
-        let mut wake_subscribers = None;
         Timer::after_millis(10).await;
         loop {
-            let now = Instant::now();
             let profile = crate::state::current_profile();
-            let local_address =
-                cfg!(feature = "ext_adv").then(|| BdAddr::new(crate::ble::profile::profile_address(address, profile)));
-            if now < deadline {
-                wake_subscribers = None;
-            } else if wake_subscribers.is_none() {
-                wake_subscribers = Some((
-                    crate::event::KeyboardEvent::subscriber(),
-                    crate::event::PointingEvent::subscriber(),
-                ));
-                if links.get(profile as usize).is_some_and(Option::is_none) {
-                    set_ble_state(BleState::Inactive);
-                    request_sleep();
-                }
-            }
-            let bond = profile_manager.bond_info(profile);
-            let can_advertise = now < deadline
-                && links.get(profile as usize).is_some_and(Option::is_none)
-                && links.iter().flatten().count() < NUM_HOST_LINKS;
-            if can_advertise {
-                set_ble_state(BleState::Advertising);
-            }
-            let accept = async {
-                if !can_advertise {
-                    return core::future::pending().await;
-                }
-                let adv = if bond.is_some() {
-                    Adv::HostReconnect
-                } else {
-                    Adv::Host { name: product_name }
-                };
-                #[cfg(feature = "dongle")]
-                let adv = if profile == crate::ble::profile::DONGLE_PROFILE {
-                    bond.as_ref()
-                        .map_or(Adv::DongleSeeking, |bond| Adv::Directed(bond.info.identity.addr))
-                } else {
-                    adv
-                };
-                let timeout = deadline.saturating_duration_since(now);
-                let result = advertise(&mut peripheral, &server.server, adv, local_address, timeout).await;
-                result.map(|conn| (profile, conn))
-            };
-            let activity = async {
-                if let Some((keys, pointing)) = wake_subscribers.as_mut() {
-                    let _ = select(keys.next_message_pure(), pointing.next_message_pure()).await;
-                    true
-                } else {
-                    Timer::at(deadline).await;
-                    false
-                }
-            };
-            match select3(accept, profile_manager.update_profile(), activity).await {
-                Either3::First(Ok((profile, gatt_conn))) => {
-                    if profile != crate::state::current_profile() || links[profile as usize].is_some() {
-                        disconnect(&gatt_conn).await;
-                        continue;
+            let clear_slot = if Instant::now() >= deadline {
+                let mut keys = crate::event::KeyboardEvent::subscriber();
+                let mut pointing = crate::event::PointingEvent::subscriber();
+                set_ble_state(BleState::Inactive);
+                request_sleep();
+                match select3(
+                    profile_manager.update_profile(),
+                    keys.next_message_pure(),
+                    pointing.next_message_pure(),
+                )
+                .await
+                {
+                    Either3::First(clear_slot) => clear_slot,
+                    Either3::Second(_) | Either3::Third(_) => {
+                        report_activity();
+                        None
                     }
-                    // A replaced advertisement can still deliver a late connection.
-                    #[cfg(feature = "ext_adv")]
-                    if gatt_conn.raw().local_address() != local_address {
-                        warn!("[ble] late connection belongs to another profile");
-                        disconnect(&gatt_conn).await;
-                        continue;
-                    }
-                    let bond_info = profile_manager.bond_info(profile);
-                    if let Some(bond) = &bond_info
-                        && !bond.info.identity.match_identity(&gatt_conn.raw().peer_identity())
-                    {
-                        warn!("[ble] peer does not match its profile");
-                        disconnect(&gatt_conn).await;
-                        continue;
-                    }
+                }
+            } else {
+                let local_address = cfg!(feature = "ext_adv")
+                    .then(|| BdAddr::new(crate::ble::profile::profile_address(address, profile)));
+                let adv = match profile_manager.bond_info(profile) {
                     #[cfg(feature = "dongle")]
-                    if profile != crate::ble::profile::DONGLE_PROFILE
-                        && profile_manager.is_bonded_dongle(&gatt_conn.raw().peer_identity())
-                    {
-                        warn!("[ble] dongle connected on a host profile");
-                        disconnect(&gatt_conn).await;
+                    Some(bond) if profile == DONGLE_PROFILE => Adv::Directed(bond.info.identity.addr),
+                    #[cfg(feature = "dongle")]
+                    None if profile == DONGLE_PROFILE => Adv::DongleSeeking,
+                    Some(_) => Adv::HostReconnect,
+                    None => Adv::Host { name: product_name },
+                };
+                let timeout = deadline.saturating_duration_since(Instant::now());
+                set_ble_state(BleState::Advertising);
+                match select3(
+                    advertise(&mut peripheral, &server.server, adv, local_address, timeout),
+                    profile_manager.update_profile(),
+                    Timer::at(deadline),
+                )
+                .await
+                {
+                    Either3::First(Ok(gatt_conn)) => {
+                        // A replaced advertisement can still deliver a late connection.
+                        #[cfg(feature = "ext_adv")]
+                        if gatt_conn.raw().local_address() != local_address {
+                            warn!("[ble] late connection belongs to another profile");
+                            disconnect(&gatt_conn).await;
+                            continue;
+                        }
+                        if let Some(bond) = profile_manager.bond_info(profile)
+                            && !bond.info.identity.match_identity(&gatt_conn.raw().peer_identity())
+                        {
+                            warn!("[ble] peer does not match its profile");
+                            disconnect(&gatt_conn).await;
+                            continue;
+                        }
+                        #[cfg(feature = "dongle")]
+                        if profile != DONGLE_PROFILE
+                            && profile_manager.is_bonded_dongle(&gatt_conn.raw().peer_identity())
+                        {
+                            warn!("[ble] dongle connected on a host profile");
+                            disconnect(&gatt_conn).await;
+                            continue;
+                        }
+                        if let Err(e) = gatt_conn.raw().set_bondable(true) {
+                            error!("Set bondable error: {:?}", e);
+                        }
+                        let conn = gatt_conn.raw().clone();
+                        incoming_conn.send((gatt_conn, profile)).await;
+                        let clear_slot = match select(conn_completed.receive(), profile_manager.update_profile()).await
+                        {
+                            Either::First(_) => None,
+                            Either::Second(clear_slot) => {
+                                conn.disconnect();
+                                conn_completed.receive().await;
+                                clear_slot
+                            }
+                        };
+                        set_ble_state(BleState::Inactive);
+                        clear_slot
+                    }
+                    Either3::First(Err(BleHostError::BleHost(Error::Timeout))) | Either3::Third(_) => {
+                        deadline = Instant::now();
                         continue;
                     }
-                    if let Err(e) = gatt_conn.raw().set_bondable(true) {
-                        error!("Set bondable error: {:?}", e);
+                    Either3::First(Err(e)) => {
+                        #[cfg(feature = "defmt")]
+                        let e = defmt::Debug2Format(&e);
+                        error!("Advertise error: {:?}", e);
+                        Timer::after_millis(200).await;
+                        continue;
                     }
-                    links[profile as usize] = Some(gatt_conn.raw().clone());
-                    incoming_conn.send((gatt_conn, profile)).await;
-                    if let Either::Second(clear_slot) =
-                        select(conn_completed.receive(), profile_manager.update_profile()).await
-                    {
-                        links[profile as usize].as_ref().unwrap().disconnect();
-                        conn_completed.receive().await;
-                        if let Some(slot) = clear_slot {
-                            profile_manager.clear_bond(slot);
-                        }
-                    }
-                    links[profile as usize].take();
-                    set_ble_state(BleState::Inactive);
-                    deadline = Instant::now() + Duration::from_secs(300);
+                    Either3::Second(clear_slot) => clear_slot,
                 }
-                Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
-                    deadline = Instant::now();
-                }
-                Either3::First(Err(e)) => {
-                    #[cfg(feature = "defmt")]
-                    let e = defmt::Debug2Format(&e);
-                    error!("Advertise error: {:?}", e);
-                    Timer::after_millis(200).await;
-                }
-                Either3::Second(clear_slot) => {
-                    if let Some(slot) = clear_slot {
-                        profile_manager.clear_bond(slot);
-                    }
-                    deadline = Instant::now() + Duration::from_secs(300);
-                }
-                Either3::Third(true) => {
-                    report_activity();
-                    deadline = Instant::now() + Duration::from_secs(300);
-                }
-                Either3::Third(false) => {}
+            };
+            if let Some(slot) = clear_slot {
+                profile_manager.clear_bond(slot);
             }
+            deadline = Instant::now() + Duration::from_secs(300);
         }
     };
 
@@ -1174,12 +1156,11 @@ pub(crate) async fn update_conn_params<
 mod tests {
     use std::sync::{Mutex, OnceLock};
 
-    use embassy_futures::join::join;
-    use embassy_futures::select::select;
-    use embassy_time::Timer;
+    use embassy_futures::select::select3;
+    use embassy_time::{Duration, MockDriver};
     use rmk_types::ble::{BleState, BleStatus};
 
-    use crate::event::{Axis, AxisEvent, AxisValType, KeyboardEvent, PointingEvent, SubscribableEvent, publish_event};
+    use crate::event::{Axis, AxisEvent, AxisValType, KeyboardEvent, PointingEvent, publish_event};
     use crate::state::{current_ble_status, set_ble_state, set_ble_status};
     use crate::test_support::test_block_on as block_on;
 
@@ -1262,38 +1243,87 @@ mod tests {
     }
 
     #[test]
-    fn wake_activity_includes_pointing_events() {
+    fn advertising_follows_slot_capacity_and_wakes_on_input() {
+        use bt_hci::controller::ExternalController;
+        use bt_hci::transport::{PacketToController, PacketToHost, Transport};
+
+        use super::{BOND_SLOTS, CONNECTIONS_MAX, DefaultPacketPool, HostResources, L2CAP_CHANNELS_MAX};
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+        use crate::config::{BleBatteryConfig, DeviceConfig};
+        use crate::state::CONNECTION_STATUS;
+
+        // Keep HCI setup pending to exercise the keyboard's outer deadline.
+        struct StalledTransport;
+        impl embedded_io_async::ErrorType for StalledTransport {
+            type Error = bt_hci::ReadHciError<core::convert::Infallible>;
+        }
+        impl Transport for StalledTransport {
+            async fn read<'a, P: PacketToHost<'a>>(&self, _: &'a mut [u8]) -> Result<P, Self::Error> {
+                core::future::pending().await
+            }
+
+            async fn write<P: PacketToController>(&self, _: &P) -> Result<(), Self::Error> {
+                core::future::pending().await
+            }
+        }
+
         let _guard = ble_status_test_lock().lock().unwrap();
+        crate::ble::rng::seed([7; 32]);
+        crate::test_support::clear_flash_channel();
+        crate::test_support::set_connection_status(Default::default());
+        BLE_PROFILE_CHANNEL.clear();
+        let mut resources =
+            HostResources::<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS>::new();
+        let stack = trouble_host::new(ExternalController::<_, 1>::new(StalledTransport), &mut resources).build();
 
         block_on(async {
-            let wake = async {
-                let mut key_wake = KeyboardEvent::subscriber();
-                let mut pointing_wake = PointingEvent::subscriber();
-                let _ = select(key_wake.next_message_pure(), pointing_wake.next_message_pure()).await;
-            };
-            join(wake, async {
-                Timer::after_millis(1).await;
-                publish_event(PointingEvent {
-                    device_id: 0,
-                    axes: [
-                        AxisEvent {
-                            typ: AxisValType::Rel,
-                            axis: Axis::X,
-                            value: 1,
-                        },
-                        AxisEvent {
-                            typ: AxisValType::Rel,
-                            axis: Axis::Y,
-                            value: 0,
-                        },
-                        AxisEvent {
-                            typ: AxisValType::Rel,
-                            axis: Axis::Z,
-                            value: 0,
-                        },
-                    ],
-                })
-            })
+            let mut status = CONNECTION_STATUS.receiver().unwrap();
+            select3(
+                super::run_ble_keyboard(
+                    &stack,
+                    [1, 2, 3, 4, 5, 0xC6],
+                    &DeviceConfig::default(),
+                    &BleBatteryConfig::disabled(),
+                    #[cfg(feature = "host")]
+                    None,
+                ),
+                crate::test_support::drain_flash_channel(),
+                async {
+                    status.get_and(|s| s.ble.state == BleState::Advertising).await;
+                    for wake in 0..3 {
+                        MockDriver::get().advance(Duration::from_secs(300));
+                        status.get_and(|s| s.ble.state == BleState::Inactive).await;
+                        match wake {
+                            0 => publish_event(KeyboardEvent::key(0, 0, true)),
+                            1 => publish_event(PointingEvent {
+                                device_id: 0,
+                                axes: [
+                                    AxisEvent {
+                                        typ: AxisValType::Rel,
+                                        axis: Axis::X,
+                                        value: 1,
+                                    },
+                                    AxisEvent {
+                                        typ: AxisValType::Rel,
+                                        axis: Axis::Y,
+                                        value: 0,
+                                    },
+                                    AxisEvent {
+                                        typ: AxisValType::Rel,
+                                        axis: Axis::Z,
+                                        value: 0,
+                                    },
+                                ],
+                            }),
+                            _ if BOND_SLOTS > 1 => BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await,
+                            _ => BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearSlot(0)).await,
+                        }
+                        let resumed = status.get_and(|s| s.ble.state == BleState::Advertising).await;
+                        assert_eq!(resumed.ble.profile, u8::from(wake == 2 && BOND_SLOTS > 1));
+                    }
+                },
+            )
             .await;
         });
     }
