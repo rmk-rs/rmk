@@ -21,6 +21,8 @@ watchdog = []
 ## Validate `STN()` steno key names against the Plover HID chart. Forwarded by
 ## rmk's `steno` feature.
 steno = ["rmk-types/steno"]
+## Allow authoring opt-in ordered tap-hold profiles
+buffered_tap_hold = []
 ## Expose the `run_tests!` simulator-scenario macro (rmk test suite only)
 _simulator = ["dep:toml", "dep:serde", "dep:serde_json"]
 ## Base DFU code generation, pulled by `dfu_rp`/`dfu_nrf`

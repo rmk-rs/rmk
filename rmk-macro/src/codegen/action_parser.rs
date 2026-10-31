@@ -186,6 +186,10 @@ pub(crate) fn expand_profile(profile: &MorseProfile) -> proc_macro2::TokenStream
     };
 
     let hold_timeout_ms = expand_timeout("hold_timeout", &profile.hold_timeout_ms, 13);
+    let buffered_tap_hold = match profile.buffered_tap_hold {
+        Some(enabled) => quote! { .with_buffered_tap_hold(::core::option::Option::Some(#enabled)) },
+        None => quote! {},
+    };
     let gap_timeout_ms = expand_timeout("gap_timeout", &profile.gap_timeout_ms, 13);
     let quick_tap_timeout_ms =
         expand_timeout("quick_tap_timeout", &profile.quick_tap_timeout_ms, 13);
@@ -193,6 +197,7 @@ pub(crate) fn expand_profile(profile: &MorseProfile) -> proc_macro2::TokenStream
     quote! {
         rmk::types::morse::MorseProfile::new(#unilateral_tap, #mode, #hold_timeout_ms, #gap_timeout_ms)
             .with_enable_flow_tap(#enable_flow_tap)
+            #buffered_tap_hold
             .with_quick_tap_timeout_ms(#quick_tap_timeout_ms)
     }
 }
@@ -667,6 +672,7 @@ mod tests {
 
     fn profile(enable_flow_tap: Option<bool>) -> MorseProfile {
         MorseProfile {
+            buffered_tap_hold: None,
             enable_flow_tap,
             unilateral_tap: Some(true),
             permissive_hold: None,

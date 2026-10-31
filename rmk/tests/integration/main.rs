@@ -10,6 +10,8 @@
 // subset of it — so per-row dead code is expected, not a finding.
 #![allow(dead_code)]
 
+#[cfg(feature = "buffered_tap_hold")]
+mod ordered;
 mod simulator;
 
 #[cfg(feature = "_ble")]

@@ -256,7 +256,7 @@ fn expand_main(
     let device_config = expand_device_config(identity, hardware);
     let usb_init = expand_usb_init(hardware, &item_mod);
     let flash_init = expand_flash_init(hardware, hardware.dfu.as_ref());
-    let behavior_config = expand_behavior_config(behavior);
+    let behavior_config = expand_behavior_config(behavior, cfg!(feature = "buffered_tap_hold"));
     let matrix_config = expand_matrix_config(hardware, rmk_features);
     let output_config = expand_output_config(hardware);
     let keymap_and_storage = expand_keymap_and_storage(hardware, keymap);

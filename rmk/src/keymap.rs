@@ -42,6 +42,12 @@ pub struct KeymapData<
     encoder_layer_cache: [[u8; 2]; NUM_ENCODER],
     /// Layer cache for touchpad gestures
     touch_layer_cache: [[u8; TouchGesture::COUNT]; NUM_TOUCHPAD],
+    #[cfg(feature = "buffered_tap_hold")]
+    physical_keys: [[bool; COL]; ROW],
+    #[cfg(feature = "buffered_tap_hold")]
+    physical_encoders: [[bool; 2]; NUM_ENCODER],
+    #[cfg(feature = "buffered_tap_hold")]
+    physical_touchpads: [[bool; TouchGesture::COUNT]; NUM_TOUCHPAD],
     /// VIA/Vial layout options; persisted via `LayoutOption`
     pub(crate) layout_option: u32,
     /// The macro buffer, see [`crate::keyboard::macros`].
@@ -75,6 +81,12 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             layer_cache: [[0; COL]; ROW],
             encoder_layer_cache: [[0u8; 2]; NUM_ENCODER],
             touch_layer_cache: [],
+            #[cfg(feature = "buffered_tap_hold")]
+            physical_keys: [[false; COL]; ROW],
+            #[cfg(feature = "buffered_tap_hold")]
+            physical_encoders: [[false; 2]; NUM_ENCODER],
+            #[cfg(feature = "buffered_tap_hold")]
+            physical_touchpads: [],
             layout_option: 0,
             #[cfg(feature = "host")]
             macros: [0; crate::MACRO_SPACE_SIZE],
@@ -100,6 +112,12 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
             layer_cache: self.layer_cache,
             encoder_layer_cache: self.encoder_layer_cache,
             touch_layer_cache: [[0u8; TouchGesture::COUNT]; NUM_TOUCHPAD],
+            #[cfg(feature = "buffered_tap_hold")]
+            physical_keys: self.physical_keys,
+            #[cfg(feature = "buffered_tap_hold")]
+            physical_encoders: self.physical_encoders,
+            #[cfg(feature = "buffered_tap_hold")]
+            physical_touchpads: [[false; TouchGesture::COUNT]; NUM_TOUCHPAD],
             layout_option: self.layout_option,
             #[cfg(feature = "host")]
             macros: self.macros,
@@ -144,6 +162,14 @@ struct KeyMapInner<'a> {
     encoder_layer_cache: &'a mut [u8],
     /// Layer cache for touchpad gestures: num_touchpad * TouchGesture::COUNT
     touch_layer_cache: &'a mut [u8],
+    #[cfg(feature = "buffered_tap_hold")]
+    physical_keys: &'a mut [bool],
+    #[cfg(feature = "buffered_tap_hold")]
+    physical_encoders: &'a mut [bool],
+    #[cfg(feature = "buffered_tap_hold")]
+    physical_touchpads: &'a mut [bool],
+    #[cfg(feature = "buffered_tap_hold")]
+    physical_down: usize,
     /// Behavior configuration
     behavior: &'a mut BehaviorConfig,
     /// Hand info: row * col (read-only)
@@ -451,6 +477,14 @@ impl<'a> KeyMap<'a> {
                 layer_cache,
                 encoder_layer_cache,
                 touch_layer_cache,
+                #[cfg(feature = "buffered_tap_hold")]
+                physical_keys: data.physical_keys.as_mut_slice().as_flattened_mut(),
+                #[cfg(feature = "buffered_tap_hold")]
+                physical_encoders: data.physical_encoders.as_mut_slice().as_flattened_mut(),
+                #[cfg(feature = "buffered_tap_hold")]
+                physical_touchpads: data.physical_touchpads.as_mut_slice().as_flattened_mut(),
+                #[cfg(feature = "buffered_tap_hold")]
+                physical_down: 0,
                 behavior,
                 hand,
                 mouse_buttons: 0,
@@ -513,6 +547,23 @@ impl<'a> KeyMap<'a> {
 
     pub(crate) fn get_action_with_layer_cache(&self, event: KeyboardEvent) -> KeyAction {
         self.inner.borrow_mut().get_action_with_layer_cache(event)
+    }
+
+    #[cfg(feature = "buffered_tap_hold")]
+    pub(crate) fn peek_action(&self, source: KeyboardEventSource) -> KeyAction {
+        let inner = self.inner.borrow();
+        for layer in (0..inner.num_layer).rev() {
+            if inner.layer_state[layer] || layer as u8 == inner.behavior.default_layer {
+                let action = inner.get_action_at(source, layer);
+                if action != KeyAction::Transparent {
+                    return action;
+                }
+            }
+            if layer as u8 == inner.behavior.default_layer {
+                break;
+            }
+        }
+        KeyAction::No
     }
 
     pub(crate) fn get_action_at(&self, source: KeyboardEventSource, layer: usize) -> KeyAction {
@@ -707,6 +758,54 @@ impl<'a> KeyMap<'a> {
 
     pub(crate) fn morse_default_profile(&self) -> MorseProfile {
         self.inner.borrow().behavior.morse.default_profile
+    }
+
+    #[cfg(feature = "buffered_tap_hold")]
+    pub(crate) fn has_buffered_tap_hold(&self) -> bool {
+        let inner = self.inner.borrow();
+        inner.behavior.morse.default_profile.buffered_tap_hold() == Some(true)
+            || inner
+                .behavior
+                .morse
+                .profiles
+                .iter()
+                .any(|profile| profile.buffered_tap_hold() == Some(true))
+    }
+
+    /// Track physical activity only, not action ownership, so a runtime policy
+    /// change cannot capture the release of a legacy-held layer or mouse action.
+    #[cfg(feature = "buffered_tap_hold")]
+    pub(crate) fn update_physical_input_state(&self, event: KeyboardEvent) -> bool {
+        let mut inner = self.inner.borrow_mut();
+        let idle_before = inner.physical_down == 0;
+        let slot = match event.source {
+            KeyboardEventSource::Key(pos) if (pos.row as usize) < inner.row && (pos.col as usize) < inner.col => {
+                let index = inner.cache_index(pos.row as usize, pos.col as usize);
+                inner.physical_keys.get_mut(index)
+            }
+            KeyboardEventSource::RotaryEncoder(pos) if pos.direction != Direction::None => {
+                let index = inner.encoder_cache_index(pos.id as usize, pos.direction as usize);
+                inner.physical_encoders.get_mut(index)
+            }
+            KeyboardEventSource::Touch(pos) => {
+                let index = inner.touch_cache_index(pos.id as usize, pos.gesture);
+                inner.physical_touchpads.get_mut(index)
+            }
+            _ => None,
+        };
+        let changed = slot.is_some_and(|pressed| {
+            let changed = *pressed != event.pressed;
+            *pressed = event.pressed;
+            changed
+        });
+        if changed {
+            if event.pressed {
+                inner.physical_down += 1;
+            } else {
+                inner.physical_down -= 1;
+            }
+        }
+        idle_before
     }
 
     /// Resolve a per-key morse profile by its table index: the table entry if

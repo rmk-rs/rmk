@@ -103,8 +103,20 @@ fn expand_morse_actions(
     }
 }
 
-fn expand_morse(morse: &Option<Morse>) -> proc_macro2::TokenStream {
+fn expand_morse(
+    morse: &Option<Morse>,
+    buffered_tap_hold_supported: bool,
+) -> proc_macro2::TokenStream {
     if let Some(config) = morse {
+        if !buffered_tap_hold_supported
+            && std::iter::once(&config.default_profile)
+                .chain(config.profiles.values())
+                .any(|profile| profile.buffered_tap_hold == Some(true))
+        {
+            panic!(
+                "keyboard.toml: buffered_tap_hold = true requires the `buffered_tap_hold` Cargo feature"
+            );
+        }
         let enable_flow_tap = config.enable_flow_tap;
         let enable_flow_tap_token = quote! { enable_flow_tap: #enable_flow_tap, };
 
@@ -537,7 +549,10 @@ fn expand_auto_mouse_layer(auto_mouse_layer: &[AutoMouseLayer]) -> proc_macro2::
     }
 }
 
-pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenStream {
+pub(crate) fn expand_behavior_config(
+    behavior: &Behavior,
+    buffered_tap_hold_supported: bool,
+) -> proc_macro2::TokenStream {
     let profiles = behavior
         .morse
         .as_ref()
@@ -550,7 +565,7 @@ pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenS
     let combos = expand_combos(&behavior.combos, &profiles);
     let macros = expand_macros(&behavior.macros);
     let forks = expand_forks(&behavior.forks, &profiles);
-    let morse = expand_morse(&behavior.morse);
+    let morse = expand_morse(&behavior.morse, buffered_tap_hold_supported);
     let auto_mouse_layer = expand_auto_mouse_layer(&behavior.auto_mouse_layer);
 
     quote! {
@@ -574,6 +589,40 @@ pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenS
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buffered_tap_hold_requires_engine_support() {
+        for flag in [None, Some(false), Some(true)] {
+            let morse = Some(Morse {
+                enable_flow_tap: false,
+                prior_idle_time_ms: 120,
+                default_profile: MorseProfile {
+                    buffered_tap_hold: flag,
+                    enable_flow_tap: None,
+                    unilateral_tap: None,
+                    permissive_hold: None,
+                    hold_on_other_press: None,
+                    normal_mode: None,
+                    hold_timeout_ms: Some(200),
+                    gap_timeout_ms: Some(250),
+                    quick_tap_timeout_ms: None,
+                },
+                profiles: HashMap::new(),
+                morses: Vec::new(),
+            });
+            let outcome = std::panic::catch_unwind(|| expand_morse(&morse, false));
+            assert_eq!(outcome.is_err(), flag == Some(true));
+            if let Err(error) = outcome {
+                let message = error
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| error.downcast_ref::<String>().map(String::as_str))
+                    .unwrap();
+                assert!(message.contains("requires the `buffered_tap_hold` Cargo feature"));
+            }
+            expand_morse(&morse, true);
+        }
+    }
 
     #[test]
     fn parse_state_combination_sets_bits_for_valid_states() {

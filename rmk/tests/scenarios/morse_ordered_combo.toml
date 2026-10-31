@@ -1,0 +1,48 @@
+# Admission bindings stay stable while execution waits for an ordered owner.
+keyboard = "boards/split.toml"
+features = ["buffered_tap_hold"]
+
+[behavior.morse]
+buffered_tap_hold = true
+hold_timeout = "200ms"
+normal_mode = true
+
+[behavior.combo]
+timeout = "50ms"
+combos = [
+  { actions = ["MT(B, LShift)", "MT(C, LGui)"], output = "X" },
+  { actions = ["MT(B, LShift)", "MT(C, LGui)", "LT(1, D)"], output = "Z" },
+]
+
+[[test]]
+name = "delayed_combo_retains_release_ownership"
+steps = [
+  { press = [1, 1] },
+  { press = [1, 7] },
+  { release = [1, 1] },
+  { release = [1, 7] },
+]
+expect = [["X"], []]
+
+[[test]]
+name = "failed_member_keeps_original_order"
+steps = [
+  { press = [1, 1] },
+  { tap = { pos = [1, 0], duration = 20 } },
+  { release = [1, 1] },
+]
+expect = [["B"], ["A", "B"], ["B"], []]
+
+[[test]]
+name = "captured_combo_executes_admitted_output_after_layer_hold"
+behavior.combo.combos = [{ actions = ["MT(B, LShift)", "MT(C, LGui)"], output = "X" }]
+steps = [
+  { press = [3, 5] },
+  { press = [1, 1] },
+  { press = [1, 7] },
+  { release = [1, 1] },
+  { release = [1, 7] },
+  { delay = 230 },
+  { release = [3, 5] },
+]
+expect = [["X"], []]

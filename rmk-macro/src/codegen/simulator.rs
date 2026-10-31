@@ -236,7 +236,8 @@ fn expand_test(
         steps.push(expectation(raw).map_err(|e| format!("{ctx}, expect[{i}]: {e}"))?);
     }
 
-    let behavior_stmt = expand_behavior_config(&behavior);
+    // Scenarios are expanded before their feature gates are applied by Rust.
+    let behavior_stmt = expand_behavior_config(&behavior, true);
     let features: Vec<&String> = file_features.iter().chain(&test.features).collect();
     // `[host]`'s lock gate and the layout blob are rynk types, so only a rynk
     // scenario can name them. Others keep the default `RmkConfig`, which is what

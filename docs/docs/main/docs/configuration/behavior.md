@@ -250,6 +250,67 @@ A profile contains the following fields:
   - Setting `quick_tap_timeout = "0ms"` explicitly disables quick-tap for that profile, even if a non-zero global default is configured. This lets you opt out on a per-profile basis. Omitting the field entirely causes the profile to inherit the global default.
   - A re-press within the window resolves as a tap even if a `double_tap` action is configured, so double-tapping faster than `quick_tap_timeout` produces two taps instead of the `double_tap` action.
 
+#### Opt-in ordered tap-hold
+
+Ordered tap-hold defers following key actions until an undecided tap-hold key
+resolves. This preserves key-down order during rolls and lets an early
+layer-tap chord use the resolved layer, even when the following key was
+released before the tapping term. It reuses the held-key buffer.
+
+Enable the `buffered_tap_hold` Cargo feature on your `rmk` dependency, then opt
+in through the default profile or a named profile:
+
+```toml
+[behavior.morse]
+buffered_tap_hold = true
+enable_flow_tap = false
+permissive_hold = true
+unilateral_tap = true
+hold_timeout = "200ms"
+quick_tap_timeout = "0ms"
+
+[behavior.morse.profiles.THUMB]
+normal_mode = true
+unilateral_tap = false
+
+[behavior.morse.profiles.LEGACY]
+buffered_tap_hold = false
+```
+
+The setting applies to physical matrix `MT`, `LT`, and `TH` keys. A named
+profile inherits the default when the field is omitted; explicit `false`
+overrides an enabled default. Named profiles can also enable it when the
+default is disabled. Morse/tap-dance definitions retain their existing
+resolution policy, although their input may wait behind an ordered key.
+
+Both the Cargo feature and the effective profile setting are required. With
+the feature disabled, or all profiles opted out, existing ordering remains
+unchanged. In mixed configurations an opted-out key can wait behind an older
+ordered key, but does not become an ordered decision owner itself.
+
+Flow-tap is independent: when enabled for a key, recent typing still forces
+its tap action. Disable it explicitly if you want subsequent chords to resolve
+through hold decisions instead. Quick-tap remains independently configurable.
+
+For an ordered key, Normal mode waits for release or timeout; PermissiveHold
+resolves when a following key is released; HoldOnOtherPress resolves on the
+following press. Unilateral filtering applies to following releases in
+PermissiveHold and to same-hand release evidence at timeout in Normal mode.
+HoldOnOtherPress still fires before unilateral release filtering can apply.
+Waiting for a decision adds latency of up to the tapping term to following
+actions. Already-emitted ordinary keys can release while a younger decision
+waits, so deferral does not unnecessarily prolong those keys.
+
+The buffer holds 16 press generations, including deferred repetitions and
+actions still waiting for their physical release. Under pressure, an unresolved
+ordered key can be resolved as a tap to drain pending work. If every slot still
+owns a held action and recovery cannot free one, a new press is rejected with a
+diagnostic; admitted releases are retained. If a combo cannot reserve output
+ownership, its waiting members are dispatched instead of triggering an unowned
+combo output. These are bounded-overload fallbacks, not unlimited lossless
+buffering. The feature adds per-record metadata; builds without it retain the
+original held-record layout.
+
 #### Default profile for Morse/TapDance/TapHold
 
 In the `[behavior.morse]` sub-table you can configure the default profile. If there's no explicit profile applied to a morse key, default profile will be used.

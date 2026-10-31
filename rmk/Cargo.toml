@@ -130,6 +130,9 @@ st7796 = ["lcd_async"]
 ## Enable async matrix scanning
 async_matrix = []
 
+## Enable opt-in ordered tap-hold using the held-key buffer
+buffered_tap_hold = ["rmk-macro/buffered_tap_hold"]
+
 ## Use 1M PHY toward the host.
 ## The dongle link and the split link are unaffected: they always run at 2M.
 use_1m_phy = []
@@ -356,4 +359,3 @@ rmk-macro = { path = "../rmk-macro", features = ["_simulator"] }
 # `serde/std` here would break `ssmarshal`, which implements `serde::de::Error`
 # without a `StdError` impl.
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
-

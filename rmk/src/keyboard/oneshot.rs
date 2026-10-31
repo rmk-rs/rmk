@@ -179,6 +179,10 @@ impl<'a> Keyboard<'a> {
     /// race; each deadline is re-checked against the current time, so a call
     /// before expiry is a no-op.
     pub(crate) async fn fire_oneshot_timeout(&mut self) {
+        #[cfg(feature = "buffered_tap_hold")]
+        if self.ordered_protects_oneshot() {
+            return;
+        }
         let now = Instant::now();
 
         if self.osm_deadline.is_some_and(|d| d <= now) {

@@ -1,0 +1,226 @@
+# Investigation cases for ordered tap-hold; no replacement engine yet.
+# Reuse the split fixture: A/Shift@(2,0), S/Gui@(2,1), V@(2,3),
+# M@(2,7), thumb D/layer1@(3,5), A/Kp1@(1,0), B/Shift@(1,1),
+# I@(1,12), Space@(3,4). These adapt the Urchin representative inputs.
+keyboard = "boards/split.toml"
+features = ["buffered_tap_hold"]
+
+[behavior.morse]
+buffered_tap_hold = true
+enable_flow_tap = false
+hold_timeout = "200ms"
+quick_tap_timeout = "0ms"
+permissive_hold = true
+unilateral_tap = true
+
+[behavior.morse.profiles.p0]
+normal_mode = true
+unilateral_tap = false
+
+[[test]]
+name = "same_hand_roll_keeps_second_tap_before_ordinary_key"
+# Previously, releasing A flushed V ahead of the unresolved S.
+# The historical harness waited 10ms before releasing the prefix, then
+# 30ms plus Down's 30ms gap before pressing the first home-row mod.
+steps = [
+  { delay = 1000 },
+  { press = [2, 7] },
+  { delay = 10 },
+  { release = [2, 7] },
+  { delay = 60 },
+  { press = [2, 0] },
+  { delay = 30 },
+  { press = [2, 1] },
+  { delay = 30 },
+  { press = [2, 3] },
+  { delay = 30 },
+  { release = [2, 0] },
+  { delay = 30 },
+  { release = [2, 1] },
+  { delay = 30 },
+  { release = [2, 3] },
+]
+expect = [["M"], [], ["A"], [], ["S"], ["S", "V"], ["V"], []]
+
+[[test]]
+name = "early_layer_chord_looks_up_following_key_after_hold"
+# Representative early chord, not a capture of the original failed quote.
+# Normal thumb must resolve at 200ms before A/Kp1 is emitted.
+steps = [
+  { delay = 1000 },
+  { press = [3, 5] },
+  { delay = 89 },
+  { press = [1, 0] },
+  { delay = 78 },
+  { release = [1, 0] },
+  { delay = 118 },
+  { release = [3, 5] },
+]
+expect = [["Kp1"], []]
+
+[[test]]
+name = "post_timeout_layer_chord_control"
+steps = [
+  { delay = 1000 },
+  { press = [3, 5] },
+  { delay = 210 },
+  { press = [1, 0] },
+  { delay = 70 },
+  { release = [1, 0] },
+  { delay = 50 },
+  { release = [3, 5] },
+]
+expect = [["Kp1"], []]
+
+[[test]]
+name = "capital_after_space_without_flow_tap_control"
+steps = [
+  { delay = 1000 },
+  { press = [3, 4] },
+  { delay = 76 },
+  { release = [3, 4] },
+  { delay = 43 },
+  { press = [1, 1] },
+  { delay = 97 },
+  { press = [1, 12] },
+  { delay = 53 },
+  { release = [1, 12] },
+  { delay = 96 },
+  { release = [1, 1] },
+]
+expect = [["Space"], [], ["LShift"], ["LShift", "I"], ["LShift"], []]
+
+[[test]]
+name = "flow_tap_still_forces_tap_after_recent_space"
+behavior.morse.enable_flow_tap = true
+steps = [
+  { delay = 1000 },
+  { press = [3, 4] },
+  { delay = 76 },
+  { release = [3, 4] },
+  { delay = 43 },
+  { press = [1, 1] },
+  { delay = 97 },
+  { press = [1, 12] },
+  { delay = 53 },
+  { release = [1, 12] },
+  { delay = 96 },
+  { release = [1, 1] },
+]
+expect = [["Space"], [], ["B"], ["B", "I"], ["B"], []]
+
+[[test]]
+name = "opted_out_normal_keeps_legacy_report_order"
+behavior.morse = { buffered_tap_hold = false, permissive_hold = false, normal_mode = true, unilateral_tap = false }
+steps = [
+  { press = [1, 1] },
+  { tap = { pos = [1, 0], duration = 10 } },
+  { release = [1, 1] },
+]
+expect = [["A"], [], ["B"], []]
+
+[[test]]
+name = "profile_can_disable_ordering_under_enabled_default"
+behavior.morse.profiles.p1 = { buffered_tap_hold = false, normal_mode = true, unilateral_tap = false }
+steps = [
+  { press = [3, 7] },
+  { tap = { pos = [1, 0], duration = 10 } },
+  { release = [3, 7] },
+]
+expect = [["A"], [], ["B"], []]
+
+[[test]]
+name = "profile_can_enable_ordering_under_disabled_default"
+behavior.morse.buffered_tap_hold = false
+behavior.morse.profiles.p1 = { buffered_tap_hold = true, normal_mode = true, unilateral_tap = false }
+steps = [
+  { press = [3, 7] },
+  { tap = { pos = [1, 0], duration = 10 } },
+  { release = [3, 7] },
+]
+expect = [["B"], ["A", "B"], ["B"], []]
+
+[[test]]
+name = "repeated_source_keeps_both_deferred_taps"
+steps = [
+  { press = [3, 5] },
+  { tap = { pos = [1, 0], duration = 20 } },
+  { tap = { pos = [1, 0], duration = 20 } },
+  { delay = 200 },
+  { release = [3, 5] },
+]
+expect = [["Kp1"], [], ["Kp1"], []]
+
+[[test]]
+name = "key_up_releases_executed_binding_after_layer_deactivation"
+steps = [
+  { press = [3, 5] },
+  { delay = 89 },
+  { press = [1, 0] },
+  { delay = 196 },
+  { release = [3, 5] },
+  { delay = 65 },
+  { release = [1, 0] },
+  { tap = { pos = [1, 0], duration = 20 } },
+]
+expect = [["Kp1"], [], ["A"], []]
+
+[[test]]
+name = "encoder_uses_layer_resolved_before_its_deferred_execution"
+steps = [
+  { press = [3, 5] },
+  { rotary_cw = 0 },
+  { delay = 220 },
+  { release = [3, 5] },
+]
+expect = [["PageDown"], []]
+
+[[test]]
+name = "hold_on_other_press_ignores_unilateral_release_filter"
+behavior.morse = { permissive_hold = false, hold_on_other_press = true }
+steps = [
+  { press = [1, 1] },
+  { press = [1, 0] },
+  { release = [1, 1] },
+  { release = [1, 0] },
+]
+expect = [["LShift"], ["LShift", "A"], ["A"], []]
+
+[[test]]
+name = "one_shot_survives_expiry_while_ordered_owner_waits"
+behavior.one_shot.timeout = "100ms"
+steps = [
+  { tap = { pos = [0, 0], duration = 10 } },
+  { press = [0, 3] },
+  { delay = 150 },
+  { release = [0, 3] },
+]
+expect = [["LShift", "B"], []]
+
+[[test]]
+name = "live_mouse_deadlines_continue_while_owner_waits"
+steps = [
+  { press = [0, 8] },
+  { press = [3, 5] },
+  { delay = 280 },
+  { release = [0, 8] },
+  { release = [3, 5] },
+]
+expect = [{ mouse = { wheel = -1 } }, { mouse = { wheel = -1 } }, { mouse = { wheel = -1 } }, { mouse = { wheel = -1 } }, { mouse = {} }]
+
+[[test]]
+name = "three_same_hand_tap_holds_keep_press_order"
+steps = [
+  { press = [2, 0] },
+  { delay = 20 },
+  { press = [2, 1] },
+  { delay = 20 },
+  { press = [2, 2] },
+  { delay = 20 },
+  { release = [2, 0] },
+  { delay = 20 },
+  { release = [2, 1] },
+  { delay = 20 },
+  { release = [2, 2] },
+]
+expect = [["A"], [], ["S"], [], ["Z"], []]

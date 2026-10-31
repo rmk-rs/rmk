@@ -38,15 +38,16 @@ pub enum MorseMode {
 ///
 /// Bit layout of the inner `u64`:
 /// ```text
-/// 63        46 | 45      | 44           32 | 31  30 | 29       17 | 16  15 | 14  13   | 12       0
-/// reserved     | qt_set  | quick_tap_tm    | mode   | gap_timeout | uni_tap| flow_tap | hold_timeout
-///   (18b)      |  (1b)   |   (13b ms)      |  (2b)  |   (13b ms)  |  (2b)  |   (2b)   |  (13b ms)
+/// 63    48 | 47    46 | 45     | 44          32 | 31 30 | 29      17 | 16 15 | 14 13 | 12       0
+/// reserved | buffered | qt_set | quick_tap_tm   | mode  | gap_timeout| uni   | flow  | hold_timeout
+///  (16b)   |   (2b)   |  (1b)  |   (13b ms)     | (2b)  |  (13b ms)  | (2b)  | (2b)  | (13b ms)
 /// ```
 ///
 /// - `qt_set` (bit 45): when set, `quick_tap_timeout` is explicitly configured
 ///   (even if 0, which means "disabled"). When clear, the field is unset and
 ///   callers should fall back to the global default.
 /// - `quick_tap_timeout` (bits 44-32): quick-tap timeout in ms (max 8191).
+/// - `buffered` (bits 47-46): `00`/`01` = None, `10` = Some(false), `11` = Some(true)
 /// - `mode` (bits 31-30): `00` = None, `01` = PermissiveHold, `10` = HoldOnOtherPress, `11` = Normal
 /// - `flow_tap` (bits 14, 13): `00`/`01` = None, `10` = Some(false), `11` = Some(true)
 /// - `gap_timeout` (bits 29-17): gap timeout in ms (0 = None, max 8191)
@@ -70,6 +71,7 @@ const FLOW_TAP_MASK: u64 = FLOW_TAP_LOW_BIT | FLOW_TAP_HIGH_BIT;
 const MODE_MASK: u64 = 0xC000_0000;
 const QT_VALUE_MASK: u64 = TIMEOUT_MASK << 32;
 const QT_SET_BIT: u64 = 1 << 45;
+const BUFFERED_MASK: u64 = 3 << 46;
 
 const fn encode_timeout_ms(t: u16) -> u64 {
     if t > TIMEOUT_MAX_MS {
@@ -82,6 +84,24 @@ const fn encode_timeout_ms(t: u16) -> u64 {
 impl MorseProfile {
     pub const fn const_default() -> Self {
         Self(0)
+    }
+
+    /// Ordered tap-hold opt-in. `None` inherits the default profile's setting.
+    pub const fn buffered_tap_hold(self) -> Option<bool> {
+        match (self.0 & BUFFERED_MASK) >> 46 {
+            3 => Some(true),
+            2 => Some(false),
+            _ => None,
+        }
+    }
+
+    pub const fn with_buffered_tap_hold(self, enabled: Option<bool>) -> Self {
+        let bits = match enabled {
+            Some(true) => 3,
+            Some(false) => 2,
+            None => 0,
+        };
+        Self((self.0 & !BUFFERED_MASK) | (bits << 46))
     }
 
     /// If the previous key is on the same "hand", the current key will be determined as a tap
@@ -256,6 +276,7 @@ impl Serialize for MorseProfile {
             struct Repr {
                 unilateral_tap: Option<bool>,
                 enable_flow_tap: Option<bool>,
+                buffered_tap_hold: Option<bool>,
                 mode: Option<MorseMode>,
                 hold_timeout_ms: Option<u16>,
                 gap_timeout_ms: Option<u16>,
@@ -264,6 +285,7 @@ impl Serialize for MorseProfile {
             Repr {
                 unilateral_tap: self.unilateral_tap(),
                 enable_flow_tap: self.enable_flow_tap(),
+                buffered_tap_hold: self.buffered_tap_hold(),
                 mode: self.mode(),
                 hold_timeout_ms: self.hold_timeout_ms(),
                 gap_timeout_ms: self.gap_timeout_ms(),
@@ -283,6 +305,7 @@ impl<'de> Deserialize<'de> for MorseProfile {
             struct Repr {
                 unilateral_tap: Option<bool>,
                 enable_flow_tap: Option<bool>,
+                buffered_tap_hold: Option<bool>,
                 mode: Option<MorseMode>,
                 hold_timeout_ms: Option<u16>,
                 gap_timeout_ms: Option<u16>,
@@ -292,6 +315,7 @@ impl<'de> Deserialize<'de> for MorseProfile {
             Ok(
                 MorseProfile::new(r.unilateral_tap, r.mode, r.hold_timeout_ms, r.gap_timeout_ms)
                     .with_enable_flow_tap(r.enable_flow_tap)
+                    .with_buffered_tap_hold(r.buffered_tap_hold)
                     .with_quick_tap_timeout_ms(r.quick_tap_timeout_ms),
             )
         } else {
@@ -304,7 +328,7 @@ impl<'de> Deserialize<'de> for MorseProfile {
 #[cfg(feature = "wasm")]
 const _: () = {
     #[::wasm_bindgen::prelude::wasm_bindgen(typescript_custom_section)]
-    const TS_APPEND_CONTENT: &'static str = "export type MorseProfile = { unilateral_tap: boolean | undefined; enable_flow_tap: boolean | undefined; mode: MorseMode | undefined; hold_timeout_ms: number | undefined; gap_timeout_ms: number | undefined; quick_tap_timeout_ms: number | undefined; };";
+    const TS_APPEND_CONTENT: &'static str = "export type MorseProfile = { unilateral_tap: boolean | undefined; enable_flow_tap: boolean | undefined; buffered_tap_hold: boolean | undefined; mode: MorseMode | undefined; hold_timeout_ms: number | undefined; gap_timeout_ms: number | undefined; quick_tap_timeout_ms: number | undefined; };";
 };
 crate::wasm_object_abi!(MorseProfile, "MorseProfile");
 
@@ -810,6 +834,51 @@ mod tests {
         );
         assert_eq!(profile.unilateral_tap(), Some(true));
         assert_eq!(profile.enable_flow_tap(), Some(true));
+    }
+
+    #[test]
+    fn buffered_tap_hold_survives_human_readable_profile_roundtrip() {
+        let legacy = r#"{"mode":"Normal","hold_timeout_ms":200}"#;
+        let profile: MorseProfile = serde_json::from_str(legacy).unwrap();
+        assert_eq!(profile.buffered_tap_hold(), None);
+        for setting in [Some(true), Some(false), None] {
+            let configured = profile.with_buffered_tap_hold(setting);
+            let json = serde_json::to_value(configured).unwrap();
+            assert_eq!(json["buffered_tap_hold"], serde_json::to_value(setting).unwrap());
+            let decoded: MorseProfile = serde_json::from_value(json).unwrap();
+            assert_eq!(decoded, configured);
+        }
+    }
+
+    #[test]
+    fn buffered_tap_hold_preserves_existing_packed_profiles() {
+        // Literal legacy payload: normal mode, unilateral/flow tap enabled,
+        // 200ms hold, 150ms gap and an explicitly disabled quick-tap window.
+        let legacy = 0x2000_c12d_e0c8u64;
+        let original = MorseProfile::from(legacy);
+        assert_eq!(original.buffered_tap_hold(), None);
+        assert_eq!(core::mem::size_of::<MorseProfile>(), 8);
+        assert_eq!(MorseProfile::POSTCARD_MAX_SIZE, u64::POSTCARD_MAX_SIZE);
+        for (setting, packed) in [
+            (Some(true), legacy | (3 << 46)),
+            (Some(false), legacy | (2 << 46)),
+            (None, legacy),
+        ] {
+            let profile = original.with_buffered_tap_hold(setting);
+            assert_eq!(profile.buffered_tap_hold(), setting);
+            assert_eq!(u64::from(profile), packed);
+            assert_eq!(profile.with_buffered_tap_hold(None), original);
+            assert_eq!(profile.hold_timeout_ms(), Some(200));
+            assert_eq!(profile.gap_timeout_ms(), Some(150));
+            assert_eq!(profile.quick_tap_timeout_ms(), Some(0));
+            assert_eq!(profile.mode(), Some(MorseMode::Normal));
+            assert_eq!(profile.unilateral_tap(), Some(true));
+            assert_eq!(profile.enable_flow_tap(), Some(true));
+            let mut encoded = [0; 10];
+            let bytes = postcard::to_slice(&profile, &mut encoded).unwrap();
+            assert_eq!(postcard::from_bytes::<u64>(bytes).unwrap(), packed);
+            assert_eq!(postcard::from_bytes::<MorseProfile>(bytes).unwrap(), profile);
+        }
     }
 
     #[test]

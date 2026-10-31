@@ -92,6 +92,7 @@ pub struct Morse {
 
 #[derive(Clone)]
 pub struct MorseProfile {
+    pub buffered_tap_hold: Option<bool>,
     pub enable_flow_tap: Option<bool>,
     pub unilateral_tap: Option<bool>,
     pub permissive_hold: Option<bool>,
@@ -192,6 +193,7 @@ impl crate::KeyboardTomlConfig {
             // Seeded rather than left `None` so the switch is stored and read
             // back over Rynk like the profile's other fields.
             let default_profile = MorseProfile {
+                buffered_tap_hold: m.buffered_tap_hold,
                 enable_flow_tap: Some(m.enable_flow_tap.unwrap_or(false)),
                 unilateral_tap: m.unilateral_tap,
                 permissive_hold: m.permissive_hold,
@@ -290,6 +292,7 @@ fn resolve_macro_operation(op: crate::MacroOperation) -> MacroOperation {
 
 fn resolve_morse_profile(p: &crate::MorseProfile) -> MorseProfile {
     MorseProfile {
+        buffered_tap_hold: p.buffered_tap_hold,
         enable_flow_tap: p.enable_flow_tap,
         unilateral_tap: p.unilateral_tap,
         permissive_hold: p.permissive_hold,
@@ -307,6 +310,42 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::{BehaviorConfig, KeyboardTomlConfig};
+
+    #[test]
+    fn buffered_tap_hold_resolves_explicit_overrides_without_enabling_legacy_defaults() {
+        for default in [None, Some(false), Some(true)] {
+            let flag = default
+                .map(|value| format!("buffered_tap_hold = {value}\n"))
+                .unwrap_or_default();
+            let source = format!(
+                r#"
+[layout]
+rows = 1
+cols = 1
+map = "(0,0)"
+[keymap]
+layers = 1
+[[keymap.layer]]
+keys = "A"
+[behavior.morse]
+{flag}
+[behavior.morse.profiles.enabled]
+buffered_tap_hold = true
+[behavior.morse.profiles.disabled]
+buffered_tap_hold = false
+[behavior.morse.profiles.inherited]
+hold_timeout = "200ms"
+"#
+            );
+            let config: KeyboardTomlConfig = toml::from_str(&source).unwrap();
+            let morse = config.behavior().unwrap().morse.unwrap();
+            assert_eq!(morse.default_profile.buffered_tap_hold, default);
+            assert_eq!(morse.profiles["enabled"].buffered_tap_hold, Some(true));
+            assert_eq!(morse.profiles["disabled"].buffered_tap_hold, Some(false));
+            assert_eq!(morse.profiles["inherited"].buffered_tap_hold, None);
+            assert_eq!(morse.profiles["inherited"].hold_timeout_ms, Some(200));
+        }
+    }
 
     #[test]
     fn morse_profile_enable_flow_tap_resolves_as_override() {
