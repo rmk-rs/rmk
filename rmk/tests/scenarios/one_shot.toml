@@ -307,10 +307,10 @@ steps = [
   { tap = { pos = [0, 2], duration = 10 } },  # Control: OSM still armed here
 ]
 expect = [
-  { mouse = { wheel = -1 } },
-  { mouse = { wheel = -1 } },  # repeat while OSM armed
-  { mouse = { wheel = -1 } },  # repeat while OSM armed
-  { mouse = { wheel = -1 } },  # repeat while OSM armed
+  { mouse = { wheel = 1 } },
+  { mouse = { wheel = 1 } },  # repeat while OSM armed
+  { mouse = { wheel = 1 } },  # repeat while OSM armed
+  { mouse = { wheel = 1 } },  # repeat while OSM armed
   { mouse = {} },
   ["LShift", "A"],
   [],
