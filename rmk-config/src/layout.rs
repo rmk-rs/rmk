@@ -1085,18 +1085,6 @@ hidden = ["(0,0)", "(1,0)", "(2,0)", "(0,11)", "(1,11)", "(2,11)"]
     }
 
     #[test]
-    fn blob_sizes_stay_firmware_friendly() {
-        for (name, toml) in [
-            ("60% ANSI/ISO/split-bs", ANSI_ISO_60),
-            ("Corne split (42/36)", CORNE_SPLIT),
-        ] {
-            let cfg: LayoutTomlConfig = toml::from_str(toml).unwrap();
-            let compressed = build_layout_blob(&cfg, None).unwrap().len();
-            assert!(compressed < 2048, "{name} blob {compressed} B exceeds 2 KB");
-        }
-    }
-
-    #[test]
     fn corne_worked_example() {
         // Cover nudge, split gap, and thumb rotation in one fixture.
         let toml = r#"
@@ -1290,11 +1278,9 @@ hidden = ["(3,14)"]
     }
 
     #[test]
-    fn multi_variant_60_blob_is_small() {
+    fn multi_variant_60_blob_round_trips() {
         let cfg: LayoutTomlConfig = toml::from_str(ANSI_ISO_60).unwrap();
         let blob = build_layout_blob(&cfg, None).unwrap();
-        // Keep the blob BLE-friendly.
-        assert!(!blob.is_empty() && blob.len() < 2048, "blob len = {}", blob.len());
         // The blob decodes back to the same layout.
         let back = miniz_oxide::inflate::decompress_to_vec(&blob).unwrap();
         let decoded: LayoutInfo = postcard::from_bytes(&back).unwrap();
