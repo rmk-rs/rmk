@@ -154,12 +154,6 @@ struct DfuStringProvider {
 }
 
 impl Handler for DfuStringProvider {
-    fn control_out(&mut self, _req: Request, _data: &[u8]) -> Option<OutResponse> {
-        None
-    }
-    fn control_in<'a>(&'a mut self, _req: Request, _buf: &'a mut [u8]) -> Option<InResponse<'a>> {
-        None
-    }
     fn get_string(&mut self, index: StringIndex, _lang_id: u16) -> Option<&'static str> {
         (index == self.string_idx).then_some(self.string_val)
     }
