@@ -141,28 +141,6 @@ impl<BUS: SpiBus, CS: OutputPin> W25qNorFlash<BUS, CS> {
         res?;
         self.wait_wip().await
     }
-
-    async fn sector_erase(&mut self, addr: u32) -> Result<(), W25qError<BUS::Error>> {
-        self.write_enable().await?;
-        let cmd = [CMD_SECTOR_ERASE, (addr >> 16) as u8, (addr >> 8) as u8, addr as u8];
-        self.cs.set_low().ok();
-        let res = self.bus.write(&cmd).await.map_err(W25qError::Spi);
-        self.cs.set_high().ok();
-        res?;
-        self.verify_wip_set().await?;
-        self.wait_wip().await
-    }
-
-    async fn block_erase_64k(&mut self, addr: u32) -> Result<(), W25qError<BUS::Error>> {
-        self.write_enable().await?;
-        let cmd = [CMD_BLOCK_ERASE_64K, (addr >> 16) as u8, (addr >> 8) as u8, addr as u8];
-        self.cs.set_low().ok();
-        let res = self.bus.write(&cmd).await.map_err(W25qError::Spi);
-        self.cs.set_high().ok();
-        res?;
-        self.verify_wip_set().await?;
-        self.wait_wip().await
-    }
 }
 
 #[derive(Debug)]
@@ -225,13 +203,20 @@ impl<BUS: SpiBus, CS: OutputPin> NorFlash for W25qNorFlash<BUS, CS> {
     async fn erase(&mut self, mut from: u32, to: u32) -> Result<(), Self::Error> {
         while from < to {
             let remaining = to - from;
-            if remaining >= BLOCK64_SIZE && from.is_multiple_of(BLOCK64_SIZE) {
-                self.block_erase_64k(from).await?;
-                from += BLOCK64_SIZE;
+            let (opcode, size) = if remaining >= BLOCK64_SIZE && from.is_multiple_of(BLOCK64_SIZE) {
+                (CMD_BLOCK_ERASE_64K, BLOCK64_SIZE)
             } else {
-                self.sector_erase(from).await?;
-                from += SECTOR_SIZE;
-            }
+                (CMD_SECTOR_ERASE, SECTOR_SIZE)
+            };
+            self.write_enable().await?;
+            let cmd = [opcode, (from >> 16) as u8, (from >> 8) as u8, from as u8];
+            self.cs.set_low().ok();
+            let res = self.bus.write(&cmd).await.map_err(W25qError::Spi);
+            self.cs.set_high().ok();
+            res?;
+            self.verify_wip_set().await?;
+            self.wait_wip().await?;
+            from += size;
         }
         Ok(())
     }
