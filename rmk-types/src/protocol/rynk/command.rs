@@ -325,6 +325,10 @@ endpoints! {
     SwitchBleProfile = 0x0704: u8 => ();
     #[cfg(feature = "_ble")]
     ClearBleProfile = 0x0705: u8 => ();
+    #[cfg(feature = "_ble")]
+    GetBleBackgroundConnections = 0x0706: () => bool;
+    #[cfg(feature = "_ble")]
+    SetBleBackgroundConnections = 0x0707: bool => ();
 
     // Status (0x08xx).
     GetCurrentLayer = 0x0801: () => u8;

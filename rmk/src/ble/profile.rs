@@ -92,6 +92,7 @@ impl Default for ProfileInfo {
 pub(crate) enum BleProfileAction {
     Switch(u8),
     Pair(u8),
+    SetBackgroundConnections(bool),
     Previous,
     Next,
     ClearBond,
