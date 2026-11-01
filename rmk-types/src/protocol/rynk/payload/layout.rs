@@ -3,12 +3,12 @@
 //! `GetLayout` streams an opaque, compressed blob the firmware never decodes —
 //! it just copies `blob[offset..offset+N]` into [`LayoutChunk`]. `rmk-config`
 //! produces the bytes at build time; the host inflates the assembled bytes and
-//! decodes them into its own `LayoutInfo` (defined in the host crate, not here,
-//! so this `#![no_std]` crate stays alloc-free). Only [`LayoutChunk`] is a wire
-//! type, so only it needs `MaxSize`.
+//! decodes them with `rmk_config::layout::LayoutInfo`, re-exported by
+//! `rynk::layout`. This `#![no_std]` crate stays alloc-free; only [`LayoutChunk`]
+//! needs `MaxSize`.
 //!
-//! The blob carries no version byte of its own: its postcard schema (the host
-//! `LayoutInfo` and its `rmk-config` mirror) is part of the wire contract, so
+//! The blob carries no version byte of its own: the shared `LayoutInfo`
+//! postcard schema is part of the wire contract, so
 //! reshaping it — including appending a field — is a protocol **major** bump,
 //! exactly like reshaping any response payload.
 
