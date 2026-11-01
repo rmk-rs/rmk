@@ -6,7 +6,8 @@
 # `MO(1)` at (0,3) adds a second layer for the rollover cases below: layer 1
 # row 1 pairs a plain keycode with its `SHIFTED()` twin, row 2 is four
 # distinct keycodes as a control. Layer 0 row 1 holds two `LShift` keys for
-# the shared-modifier case and a `WM()` mouse button.
+# the shared-modifier case and a `WM()` mouse button; row 2 holds two
+# `MouseBtn1` keys for the shared-button case.
 
 [layout]
 rows = 3
@@ -21,7 +22,7 @@ map = """
 keys = """
 AudioVolUp  SystemSleep  MouseRight  MO(1)
 LShift      LShift       WM(MouseBtn1, LCtrl)  No
-No          No           No                    No
+MouseBtn1   MouseBtn1    No                    No
 """
 
 [[keymap.layer]]
@@ -132,6 +133,17 @@ steps = [
   { release = [1, 1] },
 ]
 expect = [["LShift"], ["LShift"], ["LShift"], []]
+
+# The same holds for a mouse button: a drag survives releasing either key.
+[[test]]
+name = "shared_mouse_button_stays_down_until_last_holder_releases"
+steps = [
+  { press = [2, 0] },
+  { press = [2, 1] },
+  { release = [2, 0] },
+  { release = [2, 1] },
+]
+expect = [{ mouse = { buttons = 1 } }, { mouse = { buttons = 1 } }, { mouse = { buttons = 1 } }, { mouse = {} }]
 
 # Control: same roll shape over `-`, `7`, `8`, `9`, four distinct keycodes
 # with no collision. Plays clean, which rules out a general rollover or

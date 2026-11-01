@@ -7,9 +7,11 @@
 //! `MouseKeyConfig` as repeat count increases.
 
 use embassy_time::{Duration, Instant};
+use heapless::Vec;
 use rmk_types::keycode::HidKeyCode;
 
 use crate::config::MouseKeyConfig;
+use crate::event::{KeyboardEvent, KeyboardEventPos};
 use crate::hid::MouseReport;
 
 /// Result of processing a mouse key event.
@@ -142,6 +144,9 @@ impl DirectionState {
 
 pub(crate) struct MouseState {
     pub report: MouseReport,
+    /// Pressed button indices and who holds them, so a button shared by several
+    /// keys stays down until its last holder releases it.
+    button_holders: Vec<(KeyboardEventPos, u8), 16>,
     accel: u8,
     movement: DirectionState,
     wheel: DirectionState,
@@ -163,6 +168,7 @@ impl MouseState {
                 wheel: 0,
                 pan: 0,
             },
+            button_holders: Vec::new(),
             accel: 0,
             movement: DirectionState::default(),
             wheel: DirectionState::default(),
@@ -170,7 +176,8 @@ impl MouseState {
     }
 
     /// Process a mouse key event (press or release).
-    pub fn process(&mut self, key: HidKeyCode, pressed: bool, config: &MouseKeyConfig) -> MouseAction {
+    pub fn process(&mut self, key: HidKeyCode, event: KeyboardEvent, config: &MouseKeyConfig) -> MouseAction {
+        let pressed = event.pressed;
         if let Ok(category) = MouseCategory::try_from(key) {
             match category {
                 MouseCategory::Movement(direction) => {
@@ -192,11 +199,17 @@ impl MouseState {
                     return MouseAction::None;
                 }
                 MouseCategory::Button(index) => {
-                    if pressed {
-                        self.report.buttons |= 1 << index;
-                    } else {
-                        self.report.buttons &= !(1 << index);
+                    // A position holds one button, so a re-press replaces whatever a lost
+                    // release left there. A macro's buttons belong to nobody, so any
+                    // release of the same button frees them.
+                    self.button_holders.retain(|&(pos, i)| match pos {
+                        KeyboardEventPos::Macro => i != index,
+                        _ => pos != event.pos,
+                    });
+                    if pressed && self.button_holders.push((event.pos, index)).is_err() {
+                        warn!("Mouse button holders full, dropped {:?}", key);
                     }
+                    self.report.buttons = self.button_holders.iter().fold(0, |acc, &(_, i)| acc | 1 << i);
                     return MouseAction::SendReport;
                 }
             }
@@ -416,7 +429,7 @@ mod test {
     fn press_right_sets_positive_x() {
         let mut state = MouseState::new();
         let config = default_config();
-        let action = state.process(HidKeyCode::MouseRight, true, &config);
+        let action = state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         assert!(state.report.x > 0);
         assert_eq!(state.report.y, 0);
         assert_eq!(action, MouseAction::SendReport);
@@ -426,7 +439,7 @@ mod test {
     fn press_up_sets_negative_y() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseUp, true, &config);
+        state.process(HidKeyCode::MouseUp, KeyboardEvent::key(0, 0, true), &config);
         assert!(state.report.y < 0);
         assert_eq!(state.report.x, 0);
     }
@@ -435,8 +448,8 @@ mod test {
     fn release_clears_axis() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        let action = state.process(HidKeyCode::MouseRight, false, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        let action = state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, false), &config);
         assert_eq!(state.report.x, 0);
         assert_eq!(action, MouseAction::SendReport);
     }
@@ -445,9 +458,9 @@ mod test {
     fn button_press_and_release() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseBtn1, true, &config);
+        state.process(HidKeyCode::MouseBtn1, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(state.report.buttons, 1);
-        state.process(HidKeyCode::MouseBtn1, false, &config);
+        state.process(HidKeyCode::MouseBtn1, KeyboardEvent::key(0, 0, false), &config);
         assert_eq!(state.report.buttons, 0);
     }
 
@@ -457,9 +470,9 @@ mod test {
     fn opposite_x_cancels() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         assert!(state.report.x > 0);
-        state.process(HidKeyCode::MouseLeft, true, &config);
+        state.process(HidKeyCode::MouseLeft, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(state.report.x, 0, "Left+Right should cancel to 0");
     }
 
@@ -467,8 +480,8 @@ mod test {
     fn opposite_y_cancels() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseDown, true, &config);
-        state.process(HidKeyCode::MouseUp, true, &config);
+        state.process(HidKeyCode::MouseDown, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseUp, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(state.report.y, 0, "Up+Down should cancel to 0");
     }
 
@@ -476,10 +489,10 @@ mod test {
     fn opposite_release_restores() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseLeft, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseLeft, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(state.report.x, 0);
-        state.process(HidKeyCode::MouseLeft, false, &config);
+        state.process(HidKeyCode::MouseLeft, KeyboardEvent::key(0, 0, false), &config);
         assert!(state.report.x > 0, "Releasing Left should restore Right");
     }
 
@@ -487,8 +500,8 @@ mod test {
     fn opposite_wheel_cancels() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
-        state.process(HidKeyCode::MouseWheelDown, true, &config);
+        state.process(HidKeyCode::MouseWheelUp, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseWheelDown, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(state.report.wheel, 0);
     }
 
@@ -498,9 +511,9 @@ mod test {
     fn new_direction_preserves_repeat() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         state.movement.repeat = 10;
-        state.process(HidKeyCode::MouseDown, true, &config);
+        state.process(HidKeyCode::MouseDown, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(
             state.movement.repeat, 10,
             "Adding a new direction should not reset repeat"
@@ -511,9 +524,9 @@ mod test {
     fn direction_change_resets_repeat_on_cancel() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseDown, true, &config);
+        state.process(HidKeyCode::MouseDown, KeyboardEvent::key(0, 0, true), &config);
         state.movement.repeat = 10;
-        state.process(HidKeyCode::MouseUp, true, &config);
+        state.process(HidKeyCode::MouseUp, KeyboardEvent::key(0, 0, true), &config);
         // Opposite directions cancel → inactive → repeat resets
         assert_eq!(state.movement.repeat, 0, "Opposite cancel should reset repeat");
     }
@@ -522,12 +535,12 @@ mod test {
     fn repeat_resets_only_when_all_released() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseDown, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseDown, KeyboardEvent::key(0, 0, true), &config);
         state.movement.repeat = 10;
-        state.process(HidKeyCode::MouseDown, false, &config);
+        state.process(HidKeyCode::MouseDown, KeyboardEvent::key(0, 0, false), &config);
         assert_eq!(state.movement.repeat, 10, "Repeat should stay while Right is held");
-        state.process(HidKeyCode::MouseRight, false, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, false), &config);
         assert_eq!(state.movement.repeat, 0, "Repeat should reset when all released");
     }
 
@@ -535,11 +548,11 @@ mod test {
     fn wheel_repeat_independent() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseWheelUp, KeyboardEvent::key(0, 0, true), &config);
         state.movement.repeat = 10;
         state.wheel.repeat = 5;
-        state.process(HidKeyCode::MouseRight, false, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, false), &config);
         assert_eq!(state.movement.repeat, 0, "Movement repeat should reset");
         assert_eq!(state.wheel.repeat, 5, "Wheel repeat should be independent");
     }
@@ -550,9 +563,9 @@ mod test {
     fn duplicate_key_single_effect() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         let x_single = state.report.x;
-        let action = state.process(HidKeyCode::MouseRight, true, &config);
+        let action = state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(state.report.x, x_single, "Duplicate should not change magnitude");
         assert_eq!(
             action,
@@ -565,9 +578,9 @@ mod test {
     fn duplicate_release_one_keeps_axis() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseRight, false, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, false), &config);
         assert!(state.report.x > 0, "x should stay positive with one still held");
     }
 
@@ -575,11 +588,11 @@ mod test {
     fn duplicate_release_both_clears() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseRight, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         state.movement.repeat = 5;
-        state.process(HidKeyCode::MouseRight, false, &config);
-        state.process(HidKeyCode::MouseRight, false, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, false), &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, false), &config);
         assert_eq!(state.report.x, 0);
         assert_eq!(state.movement.repeat, 0, "Repeat should reset when all released");
     }
@@ -590,8 +603,8 @@ mod test {
     fn diagonal_both_axes_set() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseDown, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseDown, KeyboardEvent::key(0, 0, true), &config);
         assert!(state.report.x > 0);
         assert!(state.report.y > 0);
     }
@@ -600,8 +613,8 @@ mod test {
     fn diagonal_compensation_reduces() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseDown, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseDown, KeyboardEvent::key(0, 0, true), &config);
         let comp = state.get_report();
         assert!(comp.x < state.report.x, "Compensation should reduce diagonal x");
         assert!(comp.y < state.report.y, "Compensation should reduce diagonal y");
@@ -611,8 +624,8 @@ mod test {
     fn diagonal_repeat_both_axes_accelerate() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseDown, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseDown, KeyboardEvent::key(0, 0, true), &config);
         let initial_x = state.report.x;
         let initial_y = state.report.y;
 
@@ -632,7 +645,7 @@ mod test {
     fn single_axis_no_compensation() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         let comp = state.get_report();
         assert_eq!(comp.x, state.report.x);
         assert_eq!(comp.y, 0);
@@ -686,9 +699,9 @@ mod test {
     fn accel_press_only_modifies_state() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         let x_before = state.report.x;
-        let action = state.process(HidKeyCode::MouseAccel2, true, &config);
+        let action = state.process(HidKeyCode::MouseAccel2, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(action, MouseAction::None, "Accel should not send report");
         assert_eq!(
             state.report.x, x_before,
@@ -701,7 +714,7 @@ mod test {
     fn accel_without_direction_is_noop() {
         let mut state = MouseState::new();
         let config = default_config();
-        let action = state.process(HidKeyCode::MouseAccel0, true, &config);
+        let action = state.process(HidKeyCode::MouseAccel0, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(action, MouseAction::None);
         assert_eq!(state.report.x, 0);
     }
@@ -710,10 +723,10 @@ mod test {
     fn accel_release_only_modifies_state() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseAccel2, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseAccel2, KeyboardEvent::key(0, 0, true), &config);
         let x_before = state.report.x;
-        let action = state.process(HidKeyCode::MouseAccel2, false, &config);
+        let action = state.process(HidKeyCode::MouseAccel2, KeyboardEvent::key(0, 0, false), &config);
         assert_eq!(action, MouseAction::None, "Accel release should not send report");
         assert_eq!(
             state.report.x, x_before,
@@ -737,10 +750,10 @@ mod test {
     fn all_four_directions_cancel() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseUp, true, &config);
-        state.process(HidKeyCode::MouseDown, true, &config);
-        state.process(HidKeyCode::MouseLeft, true, &config);
-        state.process(HidKeyCode::MouseRight, true, &config);
+        state.process(HidKeyCode::MouseUp, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseDown, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseLeft, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(state.report.x, 0);
         assert_eq!(state.report.y, 0);
     }
@@ -749,9 +762,9 @@ mod test {
     fn three_directions_one_cancels() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseUp, true, &config);
-        state.process(HidKeyCode::MouseDown, true, &config);
-        state.process(HidKeyCode::MouseRight, true, &config);
+        state.process(HidKeyCode::MouseUp, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseDown, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(state.report.y, 0, "Up+Down should cancel");
         assert!(state.report.x > 0, "Right should still be active");
     }
@@ -776,7 +789,7 @@ mod test {
     fn first_direction_schedules_repeat() {
         let mut state = MouseState::new();
         let config = default_config();
-        let action = state.process(HidKeyCode::MouseRight, true, &config);
+        let action = state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(action, MouseAction::SendReport);
         assert!(state.movement.deadline.is_some());
     }
@@ -785,9 +798,9 @@ mod test {
     fn second_direction_does_not_reschedule() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         let deadline_after_first = state.movement.deadline;
-        let action = state.process(HidKeyCode::MouseDown, true, &config);
+        let action = state.process(HidKeyCode::MouseDown, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(action, MouseAction::SendReport);
         // Deadline unchanged — repeat was already running
         assert_eq!(state.movement.deadline, deadline_after_first);
@@ -797,7 +810,7 @@ mod test {
     fn wheel_first_schedules_repeat() {
         let mut state = MouseState::new();
         let config = default_config();
-        let action = state.process(HidKeyCode::MouseWheelUp, true, &config);
+        let action = state.process(HidKeyCode::MouseWheelUp, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(action, MouseAction::SendReport);
         assert!(state.wheel.deadline.is_some());
     }
@@ -806,7 +819,7 @@ mod test {
     fn button_returns_send_report() {
         let mut state = MouseState::new();
         let config = default_config();
-        let action = state.process(HidKeyCode::MouseBtn1, true, &config);
+        let action = state.process(HidKeyCode::MouseBtn1, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(action, MouseAction::SendReport);
     }
 
@@ -814,8 +827,8 @@ mod test {
     fn release_accel_without_active_returns_none() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseAccel0, true, &config);
-        let action = state.process(HidKeyCode::MouseAccel0, false, &config);
+        state.process(HidKeyCode::MouseAccel0, KeyboardEvent::key(0, 0, true), &config);
+        let action = state.process(HidKeyCode::MouseAccel0, KeyboardEvent::key(0, 0, false), &config);
         assert_eq!(action, MouseAction::None);
     }
 
@@ -825,7 +838,7 @@ mod test {
     fn on_repeat_tick_increments_and_recalculates() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         assert_eq!(state.movement.repeat, 1);
         let x_initial = state.report.x;
 
@@ -841,7 +854,7 @@ mod test {
     fn on_repeat_tick_schedules_next_deadline() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
         // Clear the deadline set by process so we can verify on_repeat_tick sets it
         state.movement.deadline = None;
         state
@@ -901,8 +914,8 @@ mod test {
         let mut state = MouseState::new();
         let config = default_config();
 
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseWheelUp, KeyboardEvent::key(0, 0, true), &config);
 
         // Only movement is due.
         state.movement.deadline = Some(Instant::MIN);
@@ -922,8 +935,8 @@ mod test {
         let mut state = MouseState::new();
         let config = default_config();
 
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseWheelUp, KeyboardEvent::key(0, 0, true), &config);
 
         state.movement.deadline = Some(Instant::now() + Duration::from_secs(60));
         state.wheel.deadline = Some(Instant::now() + Duration::from_secs(60));
@@ -940,8 +953,8 @@ mod test {
         let mut state = MouseState::new();
         let config = default_config();
 
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
+        state.process(HidKeyCode::MouseRight, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseWheelUp, KeyboardEvent::key(0, 0, true), &config);
 
         state.movement.deadline = Some(Instant::MIN);
         state.wheel.deadline = Some(Instant::MIN);
@@ -982,7 +995,7 @@ mod test {
         let config = default_config();
         let before = state.report;
 
-        let action = state.process(HidKeyCode::A, true, &config);
+        let action = state.process(HidKeyCode::A, KeyboardEvent::key(0, 0, true), &config);
 
         assert_eq!(action, MouseAction::None);
         assert_eq!(state.report, before);
@@ -994,8 +1007,8 @@ mod test {
         let mut state = MouseState::new();
         let config = default_config();
 
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
-        state.process(HidKeyCode::MouseWheelRight, true, &config);
+        state.process(HidKeyCode::MouseWheelUp, KeyboardEvent::key(0, 0, true), &config);
+        state.process(HidKeyCode::MouseWheelRight, KeyboardEvent::key(0, 0, true), &config);
 
         // Ensure wheel/pan magnitude is high enough so compensation is visible.
         state.accel = 1 << 2;
@@ -1016,7 +1029,7 @@ mod test {
     fn wheel_up_sets_negative_wheel() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
+        state.process(HidKeyCode::MouseWheelUp, KeyboardEvent::key(0, 0, true), &config);
         assert!(state.report.wheel < 0, "WheelUp should produce negative wheel");
         assert_eq!(state.report.pan, 0);
     }
@@ -1025,7 +1038,7 @@ mod test {
     fn wheel_right_sets_positive_pan() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseWheelRight, true, &config);
+        state.process(HidKeyCode::MouseWheelRight, KeyboardEvent::key(0, 0, true), &config);
         assert!(state.report.pan > 0, "WheelRight should produce positive pan");
         assert_eq!(state.report.wheel, 0);
     }
