@@ -109,6 +109,7 @@ for target, examples in targets.items():
             "target": target,
             "examples": bucket,
             "arm_gcc": any("nrf" in e["dir"] for e in bucket),
+            "cache": target.startswith("thumbv8m") or any("pi_pico_w" in e["dir"] for e in bucket),
             "bloat": any(e["bloat"] for e in bucket),
             "workspaces": "\n".join(
                 e["dir"] + " -> " + os.path.relpath("target/examples", e["dir"])

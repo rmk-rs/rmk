@@ -221,7 +221,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           components: ${{ matrix.bloat && github.event_name == 'pull_request' && 'llvm-tools' || '' }}
+      # Caching every example exceeded 10 GiB. Keep the expensive Pico W/ARMv8
+      # artifacts; other examples still share dependencies within each runner.
       - uses: Swatinem/rust-cache@v2
+        if: matrix.cache
         with:
           shared-key: ci-examples-${{ matrix.name }}
           workspaces: ${{ matrix.workspaces }}
