@@ -27,6 +27,8 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
+      check: ${{ steps.discover.outputs.check }}
+      test: ${{ steps.discover.outputs.test }}
       code: ${{ github.event_name == 'workflow_dispatch' || steps.paths.outputs.code == 'true' }}
       stable: ${{ steps.discover.outputs.stable }}
       esp: ${{ steps.discover.outputs.esp }}
@@ -72,13 +74,14 @@ jobs:
       - run: bash scripts/fetch_all.sh --check
 
   check:
+    name: ${{ matrix.name }}
     needs: discover
     if: needs.discover.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        include: ${{ fromJson(needs.discover.outputs.check) }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -94,7 +97,7 @@ jobs:
             rmk-types -> ../target/ci/check
           cache-bin: false
           save-if: ${{ github.event_name != 'pull_request' }}
-      - run: .github/ci/check.sh stable ${{ matrix.shard }} 3
+      - run: .github/ci/check.sh stable ${{ matrix.shard }} ${{ matrix.shards }}
 
   nightly:
     needs: discover
@@ -106,17 +109,14 @@ jobs:
       - run: .github/ci/check.sh nightly
 
   test:
+    name: ${{ matrix.name }}
     needs: discover
     if: needs.discover.outputs.code == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {group: types, shard: 0, shards: 1}
-          - {group: macro, shard: 0, shards: 1}
-          - {group: rmk, shard: 0, shards: 2}
-          - {group: rmk, shard: 1, shards: 2}
+        include: ${{ fromJson(needs.discover.outputs.test) }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable

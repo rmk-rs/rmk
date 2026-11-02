@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Discover buildable examples and emit GitHub Actions matrix JSON.
+# Discover CI partitions and buildable examples, then emit Actions matrices.
 # Outputs:
+#   check   — Clippy partitions
+#   test    — test groups and firmware behavior partitions
 #   stable  — target-specific groups of examples sharing one build directory
 #   esp     — JSON array of {dir, target} for xtensa/ESP examples
 set -euo pipefail
@@ -83,19 +85,37 @@ esp+=']'
 # Group small builds to share dependencies and runner setup. Pico W's
 # firmware-download dependencies and ARMv8 HALs make those builds heavier;
 # bloat entries also compile BASE.
-stable=$(EXAMPLES="$stable" python3 - <<'PY'
+EXAMPLES="$stable" ESP_EXAMPLES="$esp" \
+    CHECK_CONFIGS="${#RMK_FEATURESETS[@]}" TEST_CONFIGS="${#RMK_TEST_FEATURESETS[@]}" \
+    python3 - <<'PY'
 import collections
 import json
 import math
 import os
 
+# Bound runner setup and cache growth as more feature combinations are added.
+check_shards = min(3, int(os.environ["CHECK_CONFIGS"]))
+test_shards = min(2, int(os.environ["TEST_CONFIGS"]))
+checks = [{"shard": i, "shards": check_shards,
+           "name": f"Compile and Clippy / part {i + 1} of {check_shards}"}
+          for i in range(check_shards)]
+tests = [
+    {"group": "types", "shard": 0, "shards": 1, "name": "Tests / configuration and shared types"},
+    {"group": "macro", "shard": 0, "shards": 1, "name": "Tests / procedural macros"},
+    *({"group": "rmk", "shard": i, "shards": test_shards,
+       "name": f"Tests / firmware behavior part {i + 1} of {test_shards}"}
+      for i in range(test_shards)),
+]
+
+examples = json.loads(os.environ["EXAMPLES"])
+esp = json.loads(os.environ["ESP_EXAMPLES"])
 targets = collections.defaultdict(list)
-for example in json.loads(os.environ["EXAMPLES"]):
+for example in examples:
     targets[example["target"]].append(example)
 groups = []
-for target, examples in targets.items():
+for target, target_examples in targets.items():
     weighted = [(e, (2 if "pi_pico_w" in e["dir"] or target.startswith("thumbv8m") else 1)
-                 * (2 if e["bloat"] else 1)) for e in examples]
+                 * (2 if e["bloat"] else 1)) for e in target_examples]
     count = math.ceil(sum(weight for _, weight in weighted) / 4)
     buckets = [[] for _ in range(count)]
     weights = [0] * count
@@ -118,13 +138,13 @@ for target, examples in targets.items():
         })
 # Queue the expensive HEAD/BASE comparisons before the ordinary builds.
 groups.sort(key=lambda g: (not g["bloat"], not any("pi_pico_w" in e["dir"] for e in g["examples"])))
-print(json.dumps(groups, separators=(",", ":")))
+outputs = {"check": checks, "test": tests, "stable": groups, "esp": esp}
+with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+    for name, matrix in outputs.items():
+        print(f"{name}={json.dumps(matrix, separators=(',', ':'))}", file=output)
+print(f"Clippy partitions: {check_shards}")
+print(f"Test groups: {len(tests)}")
+print(f"Stable examples: {len(examples)}")
+print(f"ESP examples: {len(esp)}")
+print(f"Bloat examples: {sum(e['bloat'] for e in examples)}")
 PY
-)
-echo "stable=$stable" >> "$GITHUB_OUTPUT"
-echo "esp=$esp" >> "$GITHUB_OUTPUT"
-
-# Debug: show what was discovered
-echo "Stable examples: $(echo "$stable" | grep -o '"dir"' | wc -l | tr -d ' ')"
-echo "ESP examples: $(echo "$esp" | grep -o '"dir"' | wc -l | tr -d ' ')"
-echo "Bloat examples: $(jq '[.[].examples[] | select(.bloat)] | length' <<< "$stable")"
