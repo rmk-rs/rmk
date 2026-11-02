@@ -138,6 +138,8 @@ jobs:
         if: matrix.group == 'macro'
       - name: Install cargo-expand binary
         if: matrix.group == 'macro'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: cargo binstall --no-confirm --disable-strategies compile cargo-expand
       - run: .github/ci/test.sh ${{ matrix.group }} ${{ matrix.shard }} ${{ matrix.shards }}
 
@@ -229,6 +231,8 @@ jobs:
         if: startsWith(matrix.target, 'thumb')
       - name: Install flip-link binary
         if: startsWith(matrix.target, 'thumb')
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: cargo binstall --no-confirm --disable-strategies compile flip-link
       - name: Install ARM GCC
         if: matrix.arm_gcc
