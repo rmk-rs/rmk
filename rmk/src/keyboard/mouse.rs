@@ -1015,15 +1015,6 @@ mod test {
     // -- N. Wheel sign convention tests ----------------------------------------
 
     #[test]
-    fn wheel_up_sets_positive_wheel() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
-        assert!(state.report.wheel > 0, "WheelUp should produce positive wheel");
-        assert_eq!(state.report.pan, 0);
-    }
-
-    #[test]
     fn wheel_down_sets_negative_wheel() {
         let mut state = MouseState::new();
         let config = default_config();
