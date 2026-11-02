@@ -9,14 +9,13 @@ pub(crate) fn convert_output_pins_to_initializers(
 ) -> proc_macro2::TokenStream {
     let mut initializers = proc_macro2::TokenStream::new();
     let mut idents = vec![];
-    let pin_initializers = pins
-        .into_iter()
-        .map(|p| (p.clone(), convert_gpio_str_to_output_pin(chip, p, false)))
-        .map(|(p, ts)| {
-            let ident_name = format_ident!("{}", p.to_lowercase());
-            idents.push(ident_name.clone());
-            quote! { let #ident_name = #ts;}
-        });
+    let pin_initializers = pins.into_iter().map(|p| {
+        let name = p.to_lowercase();
+        let ts = convert_gpio_str_to_output_pin(chip, p, false);
+        let ident_name = format_ident!("{}", name);
+        idents.push(ident_name.clone());
+        quote! { let #ident_name = #ts;}
+    });
 
     initializers.extend(pin_initializers);
     let output_pin_type = get_output_pin_type(chip);
@@ -32,19 +31,13 @@ pub(crate) fn convert_input_pins_to_initializers(
 ) -> proc_macro2::TokenStream {
     let mut initializers = proc_macro2::TokenStream::new();
     let mut idents = vec![];
-    let pin_initializers = pins
-        .into_iter()
-        .map(|p| {
-            (
-                p.clone(),
-                convert_gpio_str_to_input_pin(chip, p, async_matrix, Some(false)),
-            )
-        })
-        .map(|(p, ts)| {
-            let ident_name = format_ident!("{}", p.to_lowercase());
-            idents.push(ident_name.clone());
-            quote! { let #ident_name = #ts;}
-        });
+    let pin_initializers = pins.into_iter().map(|p| {
+        let name = p.to_lowercase();
+        let ts = convert_gpio_str_to_input_pin(chip, p, async_matrix, Some(false));
+        let ident_name = format_ident!("{}", name);
+        idents.push(ident_name.clone());
+        quote! { let #ident_name = #ts;}
+    });
     initializers.extend(pin_initializers);
     let input_pin_type = get_input_pin_type(chip, async_matrix);
     let len = idents.len();
