@@ -110,12 +110,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-test
+          shared-key: ci-test-shared-v2
+          # The shared target also contains macrotest/trybuild workspaces.
+          # Per-workspace pruning would discard their build dependencies.
           workspaces: |
-            rmk -> ../target/ci/test
-            rmk-config -> ../target/ci/test
-            rmk-macro -> ../target/ci/test
-            rmk-types -> ../target/ci/test
+            rmk
+            rmk-config
+            rmk-macro
+            rmk-types
+          cache-targets: false
+          cache-directories: target/ci/test
           cache-bin: false
           save-if: ${{ github.event_name != 'pull_request' }}
       - uses: taiki-e/install-action@v2
@@ -212,7 +216,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: matrix.cache
         with:
-          shared-key: ci-examples-${{ matrix.name }}
+          shared-key: ci-examples-shared-v2-${{ matrix.name }}
           workspaces: ${{ matrix.workspaces }}
           cache-bin: false
           save-if: ${{ github.event_name != 'pull_request' }}

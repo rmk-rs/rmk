@@ -4,6 +4,8 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 
 export CARGO_TARGET_DIR="$repo_root/target/examples"
+# BASE keeps separate final binaries while reusing build dependencies.
+export CARGO_BUILD_BUILD_DIR="$CARGO_TARGET_DIR"
 export RUSTFLAGS="-D warnings --remap-path-prefix=$repo_root=/rmk-build --remap-path-prefix=$CARGO_TARGET_DIR=/rmk-target"
 
 if [[ "${COMPARE_BASE:-false}" == true ]]; then
@@ -23,7 +25,7 @@ while IFS=$'\t' read -r dir bloat bloat_bins; do
     base_dir="$base_worktree/$dir"
     if [[ -d "$base_dir" ]]; then
         (cd "$base_dir" && CARGO_TARGET_DIR="$repo_root/target/base" \
-            RUSTFLAGS="--remap-path-prefix=$base_worktree=/rmk-build --remap-path-prefix=$repo_root/target/base=/rmk-target" cargo build --release)
+            RUSTFLAGS="--remap-path-prefix=$base_worktree=/rmk-build --remap-path-prefix=$CARGO_BUILD_BUILD_DIR=/rmk-target" cargo build --release)
     fi
 
     outdir="$repo_root/bloat-data/${dir//\//_}"
