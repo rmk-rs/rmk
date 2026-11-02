@@ -81,7 +81,8 @@
 //!
 //! ## Multi-version dispatch
 //!
-//! [`RynkDevice::connect`] rejects only a protocol **major** mismatch. To
+//! [`RynkDevice::connect`] requires matching protocol majors. Before 1.0,
+//! minors must also match; from 1.0, any same-major minor is accepted. To
 //! support several majors at once, link one `rynk` build per major (cargo
 //! `package` renames) and probe with the newest first; the probe
 //! (`GetVersion`) is frozen across all majors by the protocol ICD,
