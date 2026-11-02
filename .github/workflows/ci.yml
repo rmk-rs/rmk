@@ -93,7 +93,7 @@ jobs:
             rmk-macro -> ../target/ci/check
             rmk-types -> ../target/ci/check
           cache-bin: false
-          save-if: ${{ (github.event_name != 'pull_request' || github.head_ref == 'ci-throughput') }}
+          save-if: ${{ github.event_name != 'pull_request' }}
       - run: .github/ci/check.sh stable ${{ matrix.shard }} 3
 
   nightly:
@@ -129,7 +129,7 @@ jobs:
             rmk-macro -> ../target/ci/test
             rmk-types -> ../target/ci/test
           cache-bin: false
-          save-if: ${{ (github.event_name != 'pull_request' || github.head_ref == 'ci-throughput') }}
+          save-if: ${{ github.event_name != 'pull_request' }}
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest@0.9
@@ -172,7 +172,7 @@ jobs:
           shared-key: ci-host
           workspaces: rynk -> ../target/ci/host
           cache-bin: false
-          save-if: ${{ (github.event_name != 'pull_request' || github.head_ref == 'ci-throughput') }}
+          save-if: ${{ github.event_name != 'pull_request' }}
       - run: .github/ci/host.sh
 
   qemu-rynk:
@@ -191,7 +191,7 @@ jobs:
             examples/use_rust/qemu-riscv-rynk
             rynk
           cache-bin: false
-          save-if: ${{ (github.event_name != 'pull_request' || github.head_ref == 'ci-throughput') }}
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Install QEMU
         run: |
           sudo apt-get update
@@ -229,7 +229,7 @@ jobs:
           shared-key: ci-examples-${{ matrix.name }}
           workspaces: ${{ matrix.workspaces }}
           cache-bin: false
-          save-if: ${{ (github.event_name != 'pull_request' || github.head_ref == 'ci-throughput') }}
+          save-if: ${{ github.event_name != 'pull_request' }}
       - uses: cargo-bins/cargo-binstall@main
         if: startsWith(matrix.target, 'thumb')
       - name: Install flip-link binary
@@ -322,7 +322,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: espup install --targets esp32s3 --toolchain-version "$ESP_RUST_VERSION" --skip-version-parse
       - uses: actions/cache/save@v5
-        if: (github.event_name != 'pull_request' || github.head_ref == 'ci-throughput') && steps.esp-toolchain.outputs.cache-hit != 'true'
+        if: github.event_name != 'pull_request' && steps.esp-toolchain.outputs.cache-hit != 'true'
         with:
           path: |
             ~/.rustup/toolchains/esp
@@ -335,7 +335,7 @@ jobs:
             examples/use_config/esp32s3_ble -> ../../../target-esp
             examples/use_rust/esp32s3_ble -> ../../../target-esp
           cache-bin: false
-          save-if: ${{ (github.event_name != 'pull_request' || github.head_ref == 'ci-throughput') }}
+          save-if: ${{ github.event_name != 'pull_request' }}
       - name: Build ESP examples
         run: |
           source "$HOME/export-esp.sh"

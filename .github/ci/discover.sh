@@ -116,6 +116,8 @@ for target, examples in targets.items():
                 for e in bucket
             ),
         })
+# Queue the expensive HEAD/BASE comparisons before the ordinary builds.
+groups.sort(key=lambda g: (not g["bloat"], not any("pi_pico_w" in e["dir"] for e in g["examples"])))
 print(json.dumps(groups, separators=(",", ":")))
 PY
 )
