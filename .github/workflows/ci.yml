@@ -43,7 +43,7 @@ jobs:
             code:
               - '**'
               - '!docs/**'
-              - '!README*'
+              - '!**/README*'
               - '!CHANGELOG.md'
               - '!AGENTS.md'
               - '!CLAUDE.md'
@@ -159,6 +159,7 @@ jobs:
         with:
           tool: wasm-pack
           fallback: none
+      # host.sh pins the npx TypeScript version; there is no Node project here.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -293,8 +294,33 @@ jobs:
         with:
           tool: espup
           fallback: none
+      - name: Resolve ESP toolchain versions
+        id: esp-version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "rust=$(gh api repos/esp-rs/rust-build/releases/latest --jq '.tag_name | ltrimstr("v")')" >> "$GITHUB_OUTPUT"
+          echo "espup=$(espup --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v5
+        id: esp-toolchain
+        with:
+          path: |
+            ~/.rustup/toolchains/esp
+            ~/export-esp.sh
+          key: esp-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ steps.esp-version.outputs.rust }}-${{ steps.esp-version.outputs.espup }}
       - name: Install esp toolchain
-        run: espup install
+        if: steps.esp-toolchain.outputs.cache-hit != 'true'
+        env:
+          ESP_RUST_VERSION: ${{ steps.esp-version.outputs.rust }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: espup install --targets esp32s3 --toolchain-version "$ESP_RUST_VERSION" --skip-version-parse
+      - uses: actions/cache/save@v5
+        if: github.event_name != 'pull_request' && steps.esp-toolchain.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.rustup/toolchains/esp
+            ~/export-esp.sh
+          key: ${{ steps.esp-toolchain.outputs.cache-primary-key }}
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-build-esp

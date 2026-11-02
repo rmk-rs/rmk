@@ -20,12 +20,12 @@ if [[ "$mode" != nightly ]]; then
         cargo +stable clippy --target-dir "$target_root/check" \
             --manifest-path rmk/Cargo.toml "${args[@]}" -- -D warnings
     done
-    if (( shard == 0 )); then
-        for crate in rmk rmk-config rmk-macro rmk-types; do
-            cargo +stable clippy --target-dir "$target_root/check" \
-                --manifest-path "$crate/Cargo.toml" -- -D warnings
-        done
-    fi
+    crates=(rmk rmk-config rmk-macro rmk-types)
+    for i in "${!crates[@]}"; do
+        (( i % shards == shard )) || continue
+        cargo +stable clippy --target-dir "$target_root/check" \
+            --manifest-path "${crates[$i]}/Cargo.toml" -- -D warnings
+    done
 fi
 
 if [[ "$mode" != stable ]]; then

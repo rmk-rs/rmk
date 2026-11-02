@@ -80,8 +80,9 @@ done < <(list_example_manifests)
 stable+=']'
 esp+=']'
 
-# Group small builds to share dependencies and runner setup. Bloat entries
-# compile both HEAD and BASE, so give them twice the scheduling weight.
+# Group small builds to share dependencies and runner setup. Pico W's
+# firmware-download dependencies and ARMv8 HALs make those builds heavier;
+# bloat entries also compile BASE.
 stable=$(EXAMPLES="$stable" python3 - <<'PY'
 import collections
 import json
@@ -93,13 +94,15 @@ for example in json.loads(os.environ["EXAMPLES"]):
     targets[example["target"]].append(example)
 groups = []
 for target, examples in targets.items():
-    count = math.ceil(sum(2 if e["bloat"] else 1 for e in examples) / 4)
+    weighted = [(e, (2 if "pi_pico_w" in e["dir"] or target.startswith("thumbv8m") else 1)
+                 * (2 if e["bloat"] else 1)) for e in examples]
+    count = math.ceil(sum(weight for _, weight in weighted) / 4)
     buckets = [[] for _ in range(count)]
     weights = [0] * count
-    for example in sorted(examples, key=lambda e: (not e["bloat"], e["dir"])):
+    for example, weight in sorted(weighted, key=lambda item: (-item[1], item[0]["dir"])):
         index = min(range(count), key=lambda i: weights[i])
         buckets[index].append(example)
-        weights[index] += 2 if example["bloat"] else 1
+        weights[index] += weight
     for index, bucket in enumerate(buckets):
         groups.append({
             "name": f"{target}-{index}",
