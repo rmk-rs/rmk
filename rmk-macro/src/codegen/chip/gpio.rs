@@ -151,9 +151,11 @@ pub(crate) fn convert_gpio_str_to_persisted_output_pin(
 ) -> proc_macro2::TokenStream {
     let initializer = convert_gpio_str_to_output_pin(chip, gpio_name, initial_level_high);
     match chip.series {
-        ChipSeries::Stm32 | ChipSeries::Esp32 | ChipSeries::Rp2040 => {
+        ChipSeries::Stm32 | ChipSeries::Rp2040 => {
             quote! { ::core::mem::forget(#initializer); }
         }
+        // esp-hal's Output has no Drop handler; the pin keeps its configuration.
+        ChipSeries::Esp32 => quote! { let _ = #initializer; },
         ChipSeries::Nrf52 => {
             quote! { #initializer.persist();}
         }

@@ -203,12 +203,19 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
         }
         ChipSeries::Esp32 => {
             let ble_addr = get_ble_addr(hardware, peripheral_id);
+            // S31 BLE requires the newer esp-rtos API, which allocates its own software interrupt.
+            let rtos_init = if hardware.chip.chip == "esp32s31" {
+                quote! { ::esp_rtos::start(timg0.timer0); }
+            } else {
+                quote! { ::esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0); }
+            };
             let battery = match peripheral_id {
                 Some(id) => &hardware.peripheral_batteries[id],
                 None => &hardware.battery,
             };
             // Battery measurement and the optional ADC entropy source both need ADC1.
-            let adc_entropy_init = if battery.adc.is_none() {
+            // ESP32-S31 has no HAL ADC entropy source; its enabled radio supplies entropy.
+            let adc_entropy_init = if battery.adc.is_none() && hardware.chip.chip != "esp32s31" {
                 quote! { let _trng_source = ::esp_hal::rng::TrngSource::new(p.RNG, p.ADC1); }
             } else {
                 quote! {}
@@ -218,7 +225,7 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                 let p = ::esp_hal::init(::esp_hal::Config::default().with_cpu_clock(::esp_hal::clock::CpuClock::max()));
                 ::esp_alloc::heap_allocator!(size: 72 * 1024);
                 let timg0 = ::esp_hal::timer::timg::TimerGroup::new(p.TIMG0);
-                ::esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
+                #rtos_init
                 #adc_entropy_init
                 let connector = ::esp_radio::ble::controller::BleConnector::new(p.BT, Default::default()).unwrap();
                 let ble_controller: ::bt_hci::controller::ExternalController<_, 64> = ::bt_hci::controller::ExternalController::new(connector);

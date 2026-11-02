@@ -1,0 +1,53 @@
+[package]
+name = "rmk-esp32s31"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "rmk-esp32s31"
+test = false
+bench = false
+
+[dependencies]
+rmk = { path = "../../../rmk", default-features = false, features = [
+    "esp32s31_ble",
+    "log",
+    "storage",
+    "rynk",
+    "dongle",
+    "async_matrix",
+] }
+embassy-executor = "0.10"
+esp-alloc = "0.11"
+esp-backtrace = { version = "0.20", features = ["esp32s31", "panic-handler", "println"] }
+esp-bootloader-esp-idf = { version = "0.6", features = ["esp32s31", "log-04"] }
+esp-hal = { version = "=1.2.0", features = ["esp32s31", "unstable"] }
+esp-println = { version = "0.18", default-features = false, features = ["esp32s31", "log-04", "uart"] }
+esp-radio = { version = "1.0.0-beta.2", features = ["esp32s31", "unstable", "ble"] }
+esp-rtos = { version = "0.4", features = ["esp32s31", "esp-radio", "embassy"] }
+esp-storage = { version = "0.10", features = ["embedded-storage", "esp32s31"] }
+bt-hci = "0.11"
+
+[profile.dev]
+opt-level = "s"
+
+[profile.dev.package.esp-storage]
+opt-level = 3
+
+# Includes unreleased S31 BLE support and the USB HS RX FIFO sizing fix.
+[patch.crates-io]
+esp-hal = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
+esp-alloc = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
+esp-backtrace = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
+esp-bootloader-esp-idf = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
+esp-println = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
+esp-radio = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
+esp-rtos = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
+esp-storage = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
+
+[profile.release]
+codegen-units = 1
+debug = 2
+lto = "thin"
+opt-level = 3
