@@ -33,11 +33,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       # Job-level filtering lets the final CI check complete for docs-only PRs.
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: paths
         if: github.event_name != 'workflow_dispatch'
         with:
-          base: ${{ github.event.before || github.base_ref }}
+          base: ${{ github.event_name == 'push' && github.event.before || '' }}
           predicate-quantifier: every
           filters: |
             code:
@@ -148,7 +148,7 @@ jobs:
           tool: wasm-pack
           fallback: none
       # host.sh pins the npx TypeScript version; there is no Node project here.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm

@@ -31,13 +31,6 @@ log_section() {
     printf "\n==> %s\n" "$1"
 }
 
-log_check() {
-    log_section "$1"
-    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-        printf -- '- %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
-    fi
-}
-
 # Broad rmk compile/clippy matrix; empty means only `--no-default-features`.
 RMK_FEATURESETS=(
     ""
