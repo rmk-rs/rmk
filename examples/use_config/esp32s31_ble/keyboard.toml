@@ -1,0 +1,49 @@
+[keyboard]
+name = "RMK Mosaico"
+product_name = "RMK Mosaico"
+vendor_id = 0x4c4b
+product_id = 0x4643
+manufacturer = "RMK"
+chip = "esp32s31"
+
+[matrix]
+matrix_type = "direct_pin"
+# Interaction module in the left H2 slot. Right H1: GPIO11, GPIO10.
+direct_pins = [["GPIO13", "GPIO12"]]
+direct_pin_low_active = true
+
+[[output]]
+# Enable the expansion module power rails.
+pin = "GPIO60"
+low_active = true
+initial_state_active = true
+
+[layout]
+rows = 1
+cols = 2
+map = "(0,0) (0,1)"
+
+[keymap]
+layers = 3
+
+[[keymap.layer]]
+keys = "LT(1, A) LT(2, B)"
+
+[[keymap.layer]]
+keys = "_ User8"
+
+[[keymap.layer]]
+keys = "User0 _"
+
+[host]
+vial_enabled = false
+rynk_enabled = true
+unlock_keys = [[0, 0]]
+
+[storage]
+# Last 64 KiB of Mosaico's 16 MiB NOR flash; matches partitions.csv.
+start_addr = 0xff0000
+num_sectors = 16
+
+[rmk]
+ble_profiles_num = 3

@@ -81,6 +81,11 @@ impl BatteryConfig {
             if chip.chip == "nrf52820" {
                 return Err("nrf52820 has no ADC for battery_adc_pin".into());
             }
+            if chip.chip == "esp32s31" {
+                return Err(
+                    "ESP32-S31 battery ADC calibration is unavailable in esp-hal; use a custom Rust reader".into(),
+                );
+            }
             if chip.series == ChipSeries::Stm32 {
                 return Err("Automatic battery ADC setup is unavailable for STM32; use a custom Rust reader".into());
             }

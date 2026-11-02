@@ -28,6 +28,7 @@ The following is the list of available feature gates (i.e., supported BLE chips)
 - esp32c6_ble
 - esp32h2_ble
 - esp32s3_ble
+- esp32s31_ble (requires the pinned ESP crates in the [ESP-Mosaico example](https://github.com/rmk-rs/rmk/tree/main/examples/use_config/esp32s31_ble))
 - pico_w_ble (for Raspberry Pi Pico W and Raspberry Pi Pico 2 W)
 - sf32lb52x_ble (Rust API only)
 

@@ -1,4 +1,5 @@
-#[cfg(feature = "_esp_ble")]
+// ESP32-S31 has no calibrated ADC driver in esp-hal yet.
+#[cfg(all(feature = "_esp_ble", not(feature = "esp32s31_ble")))]
 pub mod esp32;
 #[cfg(feature = "rp2040")]
 pub mod rp2040;
