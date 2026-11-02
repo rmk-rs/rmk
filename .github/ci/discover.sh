@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Discover buildable examples and emit GitHub Actions matrix JSON.
 # Outputs:
-#   stable  — JSON array of {dir, target, bloat, bloat_bins} for stable-toolchain examples
+#   stable  — target-specific groups of examples sharing one build directory
 #   esp     — JSON array of {dir, target} for xtensa/ESP examples
 set -euo pipefail
 
@@ -80,10 +80,45 @@ done < <(list_example_manifests)
 stable+=']'
 esp+=']'
 
+# Group small builds to share dependencies and runner setup. Bloat entries
+# compile both HEAD and BASE, so give them twice the scheduling weight.
+stable=$(EXAMPLES="$stable" python3 - <<'PY'
+import collections
+import json
+import math
+import os
+
+targets = collections.defaultdict(list)
+for example in json.loads(os.environ["EXAMPLES"]):
+    targets[example["target"]].append(example)
+groups = []
+for target, examples in targets.items():
+    count = math.ceil(sum(2 if e["bloat"] else 1 for e in examples) / 4)
+    buckets = [[] for _ in range(count)]
+    weights = [0] * count
+    for example in sorted(examples, key=lambda e: (not e["bloat"], e["dir"])):
+        index = min(range(count), key=lambda i: weights[i])
+        buckets[index].append(example)
+        weights[index] += 2 if example["bloat"] else 1
+    for index, bucket in enumerate(buckets):
+        groups.append({
+            "name": f"{target}-{index}",
+            "target": target,
+            "examples": bucket,
+            "arm_gcc": any("nrf" in e["dir"] for e in bucket),
+            "bloat": any(e["bloat"] for e in bucket),
+            "workspaces": "\n".join(
+                e["dir"] + " -> " + os.path.relpath("target/examples", e["dir"])
+                for e in bucket
+            ),
+        })
+print(json.dumps(groups, separators=(",", ":")))
+PY
+)
 echo "stable=$stable" >> "$GITHUB_OUTPUT"
 echo "esp=$esp" >> "$GITHUB_OUTPUT"
 
 # Debug: show what was discovered
 echo "Stable examples: $(echo "$stable" | grep -o '"dir"' | wc -l | tr -d ' ')"
 echo "ESP examples: $(echo "$esp" | grep -o '"dir"' | wc -l | tr -d ' ')"
-echo "Bloat examples: $(echo "$stable" | grep -o '"bloat":true' | wc -l | tr -d ' ')"
+echo "Bloat examples: $(jq '[.[].examples[] | select(.bloat)] | length' <<< "$stable")"

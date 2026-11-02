@@ -3,33 +3,41 @@ set -euo pipefail
 # shellcheck source=_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 
+group="${1:-all}"
+shard="${2:-0}"
+shards="${3:-1}"
+case "$group" in all|types|macro|rmk) ;; *) exit 2 ;; esac
+[[ "$shard" =~ ^[0-9]+$ && "$shards" =~ ^[1-9][0-9]*$ && "$shard" -lt "$shards" ]] || exit 2
+
 export CARGO_NET_OFFLINE=false
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$target_root/test}"
+nx=(nextest run --config-file "$repo_root/.config/nextest.toml" --profile ci)
 
-# Each crate is its own cargo workspace in this repo, so nextest's default
-# `<workspace>/.config/nextest.toml` lookup would miss our shared config at
-# repo root. Pass it explicitly.
-nextest_cfg="$repo_root/.config/nextest.toml"
-nx=(nextest run --config-file "$nextest_cfg" --profile ci)
+if [[ "$group" == all || "$group" == types ]]; then
+    log_section "Configuration and shared types"
+    cargo +stable "${nx[@]}" --manifest-path rmk-config/Cargo.toml
+    cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml
+    cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml --features host
+    cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml --features steno
 
-log_section "Running tests"
-cargo +stable "${nx[@]}" --manifest-path rmk-config/Cargo.toml
-cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml
-# Exercise the rynk protocol module (gated behind `rynk`).
-cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml --features host
-cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml --features steno
-cargo +stable "${nx[@]}" --manifest-path rmk-macro/Cargo.toml --features _simulator,steno
-for feats in "${RMK_TEST_FEATURESETS[@]}"; do
-    if [[ -z "$feats" ]]; then
-        cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features
-    else
-        cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features --features "$feats"
-    fi
-done
+    # nextest does not run doctests. rmk and rmk-macro disable them.
+    log_section "Doctests"
+    cargo +stable test --manifest-path rmk-types/Cargo.toml --doc
+    cargo +stable test --manifest-path rmk-types/Cargo.toml --features host --doc
+    cargo +stable test --manifest-path rmk-config/Cargo.toml --doc
+fi
 
-# Doctests: nextest does not run them. rmk/ and rmk-macro/ have `doctest = false`,
-# so only rmk-types and rmk-config need a separate --doc pass.
-log_section "Running doctests"
-cargo +stable test --manifest-path rmk-types/Cargo.toml --doc
-cargo +stable test --manifest-path rmk-types/Cargo.toml --features host --doc
-cargo +stable test --manifest-path rmk-config/Cargo.toml --doc
+if [[ "$group" == all || "$group" == macro ]]; then
+    log_section "Macro tests and expansion snapshots"
+    cargo +stable "${nx[@]}" --manifest-path rmk-macro/Cargo.toml --features _simulator,steno
+fi
+
+if [[ "$group" == all || "$group" == rmk ]]; then
+    log_section "RMK behavior (shard $shard/$shards)"
+    for i in "${!RMK_TEST_FEATURESETS[@]}"; do
+        (( i % shards == shard )) || continue
+        args=(--no-default-features)
+        [[ -z "${RMK_TEST_FEATURESETS[$i]}" ]] || args+=(--features "${RMK_TEST_FEATURESETS[$i]}")
+        cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml "${args[@]}"
+    done
+fi
