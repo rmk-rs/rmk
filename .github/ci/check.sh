@@ -4,29 +4,23 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 
 mode="${1:-all}"
-shard="${2:-0}"
-shards="${3:-1}"
 case "$mode" in all|stable|nightly) ;; *) exit 2 ;; esac
-[[ "$shard" =~ ^[0-9]+$ && "$shards" =~ ^[1-9][0-9]*$ && "$shard" -lt "$shards" ]] || exit 2
 
 if [[ "$mode" != nightly ]]; then
-    log_section "Stable Clippy (part $((shard + 1)) of $shards)"
+    log_section "Stable Clippy"
     # Clippy also type-checks each configuration; a separate cargo check
     # of these same manifests/features repeats the compilation.
-    for i in "${!RMK_FEATURESETS[@]}"; do
-        (( i % shards == shard )) || continue
+    for feats in "${RMK_FEATURESETS[@]}"; do
         args=(--no-default-features)
-        [[ -z "${RMK_FEATURESETS[$i]}" ]] || args+=(--features "${RMK_FEATURESETS[$i]}")
-        log_check "Clippy: rmk, default features disabled, features: ${RMK_FEATURESETS[$i]:-none}"
+        [[ -z "$feats" ]] || args+=(--features "$feats")
+        log_check "Clippy: rmk, default features disabled, features: ${feats:-none}"
         cargo +stable clippy --target-dir "$target_root/check" \
             --manifest-path rmk/Cargo.toml "${args[@]}" -- -D warnings
     done
-    crates=(rmk rmk-config rmk-macro rmk-types)
-    for i in "${!crates[@]}"; do
-        (( i % shards == shard )) || continue
-        log_check "Clippy: ${crates[$i]}, default features"
+    for crate in rmk rmk-config rmk-macro rmk-types; do
+        log_check "Clippy: $crate, default features"
         cargo +stable clippy --target-dir "$target_root/check" \
-            --manifest-path "${crates[$i]}/Cargo.toml" -- -D warnings
+            --manifest-path "$crate/Cargo.toml" -- -D warnings
     done
 fi
 

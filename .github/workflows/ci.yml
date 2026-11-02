@@ -27,8 +27,6 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      check: ${{ steps.discover.outputs.check }}
-      test: ${{ steps.discover.outputs.test }}
       code: ${{ github.event_name == 'workflow_dispatch' || steps.paths.outputs.code == 'true' }}
       stable: ${{ steps.discover.outputs.stable }}
       esp: ${{ steps.discover.outputs.esp }}
@@ -74,14 +72,9 @@ jobs:
       - run: bash scripts/fetch_all.sh --check
 
   check:
-    name: ${{ matrix.name }}
     needs: discover
     if: needs.discover.outputs.code == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.discover.outputs.check) }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -89,7 +82,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-check-${{ matrix.shard }}
+          shared-key: ci-check
           workspaces: |
             rmk -> ../target/ci/check
             rmk-config -> ../target/ci/check
@@ -97,7 +90,7 @@ jobs:
             rmk-types -> ../target/ci/check
           cache-bin: false
           save-if: ${{ github.event_name != 'pull_request' }}
-      - run: .github/ci/check.sh stable ${{ matrix.shard }} ${{ matrix.shards }}
+      - run: .github/ci/check.sh stable
 
   nightly:
     needs: discover
@@ -109,20 +102,15 @@ jobs:
       - run: .github/ci/check.sh nightly
 
   test:
-    name: ${{ matrix.name }}
     needs: discover
     if: needs.discover.outputs.code == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.discover.outputs.test) }}
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-test-${{ matrix.group }}-${{ matrix.shard }}
+          shared-key: ci-test
           workspaces: |
             rmk -> ../target/ci/test
             rmk-config -> ../target/ci/test
@@ -135,13 +123,11 @@ jobs:
           tool: nextest@0.9
           fallback: none
       - uses: cargo-bins/cargo-binstall@main
-        if: matrix.group == 'macro'
       - name: Install cargo-expand binary
-        if: matrix.group == 'macro'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: cargo binstall --no-confirm --disable-strategies compile cargo-expand
-      - run: .github/ci/test.sh ${{ matrix.group }} ${{ matrix.shard }} ${{ matrix.shards }}
+      - run: .github/ci/test.sh
 
   host:
     needs: discover
