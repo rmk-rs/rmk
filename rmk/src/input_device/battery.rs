@@ -200,7 +200,10 @@ mod tests {
     #[test]
     fn adc_divider_scales_voltage() {
         assert_eq!(BatteryProcessor::new(1, 5).get_battery_percent(800), Some(66));
-        assert_eq!(BatteryProcessor::new(u32::MAX, u32::MAX).get_battery_percent(4000), Some(66));
+        assert_eq!(
+            BatteryProcessor::new(u32::MAX, u32::MAX).get_battery_percent(4000),
+            Some(66)
+        );
     }
 
     #[test]
