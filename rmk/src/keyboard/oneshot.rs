@@ -164,7 +164,7 @@ impl<'a> Keyboard<'a> {
 
     pub(crate) fn update_osl(&mut self, event: KeyboardEvent) {
         match self.osl_state {
-            OneShotState::Initial(l) => self.osl_state = OneShotState::Held(l),
+            OneShotState::Initial(l) if event.pressed => self.osl_state = OneShotState::Held(l),
             OneShotState::Single(layer_num) if !event.pressed => {
                 self.osl_deadline = None;
                 self.keymap.deactivate_layer(layer_num);
