@@ -517,7 +517,6 @@ async fn run_ble_keyboard<
                     }
                     if let Err(e) = gatt_conn.raw().set_bondable(bond_info.is_none()) {
                         error!("Set bondable error: {:?}", e);
-                        disconnect(&gatt_conn).await;
                         continue;
                     }
                     host_connections[profile_id as usize] = Some(gatt_conn.raw().clone());
@@ -547,9 +546,7 @@ async fn run_ble_keyboard<
                             if slot != profile_id {
                                 if let Some(pairing) = profile_manager.repairing.get() {
                                     disconnect_profile(pairing, &mut host_connections, &completed).await;
-                                    profile_manager.cancel_pairing(pairing);
-                                }
-                                if NUM_HOST_LINKS == 1
+                                } else if NUM_HOST_LINKS == 1
                                     && let Some(conn) = &host_connections[profile_id as usize]
                                 {
                                     conn.disconnect();

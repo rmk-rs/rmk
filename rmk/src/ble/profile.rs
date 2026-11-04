@@ -257,19 +257,13 @@ where
         let Some(state) = self.profiles.get(info.slot_num as usize) else {
             return;
         };
-        let pairing_complete = self.repairing.get() == Some(info.slot_num);
-        let old = state.try_get();
-        if old.as_ref() == Some(&info) && !pairing_complete {
+        if self.repairing.get() == Some(info.slot_num) {
+            self.repairing.set(None);
+        } else if state.try_get().as_ref() == Some(&info) {
             return;
         }
-        let bond_changed = old.as_ref().is_none_or(|old| old.removed || old.info != info.info);
         state.sender().send(info);
-        if pairing_complete {
-            self.repairing.set(None);
-        }
-        if bond_changed || pairing_complete {
-            self.update_stack_bonds();
-        }
+        self.update_stack_bonds();
     }
 
     pub(crate) fn update_profile_cccd_table(&self, slot: u8, table: heapless::Vec<u8, CCCD_TABLE_SIZE>) {
@@ -326,6 +320,7 @@ where
 
     /// Apply a selected profile outside the cancellable action wait.
     pub(crate) fn switch_profile(&self, profile: u8, state: BleState) {
+        self.repairing.set(None);
         set_ble_status(BleStatus {
             profile,
             state,
@@ -414,6 +409,7 @@ mod tests {
             let old = ProfileInfo::default();
             manager.set_bond(old.clone());
             manager.start_pairing(0);
+            manager.update_profile_cccd_table(0, heapless::Vec::from_slice(&[1]).unwrap());
             manager.cancel_pairing(1);
             assert!(manager.bond_info(0).is_none());
             manager.cancel_pairing(0);
@@ -449,6 +445,7 @@ mod tests {
                 info.info.ltk = LongTermKey(slot.into());
                 manager.set_bond(info);
             }
+            manager.start_pairing(0);
             test_block_on(async {
                 for selected in [1, 0, 1] {
                     manager.switch_profile(selected, BleState::Inactive);
