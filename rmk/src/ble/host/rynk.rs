@@ -14,23 +14,12 @@ use crate::ble::ble_server::{RynkGattService, RynkHidService, Server};
 use crate::host::rynk::RynkService;
 use crate::host::transport::HostTransportError;
 
-/// Replies follow configuration writes. OS HOGP drivers may subscribe to HID
-/// notifications even when the client uses custom GATT.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RynkBleTransport {
-    /// No transport yet — drop topic pushes (no subscriber).
-    None,
-    /// Custom 128-bit `RynkGattService` (native hosts).
-    Custom,
-    /// Vendor HID-over-GATT `RynkHidService` (browsers over WebHID).
-    Hid,
-}
-
 /// Per-connection GATT write dispatcher for the two Rynk BLE transports.
 pub(crate) struct HostConnection<'a> {
     custom: &'a RynkGattService,
     hid: &'a RynkHidService,
-    reply_transport: Cell<RynkBleTransport>,
+    // Configuration writes select the reply route because the OS can subscribe to HID on its own.
+    reply_over_hid: Cell<bool>,
     pipe: Pipe<NoopRawMutex, 512>,
 }
 
@@ -39,27 +28,24 @@ impl<'a> HostConnection<'a> {
         Self {
             custom: &server.rynk_service,
             hid: &server.rynk_hid_service,
-            reply_transport: Cell::new(RynkBleTransport::None),
+            reply_over_hid: Cell::new(false),
             pipe: Pipe::new(),
         }
     }
 
     pub(crate) async fn handle_write(&self, handle: u16, data: &[u8], encrypted: bool) -> GattWriteResult {
-        if handle == self.custom.output_data.handle || handle == self.hid.output_data.handle {
+        let hid = handle == self.hid.output_data.handle;
+        if hid || handle == self.custom.output_data.handle {
             if !encrypted {
                 warn!("Rynk: dropping {}-byte write on unencrypted link", data.len());
                 return GattWriteResult::Handled;
             }
-            let reply_transport = if handle == self.custom.output_data.handle {
-                RynkBleTransport::Custom
-            } else if data.len() == RYNK_HID_REPORT_SIZE {
-                RynkBleTransport::Hid
-            } else {
+            if hid && data.len() != RYNK_HID_REPORT_SIZE {
                 warn!("Wrong Rynk HID report size: {}", data.len());
                 return GattWriteResult::Handled;
-            };
+            }
             if !data.is_empty() {
-                self.reply_transport.set(reply_transport);
+                self.reply_over_hid.set(hid);
                 self.pipe.write_all(data).await;
             }
             GattWriteResult::Handled
@@ -94,37 +80,26 @@ impl<P: PacketPool> ErrorType for RynkBleTx<'_, '_, '_, P> {
 
 impl<P: PacketPool> Write for RynkBleTx<'_, '_, '_, P> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-        match self.host.reply_transport.get() {
-            RynkBleTransport::Hid => {
-                for chunk in buf.chunks(RYNK_HID_REPORT_SIZE) {
-                    let mut report = [0u8; RYNK_HID_REPORT_SIZE];
-                    report[..chunk.len()].copy_from_slice(chunk);
-                    if let Err(e) = self.host.hid.input_data.notify(self.conn, &report, true).await {
-                        error!("Failed to notify Rynk HID reply: {:?}", e);
-                        return Err(HostTransportError);
-                    }
+        if self.host.reply_over_hid.get() {
+            for chunk in buf.chunks(RYNK_HID_REPORT_SIZE) {
+                let mut report = [0u8; RYNK_HID_REPORT_SIZE];
+                report[..chunk.len()].copy_from_slice(chunk);
+                if let Err(e) = self.host.hid.input_data.notify(self.conn, &report, true).await {
+                    error!("Failed to notify Rynk HID reply: {:?}", e);
+                    return Err(HostTransportError);
                 }
             }
-            RynkBleTransport::Custom => {
-                // Raw, MTU-chunked — a notify past ATT_MTU − 3 is silently
-                // truncated, not split, so a dropped tail would desync the host.
-                let max_notify = (self.conn.raw().att_mtu() as usize).saturating_sub(3);
-                let chunk_size = RYNK_BLE_CHUNK_SIZE.min(max_notify).max(1);
-                for chunk in buf.chunks(chunk_size) {
-                    let payload =
-                        Vec::<u8, RYNK_BLE_CHUNK_SIZE>::from_slice(chunk).expect("chunk size <= RYNK_BLE_CHUNK_SIZE");
-                    if let Err(e) = self.host.custom.input_data.notify(self.conn, &payload, true).await {
-                        error!("Failed to notify Rynk reply: {:?}", e);
-                        return Err(HostTransportError);
-                    }
+        } else {
+            // ATT notifications have a three-byte header. Larger payloads would be truncated.
+            let chunk_size = RYNK_BLE_CHUNK_SIZE.min(usize::from(self.conn.raw().att_mtu()) - 3);
+            for chunk in buf.chunks(chunk_size) {
+                let payload =
+                    Vec::<u8, RYNK_BLE_CHUNK_SIZE>::from_slice(chunk).expect("chunk size <= RYNK_BLE_CHUNK_SIZE");
+                if let Err(e) = self.host.custom.input_data.notify(self.conn, &payload, true).await {
+                    error!("Failed to notify Rynk reply: {:?}", e);
+                    return Err(HostTransportError);
                 }
             }
-            // No transport established yet — drop (e.g. a topic emitted before
-            // the host has written a request or subscribed for notifications).
-            RynkBleTransport::None => {}
         }
         Ok(buf.len())
     }
@@ -149,13 +124,19 @@ mod tests {
         let handler = HostConnection::new(&server);
 
         assert_eq!(
-            block_on(handler.handle_write(server.rynk_service.output_data.handle, &[], true)),
+            block_on(handler.handle_write(
+                server.rynk_hid_service.output_data.handle,
+                &[0; RYNK_HID_REPORT_SIZE],
+                true
+            )),
             GattWriteResult::Handled
         );
+        assert!(handler.reply_over_hid.get());
         assert_eq!(
-            block_on(handler.handle_write(server.rynk_hid_service.output_data.handle, &[], true,)),
+            block_on(handler.handle_write(server.rynk_service.output_data.handle, &[1], true)),
             GattWriteResult::Handled
         );
+        assert!(!handler.reply_over_hid.get());
         assert_eq!(
             block_on(handler.handle_write(server.rynk_service.input_data.cccd_handle.unwrap(), &[], true,)),
             GattWriteResult::CccdWrite
