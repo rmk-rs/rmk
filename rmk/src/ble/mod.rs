@@ -11,7 +11,7 @@ use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
 use embassy_futures::join::{join_array, join5};
-use embassy_futures::select::{Either, select, select6};
+use embassy_futures::select::{Either, select, select5};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
@@ -975,8 +975,6 @@ async fn serve_keyboard_connection<
     let mut status = CONNECTION_STATUS
         .receiver()
         .expect("connection status subscriber capacity exceeded");
-    #[cfg(feature = "host")]
-    let host = host_service.map(|_| HostConnection::new(server));
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
     #[cfg(feature = "split")]
     let mut ble_peripheral_battery_server = crate::SPLIT_BATTERY_PERIPHERAL_IDS
@@ -1044,14 +1042,18 @@ async fn serve_keyboard_connection<
     };
 
     #[cfg(feature = "host")]
-    let host_task = async {
-        match host.as_ref().zip(host_service) {
-            Some((host, service)) => host.run(conn, service).await,
-            None => core::future::pending().await,
+    let gatt_task = async {
+        match host_service {
+            Some(service) => {
+                let host = HostConnection::new(server);
+                let events = gatt_events_task(server, conn, profile_id, profile_manager, Some(&host));
+                select(events, host.run(conn, service)).await;
+            }
+            None => gatt_events_task(server, conn, profile_id, profile_manager, None).await,
         }
     };
     #[cfg(not(feature = "host"))]
-    let host_task = core::future::pending::<()>();
+    let gatt_task = gatt_events_task(server, conn, profile_id, profile_manager);
 
     // When dongle feature is enabled, send `DongleEvent` to the dongle.
     #[cfg(feature = "dongle")]
@@ -1064,19 +1066,11 @@ async fn serve_keyboard_connection<
     #[cfg(not(feature = "dongle"))]
     let dongle_event_task = core::future::pending::<()>();
 
-    select6(
-        gatt_events_task(
-            server,
-            conn,
-            profile_id,
-            profile_manager,
-            #[cfg(feature = "host")]
-            host.as_ref(),
-        ),
+    select5(
+        gatt_task,
         connection_params,
         battery_task,
         writer_task,
-        host_task,
         dongle_event_task,
     )
     .await;
