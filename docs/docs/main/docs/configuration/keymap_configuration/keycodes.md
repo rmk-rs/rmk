@@ -283,9 +283,11 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `MouseWheelDown`  | `mouse_wheel_down`, `ms_whld`                                            | Mouse wheel down           |
 | `MouseWheelLeft`  | `mouse_wheel_left`, `ms_whll`                                            | Mouse wheel left           |
 | `MouseWheelRight` | `mouse_wheel_right`, `ms_whlr`                                           | Mouse wheel right          |
-| `MouseAccel0`     | `mouse_accel_0`, `mouseacceleration0`, `mouse_acceleration_0`, `ms_acl0` | Mouse acceleration level 0 |
-| `MouseAccel1`     | `mouse_accel_1`, `mouseacceleration1`, `mouse_acceleration_1`, `ms_acl1` | Mouse acceleration level 1 |
-| `MouseAccel2`     | `mouse_accel_2`, `mouseacceleration2`, `mouse_acceleration_2`, `ms_acl2` | Mouse acceleration level 2 |
+| `MouseAccel0`     | `mouse_accel_0`, `mouseacceleration0`, `mouse_acceleration_0`, `ms_acl0` | Hold for slow movement or scrolling |
+| `MouseAccel1`     | `mouse_accel_1`, `mouseacceleration1`, `mouse_acceleration_1`, `ms_acl1` | Hold for medium movement or normal scrolling |
+| `MouseAccel2`     | `mouse_accel_2`, `mouseacceleration2`, `mouse_acceleration_2`, `ms_acl2` | Hold to sprint or scroll faster |
+
+See [mouse keys](../behavior#mouse-keys) for the speed of each level.
 
 ## Keyboard control keys
 

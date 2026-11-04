@@ -10,8 +10,41 @@ one_shot_modifiers = { activate_on_keypress = false }
 ```
 
 ::: note Rust API only
-`BehaviorConfig` has three fields with no `keyboard.toml` counterpart: `default_layer` (the base layer at startup), `tap` (`TapConfig`) and `mouse_key` (`MouseKeyConfig`, mouse-key acceleration; only its repeat intervals come from `[rmk].mouse_key_interval` and `[rmk].mouse_wheel_interval`). With `keyboard.toml` they keep their defaults; set them when you build `BehaviorConfig` in Rust.
+`default_layer` (the base layer at startup) and `tap` (`TapConfig`) can be set when you build `BehaviorConfig` in Rust.
 :::
+
+## Mouse keys
+
+Use `[behavior.mouse_key]` to tune keyboard-driven cursor movement and scrolling. Each field is optional.
+
+```toml
+[behavior.mouse_key]
+initial_speed = 150
+max_speed = 1200
+acceleration_time = "200ms"
+scroll_speed = 10
+```
+
+| Field | Default | Effect |
+| --- | --- | --- |
+| `initial_speed` | `0` | Starting cursor speed in HID counts per second, from 0 through `max_speed`. Raise it for more travel on short presses. |
+| `max_speed` | `600` | Cursor speed reached by holding a direction key, in counts per second (1–65535). |
+| `acceleration_time` | `"200ms"` | Time to reach `max_speed` from `initial_speed` on a linear ramp. Use `"0ms"` for constant speed. Accepts whole milliseconds or seconds, up to 65535ms. |
+| `scroll_speed` | `10` | Normal vertical and horizontal scroll rate in wheel units per second (1–65535). |
+
+Pressing a direction key immediately sends one count, even with zero initial speed. Holding it adds continuous movement. The host's pointer settings determine how far the cursor travels on screen. A wheel key starts with one scroll unit and repeats while held. An encoder bound to a wheel key scrolls once per detent.
+
+Hold a speed key with a direction or wheel key to select a fixed rate:
+
+| Key (also available in Vial) | Cursor | Wheel |
+| --- | --- | --- |
+| `MouseAccel0` (slow) | ¼ of `max_speed` | ¼ of `scroll_speed` |
+| `MouseAccel1` (medium) | ½ of `max_speed` | `scroll_speed` |
+| `MouseAccel2` (sprint) | 2 × `max_speed` | 2 × `scroll_speed` |
+
+For example, with `max_speed = 1200`, hold `MouseAccel2` while moving at full speed to sprint at 2400 counts/s. Releasing sprint resumes the normal ramp at the elapsed hold time. Returning to normal from slow or medium starts a fresh ramp. If you hold several speed keys, the lowest numbered key wins.
+
+With the Rust API, set `BehaviorConfig.mouse_key` to `MouseKeyConfig::new(150, 1200, 200, 10)` for the example above. The third argument is in milliseconds.
 
 ## Tri Layer
 

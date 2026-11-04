@@ -6,10 +6,7 @@ use rmk_types::keycode::KeyCode;
 use rmk_types::morse::{Morse, MorseMode, MorseProfile};
 
 use crate::keyboard::combo::Combo;
-use crate::{
-    AUTO_MOUSE_LAYER_MAX_NUM, COMBO_MAX_NUM, FORK_MAX_NUM, MORSE_MAX_NUM, MORSE_PROFILE_MAX_NUM, MOUSE_KEY_INTERVAL,
-    MOUSE_WHEEL_INTERVAL,
-};
+use crate::{AUTO_MOUSE_LAYER_MAX_NUM, COMBO_MAX_NUM, FORK_MAX_NUM, MORSE_MAX_NUM, MORSE_PROFILE_MAX_NUM};
 
 /// Config for configurable action behavior
 #[derive(Debug, Default)]
@@ -207,72 +204,60 @@ impl Default for ForksConfig {
     }
 }
 
-/// Config for mouse key behavior
+/// Cursor speeds are HID counts per second. Scrolling is measured in wheel units per second.
 #[derive(Clone, Copy, Debug)]
 pub struct MouseKeyConfig {
-    // Accelerated mode parameters
-    /// Initial delay between pressing a movement key and first cursor movement (in milliseconds)
-    pub initial_delay_ms: u16,
-    /// Time between subsequent cursor movements in milliseconds
-    pub repeat_interval_ms: u16,
-    /// Step size for each movement
-    pub move_delta: u8,
-    /// Maximum cursor speed at which acceleration stops
-    pub max_speed: u8,
-    /// Number of repeat ticks until maximum cursor speed is reached
-    pub ticks_to_max: u8,
-    /// Initial delay between pressing a wheel key and first wheel movement (in milliseconds)
-    pub wheel_initial_delay_ms: u16,
-    /// Time between subsequent wheel movements in milliseconds
-    pub wheel_repeat_interval_ms: u16,
-    /// Wheel movement step size
-    pub wheel_delta: u8,
-    /// Maximum wheel speed
-    pub wheel_max_speed: u8,
-    /// Number of repeat ticks until maximum wheel speed is reached
-    pub wheel_ticks_to_max: u8,
-    /// Maximum movement distance per report
-    pub move_max: u8,
-    /// Maximum wheel distance per report
-    pub wheel_max: u8,
+    initial_speed: u16,
+    max_speed: u16,
+    acceleration_time_ms: u16,
+    scroll_speed: u16,
 }
 
 impl Default for MouseKeyConfig {
     fn default() -> Self {
-        Self {
-            // Optimized values for comfortable and responsive mouse movement
-            initial_delay_ms: 100,                          // 100ms initial delay
-            repeat_interval_ms: MOUSE_KEY_INTERVAL,         // 20ms between movements
-            move_delta: 5,                                  // 5 pixels per movement (~250 px/sec)
-            max_speed: 3,                                   // Max speed multiplier (250 -> 750 px/sec)
-            ticks_to_max: 50,                               // 50 ticks to max speed (~1s)
-            wheel_initial_delay_ms: 100,                    // 100ms initial wheel delay
-            wheel_repeat_interval_ms: MOUSE_WHEEL_INTERVAL, // 80ms between wheel movements
-            wheel_delta: 1,                                 // 1 wheel unit per movement
-            wheel_max_speed: 2,                             // Wheel max speed multiplier
-            wheel_ticks_to_max: 40,                         // 40 ticks to max wheel speed (~3.2s)
-            move_max: 25,                                   // Maximum movement per report
-            wheel_max: 4,                                   // Maximum wheel movement per report
-        }
+        Self::DEFAULT
     }
 }
 
 impl MouseKeyConfig {
-    /// Get the appropriate delay for cursor movement based on repeat count
-    pub fn get_movement_delay(&self, repeat_count: u8) -> u16 {
-        if repeat_count == 0 {
-            self.initial_delay_ms
-        } else {
-            self.repeat_interval_ms
+    pub const DEFAULT: Self = Self::new(0, 600, 200, 10);
+
+    /// A zero acceleration time selects the maximum speed immediately.
+    ///
+    /// # Panics
+    /// Panics if the maximum or scroll speed is zero, or the initial speed exceeds the maximum.
+    pub const fn new(initial_speed: u16, max_speed: u16, acceleration_time_ms: u16, scroll_speed: u16) -> Self {
+        core::assert!(max_speed > 0, "behavior.mouse_key.max_speed must be positive");
+        core::assert!(
+            initial_speed <= max_speed,
+            "behavior.mouse_key.initial_speed must not exceed max_speed"
+        );
+        core::assert!(scroll_speed > 0, "behavior.mouse_key.scroll_speed must be positive");
+        Self {
+            initial_speed,
+            max_speed,
+            acceleration_time_ms,
+            scroll_speed,
         }
     }
 
-    /// Get the appropriate delay for wheel movement based on repeat count
-    pub fn get_wheel_delay(&self, repeat_count: u8) -> u16 {
-        if repeat_count == 0 {
-            self.wheel_initial_delay_ms
-        } else {
-            self.wheel_repeat_interval_ms
-        }
+    /// Starting cursor speed in HID counts per second.
+    pub const fn initial_speed(&self) -> u16 {
+        self.initial_speed
+    }
+
+    /// Normal cursor speed after acceleration, in HID counts per second.
+    pub const fn max_speed(&self) -> u16 {
+        self.max_speed
+    }
+
+    /// Duration of the normal cursor ramp in milliseconds.
+    pub const fn acceleration_time_ms(&self) -> u16 {
+        self.acceleration_time_ms
+    }
+
+    /// Normal horizontal and vertical scroll speed in wheel units per second.
+    pub const fn scroll_speed(&self) -> u16 {
+        self.scroll_speed
     }
 }
