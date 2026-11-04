@@ -32,7 +32,9 @@ scroll_speed = 10
 | `acceleration_time` | `"200ms"` | Time to reach `max_speed` from `initial_speed` on a linear ramp. Use `"0ms"` for constant speed. Accepts whole milliseconds or seconds, up to 65535ms. |
 | `scroll_speed` | `10` | Normal vertical and horizontal scroll rate in wheel units per second (1–65535). |
 
-Pressing a direction key immediately sends one count, even with zero initial speed. Holding it adds continuous movement. The host's pointer settings determine how far the cursor travels on screen. A wheel key starts with one scroll unit and repeats while held. An encoder bound to a wheel key scrolls once per detent.
+Pressing a direction key immediately sends one count, even with zero initial speed. Each update applies the current speed to the elapsed time, including the last interval when you release the key. During acceleration, update timing can therefore affect how far a short tap moves. The host's pointer settings determine how far the cursor travels on screen.
+
+A wheel key starts with one scroll unit and repeats while held. An encoder bound to a wheel key scrolls once per detent.
 
 Hold a speed key with a direction or wheel key to select a fixed rate:
 
