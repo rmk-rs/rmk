@@ -3,53 +3,33 @@ set -euo pipefail
 # shellcheck source=_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 
-# Emit "--- <cmd> ..." tuples for rmk (every feature set) plus the other
-# workspace crates. Tokens are literal or feature lists with no whitespace,
-# so relying on word-splitting at the call site is safe.
-emit_batch_args() {
-    local cmd="$1"
-    local feats
+mode="${1:-all}"
+case "$mode" in all|stable|nightly) ;; *) exit 2 ;; esac
+
+if [[ "$mode" != nightly ]]; then
+    log_section "Stable Clippy"
+    # Clippy also type-checks each configuration; a separate cargo check
+    # of these same manifests/features repeats the compilation.
     for feats in "${RMK_FEATURESETS[@]}"; do
-        if [[ -z "$feats" ]]; then
-            printf -- '--- %s --manifest-path rmk/Cargo.toml --no-default-features\n' "$cmd"
-        else
-            printf -- '--- %s --manifest-path rmk/Cargo.toml --no-default-features --features %s\n' "$cmd" "$feats"
-        fi
+        args=(--no-default-features)
+        [[ -z "$feats" ]] || args+=(--features "$feats")
+        log_section "Clippy: rmk, default features disabled, features: ${feats:-none}"
+        cargo +stable clippy --target-dir "$target_root/check" \
+            --manifest-path rmk/Cargo.toml "${args[@]}" -- -D warnings
     done
-    printf -- '--- %s --manifest-path rmk/Cargo.toml\n' "$cmd"
-    printf -- '--- %s --manifest-path rmk-config/Cargo.toml\n' "$cmd"
-    printf -- '--- %s --manifest-path rmk-macro/Cargo.toml\n' "$cmd"
-    printf -- '--- %s --manifest-path rmk-types/Cargo.toml\n' "$cmd"
-}
+    for crate in rmk rmk-config rmk-macro rmk-types; do
+        log_section "Clippy: $crate, default features"
+        cargo +stable clippy --target-dir "$target_root/check" \
+            --manifest-path "$crate/Cargo.toml" -- -D warnings
+    done
+fi
 
-log_section "Stable checks"
-# shellcheck disable=SC2046
-cargo +stable batch --target-dir "$target_root/check-stable" $(emit_batch_args check)
-
-log_section "Nightly smoke checks"
-cargo +nightly batch --target-dir "$target_root/check-nightly" \
-    --- check --manifest-path rmk/Cargo.toml --no-default-features \
-    --- check --manifest-path rmk/Cargo.toml --no-default-features --features split,vial,storage,passkey_entry
-
-log_section "Clippy"
-# cargo-batch only exposes a subset of cargo subcommands (build, check, ...) —
-# `clippy` is not supported, so we run it serially. Dedicated target dir
-# prevents conflicts with the check-stable fingerprints above.
-clippy_target="$target_root/clippy-stable"
-clippy_rmk() {
-    local feats="$1"
-    if [[ -z "$feats" ]]; then
-        cargo +stable clippy --target-dir "$clippy_target" \
-            --manifest-path rmk/Cargo.toml --no-default-features -- -D warnings
-    else
-        cargo +stable clippy --target-dir "$clippy_target" \
-            --manifest-path rmk/Cargo.toml --no-default-features --features "$feats" -- -D warnings
-    fi
-}
-for feats in "${RMK_FEATURESETS[@]}"; do
-    clippy_rmk "$feats"
-done
-cargo +stable clippy --target-dir "$clippy_target" --manifest-path rmk/Cargo.toml -- -D warnings
-cargo +stable clippy --target-dir "$clippy_target" --manifest-path rmk-config/Cargo.toml -- -D warnings
-cargo +stable clippy --target-dir "$clippy_target" --manifest-path rmk-macro/Cargo.toml -- -D warnings
-cargo +stable clippy --target-dir "$clippy_target" --manifest-path rmk-types/Cargo.toml -- -D warnings
+if [[ "$mode" != stable ]]; then
+    log_section "Nightly smoke checks"
+    log_section "Nightly: rmk, default features disabled, features: none"
+    cargo +nightly check --target-dir "$target_root/nightly" \
+        --manifest-path rmk/Cargo.toml --no-default-features
+    log_section "Nightly: rmk, default features disabled, features: split,vial,storage,passkey_entry"
+    cargo +nightly check --target-dir "$target_root/nightly" \
+        --manifest-path rmk/Cargo.toml --no-default-features --features split,vial,storage,passkey_entry
+fi

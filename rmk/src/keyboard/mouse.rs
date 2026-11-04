@@ -229,8 +229,10 @@ impl MouseState {
 
         if self.wheel.has_active_direction() {
             let unit = self.calculate_wheel_unit(config);
-            let (pan, wheel) = self.wheel.axis_values(unit);
-            self.report.wheel = wheel;
+            let (pan, down) = self.wheel.axis_values(unit);
+            // `y` counts downward like the cursor, but a HID wheel is positive
+            // when rotated away from the user, which scrolls up.
+            self.report.wheel = down.saturating_neg();
             self.report.pan = pan;
         } else {
             self.report.wheel = 0;
@@ -1013,11 +1015,11 @@ mod test {
     // -- N. Wheel sign convention tests ----------------------------------------
 
     #[test]
-    fn wheel_up_sets_negative_wheel() {
+    fn wheel_down_sets_negative_wheel() {
         let mut state = MouseState::new();
         let config = default_config();
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
-        assert!(state.report.wheel < 0, "WheelUp should produce negative wheel");
+        state.process(HidKeyCode::MouseWheelDown, true, &config);
+        assert!(state.report.wheel < 0, "WheelDown should produce negative wheel");
         assert_eq!(state.report.pan, 0);
     }
 

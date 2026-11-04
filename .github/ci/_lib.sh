@@ -10,7 +10,7 @@
 #     #!/bin/bash
 #     set -euo pipefail
 #
-# Toolchain + tool installation (rustup components/targets, cargo-batch,
+# Toolchain + tool installation (rustup components/targets,
 # cargo-expand, espup) is the workflow's responsibility and lives in
 # .github/workflows/ci.yml. Locally the repo's rust-toolchain.toml takes
 # care of it, so these scripts stay side-effect-free on your machine.

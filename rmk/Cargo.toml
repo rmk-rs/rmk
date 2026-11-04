@@ -237,6 +237,8 @@ esp32c6_ble = ["_esp_ble", "_no_usb"]
 esp32h2_ble = ["_esp_ble", "_no_usb"]
 ## Enable feature if you want to use ESP32S3 with BLE.
 esp32s3_ble = ["_esp_ble"]
+## Enable feature if you want to use ESP32-S31 with BLE and high-speed USB.
+esp32s31_ble = ["_esp_ble", "_usb_high_speed"]
 _esp_ble = ["_ble", "dep:esp-hal", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
 
 ## Enable feature if you want to use RP2040W with BLE.

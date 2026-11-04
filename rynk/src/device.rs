@@ -2,7 +2,7 @@
 //!
 //! Connect (open the link + handshake) is the sole lifecycle step common to
 //! every transport, so it alone forms the trait. Discovery shares no
-//! signature — enumerating serial ports, scanning BLE, and a browser chooser
+//! signature — enumerating USB devices, scanning BLE, and a browser chooser
 //! diverge, and wasm cannot enumerate at all — so each transport keeps its
 //! own inherent `discover()` (or leaves discovery to JS).
 
@@ -18,7 +18,7 @@ use crate::driver::{Client, Driver, RynkHostError};
 /// A keyboard recognized as Rynk's but not yet connected: an inert handle,
 /// produced by a transport's `discover()`, that [`connect`](Self::connect)s
 /// into a live [`Client`] + [`Driver`] pair. Implemented once per transport
-/// (USB serial, BLE, web); discovery itself is each transport's own inherent
+/// (USB bulk, BLE, web); discovery itself is each transport's own inherent
 /// call, not part of this trait.
 #[allow(async_fn_in_trait)] // concrete future `Send`-ness is fixed at each impl site
 pub trait RynkDevice: Sized {
@@ -27,7 +27,7 @@ pub trait RynkDevice: Sized {
     /// The host→device half of the byte link this device opens.
     type Write: Write;
 
-    /// Display text for a device picker (serial path / BLE name).
+    /// Display text for a device picker (USB product string / BLE name).
     #[cfg(feature = "alloc")]
     fn label(&self) -> String;
 
