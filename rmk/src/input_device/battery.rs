@@ -15,8 +15,8 @@ use crate::event::{BatteryAdcEvent, BatteryStatusEvent, ChargingStateEvent, publ
 pub(crate) static BATTERY_STATUS: Mutex<RawMutex, Cell<BatteryStatus>> =
     Mutex::new(Cell::new(BatteryStatus::Unavailable));
 
-#[cfg(any(feature = "_ble", test))]
-pub(crate) fn current_battery_status() -> BatteryStatus {
+/// Latest battery status reported by the battery processor.
+pub fn current_battery_status() -> BatteryStatus {
     BATTERY_STATUS.lock(|c| c.get())
 }
 
