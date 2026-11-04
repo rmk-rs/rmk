@@ -92,7 +92,6 @@ pub(crate) fn set_peripheral_battery(id: usize, battery: BatteryStatus) {
 }
 
 /// Latest battery status reported by peripheral `id`.
-#[cfg(any(feature = "_ble", test))]
 pub(crate) fn current_peripheral_battery_status(id: usize) -> Option<BatteryStatus> {
     PERIPHERAL_SLOTS.lock(|slots| slots.get().get(id).map(|slot| slot.battery))
 }
