@@ -202,12 +202,18 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
         }
         ChipSeries::Esp32 => {
             let ble_addr = get_ble_addr(hardware, peripheral_id);
+            // The S31 example pins the post-IPC esp-rtos API; other ESP examples use released 0.4.
+            let rtos_init = if hardware.chip.chip == "esp32s31" {
+                quote! { ::esp_rtos::start(timg0.timer0); }
+            } else {
+                quote! { ::esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0); }
+            };
             let battery = match peripheral_id {
                 Some(id) => &hardware.peripheral_batteries[id],
                 None => &hardware.battery,
             };
-            // Battery measurement and the optional ADC entropy source both need ADC1.
-            let adc_entropy_init = if battery.adc.is_none() {
+            // TrngSource and the battery ADC reader both consume ADC1.
+            let trng_init = if battery.adc.is_none() {
                 quote! { let _trng_source = ::esp_hal::rng::TrngSource::new(p.RNG, p.ADC1); }
             } else {
                 quote! {}
@@ -217,8 +223,8 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                 let p = ::esp_hal::init(::esp_hal::Config::default().with_cpu_clock(::esp_hal::clock::CpuClock::max()));
                 ::esp_alloc::heap_allocator!(size: 72 * 1024);
                 let timg0 = ::esp_hal::timer::timg::TimerGroup::new(p.TIMG0);
-                ::esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
-                #adc_entropy_init
+                #rtos_init
+                #trng_init
                 const BLE_CAPACITY: u8 = ::rmk::ble::calculate_esp_ble_capacity(#central_links, #peripheral_links);
                 let ble_config = ::esp_radio::ble::Config::default().with_max_connections(BLE_CAPACITY.into());
                 let connector = ::esp_radio::ble::controller::BleConnector::new(p.BT, ble_config).unwrap();

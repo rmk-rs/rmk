@@ -1,4 +1,5 @@
 use core::cell::Cell;
+use core::num::NonZeroU32;
 
 use embassy_sync::blocking_mutex::Mutex;
 use embedded_hal::digital::InputPin;
@@ -68,15 +69,23 @@ impl<I: InputPin> ChargingStateReader<I> {
 /// emits `BatteryStatusEvent` when battery status changes.
 #[processor(subscribe = [BatteryAdcEvent, ChargingStateEvent])]
 pub struct BatteryProcessor {
-    adc_divider: Option<(u32, u32)>,
+    adc_divider: Option<(NonZeroU32, NonZeroU32)>,
     /// Current battery status
     battery_status: BatteryStatus,
 }
 
 impl BatteryProcessor {
-    pub fn new(adc_divider_measured: u32, adc_divider_total: u32) -> Self {
-        BatteryProcessor {
-            adc_divider: Some((adc_divider_measured, adc_divider_total)),
+    pub const fn new(adc_divider_measured: u32, adc_divider_total: u32) -> Self {
+        let adc_divider = match (
+            NonZeroU32::new(adc_divider_measured),
+            NonZeroU32::new(adc_divider_total),
+        ) {
+            (Some(measured), Some(total)) => Some((measured, total)),
+            _ => None,
+        };
+
+        Self {
+            adc_divider,
             battery_status: BatteryStatus::Unavailable,
         }
     }
@@ -101,11 +110,8 @@ impl BatteryProcessor {
 
     fn get_battery_percent(&self, val: u16) -> Option<u8> {
         let (divider_measured, divider_total) = self.adc_divider?;
-        if divider_measured == 0 || divider_total == 0 {
-            error!("Battery ADC divider values must be greater than zero");
-            return Some(0);
-        }
-        let battery_mv = u64::from(val) * u64::from(divider_total) / u64::from(divider_measured);
+
+        let battery_mv = u64::from(val) * u64::from(divider_total.get()) / u64::from(divider_measured.get());
         Some((battery_mv.saturating_sub(3600) / 6).min(100) as u8)
     }
 
@@ -178,8 +184,41 @@ mod tests {
     use crate::test_support::test_block_on;
 
     #[test]
-    fn zero_adc_divider_does_not_panic() {
-        assert_eq!(BatteryProcessor::new(0, 1).get_battery_percent(2000), Some(0));
+    fn zero_measured_divider_has_no_battery_percent() {
+        let processor = const { BatteryProcessor::new(0, 1) };
+        assert_eq!(processor.get_battery_percent(4000), None);
+    }
+
+    #[test]
+    fn zero_total_divider_has_no_battery_percent() {
+        let processor = const { BatteryProcessor::new(1, 0) };
+        assert_eq!(processor.get_battery_percent(4000), None);
+    }
+
+    #[test]
+    fn both_zero_dividers_have_no_battery_percent() {
+        let processor = const { BatteryProcessor::new(0, 0) };
+        assert_eq!(processor.get_battery_percent(4000), None);
+    }
+
+    #[test]
+    fn charging_only_has_no_battery_percent() {
+        assert_eq!(BatteryProcessor::charging_only().get_battery_percent(4000), None);
+    }
+
+    #[test]
+    fn valid_adc_reading_can_report_zero_percent() {
+        let processor = const { BatteryProcessor::new(1, 1) };
+        assert_eq!(processor.get_battery_percent(3600), Some(0));
+    }
+
+    #[test]
+    fn adc_divider_scales_voltage() {
+        assert_eq!(BatteryProcessor::new(1, 5).get_battery_percent(800), Some(66));
+        assert_eq!(
+            BatteryProcessor::new(u32::MAX, u32::MAX).get_battery_percent(4000),
+            Some(66)
+        );
     }
 
     #[test]

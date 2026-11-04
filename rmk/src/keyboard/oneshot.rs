@@ -146,7 +146,7 @@ impl<'a> Keyboard<'a> {
     /// Returns `true` if the OSM was consumed (transitioned from Single to None).
     pub(crate) fn update_osm(&mut self, event: KeyboardEvent) -> bool {
         match self.osm_state {
-            OneShotState::Initial(m) => {
+            OneShotState::Initial(m) if event.pressed => {
                 self.osm_state = OneShotState::Held(m);
                 false
             }
@@ -164,7 +164,7 @@ impl<'a> Keyboard<'a> {
 
     pub(crate) fn update_osl(&mut self, event: KeyboardEvent) {
         match self.osl_state {
-            OneShotState::Initial(l) => self.osl_state = OneShotState::Held(l),
+            OneShotState::Initial(l) if event.pressed => self.osl_state = OneShotState::Held(l),
             OneShotState::Single(layer_num) if !event.pressed => {
                 self.osl_deadline = None;
                 self.keymap.deactivate_layer(layer_num);

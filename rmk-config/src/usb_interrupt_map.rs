@@ -10,6 +10,7 @@ use crate::communication::UsbInfo;
 static USB_INFO: Lazy<HashMap<String, UsbInfo>> = Lazy::new(|| {
     let mut m = HashMap::new();
     m.insert("esp32s3".to_string(), UsbInfo::new("GPIO19", "GPIO20", "USB_FS", "USB0"));
+    m.insert("esp32s31".to_string(), UsbInfo::new("", "", "USB_HS", "USB_OTG_HS"));
     m.insert("nrf52840".to_string(), UsbInfo::new("", "", "USBD", "USBD"));
     m.insert("nrf52820".to_string(), UsbInfo::new("", "", "USBD", "USBD"));
     m.insert("nrf52833".to_string(), UsbInfo::new("", "", "USBD", "USBD"));

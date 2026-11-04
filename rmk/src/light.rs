@@ -18,6 +18,7 @@ impl<'d, D: Driver<'d>> HidReaderTrait for UsbLedReader<'_, 'd, D> {
     type ReportType = LedIndicator;
 
     async fn read_report(&mut self) -> Result<Self::ReportType, HidError> {
+        self.hid_reader.ready().await;
         let mut buf = [0u8; 1];
         self.hid_reader.read(&mut buf).await.map_err(HidError::UsbReadError)?;
 

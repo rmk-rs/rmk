@@ -9,14 +9,13 @@ pub(crate) fn convert_output_pins_to_initializers(
 ) -> proc_macro2::TokenStream {
     let mut initializers = proc_macro2::TokenStream::new();
     let mut idents = vec![];
-    let pin_initializers = pins
-        .into_iter()
-        .map(|p| (p.clone(), convert_gpio_str_to_output_pin(chip, p, false)))
-        .map(|(p, ts)| {
-            let ident_name = format_ident!("{}", p.to_lowercase());
-            idents.push(ident_name.clone());
-            quote! { let #ident_name = #ts;}
-        });
+    let pin_initializers = pins.into_iter().map(|p| {
+        let name = p.to_lowercase();
+        let ts = convert_gpio_str_to_output_pin(chip, p, false);
+        let ident_name = format_ident!("{}", name);
+        idents.push(ident_name.clone());
+        quote! { let #ident_name = #ts;}
+    });
 
     initializers.extend(pin_initializers);
     let output_pin_type = get_output_pin_type(chip);
@@ -32,19 +31,13 @@ pub(crate) fn convert_input_pins_to_initializers(
 ) -> proc_macro2::TokenStream {
     let mut initializers = proc_macro2::TokenStream::new();
     let mut idents = vec![];
-    let pin_initializers = pins
-        .into_iter()
-        .map(|p| {
-            (
-                p.clone(),
-                convert_gpio_str_to_input_pin(chip, p, async_matrix, Some(false)),
-            )
-        })
-        .map(|(p, ts)| {
-            let ident_name = format_ident!("{}", p.to_lowercase());
-            idents.push(ident_name.clone());
-            quote! { let #ident_name = #ts;}
-        });
+    let pin_initializers = pins.into_iter().map(|p| {
+        let name = p.to_lowercase();
+        let ts = convert_gpio_str_to_input_pin(chip, p, async_matrix, Some(false));
+        let ident_name = format_ident!("{}", name);
+        idents.push(ident_name.clone());
+        quote! { let #ident_name = #ts;}
+    });
     initializers.extend(pin_initializers);
     let input_pin_type = get_input_pin_type(chip, async_matrix);
     let len = idents.len();
@@ -151,9 +144,11 @@ pub(crate) fn convert_gpio_str_to_persisted_output_pin(
 ) -> proc_macro2::TokenStream {
     let initializer = convert_gpio_str_to_output_pin(chip, gpio_name, initial_level_high);
     match chip.series {
-        ChipSeries::Stm32 | ChipSeries::Esp32 | ChipSeries::Rp2040 => {
+        ChipSeries::Stm32 | ChipSeries::Rp2040 => {
             quote! { ::core::mem::forget(#initializer); }
         }
+        // esp-hal's Output has no Drop handler; the pin keeps its configuration.
+        ChipSeries::Esp32 => quote! { let _ = #initializer; },
         ChipSeries::Nrf52 => {
             quote! { #initializer.persist();}
         }
