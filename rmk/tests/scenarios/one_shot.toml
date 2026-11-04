@@ -302,7 +302,7 @@ steps = [
   { press = [0, 8] },   # Hold MouseWheelUp: initial delta, first repeat due at +100ms
   { press = [0, 0] },   # OSM(LShift) down
   { release = [0, 0] }, # OSM(LShift) up and still armed; repeats must continue regardless
-  { delay = 280 },      # covers the repeat ticks at +100/+180/+260ms
+  { delay = 290 },      # covers wheel units at +100/+200/+300ms
   { release = [0, 8] },
   { tap = { pos = [0, 2], duration = 10 } },  # Control: OSM still armed here
 ]
@@ -311,7 +311,6 @@ expect = [
   { mouse = { wheel = 1 } },  # repeat while OSM armed
   { mouse = { wheel = 1 } },  # repeat while OSM armed
   { mouse = { wheel = 1 } },  # repeat while OSM armed
-  { mouse = {} },
   ["LShift", "A"],
   [],
 ]

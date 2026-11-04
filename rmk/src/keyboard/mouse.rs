@@ -1,1034 +1,394 @@
-//! Mouse key state machine and HID report generation.
-//!
-//! This module tracks movement, wheel, acceleration, and button states, then
-//! derives `MouseReport` values from key press/release events.
-//! Pressing a mouse direction/wheel key activates an automatic repeat mechanism:
-//! it schedules per-category repeat ticks and updates movement speed from
-//! `MouseKeyConfig` as repeat count increases.
+//! Mouse keys integrate relative displacement between input events and repeat deadlines.
 
 use embassy_time::{Duration, Instant};
 use rmk_types::keycode::HidKeyCode;
 
 use crate::config::MouseKeyConfig;
+use crate::event::{KeyboardEvent, KeyboardEventSource};
 use crate::hid::MouseReport;
 
-/// Result of processing a mouse key event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MouseAction {
-    /// Send report.
-    SendReport,
-    /// No report needed.
-    None,
+const INTERVAL: Duration = Duration::from_millis(20);
+// A stalled HID writer must not replay the entire pause as one large motion.
+const MAX_ELAPSED_MS: u64 = 4 * INTERVAL.as_millis();
+// Milliseconds, quarter-speed gears, and a 181/256 diagonal projection share this denominator.
+const UNITS_PER_COUNT: i64 = 1000 * 4 * 256;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Speed {
+    Normal,
+    Slow,
+    Medium,
+    Sprint,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Direction {
-    Up,
-    Down,
-    Left,
-    Right,
+#[derive(Clone, Copy)]
+enum Rate {
+    Ramp(MouseKeyConfig),
+    /// Quarter-counts per second, also representing wheel rates below one unit per second.
+    Fixed(u32),
 }
 
-#[derive(Debug, Clone, Copy)]
-enum MouseCategory {
-    /// Mouse movement
-    Movement(Direction),
-    /// Mouse wheel movement
-    Wheel(Direction),
-    /// Accel bit
-    Accel(u8),
-    /// Mouse button index
-    Button(u8),
-}
-
-impl TryFrom<HidKeyCode> for MouseCategory {
-    type Error = ();
-
-    fn try_from(value: HidKeyCode) -> Result<Self, Self::Error> {
-        match value {
-            HidKeyCode::MouseUp => Ok(MouseCategory::Movement(Direction::Up)),
-            HidKeyCode::MouseDown => Ok(MouseCategory::Movement(Direction::Down)),
-            HidKeyCode::MouseLeft => Ok(MouseCategory::Movement(Direction::Left)),
-            HidKeyCode::MouseRight => Ok(MouseCategory::Movement(Direction::Right)),
-            HidKeyCode::MouseWheelUp => Ok(MouseCategory::Wheel(Direction::Up)),
-            HidKeyCode::MouseWheelDown => Ok(MouseCategory::Wheel(Direction::Down)),
-            HidKeyCode::MouseWheelLeft => Ok(MouseCategory::Wheel(Direction::Left)),
-            HidKeyCode::MouseWheelRight => Ok(MouseCategory::Wheel(Direction::Right)),
-
-            HidKeyCode::MouseAccel0 => Ok(MouseCategory::Accel(1 << 0)),
-            HidKeyCode::MouseAccel1 => Ok(MouseCategory::Accel(1 << 1)),
-            HidKeyCode::MouseAccel2 => Ok(MouseCategory::Accel(1 << 2)),
-            HidKeyCode::MouseBtn1 => Ok(MouseCategory::Button(0)),
-            HidKeyCode::MouseBtn2 => Ok(MouseCategory::Button(1)),
-            HidKeyCode::MouseBtn3 => Ok(MouseCategory::Button(2)),
-            HidKeyCode::MouseBtn4 => Ok(MouseCategory::Button(3)),
-            HidKeyCode::MouseBtn5 => Ok(MouseCategory::Button(4)),
-            HidKeyCode::MouseBtn6 => Ok(MouseCategory::Button(5)),
-            HidKeyCode::MouseBtn7 => Ok(MouseCategory::Button(6)),
-            HidKeyCode::MouseBtn8 => Ok(MouseCategory::Button(7)),
-            _ => Err(()),
+impl Speed {
+    fn rates(self, config: MouseKeyConfig) -> (Rate, Rate) {
+        let cursor = u32::from(config.max_speed());
+        let wheel = u32::from(config.scroll_speed());
+        match self {
+            Self::Normal => (Rate::Ramp(config), Rate::Fixed(4 * wheel)),
+            Self::Slow => (Rate::Fixed(cursor), Rate::Fixed(wheel)),
+            Self::Medium => (Rate::Fixed(2 * cursor), Rate::Fixed(4 * wheel)),
+            Self::Sprint => (Rate::Fixed(8 * cursor), Rate::Fixed(8 * wheel)),
         }
     }
 }
 
-/// Per-category (movement or wheel) axis state, repeat counter and deadline.
-///
-/// `x` and `y` track the net number of pressed keys per axis:
-///   - Right/WheelRight increments `x`, Left/WheelLeft decrements `x`
-///   - Down/WheelDown increments `y`, Up/WheelUp decrements `y`
-///
-/// When opposite directions cancel out (e.g. Left+Right → x=0), the category
-/// becomes inactive and repeat stops. Direction is extracted via `signum()`.
-#[derive(Default)]
-struct DirectionState {
-    x: i8,
-    y: i8,
-    repeat: u8,
-    deadline: Option<Instant>,
+/// A negative/positive net holder count selects the negative/positive direction of each axis.
+struct Motion {
+    held: [i8; 2],
+    remainder: [i32; 2],
+    started_ms: u64,
+    last_update: Instant,
 }
 
-impl DirectionState {
-    /// Update direction state and manage repeat scheduling.
-    fn update(&mut self, direction: Direction, pressed: bool, repeat_delay: u16) {
-        let was_active = self.has_active_direction();
+impl Motion {
+    const IDLE: Self = Self {
+        held: [0; 2],
+        remainder: [0; 2],
+        started_ms: 0,
+        last_update: Instant::MIN,
+    };
 
-        // Update x/y value according to direction and the pressed state
-        let delta: i8 = if pressed { 1 } else { -1 };
-        match direction {
-            Direction::Right => self.x = self.x.saturating_add(delta),
-            Direction::Left => self.x = self.x.saturating_sub(delta),
-            Direction::Down => self.y = self.y.saturating_add(delta),
-            Direction::Up => self.y = self.y.saturating_sub(delta),
+    fn deadline(&self) -> Option<Instant> {
+        (self.held != [0, 0]).then(|| self.last_update + INTERVAL)
+    }
+
+    /// Settle motion under the old direction and rate up to this event.
+    fn advance(&mut self, now: Instant, rate: Rate) -> [i16; 2] {
+        if self.held == [0, 0] {
+            return [0, 0];
         }
-
-        let now_active = self.has_active_direction();
-
-        match (was_active, now_active) {
-            (false, true) => {
-                // Start at 1: the initial press counts as the first occurrence,
-                // so fire_repeats sees repeat >= 1 and uses repeat_interval_ms.
-                self.repeat = 1;
-                self.deadline = Some(Instant::now() + Duration::from_millis(repeat_delay as u64));
+        let end = now.as_millis();
+        let begin = self.last_update.as_millis().max(end.saturating_sub(MAX_ELAPSED_MS));
+        self.last_update = now;
+        let elapsed = end - begin;
+        let quarter_millicounts = match rate {
+            Rate::Fixed(quarters_per_second) => u64::from(quarters_per_second) * elapsed,
+            Rate::Ramp(config) => {
+                let max = u64::from(config.max_speed());
+                let duration = u64::from(config.acceleration_time_ms());
+                let ramp_start = (begin - self.started_ms).min(duration);
+                let ramp_end = (end - self.started_ms).min(duration);
+                if ramp_start == ramp_end {
+                    4 * max * elapsed
+                } else {
+                    let initial = u64::from(config.initial_speed());
+                    // Subtract cumulative areas so rounding does not depend on how a tick was split.
+                    let area = |t: u64| initial * t + (max - initial) * t * t / (2 * duration);
+                    let cruising_ms = elapsed - (ramp_end - ramp_start);
+                    4 * (area(ramp_end) - area(ramp_start) + max * cruising_ms)
+                }
             }
-            (true, false) => {
-                self.repeat = 0;
-                self.deadline = None;
+        };
+
+        let projection = if self.held[0] != 0 && self.held[1] != 0 {
+            181
+        } else {
+            256
+        };
+        core::array::from_fn(|axis| {
+            let total = i64::from(self.remainder[axis])
+                + i64::from(self.held[axis].signum()) * quarter_millicounts as i64 * projection;
+            self.remainder[axis] = (total % UNITS_PER_COUNT) as i32;
+            // Even at 2 × u16::MAX counts/s an 80 ms interval fits in a signed 16-bit HID axis.
+            (total / UNITS_PER_COUNT) as i16
+        })
+    }
+
+    fn direction(&mut self, axis: usize, sign: i8, pressed: bool, now: Instant, rate: Rate) -> [i16; 2] {
+        let current = self.held[axis];
+        let next = current.saturating_add(if pressed { sign } else { -sign });
+        if current.signum() == next.signum() {
+            self.held[axis] = next;
+            return [0, 0];
+        }
+
+        let was_idle = self.held == [0, 0];
+        let mut delta = self.advance(now, rate);
+        self.held[axis] = next;
+        self.remainder[axis] = 0;
+        if was_idle {
+            self.started_ms = now.as_millis();
+            self.last_update = now;
+            if pressed {
+                delta[axis] = i16::from(sign);
             }
-            _ => {}
         }
-    }
-
-    /// Returns `true` if this `DirectionState` is active, i.e. at least one direction has movement.
-    fn has_active_direction(&self) -> bool {
-        self.x != 0 || self.y != 0
-    }
-
-    /// Compute axis values by applying `unit` magnitude to the active directions.
-    fn axis_values(&self, unit: i16) -> (i16, i16) {
-        (
-            (self.x.signum() as i16).saturating_mul(unit),
-            (self.y.signum() as i16).saturating_mul(unit),
-        )
-    }
-
-    /// Handle a repeat tick: increment repeat counter and schedule next deadline.
-    fn on_repeat_tick(&mut self, ticks_to_max: u8, repeat_delay: u16) {
-        if self.repeat < ticks_to_max {
-            self.repeat += 1;
-        }
-        self.deadline = Some(Instant::now() + Duration::from_millis(repeat_delay as u64));
+        delta
     }
 }
 
 pub(crate) struct MouseState {
-    pub report: MouseReport,
-    accel: u8,
-    movement: DirectionState,
-    wheel: DirectionState,
-}
-
-impl Default for MouseState {
-    fn default() -> Self {
-        Self::new()
-    }
+    pub buttons: u8,
+    speed_keys: [u8; 3],
+    cursor: Motion,
+    wheel: Motion,
 }
 
 impl MouseState {
     pub fn new() -> Self {
-        MouseState {
-            report: MouseReport {
-                buttons: 0,
-                x: 0,
-                y: 0,
-                wheel: 0,
-                pan: 0,
-            },
-            accel: 0,
-            movement: DirectionState::default(),
-            wheel: DirectionState::default(),
+        Self {
+            buttons: 0,
+            speed_keys: [0; 3],
+            cursor: Motion::IDLE,
+            wheel: Motion::IDLE,
         }
     }
 
-    /// Process a mouse key event (press or release).
-    pub fn process(&mut self, key: HidKeyCode, pressed: bool, config: &MouseKeyConfig) -> MouseAction {
-        if let Ok(category) = MouseCategory::try_from(key) {
-            match category {
-                MouseCategory::Movement(direction) => {
-                    // delay is only consumed on new-activation (false→true) inside update()
-                    let delay = config.get_movement_delay(self.movement.repeat);
-                    self.movement.update(direction, pressed, delay);
+    fn speed(&self) -> Speed {
+        match self.speed_keys {
+            [0, 0, 0] => Speed::Normal,
+            [0, 0, _] => Speed::Sprint,
+            [0, _, _] => Speed::Medium,
+            _ => Speed::Slow,
+        }
+    }
+
+    pub fn process(
+        &mut self,
+        key: HidKeyCode,
+        event: KeyboardEvent,
+        now: Instant,
+        config: MouseKeyConfig,
+    ) -> Option<MouseReport> {
+        use HidKeyCode::*;
+        let pressed = event.pressed;
+        let old_speed = self.speed();
+        let (cursor_rate, wheel_rate) = old_speed.rates(config);
+        let mut report = MouseReport {
+            buttons: self.buttons,
+            ..Default::default()
+        };
+        let (wheel, axis, sign) = match key {
+            MouseLeft => (false, 0, -1),
+            MouseRight => (false, 0, 1),
+            MouseUp => (false, 1, -1),
+            MouseDown => (false, 1, 1),
+            MouseWheelLeft => (true, 0, -1),
+            MouseWheelRight => (true, 0, 1),
+            MouseWheelUp => (true, 1, 1),
+            MouseWheelDown => (true, 1, -1),
+            MouseAccel0 | MouseAccel1 | MouseAccel2 => {
+                let count = &mut self.speed_keys[(key as u8 - MouseAccel0 as u8) as usize];
+                *count = if pressed {
+                    count.saturating_add(1)
+                } else {
+                    count.saturating_sub(1)
+                };
+                let speed = self.speed();
+                if speed == old_speed {
+                    return None;
                 }
-                MouseCategory::Wheel(direction) => {
-                    // delay is only consumed on new-activation (false→true) inside update()
-                    let delay = config.get_wheel_delay(self.wheel.repeat);
-                    self.wheel.update(direction, pressed, delay);
+                [report.x, report.y] = self.cursor.advance(now, cursor_rate);
+                [report.pan, report.wheel] = self.wheel.advance(now, wheel_rate);
+                if speed == Speed::Normal && matches!(old_speed, Speed::Slow | Speed::Medium) {
+                    self.cursor.started_ms = now.as_millis();
                 }
-                MouseCategory::Accel(bit) => {
-                    if pressed {
-                        self.accel |= bit;
-                    } else {
-                        self.accel &= !bit;
-                    }
-                    return MouseAction::None;
-                }
-                MouseCategory::Button(index) => {
-                    if pressed {
-                        self.report.buttons |= 1 << index;
-                    } else {
-                        self.report.buttons &= !(1 << index);
-                    }
-                    return MouseAction::SendReport;
-                }
+                return motion_report(report);
             }
-
-            let old_report = self.report;
-            self.recalculate_report(config);
-
-            if old_report != self.report {
-                MouseAction::SendReport
-            } else {
-                MouseAction::None
+            key if (MouseBtn1..=MouseBtn8).contains(&key) => {
+                let mask = 1 << (key as u8 - MouseBtn1 as u8);
+                self.buttons = if pressed {
+                    self.buttons | mask
+                } else {
+                    self.buttons & !mask
+                };
+                if report.buttons == self.buttons {
+                    return None;
+                }
+                report.buttons = self.buttons;
+                return Some(report);
             }
+            _ => return None,
+        };
+
+        if wheel && matches!(event.source, KeyboardEventSource::RotaryEncoder(_)) {
+            if !pressed {
+                return None;
+            }
+            let mut step = [0; 2];
+            step[axis] = i16::from(sign);
+            [report.pan, report.wheel] = step;
+        } else if wheel {
+            [report.pan, report.wheel] = self.wheel.direction(axis, sign, pressed, now, wheel_rate);
         } else {
-            MouseAction::None
+            [report.x, report.y] = self.cursor.direction(axis, sign, pressed, now, cursor_rate);
         }
+        motion_report(report)
     }
 
-    /// Recompute report axes from direction state + acceleration + accel multiplier.
-    /// Buttons are NOT touched (managed directly by press/release).
-    pub fn recalculate_report(&mut self, config: &MouseKeyConfig) {
-        if self.movement.has_active_direction() {
-            let unit = self.calculate_move_unit(config);
-            let (x, y) = self.movement.axis_values(unit);
-            self.report.x = x;
-            self.report.y = y;
-        } else {
-            self.report.x = 0;
-            self.report.y = 0;
+    pub fn fire_repeats(&mut self, now: Instant, config: MouseKeyConfig) -> Option<MouseReport> {
+        let (cursor_rate, wheel_rate) = self.speed().rates(config);
+        let mut report = MouseReport {
+            buttons: self.buttons,
+            ..Default::default()
+        };
+        if self.cursor.deadline().is_some_and(|deadline| deadline <= now) {
+            [report.x, report.y] = self.cursor.advance(now, cursor_rate);
         }
-
-        if self.wheel.has_active_direction() {
-            let unit = self.calculate_wheel_unit(config);
-            let (pan, down) = self.wheel.axis_values(unit);
-            // `y` counts downward like the cursor, but a HID wheel is positive
-            // when rotated away from the user, which scrolls up.
-            self.report.wheel = down.saturating_neg();
-            self.report.pan = pan;
-        } else {
-            self.report.wheel = 0;
-            self.report.pan = 0;
+        if self.wheel.deadline().is_some_and(|deadline| deadline <= now) {
+            [report.pan, report.wheel] = self.wheel.advance(now, wheel_rate);
         }
+        motion_report(report)
     }
 
-    /// Check which categories have expired deadlines and fire them.
-    /// Only fires categories whose deadline has actually passed, so movement
-    /// and wheel repeat at their own independent intervals.
-    /// Returns a masked `MouseReport` containing only the axes whose repeat
-    /// actually fired, or `None` if nothing fired.
-    pub fn fire_repeats(&mut self, config: &MouseKeyConfig) -> Option<MouseReport> {
-        let now = Instant::now();
-        let fire_movement = self.movement.deadline.is_some_and(|d| now >= d) && self.movement.has_active_direction();
-        let fire_wheel = self.wheel.deadline.is_some_and(|d| now >= d) && self.wheel.has_active_direction();
-
-        if fire_movement {
-            let delay = config.get_movement_delay(self.movement.repeat);
-            self.movement.on_repeat_tick(config.ticks_to_max, delay);
-        }
-        if fire_wheel {
-            let delay = config.get_wheel_delay(self.wheel.repeat);
-            self.wheel.on_repeat_tick(config.wheel_ticks_to_max, delay);
-        }
-
-        if !fire_movement && !fire_wheel {
-            return None;
-        }
-
-        self.recalculate_report(config);
-
-        let mut report = self.get_report();
-        if !fire_movement {
-            report.x = 0;
-            report.y = 0;
-        }
-        if !fire_wheel {
-            report.wheel = 0;
-            report.pan = 0;
-        }
-        Some(report)
-    }
-
-    /// Returns the earliest pending repeat deadline, if any.
     pub fn next_deadline(&self) -> Option<Instant> {
-        match (self.movement.deadline, self.wheel.deadline) {
-            (Some(m), Some(w)) => Some(if m <= w { m } else { w }),
-            (Some(m), None) => Some(m),
-            (None, Some(w)) => Some(w),
-            (None, None) => None,
-        }
-    }
-
-    /// Return a copy of the current report with diagonal compensation applied.
-    /// The internal `self.report` retains raw (uncompensated) axis values so that
-    /// repeated recalculations do not shrink the non-repeated axis over time.
-    pub fn get_report(&self) -> MouseReport {
-        let mut r = self.report;
-        if r.x != 0 && r.y != 0 {
-            let (x, y) = Self::apply_diagonal_compensation(r.x, r.y);
-            r.x = x;
-            r.y = y;
-        }
-        if r.wheel != 0 && r.pan != 0 {
-            let (w, p) = Self::apply_diagonal_compensation(r.wheel, r.pan);
-            r.wheel = w;
-            r.pan = p;
-        }
-        r
-    }
-
-    /// Two-step speed calculation:
-    /// Step 1: acceleration curve based on repeat count
-    /// Step 2: accel multiplier (Accel0=0.25x, Accel1=0.5x, Accel2=2.0x, highest wins)
-    fn calculate_unit(accel: u8, repeat: u8, delta: u8, max_speed: u8, ticks_to_max: u8, max: u8) -> i16 {
-        // Step 1: Base value from acceleration curve
-        let max_unit = (delta as u16).saturating_mul(max_speed as u16);
-        let base: u16 = if repeat == 0 {
-            delta as u16
-        } else if repeat >= ticks_to_max {
-            max_unit
-        } else {
-            let repeat_count = repeat as u32;
-            let ttm = ticks_to_max as u32;
-            let min_unit = delta as u32;
-            let unit_range = (max_unit as u32).saturating_sub(min_unit);
-            let linear_term = 2 * repeat_count * ttm;
-            let quadratic_term = repeat_count * repeat_count;
-            let progress_num = linear_term.saturating_sub(quadratic_term);
-            let progress_den = ttm * ttm;
-            (min_unit + (unit_range * progress_num / progress_den.max(1))) as u16
-        };
-
-        // Step 2: Apply accel multiplier (highest active wins)
-        let multiplied: u16 = if accel & (1 << 2) != 0 {
-            // Accel2: 2.0x
-            base.saturating_mul(2)
-        } else if accel & (1 << 1) != 0 {
-            // Accel1: 0.5x (round up to avoid zero)
-            base.div_ceil(2)
-        } else if accel & (1 << 0) != 0 {
-            // Accel0: 0.25x (round up to avoid zero)
-            base.div_ceil(4)
-        } else {
-            base
-        };
-
-        // Step 3: Clamp to [1, max]
-        let clamped = if max == 0 {
-            1u16
-        } else if multiplied > max as u16 {
-            max as u16
-        } else if multiplied == 0 {
-            1
-        } else {
-            multiplied
-        };
-        clamped as i16
-    }
-
-    /// Calculate mouse movement distance based on current repeat count and acceleration settings
-    fn calculate_move_unit(&self, config: &MouseKeyConfig) -> i16 {
-        Self::calculate_unit(
-            self.accel,
-            self.movement.repeat,
-            config.move_delta,
-            config.max_speed,
-            config.ticks_to_max,
-            config.move_max,
-        )
-    }
-
-    /// Calculate mouse wheel movement distance based on current repeat count and acceleration settings
-    fn calculate_wheel_unit(&self, config: &MouseKeyConfig) -> i16 {
-        Self::calculate_unit(
-            self.accel,
-            self.wheel.repeat,
-            config.wheel_delta,
-            config.wheel_max_speed,
-            config.wheel_ticks_to_max,
-            config.wheel_max,
-        )
-    }
-
-    /// Apply diagonal movement compensation (approximation of 1/sqrt(2))
-    fn apply_diagonal_compensation(mut x: i16, mut y: i16) -> (i16, i16) {
-        if x != 0 && y != 0 {
-            // Widen so the 181/256 multiply can't overflow.
-            let x32 = x as i32;
-            let y32 = y as i32;
-            let x_bias: i32 = if x32 >= 0 { 128 } else { -128 };
-            let y_bias: i32 = if y32 >= 0 { 128 } else { -128 };
-            let x_compensated = (x32 * 181 + x_bias) / 256;
-            let y_compensated = (y32 * 181 + y_bias) / 256;
-            x = if x_compensated == 0 {
-                if x > 0 { 1 } else { -1 }
-            } else {
-                x_compensated as i16
-            };
-            y = if y_compensated == 0 {
-                if y > 0 { 1 } else { -1 }
-            } else {
-                y_compensated as i16
-            };
-        }
-        (x, y)
+        [self.cursor.deadline(), self.wheel.deadline()]
+            .into_iter()
+            .flatten()
+            .min()
     }
 }
 
+fn motion_report(report: MouseReport) -> Option<MouseReport> {
+    (report.x != 0 || report.y != 0 || report.pan != 0 || report.wheel != 0).then_some(report)
+}
+
 #[cfg(test)]
-mod test {
+mod tests {
+    use HidKeyCode::{MouseAccel0, MouseAccel1, MouseAccel2, MouseDown, MouseLeft, MouseRight, MouseWheelDown};
+
     use super::*;
-    use crate::config::MouseKeyConfig;
 
-    fn default_config() -> MouseKeyConfig {
-        MouseKeyConfig::default()
-    }
-
-    // -- A. Basic press/release -----------------------------------------------
-
-    #[test]
-    fn press_right_sets_positive_x() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        let action = state.process(HidKeyCode::MouseRight, true, &config);
-        assert!(state.report.x > 0);
-        assert_eq!(state.report.y, 0);
-        assert_eq!(action, MouseAction::SendReport);
-    }
-
-    #[test]
-    fn press_up_sets_negative_y() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseUp, true, &config);
-        assert!(state.report.y < 0);
-        assert_eq!(state.report.x, 0);
-    }
-
-    #[test]
-    fn release_clears_axis() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        let action = state.process(HidKeyCode::MouseRight, false, &config);
-        assert_eq!(state.report.x, 0);
-        assert_eq!(action, MouseAction::SendReport);
-    }
-
-    #[test]
-    fn button_press_and_release() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseBtn1, true, &config);
-        assert_eq!(state.report.buttons, 1);
-        state.process(HidKeyCode::MouseBtn1, false, &config);
-        assert_eq!(state.report.buttons, 0);
-    }
-
-    // -- B. Opposite direction cancellation (req 4.5) -------------------------
-
-    #[test]
-    fn opposite_x_cancels() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        assert!(state.report.x > 0);
-        state.process(HidKeyCode::MouseLeft, true, &config);
-        assert_eq!(state.report.x, 0, "Left+Right should cancel to 0");
-    }
-
-    #[test]
-    fn opposite_y_cancels() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseDown, true, &config);
-        state.process(HidKeyCode::MouseUp, true, &config);
-        assert_eq!(state.report.y, 0, "Up+Down should cancel to 0");
-    }
-
-    #[test]
-    fn opposite_release_restores() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseLeft, true, &config);
-        assert_eq!(state.report.x, 0);
-        state.process(HidKeyCode::MouseLeft, false, &config);
-        assert!(state.report.x > 0, "Releasing Left should restore Right");
-    }
-
-    #[test]
-    fn opposite_wheel_cancels() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
-        state.process(HidKeyCode::MouseWheelDown, true, &config);
-        assert_eq!(state.report.wheel, 0);
-    }
-
-    // -- C. Acceleration continuity (req 4.1) ---------------------------------
-
-    #[test]
-    fn new_direction_preserves_repeat() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.movement.repeat = 10;
-        state.process(HidKeyCode::MouseDown, true, &config);
-        assert_eq!(
-            state.movement.repeat, 10,
-            "Adding a new direction should not reset repeat"
-        );
-    }
-
-    #[test]
-    fn direction_change_resets_repeat_on_cancel() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseDown, true, &config);
-        state.movement.repeat = 10;
-        state.process(HidKeyCode::MouseUp, true, &config);
-        // Opposite directions cancel → inactive → repeat resets
-        assert_eq!(state.movement.repeat, 0, "Opposite cancel should reset repeat");
-    }
-
-    #[test]
-    fn repeat_resets_only_when_all_released() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseDown, true, &config);
-        state.movement.repeat = 10;
-        state.process(HidKeyCode::MouseDown, false, &config);
-        assert_eq!(state.movement.repeat, 10, "Repeat should stay while Right is held");
-        state.process(HidKeyCode::MouseRight, false, &config);
-        assert_eq!(state.movement.repeat, 0, "Repeat should reset when all released");
-    }
-
-    #[test]
-    fn wheel_repeat_independent() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
-        state.movement.repeat = 10;
-        state.wheel.repeat = 5;
-        state.process(HidKeyCode::MouseRight, false, &config);
-        assert_eq!(state.movement.repeat, 0, "Movement repeat should reset");
-        assert_eq!(state.wheel.repeat, 5, "Wheel repeat should be independent");
-    }
-
-    // -- D. Duplicate keys (req 4.4) ------------------------------------------
-
-    #[test]
-    fn duplicate_key_single_effect() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        let x_single = state.report.x;
-        let action = state.process(HidKeyCode::MouseRight, true, &config);
-        assert_eq!(state.report.x, x_single, "Duplicate should not change magnitude");
-        assert_eq!(
-            action,
-            MouseAction::None,
-            "Duplicate same-direction press should not send report"
-        );
-    }
-
-    #[test]
-    fn duplicate_release_one_keeps_axis() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseRight, false, &config);
-        assert!(state.report.x > 0, "x should stay positive with one still held");
-    }
-
-    #[test]
-    fn duplicate_release_both_clears() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.movement.repeat = 5;
-        state.process(HidKeyCode::MouseRight, false, &config);
-        state.process(HidKeyCode::MouseRight, false, &config);
-        assert_eq!(state.report.x, 0);
-        assert_eq!(state.movement.repeat, 0, "Repeat should reset when all released");
-    }
-
-    // -- E. Diagonal (req 4.6) ------------------------------------------------
-
-    #[test]
-    fn diagonal_both_axes_set() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseDown, true, &config);
-        assert!(state.report.x > 0);
-        assert!(state.report.y > 0);
-    }
-
-    #[test]
-    fn diagonal_compensation_reduces() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseDown, true, &config);
-        let comp = state.get_report();
-        assert!(comp.x < state.report.x, "Compensation should reduce diagonal x");
-        assert!(comp.y < state.report.y, "Compensation should reduce diagonal y");
-    }
-
-    #[test]
-    fn diagonal_repeat_both_axes_accelerate() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseDown, true, &config);
-        let initial_x = state.report.x;
-        let initial_y = state.report.y;
-
-        for _ in 0..10 {
-            state
-                .movement
-                .on_repeat_tick(config.ticks_to_max, config.get_movement_delay(state.movement.repeat));
-            state.recalculate_report(&config);
+    impl MouseState {
+        fn key(&mut self, key: HidKeyCode, pressed: bool, ms: u64, config: MouseKeyConfig) -> Option<MouseReport> {
+            self.process(
+                key,
+                KeyboardEvent::keycode(key, pressed),
+                Instant::from_millis(ms),
+                config,
+            )
         }
 
-        assert!(state.report.x > initial_x, "x should accelerate");
-        assert!(state.report.y > initial_y, "y should accelerate");
-        assert_eq!(state.report.x, state.report.y);
+        fn tick(&mut self, ms: u64, config: MouseKeyConfig) -> Option<MouseReport> {
+            self.fire_repeats(Instant::from_millis(ms), config)
+        }
     }
 
     #[test]
-    fn single_axis_no_compensation() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        let comp = state.get_report();
-        assert_eq!(comp.x, state.report.x);
-        assert_eq!(comp.y, 0);
-    }
-
-    // -- F. Accel multiplier (req 3) ------------------------------------------
-
-    #[test]
-    fn accel0_reduces_speed() {
-        let result = MouseState::calculate_unit(1, 0, 6, 3, 50, 20);
-        assert_eq!(result, 2); // (6+3)/4 = 2
-    }
-
-    #[test]
-    fn accel1_halves_speed() {
-        let result = MouseState::calculate_unit(2, 0, 6, 3, 50, 20);
-        assert_eq!(result, 3); // (6+1)/2 = 3
+    fn displacement_depends_on_hold_time_across_timer_and_release_boundaries() {
+        for (initial, totals) in [(0, [1, 8, 121, 129, 1081]), (150, [1, 15, 136, 144, 1096])] {
+            let cfg = MouseKeyConfig::new(initial, 1200, 200, 10);
+            for (hold, expected) in [1, 50, 200, 207, 1000].into_iter().zip(totals) {
+                for interval in [20, 37, 61] {
+                    let mut mouse = MouseState::new();
+                    let mut x = mouse.key(MouseRight, true, 0, cfg).unwrap().x;
+                    for t in (interval as u64..hold).step_by(interval) {
+                        x += mouse.tick(t, cfg).map_or(0, |r| r.x);
+                    }
+                    x += mouse.key(MouseRight, false, hold, cfg).map_or(0, |r| r.x);
+                    assert_eq!(x, expected, "initial={initial}, hold={hold}, interval={interval}");
+                    assert_eq!(mouse.next_deadline(), None);
+                }
+            }
+        }
     }
 
     #[test]
-    fn accel2_doubles_speed() {
-        let result = MouseState::calculate_unit(4, 0, 6, 3, 50, 20);
-        assert_eq!(result, 12); // 6*2 = 12
+    fn sprint_doubles_cruising_speed_and_releases_to_the_normal_curve() {
+        let cfg = MouseKeyConfig::new(0, 1200, 200, 10);
+        let mut mouse = MouseState::new();
+        mouse.key(MouseAccel2, true, 0, cfg);
+        mouse.key(MouseRight, true, 0, cfg);
+        for t in (20..=100).step_by(20) {
+            assert_eq!(mouse.tick(t, cfg).unwrap().x, 48);
+        }
+        assert!(mouse.key(MouseAccel2, false, 100, cfg).is_none());
+        assert_eq!(mouse.tick(120, cfg).unwrap().x, 13); // 600 → 720 counts/s
+        for t in (140..=200).step_by(20) {
+            mouse.tick(t, cfg);
+        }
+        assert_eq!(mouse.tick(220, cfg).unwrap().x, 24);
+        mouse.key(MouseAccel2, true, 220, cfg);
+        assert_eq!(mouse.tick(240, cfg).unwrap().x, 48);
+        mouse.key(MouseAccel2, false, 240, cfg);
+        assert_eq!(mouse.tick(260, cfg).unwrap().x, 24);
     }
 
     #[test]
-    fn accel_multiplies_accelerated_value() {
-        // At repeat=25 (mid-curve), accel2 should roughly double the base
-        // Use a high max to avoid clamping
-        let base = MouseState::calculate_unit(0, 25, 6, 3, 50, 127);
-        let with_accel2 = MouseState::calculate_unit(4, 25, 6, 3, 50, 127);
-        assert!(with_accel2 > base);
-        // Should be approximately 2x (integer rounding may cause ±1)
-        assert_eq!(with_accel2, base * 2);
+    fn held_speed_keys_select_the_slowest_then_restart_from_precision() {
+        let cfg = MouseKeyConfig::new(0, 1200, 200, 10);
+        let mut mouse = MouseState::new();
+        mouse.key(MouseRight, true, 0, cfg);
+        for key in [MouseAccel2, MouseAccel1, MouseAccel0, MouseAccel0] {
+            mouse.key(key, true, 0, cfg);
+        }
+        mouse.key(MouseAccel0, false, 0, cfg);
+        assert_eq!(mouse.tick(20, cfg).unwrap().x, 6);
+        mouse.key(MouseAccel0, false, 20, cfg);
+        assert_eq!(mouse.tick(40, cfg).unwrap().x, 12);
+        mouse.key(MouseAccel2, false, 40, cfg);
+        mouse.key(MouseAccel1, false, 40, cfg);
+        assert_eq!(mouse.tick(60, cfg).unwrap().x, 1);
     }
 
     #[test]
-    fn accel_respects_max_clamp() {
-        let result = MouseState::calculate_unit(4, 50, 6, 3, 50, 20);
-        assert_eq!(result, 20); // 18*2=36, clamped to 20
+    fn slow_scrolling_accumulates_subunits_and_stops_on_release() {
+        let cfg = MouseKeyConfig::new(0, 600, 200, 1);
+        let mut mouse = MouseState::new();
+        mouse.key(MouseAccel0, true, 0, cfg);
+        assert_eq!(mouse.key(MouseWheelDown, true, 0, cfg).unwrap().wheel, -1);
+        for t in (20..4000).step_by(20) {
+            assert!(mouse.tick(t, cfg).is_none());
+        }
+        assert_eq!(mouse.tick(4000, cfg).unwrap().wheel, -1);
+        assert!(mouse.key(MouseWheelDown, false, 4000, cfg).is_none());
+        assert!(mouse.tick(8000, cfg).is_none());
     }
 
     #[test]
-    fn accel_highest_wins() {
-        let accel2_only = MouseState::calculate_unit(4, 0, 6, 3, 50, 20);
-        let accel0_and_2 = MouseState::calculate_unit(5, 0, 6, 3, 50, 20);
-        assert_eq!(accel0_and_2, accel2_only);
+    fn cursor_and_pan_report_only_the_axes_due_at_each_deadline() {
+        let cfg = MouseKeyConfig::new(0, 1000, 0, 100);
+        let mut mouse = MouseState::new();
+        mouse.key(MouseRight, true, 0, cfg);
+        let first_pan = mouse.key(HidKeyCode::MouseWheelLeft, true, 10, cfg).unwrap();
+        assert_eq!((first_pan.x, first_pan.pan), (0, -1));
+        for (ms, expected) in [(20, (20, 0)), (30, (0, -2)), (55, (35, -2))] {
+            let r = mouse.tick(ms, cfg).unwrap();
+            assert_eq!((r.x, r.pan), expected);
+        }
     }
 
     #[test]
-    fn accel_press_only_modifies_state() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        let x_before = state.report.x;
-        let action = state.process(HidKeyCode::MouseAccel2, true, &config);
-        assert_eq!(action, MouseAction::None, "Accel should not send report");
-        assert_eq!(
-            state.report.x, x_before,
-            "Report should not change until next repeat tick"
-        );
-        assert_eq!(state.accel, 1 << 2, "Accel state should be updated");
+    fn diagonal_travel_keeps_its_speed_and_opposite_keys_cancel() {
+        let cfg = MouseKeyConfig::new(1000, 1000, 0, 10);
+        let mut mouse = MouseState::new();
+        mouse.key(MouseLeft, true, 0, cfg);
+        mouse.key(MouseLeft, true, 0, cfg);
+        mouse.key(MouseLeft, false, 0, cfg);
+        assert!(mouse.key(MouseDown, true, 0, cfg).is_none());
+        let (mut x, mut y) = (0, 0);
+        for t in (20..=1000).step_by(20) {
+            let r = mouse.tick(t, cfg).unwrap();
+            x += r.x;
+            y += r.y;
+        }
+        assert_eq!((x, y), (-707, 707));
+        mouse.key(MouseDown, false, 1000, cfg);
+        mouse.key(MouseRight, true, 1000, cfg);
+        assert_eq!(mouse.next_deadline(), None);
+        assert!(mouse.key(MouseLeft, false, 1020, cfg).is_none());
+        assert_eq!(mouse.tick(1040, cfg).unwrap().x, 20);
     }
 
     #[test]
-    fn accel_without_direction_is_noop() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        let action = state.process(HidKeyCode::MouseAccel0, true, &config);
-        assert_eq!(action, MouseAction::None);
-        assert_eq!(state.report.x, 0);
-    }
-
-    #[test]
-    fn accel_release_only_modifies_state() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseAccel2, true, &config);
-        let x_before = state.report.x;
-        let action = state.process(HidKeyCode::MouseAccel2, false, &config);
-        assert_eq!(action, MouseAction::None, "Accel release should not send report");
-        assert_eq!(
-            state.report.x, x_before,
-            "Report should not change until next repeat tick"
-        );
-        assert_eq!(state.accel, 0, "Accel state should be cleared");
-    }
-
-    // -- G. Edge cases --------------------------------------------------------
-
-    #[test]
-    fn no_directions_report_zero() {
-        let state = MouseState::new();
-        assert_eq!(state.report.x, 0);
-        assert_eq!(state.report.y, 0);
-        assert_eq!(state.report.wheel, 0);
-        assert_eq!(state.report.pan, 0);
-    }
-
-    #[test]
-    fn all_four_directions_cancel() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseUp, true, &config);
-        state.process(HidKeyCode::MouseDown, true, &config);
-        state.process(HidKeyCode::MouseLeft, true, &config);
-        state.process(HidKeyCode::MouseRight, true, &config);
-        assert_eq!(state.report.x, 0);
-        assert_eq!(state.report.y, 0);
-    }
-
-    #[test]
-    fn three_directions_one_cancels() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseUp, true, &config);
-        state.process(HidKeyCode::MouseDown, true, &config);
-        state.process(HidKeyCode::MouseRight, true, &config);
-        assert_eq!(state.report.y, 0, "Up+Down should cancel");
-        assert!(state.report.x > 0, "Right should still be active");
-    }
-
-    #[test]
-    fn calculate_unit_never_zero() {
-        let result = MouseState::calculate_unit(0, 0, 0, 1, 50, 20);
-        assert_eq!(result, 1);
-    }
-
-    #[test]
-    fn calculate_unit_clamps_to_max() {
-        // `max` is the only cap; the report axes are 16-bit, so a `move_max`
-        // above 127 survives instead of being truncated.
-        let result = MouseState::calculate_unit(4, 50, 100, 10, 50, 255);
-        assert_eq!(result, 255);
-    }
-
-    // -- H. Return value semantics --------------------------------------------
-
-    #[test]
-    fn first_direction_schedules_repeat() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        let action = state.process(HidKeyCode::MouseRight, true, &config);
-        assert_eq!(action, MouseAction::SendReport);
-        assert!(state.movement.deadline.is_some());
-    }
-
-    #[test]
-    fn second_direction_does_not_reschedule() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        let deadline_after_first = state.movement.deadline;
-        let action = state.process(HidKeyCode::MouseDown, true, &config);
-        assert_eq!(action, MouseAction::SendReport);
-        // Deadline unchanged — repeat was already running
-        assert_eq!(state.movement.deadline, deadline_after_first);
-    }
-
-    #[test]
-    fn wheel_first_schedules_repeat() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        let action = state.process(HidKeyCode::MouseWheelUp, true, &config);
-        assert_eq!(action, MouseAction::SendReport);
-        assert!(state.wheel.deadline.is_some());
-    }
-
-    #[test]
-    fn button_returns_send_report() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        let action = state.process(HidKeyCode::MouseBtn1, true, &config);
-        assert_eq!(action, MouseAction::SendReport);
-    }
-
-    #[test]
-    fn release_accel_without_active_returns_none() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseAccel0, true, &config);
-        let action = state.process(HidKeyCode::MouseAccel0, false, &config);
-        assert_eq!(action, MouseAction::None);
-    }
-
-    // -- I. on_repeat_tick ----------------------------------------------------
-
-    #[test]
-    fn on_repeat_tick_increments_and_recalculates() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        assert_eq!(state.movement.repeat, 1);
-        let x_initial = state.report.x;
-
-        state
-            .movement
-            .on_repeat_tick(config.ticks_to_max, config.get_movement_delay(state.movement.repeat));
-        state.recalculate_report(&config);
-        assert_eq!(state.movement.repeat, 2);
-        assert!(state.report.x >= x_initial);
-    }
-
-    #[test]
-    fn on_repeat_tick_schedules_next_deadline() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseRight, true, &config);
-        // Clear the deadline set by process so we can verify on_repeat_tick sets it
-        state.movement.deadline = None;
-        state
-            .movement
-            .on_repeat_tick(config.ticks_to_max, config.get_movement_delay(state.movement.repeat));
-        assert!(state.movement.deadline.is_some());
-    }
-
-    // -- J. Diagonal compensation static tests --------------------------------
-
-    #[test]
-    fn diagonal_compensation_reduces_magnitude() {
-        let (x, y) = MouseState::apply_diagonal_compensation(10, 10);
-        assert!(x < 10 && x > 0);
-        assert!(y < 10 && y > 0);
-        assert_eq!(x, y);
-    }
-
-    #[test]
-    fn diagonal_compensation_preserves_sign() {
-        let (x, y) = MouseState::apply_diagonal_compensation(-10, 10);
-        assert!(x < 0);
-        assert!(y > 0);
-    }
-
-    #[test]
-    fn diagonal_compensation_small_values_never_zero() {
-        let (x, y) = MouseState::apply_diagonal_compensation(1, 1);
-        assert_eq!(x, 1);
-        assert_eq!(y, 1);
-    }
-
-    // -- K. calculate_unit curve tests ----------------------------------------
-
-    #[test]
-    fn calculate_unit_initial_returns_delta() {
-        let result = MouseState::calculate_unit(0, 0, 6, 3, 50, 20);
-        assert_eq!(result, 6);
-    }
-
-    #[test]
-    fn calculate_unit_at_max_speed() {
-        let result = MouseState::calculate_unit(0, 50, 6, 3, 50, 20);
-        assert_eq!(result, 18);
-    }
-
-    #[test]
-    fn calculate_unit_clamped_to_max() {
-        let result = MouseState::calculate_unit(0, 50, 6, 3, 50, 10);
-        assert_eq!(result, 10);
-    }
-
-    // -- L. Repeat scheduling / deadline behavior -----------------------------
-
-    #[test]
-    fn fire_repeats_only_due_category_fires() {
-        let mut state = MouseState::new();
-        let config = default_config();
-
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
-
-        // Only movement is due.
-        state.movement.deadline = Some(Instant::MIN);
-        state.wheel.deadline = Some(Instant::now() + Duration::from_secs(60));
-
-        let report = state.fire_repeats(&config);
-
-        let report = report.expect("Movement was due, should return Some");
-        assert!(report.x != 0, "Movement axis should be non-zero");
-        assert_eq!(report.wheel, 0, "Wheel should be masked to 0");
-        assert_eq!(state.movement.repeat, 2, "Movement repeat should tick");
-        assert_eq!(state.wheel.repeat, 1, "Wheel repeat should not tick");
-    }
-
-    #[test]
-    fn fire_repeats_none_due_no_fire() {
-        let mut state = MouseState::new();
-        let config = default_config();
-
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
-
-        state.movement.deadline = Some(Instant::now() + Duration::from_secs(60));
-        state.wheel.deadline = Some(Instant::now() + Duration::from_secs(60));
-
-        let report = state.fire_repeats(&config);
-
-        assert!(report.is_none(), "Nothing due, should return None");
-        assert_eq!(state.movement.repeat, 1);
-        assert_eq!(state.wheel.repeat, 1);
-    }
-
-    #[test]
-    fn fire_repeats_both_due_fire_both() {
-        let mut state = MouseState::new();
-        let config = default_config();
-
-        state.process(HidKeyCode::MouseRight, true, &config);
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
-
-        state.movement.deadline = Some(Instant::MIN);
-        state.wheel.deadline = Some(Instant::MIN);
-
-        let report = state.fire_repeats(&config);
-
-        let report = report.expect("Both due, should return Some");
-        assert!(report.x != 0, "Movement axis should be non-zero");
-        assert!(report.wheel != 0, "Wheel axis should be non-zero");
-        assert_eq!(state.movement.repeat, 2);
-        assert_eq!(state.wheel.repeat, 2);
-    }
-
-    #[test]
-    fn next_deadline_selects_earliest_and_handles_none() {
-        let mut state = MouseState::new();
-        let now = Instant::now();
-
-        assert_eq!(state.next_deadline(), None);
-
-        let movement_deadline = now + Duration::from_millis(10);
-        state.movement.deadline = Some(movement_deadline);
-        assert_eq!(state.next_deadline(), Some(movement_deadline));
-
-        let wheel_deadline = now + Duration::from_millis(20);
-        state.wheel.deadline = Some(wheel_deadline);
-        assert_eq!(state.next_deadline(), Some(movement_deadline));
-
-        state.movement.deadline = None;
-        assert_eq!(state.next_deadline(), Some(wheel_deadline));
-    }
-
-    // -- M. Additional behavior guards ---------------------------------------
-
-    #[test]
-    fn non_mouse_key_is_noop() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        let before = state.report;
-
-        let action = state.process(HidKeyCode::A, true, &config);
-
-        assert_eq!(action, MouseAction::None);
-        assert_eq!(state.report, before);
-        assert_eq!(state.next_deadline(), None);
-    }
-
-    #[test]
-    fn wheel_diagonal_compensation_reduces_magnitude() {
-        let mut state = MouseState::new();
-        let config = default_config();
-
-        state.process(HidKeyCode::MouseWheelUp, true, &config);
-        state.process(HidKeyCode::MouseWheelRight, true, &config);
-
-        // Ensure wheel/pan magnitude is high enough so compensation is visible.
-        state.accel = 1 << 2;
-        state.wheel.repeat = config.wheel_ticks_to_max;
-        state.recalculate_report(&config);
-
-        let raw = state.report;
-        let compensated = state.get_report();
-
-        assert!(raw.wheel != 0 && raw.pan != 0);
-        assert!(compensated.wheel.abs() < raw.wheel.abs());
-        assert!(compensated.pan.abs() < raw.pan.abs());
-    }
-
-    // -- N. Wheel sign convention tests ----------------------------------------
-
-    #[test]
-    fn wheel_down_sets_negative_wheel() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseWheelDown, true, &config);
-        assert!(state.report.wheel < 0, "WheelDown should produce negative wheel");
-        assert_eq!(state.report.pan, 0);
-    }
-
-    #[test]
-    fn wheel_right_sets_positive_pan() {
-        let mut state = MouseState::new();
-        let config = default_config();
-        state.process(HidKeyCode::MouseWheelRight, true, &config);
-        assert!(state.report.pan > 0, "WheelRight should produce positive pan");
-        assert_eq!(state.report.wheel, 0);
+    fn late_wakeup_limits_catch_up_at_maximum_sprint_speed() {
+        let cfg = MouseKeyConfig::new(0, u16::MAX, u16::MAX, u16::MAX);
+        let mut mouse = MouseState::new();
+        mouse.key(MouseAccel2, true, 0, cfg);
+        mouse.key(MouseRight, true, 0, cfg);
+        mouse.key(MouseWheelDown, true, 0, cfg);
+        let r = mouse.tick(1000, cfg).unwrap();
+        assert_eq!((r.x, r.wheel), (10485, -10485));
+        assert!(mouse.tick(1000, cfg).is_none());
+        assert_eq!(mouse.next_deadline(), Some(Instant::from_millis(1020)));
     }
 }
