@@ -35,9 +35,9 @@ use crate::ble::led::BleLedReader;
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
 #[cfg(feature = "dongle")]
 use crate::ble::profile::DONGLE_PROFILE;
-use crate::ble::profile::{BOND_SLOTS, ProfileChange, ProfileInfo, ProfileManager};
+use crate::ble::profile::{BOND_SLOTS, ProfileInfo, ProfileManager};
 use crate::ble::sleep::{report_activity, request_sleep};
-use crate::channel::{BLE_REPORT_CHANNEL, LED_SIGNAL};
+use crate::channel::{BLE_PROFILE_CHANNEL, BLE_REPORT_CHANNEL, LED_SIGNAL};
 use crate::config::{BleBatteryConfig, DeviceConfig, RmkConfig};
 use crate::core_traits::Runnable;
 use crate::event::SubscribableEvent;
@@ -492,7 +492,7 @@ async fn run_ble_keyboard<
 
             let accepted;
             // Consume queued wake input before a profile action can cancel the connection flow.
-            match select3(connect, ProfileChange::receive(profile_id), completed.receive()).await {
+            match select3(connect, BLE_PROFILE_CHANNEL.receive(), completed.receive()).await {
                 Either3::First(Ok(gatt_conn)) => {
                     // A replaced advertisement can still deliver a late connection.
                     #[cfg(feature = "ext_adv")]
@@ -543,43 +543,56 @@ async fn run_ble_keyboard<
                     Timer::after_millis(200).await;
                     continue;
                 }
-                Either3::Second(Some(change)) => {
+                Either3::Second(action) => {
+                    use crate::NUM_BLE_PROFILE;
+                    use crate::ble::profile::BleProfileAction::{ClearBond, ClearSlot, Next, Previous, Switch};
+
+                    let slot = match action {
+                        Switch(slot) | ClearSlot(slot) => slot,
+                        ClearBond => profile_id,
+                        Next | Previous if NUM_BLE_PROFILE == 0 => continue,
+                        Next if usize::from(profile_id) + 1 < NUM_BLE_PROFILE => profile_id + 1,
+                        Next => 0,
+                        Previous if profile_id == 0 => NUM_BLE_PROFILE.saturating_sub(1) as u8,
+                        Previous => profile_id - 1,
+                    };
+                    let clear_bond = matches!(action, ClearBond | ClearSlot(_));
+                    if !clear_bond && slot == profile_id {
+                        continue;
+                    }
                     report_activity();
                     advertising_paused = false;
-                    match change {
-                        ProfileChange::ClearBond(slot) => {
-                            if let Some(conn) = &host_connections[slot as usize] {
-                                conn.disconnect();
-                            }
-                            while host_connections[slot as usize].is_some() {
-                                let ended = completed.receive().await;
-                                host_connections[ended as usize].take();
-                                if ended == profile_id {
-                                    set_ble_state(BleState::Inactive);
-                                }
-                            }
-                            profile_manager.clear_bond(slot);
+                    if clear_bond {
+                        if let Some(conn) = &host_connections[slot as usize] {
+                            conn.disconnect();
                         }
-                        ProfileChange::SwitchTo(slot) => {
-                            if NUM_HOST_LINKS == 1
-                                && let Some(conn) = &host_connections[profile_id as usize]
-                            {
-                                conn.disconnect();
+                        while host_connections[slot as usize].is_some() {
+                            let ended = completed.receive().await;
+                            host_connections[ended as usize].take();
+                            if ended == profile_id {
+                                set_ble_state(BleState::Inactive);
                             }
-                            let state = if host_connections[slot as usize]
-                                .as_ref()
-                                .is_some_and(|conn| conn.security_level().is_ok_and(|level| level.encrypted()))
-                            {
-                                BleState::Connected
-                            } else {
-                                BleState::Inactive
-                            };
-                            profile_manager.switch_profile(slot, state);
                         }
+                        profile_manager.clear_bond(slot);
+                        continue;
                     }
+
+                    if NUM_HOST_LINKS == 1
+                        && let Some(conn) = &host_connections[profile_id as usize]
+                    {
+                        conn.disconnect();
+                    }
+                    let state = if host_connections[slot as usize]
+                        .as_ref()
+                        .is_some_and(|conn| conn.security_level().is_ok_and(|level| level.encrypted()))
+                    {
+                        BleState::Connected
+                    } else {
+                        BleState::Inactive
+                    };
+                    profile_manager.switch_profile(slot, state);
                     continue;
                 }
-                Either3::Second(None) => continue,
                 Either3::Third(ended) => {
                     host_connections[ended as usize].take();
                     if ended == profile_id {
