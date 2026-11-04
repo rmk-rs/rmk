@@ -6,10 +6,6 @@ The `[rmk]` section defines configuration parameters used inside RMK. These para
 
 ```toml
 [rmk]
-# Mouse key interval (ms) - controls mouse movement speed
-mouse_key_interval = 20
-# Mouse wheel interval (ms) - controls scrolling speed
-mouse_wheel_interval = 80
 # Maximum number of combos keyboard can store
 combo_max_num = 8
 # Maximum number of keys pressed simultaneously in a combo
@@ -49,11 +45,6 @@ auto_mouse_layer_max_num = 2
 ```
 
 ## Parameter Details
-
-### Mouse-Related Configuration
-
-- `mouse_key_interval`: Mouse key interval in milliseconds, default value is 20. This parameter controls the mouse movement speed; lower values result in faster movement.
-- `mouse_wheel_interval`: Mouse wheel interval in milliseconds, default value is 80. This parameter controls the scrolling speed; lower values result in faster scrolling.
 
 ### Behavior Configuration
 

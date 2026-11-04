@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 /// Resolved behavioral configuration.
 pub struct Behavior {
+    pub mouse_key: Option<MouseKey>,
     pub tri_layer: Option<[u8; 3]>,
     pub one_shot_timeout_ms: Option<u64>,
     pub one_shot_modifiers: Option<OneShot>,
@@ -10,6 +11,24 @@ pub struct Behavior {
     pub forks: Option<Forks>,
     pub morse: Option<Morse>,
     pub auto_mouse_layer: Vec<AutoMouseLayer>,
+}
+
+/// Per-keyboard overrides. Omitted fields inherit the firmware's mouse-key defaults.
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MouseKey {
+    pub initial_speed: Option<u16>,
+    pub max_speed: Option<u16>,
+    #[serde(default, rename = "acceleration_time", deserialize_with = "mouse_acceleration_time")]
+    pub acceleration_time_ms: Option<u16>,
+    pub scroll_speed: Option<u16>,
+}
+
+fn mouse_acceleration_time<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<u16>, D::Error> {
+    let ms = <crate::DurationMillis as serde::Deserialize>::deserialize(de)?.0;
+    u16::try_from(ms)
+        .map(Some)
+        .map_err(|_| serde::de::Error::custom("behavior.mouse_key.acceleration_time must be at most 65535ms"))
 }
 
 pub struct AutoMouseLayer {
@@ -263,6 +282,7 @@ impl crate::KeyboardTomlConfig {
             .collect();
 
         Ok(Behavior {
+            mouse_key: toml_behavior.mouse_key,
             tri_layer,
             one_shot_timeout_ms,
             one_shot_modifiers,
@@ -307,6 +327,27 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::{BehaviorConfig, KeyboardTomlConfig};
+
+    #[test]
+    fn mouse_key_time_uses_duration_syntax_and_fits_the_firmware_type() {
+        let config: KeyboardTomlConfig = toml::from_str("[behavior.mouse_key]\nacceleration_time = '1s'").unwrap();
+        let mouse = config.behavior().unwrap().mouse_key.unwrap();
+        assert_eq!(mouse.acceleration_time_ms, Some(1000));
+        assert_eq!(mouse.max_speed, None);
+        for field in [
+            "acceleration_time = '66s'",
+            "acceleration_time = '18446744073709552s'",
+            "initial_speed = -1",
+            "max_speed = 1.5",
+            "move_delta = 5",
+        ] {
+            assert!(
+                toml::from_str::<KeyboardTomlConfig>(&format!("[behavior.mouse_key]\n{field}")).is_err(),
+                "{field}"
+            );
+        }
+        assert!(toml::from_str::<KeyboardTomlConfig>("[rmk]\nmouse_key_interval = 20").is_err());
+    }
 
     #[test]
     fn morse_profile_enable_flow_tap_resolves_as_override() {

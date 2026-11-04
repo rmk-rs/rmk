@@ -51,14 +51,6 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     let mut lines = Vec::new();
 
     // Direct constants
-    lines.push(format!(
-        "pub const MOUSE_KEY_INTERVAL: u16 = {};",
-        bc.mouse_key_interval
-    ));
-    lines.push(format!(
-        "pub const MOUSE_WHEEL_INTERVAL: u16 = {};",
-        bc.mouse_wheel_interval
-    ));
     lines.push(format!("pub const COMBO_MAX_NUM: usize = {};", bc.combo_max_num));
     lines.push(format!("pub const COMBO_MAX_LENGTH: usize = {};", bc.combo_max_length));
     lines.push(format!("pub const MACRO_MAX_NUM: usize = {};", bc.macro_max_num));

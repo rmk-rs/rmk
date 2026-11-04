@@ -552,6 +552,27 @@ pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenS
     let forks = expand_forks(&behavior.forks, &profiles);
     let morse = expand_morse(&behavior.morse);
     let auto_mouse_layer = expand_auto_mouse_layer(&behavior.auto_mouse_layer);
+    let mouse_key = if let Some(cfg) = &behavior.mouse_key {
+        let args = [
+            ("initial_speed", cfg.initial_speed),
+            ("max_speed", cfg.max_speed),
+            ("acceleration_time_ms", cfg.acceleration_time_ms),
+            ("scroll_speed", cfg.scroll_speed),
+        ]
+        .map(|(field, value)| match value {
+            Some(n) => quote! { #n },
+            None => {
+                let field = format_ident!("{field}");
+                quote! { MouseKeyConfig::DEFAULT.#field() }
+            }
+        });
+        quote! { const {
+            use ::rmk::config::MouseKeyConfig;
+            MouseKeyConfig::new(#(#args),*)
+        } }
+    } else {
+        quote! { ::rmk::config::MouseKeyConfig::DEFAULT }
+    };
 
     quote! {
         #[allow(clippy::needless_update)]
@@ -563,7 +584,7 @@ pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenS
             fork: #forks,
             morse: #morse,
             keyboard_macros: #macros,
-            mouse_key: ::rmk::config::MouseKeyConfig::default(),
+            mouse_key: #mouse_key,
             tap: ::rmk::config::TapConfig::default(),
             auto_mouse_layer: #auto_mouse_layer,
             ..Default::default()
