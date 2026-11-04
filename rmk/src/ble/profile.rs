@@ -200,10 +200,16 @@ where
         (target != current).then_some(ProfileChange::SwitchTo(target))
     }
 
-    /// Change pairing mode after the slot's previous connection has finished.
-    pub(crate) fn set_pairing(&self, profile: Option<u8>) {
-        self.repairing.set(profile);
+    pub(super) fn start_pairing(&self, slot: u8) {
+        self.repairing.set(Some(slot));
         self.update_stack_bonds();
+    }
+
+    pub(super) fn cancel_pairing(&self, slot: u8) {
+        if self.repairing.get() == Some(slot) {
+            self.repairing.set(None);
+            self.update_stack_bonds();
+        }
     }
 
     /// Check if the `identity` is the bonded dongle's identity.
@@ -407,19 +413,21 @@ mod tests {
         with_manager::<2>(|manager| {
             let old = ProfileInfo::default();
             manager.set_bond(old.clone());
-            manager.set_pairing(Some(0));
+            manager.start_pairing(0);
+            manager.cancel_pairing(1);
             assert!(manager.bond_info(0).is_none());
-            manager.set_pairing(None);
+            manager.cancel_pairing(0);
             assert_eq!(manager.bond_info(0), Some(old.clone()));
 
-            manager.set_pairing(Some(0));
+            manager.start_pairing(0);
             let mut replacement = old;
             replacement.info.ltk = LongTermKey(42);
             manager.set_bond(replacement.clone());
             assert_eq!(manager.repairing.get(), None);
+            manager.cancel_pairing(0);
             assert_eq!(manager.bond_info(0), Some(replacement));
 
-            manager.set_pairing(Some(0));
+            manager.start_pairing(0);
             manager.clear_bond(0);
             assert_eq!(manager.repairing.get(), None);
             assert!(manager.bond_info(0).is_none());
