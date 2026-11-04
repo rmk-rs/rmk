@@ -161,7 +161,7 @@ async fn main(spawner: Spawner) {
         embassy_time::Duration::from_secs(12),
         None,
     );
-    let mut battery_processor = BatteryProcessor::new(2000, 2806);
+    let mut battery_processor = const { BatteryProcessor::new(2000, 2806) };
 
     let mut watchdog_runner = Nrf52Watchdog::default_runner(p.WDT);
 
