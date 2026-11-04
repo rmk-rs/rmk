@@ -200,10 +200,16 @@ where
         (target != current).then_some(ProfileChange::SwitchTo(target))
     }
 
-    /// Change pairing mode after the slot's previous connection has finished.
-    pub(crate) fn set_pairing(&self, profile: Option<u8>) {
-        self.repairing.set(profile);
+    pub(super) fn start_pairing(&self, slot: u8) {
+        self.repairing.set(Some(slot));
         self.update_stack_bonds();
+    }
+
+    pub(super) fn cancel_pairing(&self, slot: u8) {
+        if self.repairing.get() == Some(slot) {
+            self.repairing.set(None);
+            self.update_stack_bonds();
+        }
     }
 
     /// Check if the `identity` is the bonded dongle's identity.
@@ -251,19 +257,13 @@ where
         let Some(state) = self.profiles.get(info.slot_num as usize) else {
             return;
         };
-        let pairing_complete = self.repairing.get() == Some(info.slot_num);
-        let old = state.try_get();
-        if old.as_ref() == Some(&info) && !pairing_complete {
+        if self.repairing.get() == Some(info.slot_num) {
+            self.repairing.set(None);
+        } else if state.try_get().as_ref() == Some(&info) {
             return;
         }
-        let bond_changed = old.as_ref().is_none_or(|old| old.removed || old.info != info.info);
         state.sender().send(info);
-        if pairing_complete {
-            self.repairing.set(None);
-        }
-        if bond_changed || pairing_complete {
-            self.update_stack_bonds();
-        }
+        self.update_stack_bonds();
     }
 
     pub(crate) fn update_profile_cccd_table(&self, slot: u8, table: heapless::Vec<u8, CCCD_TABLE_SIZE>) {
@@ -320,6 +320,7 @@ where
 
     /// Apply a selected profile outside the cancellable action wait.
     pub(crate) fn switch_profile(&self, profile: u8, state: BleState) {
+        self.repairing.set(None);
         set_ble_status(BleStatus {
             profile,
             state,
@@ -407,19 +408,22 @@ mod tests {
         with_manager::<2>(|manager| {
             let old = ProfileInfo::default();
             manager.set_bond(old.clone());
-            manager.set_pairing(Some(0));
+            manager.start_pairing(0);
+            manager.update_profile_cccd_table(0, heapless::Vec::from_slice(&[1]).unwrap());
+            manager.cancel_pairing(1);
             assert!(manager.bond_info(0).is_none());
-            manager.set_pairing(None);
+            manager.cancel_pairing(0);
             assert_eq!(manager.bond_info(0), Some(old.clone()));
 
-            manager.set_pairing(Some(0));
+            manager.start_pairing(0);
             let mut replacement = old;
             replacement.info.ltk = LongTermKey(42);
             manager.set_bond(replacement.clone());
             assert_eq!(manager.repairing.get(), None);
+            manager.cancel_pairing(0);
             assert_eq!(manager.bond_info(0), Some(replacement));
 
-            manager.set_pairing(Some(0));
+            manager.start_pairing(0);
             manager.clear_bond(0);
             assert_eq!(manager.repairing.get(), None);
             assert!(manager.bond_info(0).is_none());
@@ -441,6 +445,7 @@ mod tests {
                 info.info.ltk = LongTermKey(slot.into());
                 manager.set_bond(info);
             }
+            manager.start_pairing(0);
             test_block_on(async {
                 for selected in [1, 0, 1] {
                     manager.switch_profile(selected, BleState::Inactive);
