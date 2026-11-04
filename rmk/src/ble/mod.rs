@@ -490,9 +490,8 @@ async fn run_ble_keyboard<
                 .await
             };
 
-            let accepted;
             // Consume queued wake input before a profile action can cancel the connection flow.
-            match select3(connect, BLE_PROFILE_CHANNEL.receive(), completed.receive()).await {
+            let accepted = match select3(connect, BLE_PROFILE_CHANNEL.receive(), completed.receive()).await {
                 Either3::First(Ok(gatt_conn)) => {
                     // A replaced advertisement can still deliver a late connection.
                     #[cfg(feature = "ext_adv")]
@@ -528,7 +527,7 @@ async fn run_ble_keyboard<
                         }
                     }
                     host_connections[profile_id as usize] = Some(gatt_conn.raw().clone());
-                    accepted = gatt_conn;
+                    gatt_conn
                 }
                 Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
                     advertising_paused = true;
@@ -601,7 +600,7 @@ async fn run_ble_keyboard<
                     }
                     continue;
                 }
-            }
+            };
             accepted_connections.send((accepted, profile_id)).await;
         }
     };
