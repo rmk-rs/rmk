@@ -490,6 +490,7 @@ async fn run_ble_keyboard<
                 .await
             };
 
+            let accepted;
             // Consume queued wake input before a profile action can cancel the connection flow.
             match select3(connect, ProfileChange::receive(profile_id), completed.receive()).await {
                 Either3::First(Ok(gatt_conn)) => {
@@ -500,7 +501,8 @@ async fn run_ble_keyboard<
                         disconnect(&gatt_conn).await;
                         continue;
                     }
-                    if let Some(bond) = profile_manager.bond_info(profile_id)
+                    let bond_info = profile_manager.bond_info(profile_id);
+                    if let Some(bond) = &bond_info
                         && !bond.info.identity.match_identity(&gatt_conn.raw().peer_identity())
                     {
                         warn!("[ble] peer does not match its profile");
@@ -518,19 +520,28 @@ async fn run_ble_keyboard<
                     if let Err(e) = gatt_conn.raw().set_bondable(true) {
                         error!("Set bondable error: {:?}", e);
                     }
+                    if let Some(bond) = bond_info {
+                        info!("Loading CCCD table: {:?}", bond.cccd_table);
+                        match ClientAttTableView::try_from_raw(&bond.cccd_table) {
+                            Ok(view) => server.set_client_att_table(gatt_conn.raw(), &view),
+                            Err(e) => warn!("Invalid stored CCCD table: {:?}", e),
+                        }
+                    }
                     host_connections[profile_id as usize] = Some(gatt_conn.raw().clone());
-                    accepted_connections.send((gatt_conn, profile_id)).await;
+                    accepted = gatt_conn;
                 }
                 Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
                     advertising_paused = true;
                     set_ble_state(BleState::Inactive);
                     request_sleep();
+                    continue;
                 }
                 Either3::First(Err(e)) => {
                     #[cfg(feature = "defmt")]
                     let e = defmt::Debug2Format(&e);
                     error!("Advertise error: {:?}", e);
                     Timer::after_millis(200).await;
+                    continue;
                 }
                 Either3::Second(Some(change)) => {
                     report_activity();
@@ -566,16 +577,19 @@ async fn run_ble_keyboard<
                             profile_manager.switch_profile(slot, state);
                         }
                     }
+                    continue;
                 }
-                Either3::Second(None) => {}
+                Either3::Second(None) => continue,
                 Either3::Third(ended) => {
                     host_connections[ended as usize].take();
                     if ended == profile_id {
                         set_ble_state(BleState::Inactive);
                         advertising_paused = false;
                     }
+                    continue;
                 }
             }
+            accepted_connections.send((accepted, profile_id)).await;
         }
     };
 
@@ -1014,18 +1028,6 @@ async fn serve_keyboard_connection<
     let mut ble_peripheral_battery_server = crate::SPLIT_BATTERY_PERIPHERAL_IDS
         .first()
         .map(|_| BlePeripheralBatteryServer::new(server, conn));
-
-    // CCCD lookup uses cached bond info to avoid a cancellable flash read while
-    // this future is racing other arms of an outer `select`.
-    if let Some(bond_info) = profile_manager.bond_info(profile_id)
-        && bond_info.info.identity.match_identity(&conn.raw().peer_identity())
-    {
-        info!("Loading CCCD table: {:?}", bond_info.cccd_table);
-        match ClientAttTableView::try_from_raw(&bond_info.cccd_table) {
-            Ok(view) => server.set_client_att_table(conn.raw(), &view),
-            Err(e) => warn!("Invalid stored CCCD table: {:?}", e),
-        }
-    }
 
     // `use_1m_phy` exists for legacy host adapters that cannot do 2M.
     // Always use 2M for the dongle link.
