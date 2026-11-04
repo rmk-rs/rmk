@@ -18,6 +18,8 @@ use self::handlers::{serve, serve_bulk};
 use self::topics::TopicSubscribers;
 use super::context::KeyboardContext;
 use super::lock::HostLock;
+#[cfg(feature = "_ble")]
+use crate::ble::profile::BleProfileAction;
 use crate::config::{DeviceConfig, LockConfig, RmkConfig};
 use crate::keymap::KeyMap;
 
@@ -79,12 +81,26 @@ impl<'a> RynkService<'a> {
         &self,
         locker: &HostLock<'_>,
         msg: &mut RynkMessage<'_>,
-        #[cfg(feature = "_ble")] profile_action: &mut Option<crate::ble::profile::BleProfileAction>,
+        #[cfg(feature = "_ble")] profile_action: &mut Option<BleProfileAction>,
     ) -> Result<(), RynkError> {
         let cmd = msg.header().cmd;
         if self.requires_unlock(cmd) && !locker.is_unlocked() {
             return Err(RynkError::Locked);
         }
+
+        #[cfg(feature = "_ble")]
+        let mut prepare_profile_action = |action: fn(u8) -> BleProfileAction| {
+            let slot: u8 = msg.decode_request()?;
+            if usize::from(slot) >= crate::NUM_BLE_PROFILE {
+                return Err(RynkError::Invalid);
+            }
+            if crate::channel::BLE_PROFILE_CHANNEL.is_full() {
+                return Err(RynkError::NotReady);
+            }
+            msg.encode_response(&())?;
+            *profile_action = Some(action(slot));
+            Ok(())
+        };
 
         match cmd {
             Cmd::GetVersion => serve::<command::GetVersion, _>(self, msg).await,
@@ -128,26 +144,10 @@ impl<'a> RynkService<'a> {
             Cmd::GetConnectionStatus => serve::<command::GetConnectionStatus, _>(self, msg).await,
             #[cfg(feature = "_ble")]
             Cmd::GetBleStatus => serve::<command::GetBleStatus, _>(self, msg).await,
-
             #[cfg(feature = "_ble")]
-            cmd @ (Cmd::SwitchBleProfile | Cmd::ClearBleProfile) => {
-                use crate::ble::profile::BleProfileAction;
-
-                let target_profile_id: u8 = msg.decode_request()?;
-                if usize::from(target_profile_id) >= crate::NUM_BLE_PROFILE {
-                    return Err(RynkError::Invalid);
-                }
-                if crate::channel::BLE_PROFILE_CHANNEL.is_full() {
-                    return Err(RynkError::NotReady);
-                }
-                msg.encode_response(&())?;
-                *profile_action = Some(if cmd == Cmd::SwitchBleProfile {
-                    BleProfileAction::Switch(target_profile_id)
-                } else {
-                    BleProfileAction::ClearSlot(target_profile_id)
-                });
-                Ok(())
-            }
+            Cmd::SwitchBleProfile => prepare_profile_action(BleProfileAction::Switch),
+            #[cfg(feature = "_ble")]
+            Cmd::ClearBleProfile => prepare_profile_action(BleProfileAction::ClearSlot),
 
             Cmd::GetCurrentLayer => serve::<command::GetCurrentLayer, _>(self, msg).await,
             Cmd::GetMatrixState => serve::<command::GetMatrixState, _>(self, msg).await,
