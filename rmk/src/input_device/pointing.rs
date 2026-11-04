@@ -7,8 +7,6 @@ use futures::future::pending;
 use rmk_macro::{input_device, processor};
 use rmk_types::keycode::HidKeyCode;
 
-#[cfg(feature = "_ble")]
-use crate::ble::sleep::report_activity;
 use crate::channel::send_hid_report;
 use crate::event::{
     Axis, AxisEvent, AxisValType, KeyboardEvent, PointingEvent, PointingProcessorEvent, PointingSetCpiEvent,
@@ -16,6 +14,7 @@ use crate::event::{
 };
 use crate::hid::{MouseReport, Report};
 use crate::keymap::KeyMap;
+use crate::sleep::report_activity;
 
 pub const ALL_POINTING_DEVICES: u8 = 255;
 
@@ -675,7 +674,6 @@ impl<'a> PointingProcessor<'a> {
 
         // Report activity for sleep management, as the keyboard does for key
         // events: on a pointing device, moving the ball is the activity.
-        #[cfg(feature = "_ble")]
         report_activity();
 
         let mut x = 0i16;
