@@ -22,9 +22,8 @@ pub fn set_ble_state(state: rmk_types::ble::BleState) {
     crate::state::set_ble_state(state);
 }
 
-#[cfg(any(not(feature = "_no_usb"), feature = "_ble"))]
-pub fn reset_connection_status() {
-    crate::state::CONNECTION_STATUS.lock(|c| c.set(rmk_types::connection::ConnectionStatus::default()));
+pub fn set_connection_status(status: rmk_types::connection::ConnectionStatus) {
+    crate::state::update_status(|current| *current = status);
 }
 
 #[cfg(feature = "storage")]

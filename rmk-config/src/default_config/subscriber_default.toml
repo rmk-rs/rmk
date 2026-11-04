@@ -60,7 +60,8 @@ events = [
     { name = "pointing" },
 ]
 
-# Rynk sessions subscribe to these topics; USB+BLE boards need two slots.
+# The USB Rynk connection subscribes to these topics. BLE counts are sized
+# from the configured host-link capacity in build_constants.
 
 [[subscriber]]
 features = ["rynk"]
@@ -75,15 +76,8 @@ events = [
 [[subscriber]]
 features = ["rynk", "_ble"]
 events = [
-    # battery_status is only subscribed under `_ble`; needs one slot per
-    # concurrent session (USB + BLE = 2).
-    { name = "battery_status", count = 2 },
-    # Second session slot for the always-on topics on dual-transport boards.
-    { name = "layer_change" },
-    { name = "wpm_update" },
-    { name = "connection_status_change" },
-    { name = "sleep_state" },
-    { name = "led_indicator" },
+    # Battery topics exist only in BLE-enabled firmware, including over USB.
+    { name = "battery_status" },
 ]
 
 # --- Dongle-gated internal subscribers (both binaries enable `dongle`) ---

@@ -383,16 +383,15 @@ impl Client {
         self.request::<command::GetBleStatus>(&()).await
     }
 
-    /// Switch to a BLE profile by slot. Requires [`DeviceCapabilities::ble_enabled`];
-    /// nothing is sent otherwise.
+    /// Switch to a BLE profile by slot. The switch can disconnect the requesting
+    /// BLE host before it receives the reply. Requires [`DeviceCapabilities::ble_enabled`].
     pub async fn switch_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
         self.require_ble(Cmd::SwitchBleProfile)?;
         self.request::<command::SwitchBleProfile>(&slot).await
     }
 
-    /// Clear (unbond) a BLE profile by slot. Clearing the currently connected profile
-    /// drops that connection. Requires [`DeviceCapabilities::ble_enabled`]; nothing is
-    /// sent otherwise.
+    /// Clear the bond at `slot` after unlocking. Clearing the requesting host's
+    /// BLE profile can disconnect it before it receives the reply.
     pub async fn clear_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
         self.require_ble(Cmd::ClearBleProfile)?;
         self.request::<command::ClearBleProfile>(&slot).await

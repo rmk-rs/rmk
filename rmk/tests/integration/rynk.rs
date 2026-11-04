@@ -11,9 +11,7 @@
 //! the case a scenario has no vocabulary for: two keyboards built over one
 //! flash, which is a lifetime a timeline cannot describe.
 
-use rmk::event::{
-    ConnectionStatusChangeEvent, LedIndicatorEvent, SleepStateEvent, WpmUpdateEvent, publish_event_async,
-};
+use rmk::event::{LedIndicatorEvent, SleepStateEvent, WpmUpdateEvent, publish_event_async};
 use rmk::k;
 use rmk::test_support::test_block_on;
 use rmk::types::keycode::HidKeyCode;
@@ -70,7 +68,8 @@ impl SimKeyboard {
             Cmd::SleepState => self.publish(publish_event_async(SleepStateEvent(payload(json, "topic")))),
             Cmd::LedIndicatorChange => self.publish(publish_event_async(LedIndicatorEvent(payload(json, "topic")))),
             Cmd::ConnectionChange => {
-                self.publish(publish_event_async(ConnectionStatusChangeEvent(payload(json, "topic"))))
+                let status = payload(json, "topic");
+                self.publish(async move { rmk::test_support::set_connection_status(status) })
             }
             #[cfg(feature = "_ble")]
             Cmd::BatteryStatusChange => self.publish(publish_event_async(rmk::event::BatteryStatusEvent(payload(

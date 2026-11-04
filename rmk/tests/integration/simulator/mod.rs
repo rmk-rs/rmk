@@ -63,7 +63,7 @@ fn reset() {
         .expect("free publisher slot at reset")
         .clear();
 
-    rmk::test_support::reset_connection_status();
+    rmk::test_support::set_connection_status(Default::default());
     #[cfg(not(feature = "_no_usb"))]
     rmk::state::set_usb_state(rmk_types::connection::UsbState::Configured);
     #[cfg(feature = "_no_usb")]
@@ -377,7 +377,7 @@ impl SimKeyboard {
             }
             let service = rmk::host::HostService::new(keymap, rmk_config);
             let (mut rx, mut tx): (&Link, &Link) = (&to_device, &from_device);
-            service.run_session(&mut rx, &mut tx).await;
+            service.run(&mut rx, &mut tx).await;
         };
         #[cfg(not(feature = "host"))]
         let session = core::future::pending::<()>();
