@@ -98,29 +98,6 @@ pub(crate) enum BleProfileAction {
     ClearSlot(u8),
 }
 
-/// A requested change with its target profile resolved.
-pub(super) enum ProfileChange {
-    SwitchTo(u8),
-    ClearBond(u8),
-}
-
-impl ProfileChange {
-    /// Consume one command, even when it selects the current profile and yields no change.
-    pub(super) async fn receive(current: u8) -> Option<Self> {
-        let target = match crate::channel::BLE_PROFILE_CHANNEL.receive().await {
-            BleProfileAction::Switch(slot) => slot,
-            BleProfileAction::ClearBond => return Some(Self::ClearBond(current)),
-            BleProfileAction::ClearSlot(slot) => return Some(Self::ClearBond(slot)),
-            BleProfileAction::Previous | BleProfileAction::Next if NUM_BLE_PROFILE == 0 => return None,
-            BleProfileAction::Previous if current == 0 => NUM_BLE_PROFILE.saturating_sub(1) as u8,
-            BleProfileAction::Previous => current - 1,
-            BleProfileAction::Next if usize::from(current) + 1 < NUM_BLE_PROFILE => current + 1,
-            BleProfileAction::Next => 0,
-        };
-        (target != current).then_some(Self::SwitchTo(target))
-    }
-}
-
 /// Manage BLE profiles and bonding information
 ///
 /// ProfileManager is responsible for:
