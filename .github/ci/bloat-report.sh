@@ -2,8 +2,8 @@
 # Assemble a bloat report from size-data artifact files.
 # Input directory structure per example:
 #   <safe_name>/size-data.txt       — dir|bin_label|base_total|head_total|text_diff|data_diff|bss_diff
-#   <safe_name>/size-head[-bin].txt — full cargo size output (HEAD)
-#   <safe_name>/size-base[-bin].txt — full cargo size output (BASE)
+#   <safe_name>/size-head[-bin].txt — full LLVM size output (HEAD)
+#   <safe_name>/size-base[-bin].txt — full LLVM size output (BASE)
 #   <safe_name>/bloaty[-bin].txt    — bloaty diff output
 #
 # Writes markdown to stdout and $GITHUB_STEP_SUMMARY.
@@ -92,20 +92,20 @@ done
         echo "<summary><code>$label</code> — $(fmt_size "$base_size") → $(fmt_size "$head_size") ($(fmt_diff "$base_size" "$head_size"))</summary>"
         echo
 
-        # cargo size (PR)
+        # LLVM size (PR)
         size_head="$artifact_dir/$safe_name/size-head${bin_suffix}.txt"
         if [[ -f "$size_head" ]]; then
-            echo "**cargo size (PR):**"
+            echo "**LLVM size (PR):**"
             echo '```'
             cat "$size_head"
             echo '```'
             echo
         fi
 
-        # cargo size (main)
+        # LLVM size (main)
         size_base="$artifact_dir/$safe_name/size-base${bin_suffix}.txt"
         if [[ -f "$size_base" ]]; then
-            echo "**cargo size (main):**"
+            echo "**LLVM size (main):**"
             echo '```'
             cat "$size_base"
             echo '```'
