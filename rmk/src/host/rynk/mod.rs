@@ -20,6 +20,8 @@ use super::context::KeyboardContext;
 use super::lock::HostLock;
 #[cfg(feature = "_ble")]
 use crate::ble::profile::BleProfileAction;
+#[cfg(feature = "_ble")]
+use crate::channel::BLE_PROFILE_CHANNEL;
 use crate::config::{DeviceConfig, LockConfig, RmkConfig};
 use crate::keymap::KeyMap;
 
@@ -76,33 +78,16 @@ impl<'a> RynkService<'a> {
         }
     }
 
-    /// Process one request and encode its response in place.
-    async fn dispatch(
+    /// Write one reply. A protocol rejection keeps the session open and returns `false`.
+    async fn serve_request<W: Write>(
         &self,
         locker: &HostLock<'_>,
         msg: &mut RynkMessage<'_>,
-        #[cfg(feature = "_ble")] profile_action: &mut Option<BleProfileAction>,
-    ) -> Result<(), RynkError> {
+        tx: &mut W,
+    ) -> Result<bool, W::Error> {
         let cmd = msg.header().cmd;
-        if self.requires_unlock(cmd) && !locker.is_unlocked() {
-            return Err(RynkError::Locked);
-        }
-
-        #[cfg(feature = "_ble")]
-        let mut prepare_profile_action = |action: fn(u8) -> BleProfileAction| {
-            let slot: u8 = msg.decode_request()?;
-            if usize::from(slot) >= crate::NUM_BLE_PROFILE {
-                return Err(RynkError::Invalid);
-            }
-            if crate::channel::BLE_PROFILE_CHANNEL.is_full() {
-                return Err(RynkError::NotReady);
-            }
-            msg.encode_response(&())?;
-            *profile_action = Some(action(slot));
-            Ok(())
-        };
-
-        match cmd {
+        let result = match cmd {
+            _ if self.requires_unlock(cmd) && !locker.is_unlocked() => Err(RynkError::Locked),
             Cmd::GetVersion => serve::<command::GetVersion, _>(self, msg).await,
             Cmd::GetCapabilities => serve::<command::GetCapabilities, _>(self, msg).await,
             Cmd::Reboot => serve::<command::Reboot, _>(self, msg).await,
@@ -145,9 +130,9 @@ impl<'a> RynkService<'a> {
             #[cfg(feature = "_ble")]
             Cmd::GetBleStatus => serve::<command::GetBleStatus, _>(self, msg).await,
             #[cfg(feature = "_ble")]
-            Cmd::SwitchBleProfile => prepare_profile_action(BleProfileAction::Switch),
+            Cmd::SwitchBleProfile => return serve_ble_profile(msg, tx, BleProfileAction::Switch).await,
             #[cfg(feature = "_ble")]
-            Cmd::ClearBleProfile => prepare_profile_action(BleProfileAction::ClearSlot),
+            Cmd::ClearBleProfile => return serve_ble_profile(msg, tx, BleProfileAction::ClearSlot).await,
 
             Cmd::GetCurrentLayer => serve::<command::GetCurrentLayer, _>(self, msg).await,
             Cmd::GetMatrixState => serve::<command::GetMatrixState, _>(self, msg).await,
@@ -161,6 +146,13 @@ impl<'a> RynkService<'a> {
             Cmd::GetLayout => serve::<command::GetLayout, _>(self, msg).await,
 
             _ => Err(RynkError::UnknownCmd),
+        };
+        match result {
+            Ok(()) => {
+                tx.write_all(msg.frame()).await?;
+                Ok(true)
+            }
+            Err(error) => reject(msg, tx, error).await,
         }
     }
 
@@ -191,44 +183,10 @@ impl<'a> RynkService<'a> {
                     // Hosts never send topic-range cmds; drop without a reply.
                     warn!("Rynk: dropping topic-range request {:?}", cmd);
                 } else {
-                    #[cfg(feature = "_ble")]
-                    let mut profile_action = None;
-                    let served = self
-                        .dispatch(
-                            &locker,
-                            &mut msg,
-                            #[cfg(feature = "_ble")]
-                            &mut profile_action,
-                        )
-                        .await;
-                    // The version handshake completes on GetCapabilities.
-                    handshaked |= cmd == Cmd::GetCapabilities && served.is_ok();
-                    let written = match served {
-                        Ok(()) => tx.write_all(msg.frame()).await,
-                        Err(error) => {
-                            // A parked tail shrinks the reply window, so an encode
-                            // failure there is backpressure, not a firmware fault.
-                            let error = if parked > 0 && error == RynkError::Internal {
-                                RynkError::Busy
-                            } else {
-                                error
-                            };
-                            let mut err_frame = [0u8; max_wire_size(
-                                RYNK_HEADER_SIZE + <Result<(), RynkError> as MaxSize>::POSTCARD_MAX_SIZE,
-                            )];
-                            let len =
-                                encode_frame(&mut err_frame, msg.header(), &Err::<(), RynkError>(error)).unwrap_or(0);
-                            tx.write_all(&err_frame[..len]).await
-                        }
-                    };
-                    if written.is_err() {
+                    let Ok(served) = self.serve_request(&locker, &mut msg, tx).await else {
                         return;
-                    }
-                    #[cfg(feature = "_ble")]
-                    if let Some(action) = profile_action {
-                        // A profile action may close this connection.
-                        crate::channel::BLE_PROFILE_CHANNEL.send(action).await;
-                    }
+                    };
+                    handshaked |= served && cmd == Cmd::GetCapabilities;
                 }
                 df.unpark_pending(&mut buf, parked);
             }
@@ -263,6 +221,40 @@ impl<'a> RynkService<'a> {
             }
         }
     }
+}
+
+#[cfg(feature = "_ble")]
+async fn serve_ble_profile<W: Write>(
+    msg: &mut RynkMessage<'_>,
+    tx: &mut W,
+    action_for_slot: fn(u8) -> BleProfileAction,
+) -> Result<bool, W::Error> {
+    let slot = match msg.decode_request::<u8>() {
+        Err(error) => return reject(msg, tx, error).await,
+        Ok(slot) if usize::from(slot) >= crate::NUM_BLE_PROFILE => return reject(msg, tx, RynkError::Invalid).await,
+        Ok(_) if BLE_PROFILE_CHANNEL.is_full() => return reject(msg, tx, RynkError::NotReady).await,
+        Ok(slot) => slot,
+    };
+    if let Err(error) = msg.encode_response(&()) {
+        return reject(msg, tx, error).await;
+    }
+    // Switching or clearing a profile can disconnect the requesting host.
+    tx.write_all(msg.frame()).await?;
+    BLE_PROFILE_CHANNEL.send(action_for_slot(slot)).await;
+    Ok(true)
+}
+
+async fn reject<W: Write>(msg: &RynkMessage<'_>, tx: &mut W, error: RynkError) -> Result<bool, W::Error> {
+    // Pipelined frames can leave too little room for the reply.
+    let error = if msg.capacity() < RYNK_BUFFER_SIZE && error == RynkError::Internal {
+        RynkError::Busy
+    } else {
+        error
+    };
+    let mut frame = [0u8; max_wire_size(RYNK_HEADER_SIZE + <Result<(), RynkError> as MaxSize>::POSTCARD_MAX_SIZE)];
+    let len = encode_frame(&mut frame, msg.header(), &Err::<(), RynkError>(error)).unwrap_or(0);
+    tx.write_all(&frame[..len]).await?;
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -402,6 +394,38 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(info.serial_number, config.device_config.serial_number);
+        }
+    }
+
+    #[cfg(feature = "_ble")]
+    #[test]
+    fn ble_profile_actions_require_a_successfully_written_reply() {
+        let mut behavior = BehaviorConfig::default();
+        let positional: PositionalConfig<1, 1> = PositionalConfig::default();
+        let mut data = KeymapData::<1, 1, 1, 0>::new([[[KeyAction::No]]]);
+        let keymap = block_on(KeyMap::new(&mut data, &mut behavior, &positional));
+        let config = RmkConfig {
+            lock_config: LockConfig {
+                insecure: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let service = RynkService::new(&keymap, &config);
+
+        for cmd in [Cmd::SwitchBleProfile, Cmd::ClearBleProfile] {
+            let request = req_with(cmd.raw(), 1, &0u8);
+            block_on(service.run(&mut request.as_slice(), &mut [].as_mut_slice()));
+            assert!(BLE_PROFILE_CHANNEL.is_empty());
+
+            let mut tx = VecWrite { captured: Vec::new() };
+            block_on(service.run(&mut request.as_slice(), &mut tx));
+            assert_eq!(tx.captured, req_with(cmd.raw(), 1, &Ok::<(), RynkError>(())));
+            assert!(matches!(
+                (cmd, BLE_PROFILE_CHANNEL.try_receive()),
+                (Cmd::SwitchBleProfile, Ok(BleProfileAction::Switch(0)))
+                    | (Cmd::ClearBleProfile, Ok(BleProfileAction::ClearSlot(0)))
+            ));
         }
     }
 
