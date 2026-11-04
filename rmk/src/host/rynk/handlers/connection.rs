@@ -1,9 +1,6 @@
 //! Connection handlers — USB/BLE preferred-transport read, BLE profile management.
 
 #[cfg(feature = "_ble")]
-use core::cell::Cell;
-
-#[cfg(feature = "_ble")]
 use rmk_types::ble::BleStatus;
 use rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rmk_types::protocol::rynk::RynkError;
@@ -13,8 +10,6 @@ use rmk_types::protocol::rynk::command::{GetConnectionStatus, GetConnectionType}
 
 use super::super::RynkService;
 use super::Handle;
-#[cfg(feature = "_ble")]
-use crate::ble::profile::BleProfileAction;
 
 impl Handle<GetConnectionType> for RynkService<'_> {
     async fn handle(&self, _: ()) -> Result<ConnectionType, RynkError> {
@@ -37,31 +32,40 @@ impl Handle<GetBleStatus> for RynkService<'_> {
     }
 }
 
+/// `Cmd::SwitchBleProfile` — payload is the slot index. `try_send` is
+/// used so a host hammering this Cmd while the previous switch is still
+/// running observes the queue-full error rather than blocking the
+/// dispatch loop.
 #[cfg(feature = "_ble")]
-impl Handle<SwitchBleProfile> for Cell<Option<BleProfileAction>> {
+impl Handle<SwitchBleProfile> for RynkService<'_> {
     async fn handle(&self, slot: u8) -> Result<(), RynkError> {
-        check_profile_request(slot)?;
-        self.set(Some(BleProfileAction::Switch(slot)));
-        Ok(())
+        Self::check_ble_profile_slot(slot)?;
+        crate::channel::BLE_PROFILE_CHANNEL
+            .try_send(crate::ble::profile::BleProfileAction::Switch(slot))
+            .map_err(|_| RynkError::NotReady)
+    }
+}
+
+/// `Cmd::ClearBleProfile` — wipes the bond at the given slot without
+/// requiring a prior switch (uses [`BleProfileAction::ClearSlot`]).
+#[cfg(feature = "_ble")]
+impl Handle<ClearBleProfile> for RynkService<'_> {
+    async fn handle(&self, slot: u8) -> Result<(), RynkError> {
+        Self::check_ble_profile_slot(slot)?;
+        crate::channel::BLE_PROFILE_CHANNEL
+            .try_send(crate::ble::profile::BleProfileAction::ClearSlot(slot))
+            .map_err(|_| RynkError::NotReady)
     }
 }
 
 #[cfg(feature = "_ble")]
-impl Handle<ClearBleProfile> for Cell<Option<BleProfileAction>> {
-    async fn handle(&self, slot: u8) -> Result<(), RynkError> {
-        check_profile_request(slot)?;
-        self.set(Some(BleProfileAction::ClearSlot(slot)));
-        Ok(())
+impl RynkService<'_> {
+    /// `Invalid` for a BLE profile slot past the configured profile count.
+    fn check_ble_profile_slot(slot: u8) -> Result<(), RynkError> {
+        if (slot as usize) >= crate::NUM_BLE_PROFILE {
+            Err(RynkError::Invalid)
+        } else {
+            Ok(())
+        }
     }
-}
-
-#[cfg(feature = "_ble")]
-fn check_profile_request(slot: u8) -> Result<(), RynkError> {
-    if usize::from(slot) >= crate::NUM_BLE_PROFILE {
-        return Err(RynkError::Invalid);
-    }
-    if crate::channel::BLE_PROFILE_CHANNEL.is_full() {
-        return Err(RynkError::NotReady);
-    }
-    Ok(())
 }
