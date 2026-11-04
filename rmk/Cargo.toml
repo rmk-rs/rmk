@@ -227,7 +227,8 @@ nrf52832_ble = ["_nrf_ble", "_no_usb"]
 nrf52811_ble = ["_nrf_ble", "_no_usb"]
 ## Enable feature if you want to use nRF52810 with BLE.
 nrf52810_ble = ["_nrf_ble", "_no_usb"]
-_nrf_ble = ["_ble", "dep:embassy-nrf", "dep:p256-cortex-m4", "dep:zeroize"]
+_nrf = ["dep:embassy-nrf"]
+_nrf_ble = ["_ble", "_nrf", "dep:p256-cortex-m4", "dep:zeroize"]
 
 ## Enable feature if you want to use ESP32C3 with BLE.
 esp32c3_ble = ["_esp_ble", "_no_usb"]
