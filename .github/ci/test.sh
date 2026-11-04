@@ -5,31 +5,35 @@ source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 
 export CARGO_NET_OFFLINE=false
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$target_root/test}"
+nx=(nextest run --config-file "$repo_root/.config/nextest.toml" --profile ci)
 
-# Each crate is its own cargo workspace in this repo, so nextest's default
-# `<workspace>/.config/nextest.toml` lookup would miss our shared config at
-# repo root. Pass it explicitly.
-nextest_cfg="$repo_root/.config/nextest.toml"
-nx=(nextest run --config-file "$nextest_cfg" --profile ci)
-
-log_section "Running tests"
+log_section "Configuration and shared types"
+log_section "Tests: rmk-config, default features"
 cargo +stable "${nx[@]}" --manifest-path rmk-config/Cargo.toml
+log_section "Tests: rmk-types, default features"
 cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml
-# Exercise the rynk protocol module (gated behind `rynk`).
+log_section "Tests: rmk-types, default features + host"
 cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml --features host
+log_section "Tests: rmk-types, default features + steno"
 cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml --features steno
-cargo +stable "${nx[@]}" --manifest-path rmk-macro/Cargo.toml --features _simulator,steno
-for feats in "${RMK_TEST_FEATURESETS[@]}"; do
-    if [[ -z "$feats" ]]; then
-        cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features
-    else
-        cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features --features "$feats"
-    fi
-done
 
-# Doctests: nextest does not run them. rmk/ and rmk-macro/ have `doctest = false`,
-# so only rmk-types and rmk-config need a separate --doc pass.
-log_section "Running doctests"
+# nextest does not run doctests. rmk and rmk-macro disable them.
+log_section "Doctests"
+log_section "Doctests: rmk-types, default features"
 cargo +stable test --manifest-path rmk-types/Cargo.toml --doc
+log_section "Doctests: rmk-types, default features + host"
 cargo +stable test --manifest-path rmk-types/Cargo.toml --features host --doc
+log_section "Doctests: rmk-config, default features"
 cargo +stable test --manifest-path rmk-config/Cargo.toml --doc
+
+log_section "Macro tests and expansion snapshots"
+log_section "Tests: rmk-macro, default features + _simulator,steno"
+cargo +stable "${nx[@]}" --manifest-path rmk-macro/Cargo.toml --features _simulator,steno
+
+log_section "RMK behavior"
+for feats in "${RMK_TEST_FEATURESETS[@]}"; do
+    args=(--no-default-features)
+    [[ -z "$feats" ]] || args+=(--features "$feats")
+    log_section "Tests: rmk, default features disabled, features: ${feats:-none}"
+    cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml "${args[@]}"
+done

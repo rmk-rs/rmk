@@ -20,9 +20,9 @@ steps = [
   { release = [0, 8] },
 ]
 expect = [
-  { mouse = { wheel = -1 } },
-  { mouse = { wheel = -1 } },  # repeat while the morse key is buffered
-  { mouse = { wheel = -1 } },  # repeat
+  { mouse = { wheel = 1 } },
+  { mouse = { wheel = 1 } },  # repeat while the morse key is buffered
+  { mouse = { wheel = 1 } },  # repeat
   ["B"], [],
   { mouse = {} },
 ]

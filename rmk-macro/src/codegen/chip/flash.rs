@@ -121,10 +121,10 @@ pub(crate) fn expand_flash_init(hardware: &Hardware, dfu: Option<&DfuConfig>) ->
         }
         ChipSeries::Esp32 => {
             hardware.storage.as_ref().map(|_| {
-                // ESP32 and ESP32-S3 are dual-core. Flash writes must auto-park it to avoid
+                // Dual-core chips must park the other core during flash writes to avoid
                 // `FlashStorageError::OtherCoreRunning`.
                 let chip_name = hardware.chip.chip.to_lowercase();
-                if chip_name == "esp32s3" {
+                if matches!(chip_name.as_str(), "esp32s3" | "esp32s31") {
                     quote! {
                         let storage_partition = ::rmk::storage::async_flash_wrapper(
                             ::esp_storage::FlashStorage::new(p.FLASH).multicore_auto_park()

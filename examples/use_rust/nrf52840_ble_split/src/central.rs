@@ -220,7 +220,7 @@ async fn main(spawner: Spawner) {
         embassy_time::Duration::from_secs(12),
         None,
     );
-    let mut batt_proc = BatteryProcessor::new(2000, 2806);
+    let mut batt_proc = const { BatteryProcessor::new(2000, 2806) };
     let mut charging = rmk::input_device::battery::ChargingStateReader::new(is_charging_pin, true);
 
     // Initialize the controllers
