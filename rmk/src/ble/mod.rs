@@ -142,6 +142,8 @@ pub const fn calculate_esp_ble_capacity(central_links: usize, peripheral_links: 
         // C3/S3 share activity slots between connections, scanning, and advertising.
         capacity += (central_links > 0) as usize + (peripheral_links > 0) as usize;
         10
+    } else if cfg!(feature = "esp32s31_ble") {
+        10
     } else if cfg!(feature = "esp32h2_ble") {
         35
     } else {
