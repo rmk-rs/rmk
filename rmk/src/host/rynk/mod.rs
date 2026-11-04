@@ -19,8 +19,6 @@ use self::topics::TopicSubscribers;
 use super::context::KeyboardContext;
 use super::lock::HostLock;
 #[cfg(feature = "_ble")]
-use crate::ble::profile::BleProfileAction;
-#[cfg(feature = "_ble")]
 use crate::channel::BLE_PROFILE_CHANNEL;
 use crate::config::{DeviceConfig, LockConfig, RmkConfig};
 use crate::keymap::KeyMap;
@@ -86,6 +84,8 @@ impl<'a> RynkService<'a> {
         tx: &mut W,
     ) -> Result<bool, W::Error> {
         let cmd = msg.header().cmd;
+        #[cfg(feature = "_ble")]
+        let pending_profile_action = core::cell::Cell::new(None);
         let result = match cmd {
             _ if self.requires_unlock(cmd) && !locker.is_unlocked() => Err(RynkError::Locked),
             Cmd::GetVersion => serve::<command::GetVersion, _>(self, msg).await,
@@ -130,9 +130,9 @@ impl<'a> RynkService<'a> {
             #[cfg(feature = "_ble")]
             Cmd::GetBleStatus => serve::<command::GetBleStatus, _>(self, msg).await,
             #[cfg(feature = "_ble")]
-            Cmd::SwitchBleProfile => return serve_ble_profile(msg, tx, BleProfileAction::Switch).await,
+            Cmd::SwitchBleProfile => serve::<command::SwitchBleProfile, _>(&pending_profile_action, msg).await,
             #[cfg(feature = "_ble")]
-            Cmd::ClearBleProfile => return serve_ble_profile(msg, tx, BleProfileAction::ClearSlot).await,
+            Cmd::ClearBleProfile => serve::<command::ClearBleProfile, _>(&pending_profile_action, msg).await,
 
             Cmd::GetCurrentLayer => serve::<command::GetCurrentLayer, _>(self, msg).await,
             Cmd::GetMatrixState => serve::<command::GetMatrixState, _>(self, msg).await,
@@ -150,6 +150,11 @@ impl<'a> RynkService<'a> {
         match result {
             Ok(()) => {
                 tx.write_all(msg.frame()).await?;
+                #[cfg(feature = "_ble")]
+                if let Some(action) = pending_profile_action.into_inner() {
+                    // Switching or clearing a profile can disconnect the requesting host.
+                    BLE_PROFILE_CHANNEL.send(action).await;
+                }
                 Ok(true)
             }
             Err(error) => reject(msg, tx, error).await,
@@ -223,27 +228,6 @@ impl<'a> RynkService<'a> {
     }
 }
 
-#[cfg(feature = "_ble")]
-async fn serve_ble_profile<W: Write>(
-    msg: &mut RynkMessage<'_>,
-    tx: &mut W,
-    action_for_slot: fn(u8) -> BleProfileAction,
-) -> Result<bool, W::Error> {
-    let slot = match msg.decode_request::<u8>() {
-        Err(error) => return reject(msg, tx, error).await,
-        Ok(slot) if usize::from(slot) >= crate::NUM_BLE_PROFILE => return reject(msg, tx, RynkError::Invalid).await,
-        Ok(_) if BLE_PROFILE_CHANNEL.is_full() => return reject(msg, tx, RynkError::NotReady).await,
-        Ok(slot) => slot,
-    };
-    if let Err(error) = msg.encode_response(&()) {
-        return reject(msg, tx, error).await;
-    }
-    // Switching or clearing a profile can disconnect the requesting host.
-    tx.write_all(msg.frame()).await?;
-    BLE_PROFILE_CHANNEL.send(action_for_slot(slot)).await;
-    Ok(true)
-}
-
 async fn reject<W: Write>(msg: &RynkMessage<'_>, tx: &mut W, error: RynkError) -> Result<bool, W::Error> {
     // Pipelined frames can leave too little room for the reply.
     let error = if msg.capacity() < RYNK_BUFFER_SIZE && error == RynkError::Internal {
@@ -273,6 +257,8 @@ mod tests {
     };
 
     use super::*;
+    #[cfg(feature = "_ble")]
+    use crate::ble::profile::BleProfileAction;
     use crate::config::{BehaviorConfig, LockConfig, PositionalConfig, RmkConfig, build_serial_number};
     use crate::event::KeyboardEvent;
     use crate::keymap::{KeyMap, KeymapData};
