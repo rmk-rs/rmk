@@ -18,8 +18,6 @@ use self::handlers::{serve, serve_bulk};
 use self::topics::TopicSubscribers;
 use super::context::KeyboardContext;
 use super::lock::HostLock;
-#[cfg(feature = "_ble")]
-use crate::channel::BLE_PROFILE_CHANNEL;
 use crate::config::{DeviceConfig, LockConfig, RmkConfig};
 use crate::keymap::KeyMap;
 
@@ -84,8 +82,6 @@ impl<'a> RynkService<'a> {
         tx: &mut W,
     ) -> Result<bool, W::Error> {
         let cmd = msg.header().cmd;
-        #[cfg(feature = "_ble")]
-        let pending_profile_action = core::cell::Cell::new(None);
         let result = match cmd {
             _ if self.requires_unlock(cmd) && !locker.is_unlocked() => Err(RynkError::Locked),
             Cmd::GetVersion => serve::<command::GetVersion, _>(self, msg).await,
@@ -130,9 +126,9 @@ impl<'a> RynkService<'a> {
             #[cfg(feature = "_ble")]
             Cmd::GetBleStatus => serve::<command::GetBleStatus, _>(self, msg).await,
             #[cfg(feature = "_ble")]
-            Cmd::SwitchBleProfile => serve::<command::SwitchBleProfile, _>(&pending_profile_action, msg).await,
+            Cmd::SwitchBleProfile => serve::<command::SwitchBleProfile, _>(self, msg).await,
             #[cfg(feature = "_ble")]
-            Cmd::ClearBleProfile => serve::<command::ClearBleProfile, _>(&pending_profile_action, msg).await,
+            Cmd::ClearBleProfile => serve::<command::ClearBleProfile, _>(self, msg).await,
 
             Cmd::GetCurrentLayer => serve::<command::GetCurrentLayer, _>(self, msg).await,
             Cmd::GetMatrixState => serve::<command::GetMatrixState, _>(self, msg).await,
@@ -150,11 +146,6 @@ impl<'a> RynkService<'a> {
         match result {
             Ok(()) => {
                 tx.write_all(msg.frame()).await?;
-                #[cfg(feature = "_ble")]
-                if let Some(action) = pending_profile_action.into_inner() {
-                    // Switching or clearing a profile can disconnect the requesting host.
-                    BLE_PROFILE_CHANNEL.send(action).await;
-                }
                 Ok(true)
             }
             Err(error) => reject(msg, tx, error).await,
@@ -257,8 +248,6 @@ mod tests {
     };
 
     use super::*;
-    #[cfg(feature = "_ble")]
-    use crate::ble::profile::BleProfileAction;
     use crate::config::{BehaviorConfig, LockConfig, PositionalConfig, RmkConfig, build_serial_number};
     use crate::event::KeyboardEvent;
     use crate::keymap::{KeyMap, KeymapData};
@@ -385,7 +374,10 @@ mod tests {
 
     #[cfg(feature = "_ble")]
     #[test]
-    fn ble_profile_actions_require_a_successfully_written_reply() {
+    fn a_failed_profile_reply_leaves_the_action_queued() {
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+
         let mut behavior = BehaviorConfig::default();
         let positional: PositionalConfig<1, 1> = PositionalConfig::default();
         let mut data = KeymapData::<1, 1, 1, 0>::new([[[KeyAction::No]]]);
@@ -402,11 +394,10 @@ mod tests {
         for cmd in [Cmd::SwitchBleProfile, Cmd::ClearBleProfile] {
             let request = req_with(cmd.raw(), 1, &0u8);
             block_on(service.run(&mut request.as_slice(), &mut [].as_mut_slice()));
-            assert!(BLE_PROFILE_CHANNEL.is_empty());
 
             let mut tx = VecWrite { captured: Vec::new() };
             block_on(service.run(&mut request.as_slice(), &mut tx));
-            assert_eq!(tx.captured, req_with(cmd.raw(), 1, &Ok::<(), RynkError>(())));
+            assert_eq!(tx.captured, req_with(cmd.raw(), 1, &Err::<(), _>(RynkError::NotReady)));
             assert!(matches!(
                 (cmd, BLE_PROFILE_CHANNEL.try_receive()),
                 (Cmd::SwitchBleProfile, Ok(BleProfileAction::Switch(0)))
