@@ -1,4 +1,4 @@
-//! Mouse keys integrate relative displacement between input events and repeat deadlines.
+//! Mouse keys sample the current speed at input events and repeat deadlines.
 
 use embassy_time::{Duration, Instant};
 use rmk_types::keycode::HidKeyCode;
@@ -11,7 +11,7 @@ const INTERVAL: Duration = Duration::from_millis(20);
 // A stalled HID writer must not replay the entire pause as one large motion.
 const MAX_ELAPSED_MS: u64 = 4 * INTERVAL.as_millis();
 // Milliseconds, quarter-speed gears, and a 181/256 diagonal projection share this denominator.
-const UNITS_PER_COUNT: i64 = 1000 * 4 * 256;
+const UNITS_PER_COUNT: u64 = 1000 * 4 * 256;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Speed {
@@ -44,7 +44,8 @@ impl Speed {
 /// A negative/positive net holder count selects the negative/positive direction of each axis.
 struct Motion {
     held: [i8; 2],
-    remainder: [i32; 2],
+    /// Fractional distance along each axis, cleared when its direction changes.
+    remainder: [u32; 2],
     started_ms: u64,
     last_update: Instant,
 }
@@ -73,19 +74,16 @@ impl Motion {
         let quarter_millicounts = match rate {
             Rate::Fixed(quarters_per_second) => u64::from(quarters_per_second) * elapsed,
             Rate::Ramp(config) => {
-                let max = u64::from(config.max_speed());
-                let duration = u64::from(config.acceleration_time_ms());
-                let ramp_start = (begin - self.started_ms).min(duration);
-                let ramp_end = (end - self.started_ms).min(duration);
-                if ramp_start == ramp_end {
-                    4 * max * elapsed
+                let initial = u32::from(config.initial_speed());
+                let max = u32::from(config.max_speed());
+                let duration = u32::from(config.acceleration_time_ms());
+                let age = (end - self.started_ms).min(u64::from(duration)) as u32;
+                let speed = if age < duration {
+                    initial + (max - initial) * age / duration
                 } else {
-                    let initial = u64::from(config.initial_speed());
-                    // Subtract cumulative areas so rounding does not depend on how a tick was split.
-                    let area = |t: u64| initial * t + (max - initial) * t * t / (2 * duration);
-                    let cruising_ms = elapsed - (ramp_end - ramp_start);
-                    4 * (area(ramp_end) - area(ramp_start) + max * cruising_ms)
-                }
+                    max
+                };
+                4 * u64::from(speed) * elapsed
             }
         };
 
@@ -95,11 +93,14 @@ impl Motion {
             256
         };
         core::array::from_fn(|axis| {
-            let total = i64::from(self.remainder[axis])
-                + i64::from(self.held[axis].signum()) * quarter_millicounts as i64 * projection;
-            self.remainder[axis] = (total % UNITS_PER_COUNT) as i32;
+            let direction = i16::from(self.held[axis].signum());
+            if direction == 0 {
+                return 0;
+            }
+            let total = u64::from(self.remainder[axis]) + quarter_millicounts * projection;
+            self.remainder[axis] = (total % UNITS_PER_COUNT) as u32;
             // Even at 2 × u16::MAX counts/s an 80 ms interval fits in a signed 16-bit HID axis.
-            (total / UNITS_PER_COUNT) as i16
+            direction * (total / UNITS_PER_COUNT) as i16
         })
     }
 
@@ -241,10 +242,10 @@ impl MouseState {
     }
 
     pub fn next_deadline(&self) -> Option<Instant> {
-        [self.cursor.deadline(), self.wheel.deadline()]
-            .into_iter()
-            .flatten()
-            .min()
+        match (self.cursor.deadline(), self.wheel.deadline()) {
+            (Some(cursor), Some(wheel)) => Some(cursor.min(wheel)),
+            (cursor, wheel) => cursor.or(wheel),
+        }
     }
 }
 
@@ -274,21 +275,28 @@ mod tests {
     }
 
     #[test]
-    fn displacement_depends_on_hold_time_across_timer_and_release_boundaries() {
-        for (initial, totals) in [(0, [1, 8, 121, 129, 1081]), (150, [1, 15, 136, 144, 1096])] {
+    fn ramp_samples_speed_at_each_update_including_release() {
+        // A 50 ms press sampled at 20, 40 and 50 ms starts with one count, then
+        // adds 120 × .020 + 240 × .020 + 300 × .010 = 10.2 counts from a zero start.
+        for (initial, hold, interval, expected) in [
+            (0, 1, 20, 1),
+            (150, 1, 20, 1),
+            (0, 50, 20, 11),
+            (150, 50, 20, 17),
+            (0, 50, 37, 13), // a late tick, then 13 ms of motion on release
+            (0, 200, 20, 133),
+            (0, 207, 37, 150), // the final interval crosses the end of the ramp
+            (0, 1000, 20, 1093),
+        ] {
             let cfg = MouseKeyConfig::new(initial, 1200, 200, 10);
-            for (hold, expected) in [1, 50, 200, 207, 1000].into_iter().zip(totals) {
-                for interval in [20, 37, 61] {
-                    let mut mouse = MouseState::new();
-                    let mut x = mouse.key(MouseRight, true, 0, cfg).unwrap().x;
-                    for t in (interval as u64..hold).step_by(interval) {
-                        x += mouse.tick(t, cfg).map_or(0, |r| r.x);
-                    }
-                    x += mouse.key(MouseRight, false, hold, cfg).map_or(0, |r| r.x);
-                    assert_eq!(x, expected, "initial={initial}, hold={hold}, interval={interval}");
-                    assert_eq!(mouse.next_deadline(), None);
-                }
+            let mut mouse = MouseState::new();
+            let mut x = mouse.key(MouseRight, true, 0, cfg).unwrap().x;
+            for t in (interval as u64..hold).step_by(interval) {
+                x += mouse.tick(t, cfg).map_or(0, |r| r.x);
             }
+            x += mouse.key(MouseRight, false, hold, cfg).map_or(0, |r| r.x);
+            assert_eq!(x, expected, "initial={initial}, hold={hold}, interval={interval}");
+            assert_eq!(mouse.next_deadline(), None);
         }
     }
 
@@ -302,7 +310,7 @@ mod tests {
             assert_eq!(mouse.tick(t, cfg).unwrap().x, 48);
         }
         assert!(mouse.key(MouseAccel2, false, 100, cfg).is_none());
-        assert_eq!(mouse.tick(120, cfg).unwrap().x, 13); // 600 → 720 counts/s
+        assert_eq!(mouse.tick(120, cfg).unwrap().x, 14); // 720 counts/s for the last 20 ms
         for t in (140..=200).step_by(20) {
             mouse.tick(t, cfg);
         }
@@ -327,7 +335,7 @@ mod tests {
         assert_eq!(mouse.tick(40, cfg).unwrap().x, 12);
         mouse.key(MouseAccel2, false, 40, cfg);
         mouse.key(MouseAccel1, false, 40, cfg);
-        assert_eq!(mouse.tick(60, cfg).unwrap().x, 1);
+        assert_eq!(mouse.tick(60, cfg).unwrap().x, 2); // 20 ms after restarting the ramp
     }
 
     #[test]
@@ -380,15 +388,21 @@ mod tests {
     }
 
     #[test]
-    fn late_wakeup_limits_catch_up_at_maximum_sprint_speed() {
+    fn late_wakeup_limits_catch_up_at_full_range_cursor_and_scroll_speeds() {
         let cfg = MouseKeyConfig::new(0, u16::MAX, u16::MAX, u16::MAX);
-        let mut mouse = MouseState::new();
-        mouse.key(MouseAccel2, true, 0, cfg);
-        mouse.key(MouseRight, true, 0, cfg);
-        mouse.key(MouseWheelDown, true, 0, cfg);
-        let r = mouse.tick(1000, cfg).unwrap();
-        assert_eq!((r.x, r.wheel), (10485, -10485));
-        assert!(mouse.tick(1000, cfg).is_none());
-        assert_eq!(mouse.next_deadline(), Some(Instant::from_millis(1020)));
+        // One millisecond before the ramp ends, the cursor does 65_534 counts/s,
+        // or 131_070 in sprint. Only the last 80 ms belong in this report.
+        for (sprint, expected) in [(false, 5242), (true, 10485)] {
+            let mut mouse = MouseState::new();
+            if sprint {
+                mouse.key(MouseAccel2, true, 0, cfg);
+            }
+            mouse.key(MouseRight, true, 0, cfg);
+            mouse.key(MouseWheelDown, true, 0, cfg);
+            let r = mouse.tick(65_534, cfg).unwrap();
+            assert_eq!((r.x, r.wheel), (expected, -expected));
+            assert!(mouse.tick(65_534, cfg).is_none());
+            assert_eq!(mouse.next_deadline(), Some(Instant::from_millis(65_554)));
+        }
     }
 }
