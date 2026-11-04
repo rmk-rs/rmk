@@ -108,14 +108,17 @@ async fn main(_spawner: Spawner) {
     let mut watchdog_runner = Rp2040Watchdog::default_runner(embassy_rp::watchdog::Watchdog::new(p.WATCHDOG));
 
     join(
-        run_all!(
-            matrix,
-            storage,
-            usb_transport,
-            dfu_iface,
-            wpm_processor,
-            keyboard,
-            watchdog_runner
+        rmk::join_all!(
+            rmk::sleep::run_sleep_manager(),
+            run_all!(
+                matrix,
+                storage,
+                usb_transport,
+                dfu_iface,
+                wpm_processor,
+                keyboard,
+                watchdog_runner
+            )
         ),
         run_peripheral_manager(
             0,
