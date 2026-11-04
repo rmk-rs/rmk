@@ -109,9 +109,7 @@ impl BatteryProcessor {
     }
 
     fn get_battery_percent(&self, val: u16) -> Option<u8> {
-        let Some((divider_measured, divider_total)) = self.adc_divider else {
-            return Some(0);
-        };
+        let (divider_measured, divider_total) = self.adc_divider?;
 
         let battery_mv = u64::from(val) * u64::from(divider_total.get()) / u64::from(divider_measured.get());
         Some((battery_mv.saturating_sub(3600) / 6).min(100) as u8)
@@ -186,21 +184,26 @@ mod tests {
     use crate::test_support::test_block_on;
 
     #[test]
-    fn zero_measured_divider_reports_zero_percent() {
+    fn zero_measured_divider_has_no_battery_percent() {
         let processor = const { BatteryProcessor::new(0, 1) };
-        assert_eq!(processor.get_battery_percent(4000), Some(0));
+        assert_eq!(processor.get_battery_percent(4000), None);
     }
 
     #[test]
-    fn zero_total_divider_reports_zero_percent() {
+    fn zero_total_divider_has_no_battery_percent() {
         let processor = const { BatteryProcessor::new(1, 0) };
-        assert_eq!(processor.get_battery_percent(4000), Some(0));
+        assert_eq!(processor.get_battery_percent(4000), None);
     }
 
     #[test]
-    fn both_zero_dividers_report_zero_percent() {
+    fn both_zero_dividers_have_no_battery_percent() {
         let processor = const { BatteryProcessor::new(0, 0) };
-        assert_eq!(processor.get_battery_percent(4000), Some(0));
+        assert_eq!(processor.get_battery_percent(4000), None);
+    }
+
+    #[test]
+    fn charging_only_has_no_battery_percent() {
+        assert_eq!(BatteryProcessor::charging_only().get_battery_percent(4000), None);
     }
 
     #[test]
