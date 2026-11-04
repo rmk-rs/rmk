@@ -455,7 +455,7 @@ async fn run_ble_keyboard<
 
             let connect = async {
                 if host_connections[profile_id as usize].is_some()
-                    || host_connections.iter().flatten().count() >= NUM_HOST_LINKS
+                    || (NUM_HOST_LINKS == 1 && host_connections.iter().any(Option::is_some))
                 {
                     return core::future::pending().await;
                 }
