@@ -75,14 +75,17 @@ pub struct BatteryProcessor {
 }
 
 impl BatteryProcessor {
-    /// # Panics
-    /// Panics if either part of the ADC divider is zero.
     pub const fn new(adc_divider_measured: u32, adc_divider_total: u32) -> Self {
-        BatteryProcessor {
-            adc_divider: Some((
-                NonZeroU32::new(adc_divider_measured).expect("adc_divider_measured must be greater than zero"),
-                NonZeroU32::new(adc_divider_total).expect("adc_divider_total must be greater than zero"),
-            )),
+        let adc_divider = match (
+            NonZeroU32::new(adc_divider_measured),
+            NonZeroU32::new(adc_divider_total),
+        ) {
+            (Some(measured), Some(total)) => Some((measured, total)),
+            _ => None,
+        };
+
+        Self {
+            adc_divider,
             battery_status: BatteryStatus::Unavailable,
         }
     }
@@ -106,7 +109,10 @@ impl BatteryProcessor {
     }
 
     fn get_battery_percent(&self, val: u16) -> Option<u8> {
-        let (divider_measured, divider_total) = self.adc_divider?;
+        let Some((divider_measured, divider_total)) = self.adc_divider else {
+            return Some(0);
+        };
+
         let battery_mv = u64::from(val) * u64::from(divider_total.get()) / u64::from(divider_measured.get());
         Some((battery_mv.saturating_sub(3600) / 6).min(100) as u8)
     }
@@ -180,15 +186,21 @@ mod tests {
     use crate::test_support::test_block_on;
 
     #[test]
-    #[should_panic(expected = "adc_divider_measured must be greater than zero")]
-    fn rejects_zero_measured_divider() {
-        BatteryProcessor::new(0, 1);
+    fn zero_measured_divider_reports_zero_percent() {
+        let processor = const { BatteryProcessor::new(0, 1) };
+        assert_eq!(processor.get_battery_percent(4000), Some(0));
     }
 
     #[test]
-    #[should_panic(expected = "adc_divider_total must be greater than zero")]
-    fn rejects_zero_total_divider() {
-        BatteryProcessor::new(1, 0);
+    fn zero_total_divider_reports_zero_percent() {
+        let processor = const { BatteryProcessor::new(1, 0) };
+        assert_eq!(processor.get_battery_percent(4000), Some(0));
+    }
+
+    #[test]
+    fn both_zero_dividers_report_zero_percent() {
+        let processor = const { BatteryProcessor::new(0, 0) };
+        assert_eq!(processor.get_battery_percent(4000), Some(0));
     }
 
     #[test]
