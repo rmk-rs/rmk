@@ -158,21 +158,29 @@ impl MouseState {
         }
     }
 
-    pub fn process(
+    pub fn update(
         &mut self,
-        key: HidKeyCode,
-        event: KeyboardEvent,
+        input: Option<(HidKeyCode, KeyboardEvent)>,
         now: Instant,
         config: MouseKeyConfig,
     ) -> Option<MouseReport> {
         use HidKeyCode::*;
-        let pressed = event.pressed;
         let old_speed = self.speed();
         let (cursor_rate, wheel_rate) = old_speed.rates(config);
         let mut report = MouseReport {
             buttons: self.buttons,
             ..Default::default()
         };
+        let Some((key, event)) = input else {
+            if self.cursor.deadline().is_some_and(|deadline| deadline <= now) {
+                [report.x, report.y] = self.cursor.advance(now, cursor_rate);
+            }
+            if self.wheel.deadline().is_some_and(|deadline| deadline <= now) {
+                [report.pan, report.wheel] = self.wheel.advance(now, wheel_rate);
+            }
+            return motion_report(report);
+        };
+        let pressed = event.pressed;
         let (wheel, axis, sign) = match key {
             MouseLeft => (false, 0, -1),
             MouseRight => (false, 0, 1),
@@ -231,21 +239,6 @@ impl MouseState {
         motion_report(report)
     }
 
-    pub fn fire_repeats(&mut self, now: Instant, config: MouseKeyConfig) -> Option<MouseReport> {
-        let (cursor_rate, wheel_rate) = self.speed().rates(config);
-        let mut report = MouseReport {
-            buttons: self.buttons,
-            ..Default::default()
-        };
-        if self.cursor.deadline().is_some_and(|deadline| deadline <= now) {
-            [report.x, report.y] = self.cursor.advance(now, cursor_rate);
-        }
-        if self.wheel.deadline().is_some_and(|deadline| deadline <= now) {
-            [report.pan, report.wheel] = self.wheel.advance(now, wheel_rate);
-        }
-        motion_report(report)
-    }
-
     pub fn next_deadline(&self) -> Option<Instant> {
         match (self.cursor.deadline(), self.wheel.deadline()) {
             (Some(cursor), Some(wheel)) => Some(cursor.min(wheel)),
@@ -266,16 +259,15 @@ mod tests {
 
     impl MouseState {
         fn key(&mut self, key: HidKeyCode, pressed: bool, ms: u64, config: MouseKeyConfig) -> Option<MouseReport> {
-            self.process(
-                key,
-                KeyboardEvent::keycode(key, pressed),
+            self.update(
+                Some((key, KeyboardEvent::keycode(key, pressed))),
                 Instant::from_millis(ms),
                 config,
             )
         }
 
         fn tick(&mut self, ms: u64, config: MouseKeyConfig) -> Option<MouseReport> {
-            self.fire_repeats(Instant::from_millis(ms), config)
+            self.update(None, Instant::from_millis(ms), config)
         }
     }
 
