@@ -342,7 +342,7 @@ pub struct CaretConfig {
     /// Invert Y axis.
     pub invert_y: bool,
     /// Threshold for accumulated motion. Read this as sensitivity in caret mode.
-    /// Higher values mean less sensitivity.
+    /// Higher values mean less sensitivity. Values below 1 act as 1.
     pub threshold: i16,
     /// Keycode to emit for up rotation. Default: Up arrow
     pub keycode_up: HidKeyCode,
@@ -474,27 +474,10 @@ impl MotionAccumulator {
     /// Accumulate motion and return the divided output, keeping remainder.
     /// A divisor of 0 disables that axis (always outputs 0).
     pub fn accumulate(&mut self, dx: i16, dy: i16, ratio_x: (u8, u8), ratio_y: (u8, u8)) -> (i16, i16) {
-        let out_x = if ratio_x.1 == 0 {
-            self.remainder_x = 0;
-            0
-        } else {
-            let total_x = self.remainder_x.saturating_add(dx * ratio_x.0 as i16);
-            let out = total_x / ratio_x.1 as i16;
-            self.remainder_x = total_x - out * ratio_x.1 as i16;
-            out
-        };
-
-        let out_y = if ratio_y.1 == 0 {
-            self.remainder_y = 0;
-            0
-        } else {
-            let total_y = self.remainder_y.saturating_add(dy * ratio_y.0 as i16);
-            let out = total_y / ratio_y.1 as i16;
-            self.remainder_y = total_y - out * ratio_y.1 as i16;
-            out
-        };
-
-        (out_x, out_y)
+        (
+            scale_motion(dx, ratio_x.0, ratio_x.1, &mut self.remainder_x),
+            scale_motion(dy, ratio_y.0, ratio_y.1, &mut self.remainder_y),
+        )
     }
 
     /// Accumulate motion and return the divided output, keeping remainder.
@@ -504,20 +487,20 @@ impl MotionAccumulator {
             self.remainder_x = 0;
             0
         } else {
-            let total_x = self.remainder_x.saturating_add(dx * ratio_x.0 as i16);
-            let out = total_x / ratio_x.1 as i16;
+            let total_x = (i32::from(self.remainder_x) + i32::from(dx) * i32::from(ratio_x.0))
+                .clamp(i16::MIN.into(), i16::MAX.into()) as i16;
             self.remainder_x = total_x;
-            out
+            total_x / ratio_x.1 as i16
         };
 
         let out_y = if ratio_y.1 == 0 {
             self.remainder_y = 0;
             0
         } else {
-            let total_y = self.remainder_y.saturating_add(dy * ratio_y.0 as i16);
-            let out = total_y / ratio_y.1 as i16;
+            let total_y = (i32::from(self.remainder_y) + i32::from(dy) * i32::from(ratio_y.0))
+                .clamp(i16::MIN.into(), i16::MAX.into()) as i16;
             self.remainder_y = total_y;
-            out
+            total_y / ratio_y.1 as i16
         };
 
         (out_x, out_y)
@@ -860,8 +843,10 @@ fn compute_caret_taps(
     let divisor_x = if cfg.disable_x { 0 } else { 1 };
     let divisor_y = if cfg.disable_y { 0 } else { 1 };
     let (mut dx, mut dy) = accumulator.accumulate_persistent(x, y, (1, divisor_x), (1, divisor_y));
+    let threshold = cfg.threshold.max(1);
+    let exceeds_threshold = |dx: i16, dy: i16| i32::from(dx).abs() + i32::from(dy).abs() > i32::from(threshold);
 
-    if (dx.abs() + dy.abs()) <= cfg.threshold {
+    if !exceeds_threshold(dx, dy) {
         return None;
     }
 
@@ -869,7 +854,7 @@ fn compute_caret_taps(
         X,
         Y,
     }
-    let axis = if dx.abs() >= dy.abs() {
+    let axis = if dx.unsigned_abs() >= dy.unsigned_abs() {
         MovementAxis::X
     } else {
         MovementAxis::Y
@@ -890,15 +875,15 @@ fn compute_caret_taps(
     // Each tap reduces the running total on the dominant axis by `threshold`.
     // The number of iterations is the tap count.
     let mut count: u8 = 0;
-    while (dx.abs() + dy.abs()) > cfg.threshold {
+    while exceeds_threshold(dx, dy) {
         let (reduce_x, reduce_y) = match axis {
             MovementAxis::X => {
-                let r = if dx > 0 { -cfg.threshold } else { cfg.threshold };
+                let r = if dx > 0 { -threshold } else { threshold };
                 accumulator.reset_y(); //  non-dominant axis
                 (r, 0)
             }
             MovementAxis::Y => {
-                let r = if dy > 0 { -cfg.threshold } else { cfg.threshold };
+                let r = if dy > 0 { -threshold } else { threshold };
                 accumulator.reset_x(); //  non-dominant axis
                 (0, r)
             }
@@ -1285,6 +1270,31 @@ mod tests {
     }
 
     #[test]
+    fn test_motion_accumulator_large_motion_does_not_wrap() {
+        let mut acc = MotionAccumulator::default();
+        // 30001*3 = 90003 = 11250*8 + 3
+        assert_eq!(acc.accumulate(30001, -30001, (3, 8), (3, 8)), (11250, -11250));
+        assert_eq!((acc.remainder_x, acc.remainder_y), (3, -3));
+        // 5*3 + 3 = 18 = 2*8 + 2
+        assert_eq!(acc.accumulate(5, -5, (3, 8), (3, 8)), (2, -2));
+        assert_eq!((acc.remainder_x, acc.remainder_y), (2, -2));
+
+        acc.reset();
+        assert_eq!(
+            acc.accumulate(i16::MAX, i16::MIN, (255, 1), (255, 1)),
+            (i16::MAX, i16::MIN)
+        );
+        assert_eq!((acc.remainder_x, acc.remainder_y), (0, 0));
+
+        acc.reset();
+        assert_eq!(
+            acc.accumulate_persistent(20000, -20000, (2, 1), (2, 1)),
+            (i16::MAX, i16::MIN)
+        );
+        assert_eq!((acc.remainder_x, acc.remainder_y), (i16::MAX, i16::MIN));
+    }
+
+    #[test]
     fn test_motion_accumulator_persistent_keeps_total_in_remainder() {
         // accumulate_persistent does NOT subtract the output from the
         // remainder. The remainder is the full signed running total; the
@@ -1587,6 +1597,37 @@ mod tests {
         assert_eq!(result, Some((HidKeyCode::Right, 2)));
         assert_eq!(a.remainder_x, 50);
         assert_eq!(a.remainder_y, 0);
+    }
+
+    #[test]
+    fn test_compute_caret_taps_large_motion() {
+        let mut a = acc();
+        // |20000|+|20000| exceeds i16; X dominant, taps until 100 is left
+        assert_eq!(
+            compute_caret_taps(20000, 20000, &mut a, &cfg()),
+            Some((HidKeyCode::Right, 199))
+        );
+        assert_eq!((a.remainder_x, a.remainder_y), (100, 0));
+
+        let mut a = acc();
+        // Capped at 255 taps; the rest carries over
+        assert_eq!(
+            compute_caret_taps(i16::MIN, 0, &mut a, &cfg()),
+            Some((HidKeyCode::Left, 255))
+        );
+        assert_eq!((a.remainder_x, a.remainder_y), (i16::MIN + 255 * 100, 0));
+    }
+
+    #[test]
+    fn test_compute_caret_taps_non_positive_threshold() {
+        let mut c = cfg();
+        for threshold in [0, -100] {
+            c.threshold = threshold;
+            let mut a = acc();
+            // Treated as a threshold of 1
+            assert_eq!(compute_caret_taps(5, 0, &mut a, &c), Some((HidKeyCode::Right, 4)));
+            assert_eq!(a.remainder_x, 1);
+        }
     }
 
     // === PointingMode tests ===
