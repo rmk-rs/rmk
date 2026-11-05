@@ -292,25 +292,26 @@ impl<'a> Keyboard<'a> {
     /// The earliest time `run()` must wake up. Every deadline returned here has to be
     /// cleared or moved forward by `fire_expired`, otherwise `run()` busy-loops on it.
     fn next_deadline(&self) -> Option<Instant> {
-        let buffered = self.next_buffered_key().map(|k| k.timeout_time);
-        // A buffered key may still use the one-shot it was pressed under, so the
-        // one-shot can only expire when the buffer is empty.
-        let one_shot = if buffered.is_some() {
-            None
-        } else {
-            [self.osm_deadline, self.osl_deadline].into_iter().flatten().min()
+        let mut earliest = self.mouse.next_deadline();
+        let mut include = |candidate: Option<Instant>| {
+            if let Some(time) = candidate {
+                earliest = Some(earliest.map_or(time, |previous| previous.min(time)));
+            }
         };
-        [
-            one_shot,
-            #[cfg(feature = "_ble")]
-            self.user_hold.map(|(at, _)| at),
-            buffered,
-            self.mouse.next_deadline(),
-            self.keymap.macros(|m| m.is_playing()).then_some(self.macro_due),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
+        if let Some(key) = self.next_buffered_key() {
+            include(Some(key.timeout_time));
+        } else {
+            // A buffered key may still use the one-shot it was pressed under, so
+            // the one-shot can only expire when the buffer is empty.
+            include(self.osm_deadline);
+            include(self.osl_deadline);
+        }
+        #[cfg(feature = "_ble")]
+        include(self.user_hold.map(|(at, _)| at));
+        if self.keymap.macros(|m| m.is_playing()) {
+            include(Some(self.macro_due));
+        }
+        earliest
     }
 
     /// Handle every deadline that is due. Each step checks its own deadline, so
