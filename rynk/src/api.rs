@@ -81,8 +81,8 @@ impl Client {
         self.request::<command::GetDeviceInfo>(&()).await
     }
 
-    /// Reboot the device. The firmware resets before it can reply, so `Ok(())` only
-    /// means the request was queued — keep the driver running long enough to write it.
+    /// Reboot the device. The firmware resets before it can reply, so this resolves
+    /// once the request is written out.
     pub async fn reboot(&self) -> Result<(), RynkHostError> {
         self.send_no_reply::<command::Reboot>(&()).await
     }
