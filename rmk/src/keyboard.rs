@@ -324,7 +324,7 @@ impl<'a> Keyboard<'a> {
         }
         #[cfg(feature = "_ble")]
         self.fire_user_hold().await;
-        self.fire_mouse_repeat().await;
+        self.update_mouse(None).await;
         self.fire_macro().await;
     }
 
@@ -1566,7 +1566,7 @@ impl<'a> Keyboard<'a> {
         } else if let Some(system_control) = key.process_as_system_control() {
             self.process_action_system_control(system_control, event).await;
         } else if key.is_mouse_key() {
-            self.process_action_mouse(key, event).await;
+            self.update_mouse(Some((key, event))).await;
         } else {
             self.process_hid_keycode(key, mods, event).await;
         }
@@ -1612,22 +1612,14 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    /// Process mouse key action with acceleration support.
-    async fn process_action_mouse(&mut self, key: HidKeyCode, event: KeyboardEvent) {
-        if let Some(report) = self
-            .mouse
-            .process(key, event, Instant::now(), self.keymap.mouse_key_config())
-        {
-            self.keymap.set_mouse_buttons(report.buttons);
-            self.send_report(Report::MouseReport(report)).await;
-            yield_now().await;
-        }
-    }
-
-    /// Fire pending mouse repeats: recalculate movement with acceleration,
-    /// send the report, and schedule the next repeat.
-    async fn fire_mouse_repeat(&mut self) {
-        if let Some(report) = self.mouse.fire_repeats(Instant::now(), self.keymap.mouse_key_config()) {
+    /// Process a mouse key event, or fire any repeats due at the timer wakeup.
+    async fn update_mouse(&mut self, event: Option<(HidKeyCode, KeyboardEvent)>) {
+        let now = Instant::now();
+        let config = self.keymap.mouse_key_config();
+        if let Some(report) = self.mouse.update(event, now, config) {
+            if event.is_some() {
+                self.keymap.set_mouse_buttons(report.buttons);
+            }
             self.send_report(Report::MouseReport(report)).await;
             yield_now().await;
         }
