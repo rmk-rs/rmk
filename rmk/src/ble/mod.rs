@@ -440,7 +440,6 @@ async fn run_ble_keyboard<
             )
             .await;
             drop(conn);
-            profile_manager.cancel_pairing(profile_id);
             completed.send(profile_id).await;
         }
     }));
@@ -517,7 +516,7 @@ async fn run_ble_keyboard<
                         disconnect(&gatt_conn).await;
                         continue;
                     }
-                    if let Err(e) = gatt_conn.raw().set_bondable(bond_info.is_none()) {
+                    if let Err(e) = gatt_conn.raw().set_bondable(true) {
                         error!("Set bondable error: {:?}", e);
                         continue;
                     }
@@ -970,7 +969,7 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
             }
             GattConnectionEvent::BondLost => {
                 warn!("[gatt] BondLost");
-                if profile_manager.bond_info(profile_id).is_some() {
+                if profile_id != crate::state::current_profile() {
                     conn.raw().disconnect();
                 }
             }
