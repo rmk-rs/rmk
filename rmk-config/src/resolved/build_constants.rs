@@ -92,6 +92,35 @@ impl crate::KeyboardTomlConfig {
             .unwrap_or(0)
     }
 
+    /// Pointing and joystick processors generated for the central (or unibody),
+    /// which processes the sensors of every board.
+    fn pointing_processor_count(&self) -> usize {
+        let central = self
+            .split
+            .as_ref()
+            .and_then(|split| split.central.input_device.as_ref());
+        let peripherals = self
+            .split
+            .iter()
+            .flat_map(|split| split.peripheral.iter().map(|p| p.input_device.as_ref()));
+        let sensors: usize = [self.input_device.as_ref(), central]
+            .into_iter()
+            .chain(peripherals)
+            .flatten()
+            .map(|d| {
+                d.pmw3610.as_ref().map_or(0, Vec::len)
+                    + d.pmw33xx.as_ref().map_or(0, Vec::len)
+                    + d.iqs5xx.as_ref().map_or(0, Vec::len)
+            })
+            .sum();
+        let joysticks: usize = [self.input_device.as_ref(), central]
+            .into_iter()
+            .flatten()
+            .map(|d| d.joystick.as_ref().map_or(0, Vec::len))
+            .sum();
+        sensors + joysticks
+    }
+
     /// Build compile-time constants from the configuration.
     ///
     /// `active_features` contains feature names enabled on the
@@ -177,6 +206,26 @@ impl crate::KeyboardTomlConfig {
             && let Some(event) = events.iter_mut().find(|event| event.name == "sleep_state")
         {
             event.subs += pointing_devices;
+        }
+
+        // Generated pointing processors and the AutoMouseLayerRunner subscribe to
+        // pointing events; the runner and each PeripheralManager follow layer changes.
+        let auto_mouse_layer = self
+            .behavior
+            .as_ref()
+            .and_then(|b| b.auto_mouse_layer.as_ref())
+            .is_some_and(|entries| !entries.is_empty()) as usize;
+        let peripheral_managers = if active_features.contains(&"split") {
+            split_peripherals_num
+        } else {
+            0
+        };
+        for event in &mut events {
+            match event.name.as_str() {
+                "pointing" => event.subs += self.pointing_processor_count() + auto_mouse_layer,
+                "layer_change" => event.subs += auto_mouse_layer + peripheral_managers,
+                _ => {}
+            }
         }
 
         // Every link subscribes to the outgoing queue, so a central needs one
@@ -430,6 +479,69 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(subs(&config), base + 2);
+    }
+
+    #[test]
+    fn reserves_layer_change_subscribers_per_peripheral_and_auto_mouse_layer() {
+        let subs = |config: &KeyboardTomlConfig, features: &[&str]| {
+            config
+                .build_constants(features)
+                .unwrap()
+                .events
+                .into_iter()
+                .find(|event| event.name == "layer_change")
+                .unwrap()
+                .subs
+        };
+        let base = subs(&parse(""), &[]);
+        let mut config = parse("[[behavior.auto_mouse_layer]]\ntarget_layer = 1\n");
+        config.split = Some(SplitConfig {
+            peripheral: vec![SplitBoardConfig::default(); 2],
+            ..Default::default()
+        });
+        config.auto_calculate_parameters();
+
+        // Two PeripheralManagers and the AutoMouseLayerRunner.
+        assert_eq!(subs(&config, &["split"]), base + 3);
+    }
+
+    #[test]
+    fn reserves_a_pointing_subscriber_per_generated_processor_and_auto_mouse_layer() {
+        use crate::{InputDeviceConfig, Iqs5xxConfig, JoystickConfig, Pmw3610Config};
+        let subs = |config: &KeyboardTomlConfig| {
+            config
+                .build_constants(&["split", "_ble"])
+                .unwrap()
+                .events
+                .into_iter()
+                .find(|event| event.name == "pointing")
+                .unwrap()
+                .subs
+        };
+        let base = subs(&parse(""));
+        let mut config = parse("[[behavior.auto_mouse_layer]]\ntarget_layer = 1\n");
+        // The central runs a processor for every board's sensor, plus its own joysticks.
+        config.split = Some(SplitConfig {
+            central: SplitBoardConfig {
+                input_device: Some(InputDeviceConfig {
+                    pmw3610: Some(vec![Pmw3610Config::default()]),
+                    joystick: Some(vec![JoystickConfig::default()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            peripheral: vec![SplitBoardConfig {
+                input_device: Some(InputDeviceConfig {
+                    pmw3610: Some(vec![Pmw3610Config::default()]),
+                    iqs5xx: Some(vec![Iqs5xxConfig::default()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        assert_eq!(subs(&config), base + 5);
     }
 
     #[test]
