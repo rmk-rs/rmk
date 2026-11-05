@@ -4,16 +4,16 @@ use crate::core_traits::Runnable;
 
 #[cfg(feature = "_esp_ble")]
 mod esp32;
-#[cfg(any(feature = "_nrf_ble", feature = "dfu_nrf"))]
-#[cfg(not(any(feature = "nrf54l15_ble", feature = "nrf54lm20_ble")))]
+#[cfg(feature = "_nrf")]
+#[cfg(not(any(feature = "nrf54l15", feature = "nrf54lm20")))]
 mod nrf52;
 #[cfg(feature = "rp2040")]
 mod rp2040;
 
 #[cfg(feature = "_esp_ble")]
 pub use esp32::Esp32Watchdog;
-#[cfg(any(feature = "_nrf_ble", feature = "dfu_nrf"))]
-#[cfg(not(any(feature = "nrf54l15_ble", feature = "nrf54lm20_ble")))]
+#[cfg(feature = "_nrf")]
+#[cfg(not(any(feature = "nrf54l15", feature = "nrf54lm20")))]
 pub use nrf52::Nrf52Watchdog;
 #[cfg(feature = "rp2040")]
 pub use rp2040::Rp2040Watchdog;

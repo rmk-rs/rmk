@@ -112,11 +112,11 @@ pub fn rp2040_serial_number(
 
 impl Default for DeviceConfig<'_> {
     fn default() -> Self {
-        #[cfg(feature = "_nrf_ble")]
+        #[cfg(feature = "_nrf")]
         let serial_number = {
-            #[cfg(any(feature = "nrf54l15_ble", feature = "nrf54lm20_ble"))]
+            #[cfg(any(feature = "nrf54l15", feature = "nrf54lm20"))]
             let id = embassy_nrf::pac::FICR.deviceaddr(1).read();
-            #[cfg(not(any(feature = "nrf54l15_ble", feature = "nrf54lm20_ble")))]
+            #[cfg(not(any(feature = "nrf54l15", feature = "nrf54lm20")))]
             let id = embassy_nrf::pac::FICR.deviceid(1).read();
             // Keep the 24 bits used by existing nRF device IDs.
             build_serial_number(&id.to_be_bytes()[..3])
@@ -124,7 +124,7 @@ impl Default for DeviceConfig<'_> {
         // Skip the vendor prefix shared by Espressif chips.
         #[cfg(feature = "_esp_ble")]
         let serial_number = build_serial_number(&esp_hal::efuse::base_mac_address().as_bytes()[3..]);
-        #[cfg(not(any(feature = "_nrf_ble", feature = "_esp_ble")))]
+        #[cfg(not(any(feature = "_nrf", feature = "_esp_ble")))]
         let serial_number = build_serial_number(&[]);
         Self {
             vid: 0x4c4b,
