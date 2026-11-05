@@ -101,13 +101,6 @@ pub(crate) enum BleProfileAction {
     ClearSlot(u8),
 }
 
-/// A requested change with its target profile resolved.
-pub(super) enum ProfileChange {
-    SwitchTo(u8),
-    Pair(u8),
-    ClearBond(u8),
-}
-
 /// Manage BLE profiles and bonding information
 ///
 /// ProfileManager is responsible for:
@@ -182,22 +175,6 @@ where
             return None;
         }
         self.profiles.get(profile as usize)?.try_get_and(|info| !info.removed)
-    }
-
-    /// Consume one command, even when it selects the current profile and yields no change.
-    pub(super) async fn receive_change(&self, current: u8) -> Option<ProfileChange> {
-        let target = match crate::channel::BLE_PROFILE_CHANNEL.receive().await {
-            BleProfileAction::Pair(slot) if self.bond_info(slot).is_some() => return Some(ProfileChange::Pair(slot)),
-            BleProfileAction::Switch(slot) | BleProfileAction::Pair(slot) => slot,
-            BleProfileAction::ClearBond => return Some(ProfileChange::ClearBond(current)),
-            BleProfileAction::ClearSlot(slot) => return Some(ProfileChange::ClearBond(slot)),
-            BleProfileAction::Previous | BleProfileAction::Next if NUM_BLE_PROFILE == 0 => return None,
-            BleProfileAction::Previous if current == 0 => NUM_BLE_PROFILE.saturating_sub(1) as u8,
-            BleProfileAction::Previous => current - 1,
-            BleProfileAction::Next if usize::from(current) + 1 < NUM_BLE_PROFILE => current + 1,
-            BleProfileAction::Next => 0,
-        };
-        (target != current).then_some(ProfileChange::SwitchTo(target))
     }
 
     pub(super) fn start_pairing(&self, slot: u8) {
