@@ -543,17 +543,15 @@ async fn run_ble_keyboard<
                     continue;
                 }
                 Either3::Second(action) => {
-                    use crate::NUM_BLE_PROFILE;
                     use crate::ble::profile::BleProfileAction::{ClearBond, ClearSlot, Next, Previous, Switch};
 
+                    let last_host = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
                     let slot = match action {
                         Switch(slot) | ClearSlot(slot) => slot,
                         ClearBond => profile_id,
-                        Next | Previous if NUM_BLE_PROFILE == 0 => continue,
-                        Next if usize::from(profile_id) + 1 < NUM_BLE_PROFILE => profile_id + 1,
+                        Next if profile_id < last_host => profile_id + 1,
                         Next => 0,
-                        Previous if profile_id == 0 => NUM_BLE_PROFILE.saturating_sub(1) as u8,
-                        Previous => profile_id - 1,
+                        Previous => profile_id.checked_sub(1).unwrap_or(last_host),
                     };
                     let clear_bond = matches!(action, ClearBond | ClearSlot(_));
                     if !clear_bond && slot == profile_id {
@@ -581,13 +579,9 @@ async fn run_ble_keyboard<
                     {
                         conn.disconnect();
                     }
-                    let state = if host_connections[slot as usize]
-                        .as_ref()
-                        .is_some_and(|conn| conn.security_level().is_ok_and(|level| level.encrypted()))
-                    {
-                        BleState::Connected
-                    } else {
-                        BleState::Inactive
+                    let state = match &host_connections[slot as usize] {
+                        Some(conn) if conn.security_level().is_ok_and(|level| level.encrypted()) => BleState::Connected,
+                        _ => BleState::Inactive,
                     };
                     profile_manager.switch_profile(slot, state);
                     continue;
