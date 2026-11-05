@@ -189,6 +189,60 @@ pub(crate) fn bind_interrupt_default(
             }
         }
         rmk_config::resolved::hardware::ChipSeries::Nrf52 => {
+            // Extract PMW33xx configuration
+            let pmw33xx_config = match &board {
+                BoardConfig::UniBody(UniBodyConfig { input_device, .. }) => {
+                    input_device.clone().pmw33xx.unwrap_or(Vec::new())
+                }
+                BoardConfig::Split(split_config) => split_config
+                    .central
+                    .input_device
+                    .clone()
+                    .unwrap_or(InputDeviceConfig::default())
+                    .pmw33xx
+                    .unwrap_or(Vec::new()),
+            };
+
+            // Generate SPI interrupts for each sensor
+            let mut pmw33xx_spi_interrupts = Vec::new();
+
+            for sensor in &pmw33xx_config {
+                let instance_ident = format_ident!("{}", &sensor.spi.instance);
+
+                pmw33xx_spi_interrupts.push(quote! {
+                    #instance_ident => ::embassy_nrf::spim::InterruptHandler<::embassy_nrf::peripherals::#instance_ident>;
+                });
+            }
+
+            let pmw33xx_spi_interrupts = if pmw33xx_spi_interrupts.is_empty() {
+                quote! {}
+            } else {
+                quote! {
+                    #(#pmw33xx_spi_interrupts)*
+                }
+            };
+
+            if !communication.ble_enabled() {
+                let usb_interrupts = communication.get_usb_info().map(|usb| {
+                    let interrupt = format_ident!("{}", usb.interrupt_name);
+                    let peripheral = format_ident!("{}", usb.peripheral_name);
+                    quote! {
+                        #interrupt => ::embassy_nrf::usb::InterruptHandler<::embassy_nrf::peripherals::#peripheral>;
+                        CLOCK_POWER => ::embassy_nrf::usb::vbus_detect::InterruptHandler;
+                    }
+                });
+                return quote! {
+                    ::embassy_nrf::bind_interrupts!(struct Irqs {
+                        #usb_interrupts
+                        #pmw33xx_spi_interrupts
+                        #ext_flash_spi_interrupt
+                        #iqs5xx_interrupt
+                        #display_interrupt
+                        #extern_irqs
+                    });
+                };
+            }
+
             // Usb and clock interrupt
             let usb_and_clock_interrupt = if let Some(usb_info) = communication.get_usb_info() {
                 let interrupt_name = format_ident!("{}", usb_info.interrupt_name);
@@ -270,39 +324,6 @@ pub(crate) fn bind_interrupt_default(
                     .buffer_cfg(SDC_PACKET_SIZE as u16, SDC_PACKET_SIZE as u16, SDC_TX_BUFFERS, SDC_RX_BUFFERS)?
                     .build(p, rng, mpsl, mem)
                 },
-            };
-
-            // Extract PMW33xx configuration
-            let pmw33xx_config = match &board {
-                BoardConfig::UniBody(UniBodyConfig { input_device, .. }) => {
-                    input_device.clone().pmw33xx.unwrap_or(Vec::new())
-                }
-                BoardConfig::Split(split_config) => split_config
-                    .central
-                    .input_device
-                    .clone()
-                    .unwrap_or(InputDeviceConfig::default())
-                    .pmw33xx
-                    .unwrap_or(Vec::new()),
-            };
-
-            // Generate SPI interrupts for each sensor
-            let mut pmw33xx_spi_interrupts = Vec::new();
-
-            for sensor in &pmw33xx_config {
-                let instance_ident = format_ident!("{}", &sensor.spi.instance);
-
-                pmw33xx_spi_interrupts.push(quote! {
-                    #instance_ident => ::embassy_nrf::spim::InterruptHandler<::embassy_nrf::peripherals::#instance_ident>;
-                });
-            }
-
-            let pmw33xx_spi_interrupts = if pmw33xx_spi_interrupts.is_empty() {
-                quote! {}
-            } else {
-                quote! {
-                    #(#pmw33xx_spi_interrupts)*
-                }
             };
 
             quote! {
@@ -469,6 +490,66 @@ fn get_pin_num_stm32(gpio_name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nrf_usb_codegen_has_no_ble_dependencies() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/use_config/nrf52840_ble/keyboard.toml");
+        let config = rmk_config::KeyboardTomlConfig::new_from_toml_path(&path);
+        let mut hardware = config.hardware().unwrap();
+        hardware.communication = rmk_config::resolved::hardware::CommunicationConfig::Usb(
+            hardware.communication.get_usb_info().unwrap(),
+        );
+        let module = syn::parse_quote!(
+            mod keyboard {
+                add_interrupt!(TEST => TestHandler;);
+            }
+        );
+        let interrupts = bind_interrupt_default(&hardware, &module, None).to_string();
+        let init = crate::codegen::chip::chip_init::chip_init_default(&hardware, None).to_string();
+        assert!(interrupts.contains("HardwareVbusDetect") || interrupts.contains("vbus_detect"));
+        assert!(interrupts.contains("TEST => TestHandler"));
+        assert!(interrupts.contains("USBD"));
+        for generated in [&interrupts, &init] {
+            assert!(!generated.contains("nrf_sdc"));
+            assert!(!generated.contains("mpsl"));
+            assert!(!generated.contains("rmk :: ble"));
+        }
+        #[cfg(not(feature = "_dfu"))]
+        {
+            assert!(hardware.storage.is_some());
+            let flash = crate::codegen::chip::flash::expand_flash_init(&hardware, None).to_string();
+            assert!(flash.contains("Nvmc :: new"));
+            assert!(flash.contains("async_flash_wrapper"));
+            assert!(!flash.contains("mpsl"));
+        }
+    }
+
+    #[test]
+    fn nrf_ble_codegen_keeps_controller_and_flash() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/use_config/nrf52840_ble/keyboard.toml");
+        let hardware = rmk_config::KeyboardTomlConfig::new_from_toml_path(&path)
+            .hardware()
+            .unwrap();
+        let interrupts = bind_interrupt_default(
+            &hardware,
+            &syn::parse_quote!(
+                mod keyboard {}
+            ),
+            None,
+        )
+        .to_string();
+        assert!(interrupts.contains("build_sdc"));
+        assert!(interrupts.contains("ClockInterruptHandler"));
+        assert!(interrupts.contains("vbus_detect"));
+        #[cfg(not(feature = "_dfu"))]
+        assert!(
+            crate::codegen::chip::flash::expand_flash_init(&hardware, None)
+                .to_string()
+                .contains("nrf_mpsl :: Flash :: take")
+        );
+    }
 
     fn parse_fn(src: &str) -> ItemFn {
         syn::parse_str(src).expect("test fn should parse")
