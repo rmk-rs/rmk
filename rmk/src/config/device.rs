@@ -122,9 +122,9 @@ impl Default for DeviceConfig<'_> {
             build_serial_number(&id.to_be_bytes()[..3])
         };
         // Skip the vendor prefix shared by Espressif chips.
-        #[cfg(feature = "_esp_ble")]
+        #[cfg(feature = "_esp")]
         let serial_number = build_serial_number(&esp_hal::efuse::base_mac_address().as_bytes()[3..]);
-        #[cfg(not(any(feature = "_nrf", feature = "_esp_ble")))]
+        #[cfg(not(any(feature = "_nrf", feature = "_esp")))]
         let serial_number = build_serial_number(&[]);
         Self {
             vid: 0x4c4b,

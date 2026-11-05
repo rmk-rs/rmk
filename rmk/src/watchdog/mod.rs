@@ -2,7 +2,7 @@ use embassy_time::{Duration, Timer};
 
 use crate::core_traits::Runnable;
 
-#[cfg(feature = "_esp_ble")]
+#[cfg(feature = "_esp")]
 mod esp32;
 #[cfg(feature = "_nrf")]
 #[cfg(not(any(feature = "nrf54l15", feature = "nrf54lm20")))]
@@ -10,7 +10,7 @@ mod nrf52;
 #[cfg(feature = "rp2040")]
 mod rp2040;
 
-#[cfg(feature = "_esp_ble")]
+#[cfg(feature = "_esp")]
 pub use esp32::Esp32Watchdog;
 #[cfg(feature = "_nrf")]
 #[cfg(not(any(feature = "nrf54l15", feature = "nrf54lm20")))]
