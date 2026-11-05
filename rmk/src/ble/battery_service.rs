@@ -2,7 +2,6 @@ use core::sync::atomic::Ordering;
 
 use embassy_futures::join::join;
 use embassy_futures::select::{Either, select};
-use embassy_sync::watch::Receiver;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
@@ -115,7 +114,6 @@ fn add_peripheral_battery_level<M: embassy_sync::blocking_mutex::raw::RawMutex, 
 }
 
 pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
-    last_key: Receiver<'static, crate::RawMutex, u32, { super::NUM_HOST_LINKS }>,
     battery_level: Characteristic<u8>,
     conn: &'conn GattConnection<'stack, 'server, P>,
     sub: <BatteryStatusEvent as SubscribableEvent>::Subscriber,
@@ -127,15 +125,16 @@ impl<'stack, 'server, 'conn, P: PacketPool> BleBatteryServer<'stack, 'server, 'c
             battery_level: server.battery_service.level,
             conn,
             sub: BatteryStatusEvent::subscriber(),
-            last_key: LAST_KEY_TIMESTAMP
-                .receiver()
-                .expect("battery activity receiver slots exhausted"),
         }
     }
 }
 
 impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
     async fn run(&mut self) -> ! {
+        let mut last_key = LAST_KEY_TIMESTAMP
+            .receiver()
+            .expect("battery activity receiver slots exhausted");
+
         // Wait 2 seconds, ensure that gatt server has been started
         Timer::after_secs(2).await;
 
@@ -175,29 +174,6 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
 
         // Report the battery level.
         loop {
-            let mut state = self.wait_until_battery_status_available().await;
-
-            while let Some(newer) = self.sub.try_next_message_pure() {
-                state = newer;
-            }
-            if let BatteryStatus::Available { level: Some(level), .. } = state.0
-                && let Err(e) = self.battery_level.notify(self.conn, &level, true).await
-            {
-                error!("Failed to notify battery level: {:?}", e);
-            }
-        }
-    }
-}
-
-impl<P: PacketPool> BleBatteryServer<'_, '_, '_, P> {
-    /// Wait until the battery status is available.
-    /// To avoid unexpected wakeup, before reporting battery level, all conditions should be satistied:
-    ///
-    /// 1. There's a battery status update
-    /// 2. There's a key press in last 1 minute, or timeout(30 minutes)
-    /// 3. The keyboard is not in the sleep mode
-    async fn wait_until_battery_status_available(&mut self) -> BatteryStatusEvent {
-        loop {
             // Calculate timeout when reporting battery level
             let timeout = async {
                 loop {
@@ -210,19 +186,21 @@ impl<P: PacketPool> BleBatteryServer<'_, '_, '_, P> {
             };
 
             // Wait until there are both battery status update and key pressing or timeout
-            let (battery_status, last_press) =
-                join(self.sub.next_message_pure(), select(timeout, self.last_key.changed())).await;
+            let (mut state, last_press) = join(self.sub.next_message_pure(), select(timeout, last_key.changed())).await;
 
-            // Then check the value last press time
-            let last_press = match last_press {
-                Either::First(_) => Instant::now().as_secs() as u32,
-                Either::Second(last_press) => last_press,
-            };
+            if let Either::Second(last_press) = last_press
+                && (Instant::now().as_secs() as u32).saturating_sub(last_press) >= 60
+            {
+                continue;
+            }
 
-            // Only report battery status if the last key action is less than 60 seconds ago
-            let current_time = Instant::now().as_secs() as u32;
-            if current_time.saturating_sub(last_press) < 60 {
-                return battery_status;
+            while let Some(newer) = self.sub.try_next_message_pure() {
+                state = newer;
+            }
+            if let BatteryStatus::Available { level: Some(level), .. } = state.0
+                && let Err(e) = self.battery_level.notify(self.conn, &level, true).await
+            {
+                error!("Failed to notify battery level: {:?}", e);
             }
         }
     }
