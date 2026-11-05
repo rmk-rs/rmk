@@ -456,7 +456,7 @@ async fn run_ble_keyboard<
             let local_address = cfg!(feature = "ext_adv")
                 .then(|| BdAddr::new(crate::ble::profile::profile_address(address, profile_id)));
 
-            let connect = async {
+            let advertise_and_accept = async {
                 if host_connections[profile_id as usize].is_some()
                     || (NUM_HOST_LINKS == 1 && host_connections.iter().any(Option::is_some))
                 {
@@ -491,45 +491,10 @@ async fn run_ble_keyboard<
             };
 
             // Consume queued wake input before a profile action can cancel the connection flow.
-            let accepted = match select3(connect, BLE_PROFILE_CHANNEL.receive(), completed.receive()).await {
-                Either3::First(Ok(gatt_conn)) => {
-                    // A replaced advertisement can still deliver a late connection.
-                    #[cfg(feature = "ext_adv")]
-                    if gatt_conn.raw().local_address() != local_address {
-                        warn!("[ble] late connection belongs to another profile");
-                        disconnect(&gatt_conn).await;
-                        continue;
-                    }
-                    let bond_info = profile_manager.bond_info(profile_id);
-                    if let Some(bond) = &bond_info
-                        && !bond.info.identity.match_identity(&gatt_conn.raw().peer_identity())
-                    {
-                        warn!("[ble] peer does not match its profile");
-                        disconnect(&gatt_conn).await;
-                        continue;
-                    }
-                    #[cfg(feature = "dongle")]
-                    if profile_id != DONGLE_PROFILE
-                        && profile_manager.is_bonded_dongle(&gatt_conn.raw().peer_identity())
-                    {
-                        warn!("[ble] dongle connected on a host profile");
-                        disconnect(&gatt_conn).await;
-                        continue;
-                    }
-                    if let Err(e) = gatt_conn.raw().set_bondable(true) {
-                        error!("Set bondable error: {:?}", e);
-                        continue;
-                    }
-                    if let Some(bond) = bond_info {
-                        info!("Loading CCCD table: {:?}", bond.cccd_table);
-                        match ClientAttTableView::try_from_raw(&bond.cccd_table) {
-                            Ok(view) => server.set_client_att_table(gatt_conn.raw(), &view),
-                            Err(e) => warn!("Invalid stored CCCD table: {:?}", e),
-                        }
-                    }
-                    host_connections[profile_id as usize] = Some(gatt_conn.raw().clone());
-                    gatt_conn
-                }
+            let gatt_conn = match select3(advertise_and_accept, BLE_PROFILE_CHANNEL.receive(), completed.receive())
+                .await
+            {
+                Either3::First(Ok(gatt_conn)) => gatt_conn,
                 Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
                     profile_manager.cancel_pairing(profile_id);
                     advertising_paused = true;
@@ -545,17 +510,15 @@ async fn run_ble_keyboard<
                     continue;
                 }
                 Either3::Second(action) => {
-                    use crate::NUM_BLE_PROFILE;
                     use crate::ble::profile::BleProfileAction::{ClearBond, ClearSlot, Next, Pair, Previous, Switch};
 
+                    let last_host = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
                     let slot = match action {
                         Switch(slot) | Pair(slot) | ClearSlot(slot) => slot,
                         ClearBond => profile_id,
-                        Next | Previous if NUM_BLE_PROFILE == 0 => continue,
-                        Next if usize::from(profile_id) + 1 < NUM_BLE_PROFILE => profile_id + 1,
+                        Next if profile_id < last_host => profile_id + 1,
                         Next => 0,
-                        Previous if profile_id == 0 => NUM_BLE_PROFILE.saturating_sub(1) as u8,
-                        Previous => profile_id - 1,
+                        Previous => profile_id.checked_sub(1).unwrap_or(last_host),
                     };
                     let clear_bond = matches!(action, ClearBond | ClearSlot(_));
                     let pair = matches!(action, Pair(_)) && profile_manager.bond_info(slot).is_some();
@@ -578,13 +541,11 @@ async fn run_ble_keyboard<
                         {
                             conn.disconnect();
                         }
-                        let state = if host_connections[slot as usize]
-                            .as_ref()
-                            .is_some_and(|conn| conn.security_level().is_ok_and(|level| level.encrypted()))
-                        {
-                            BleState::Connected
-                        } else {
-                            BleState::Inactive
+                        let state = match &host_connections[slot as usize] {
+                            Some(conn) if conn.security_level().is_ok_and(|level| level.encrypted()) => {
+                                BleState::Connected
+                            }
+                            _ => BleState::Inactive,
                         };
                         profile_manager.switch_profile(slot, state);
                     }
@@ -603,7 +564,38 @@ async fn run_ble_keyboard<
                     continue;
                 }
             };
-            accepted_connections.send((accepted, profile_id)).await;
+
+            let conn = gatt_conn.raw();
+            let peer = conn.peer_identity();
+            match profile_manager.bond_info(profile_id) {
+                // A replaced advertisement can still deliver a late connection.
+                #[cfg(feature = "ext_adv")]
+                _ if conn.local_address() != local_address => warn!("[ble] late connection belongs to another profile"),
+                Some(bond) if !bond.info.identity.match_identity(&peer) => {
+                    warn!("[ble] peer does not match its profile")
+                }
+                #[cfg(feature = "dongle")]
+                _ if profile_id != DONGLE_PROFILE && profile_manager.is_bonded_dongle(&peer) => {
+                    warn!("[ble] dongle connected on a host profile");
+                }
+                bond_info => {
+                    if let Err(e) = conn.set_bondable(true) {
+                        error!("Set bondable error: {:?}", e);
+                        continue;
+                    }
+                    if let Some(bond) = bond_info {
+                        info!("Loading CCCD table: {:?}", bond.cccd_table);
+                        match ClientAttTableView::try_from_raw(&bond.cccd_table) {
+                            Ok(view) => server.set_client_att_table(conn, &view),
+                            Err(e) => warn!("Invalid stored CCCD table: {:?}", e),
+                        }
+                    }
+                    host_connections[profile_id as usize] = Some(conn.clone());
+                    accepted_connections.send((gatt_conn, profile_id)).await;
+                    continue;
+                }
+            }
+            disconnect(&gatt_conn).await;
         }
     };
 
