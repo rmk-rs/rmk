@@ -2,7 +2,6 @@ use core::sync::atomic::Ordering;
 
 use embassy_futures::join::join;
 use embassy_futures::select::{Either, select};
-use embassy_sync::pubsub::Subscriber;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
@@ -122,14 +121,7 @@ fn peripheral_battery_presentation_format(peripheral_id: usize) -> [u8; 7] {
 pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
     battery_level: Characteristic<u8>,
     conn: &'conn GattConnection<'stack, 'server, P>,
-    sub: Subscriber<
-        'static,
-        crate::RawMutex,
-        BatteryStatusEvent,
-        { crate::BATTERY_STATUS_EVENT_CHANNEL_SIZE },
-        { crate::BATTERY_STATUS_EVENT_SUB_SIZE },
-        { crate::BATTERY_STATUS_EVENT_PUB_SIZE },
-    >,
+    sub: <BatteryStatusEvent as SubscribableEvent>::Subscriber,
 }
 
 impl<'stack, 'server, 'conn, P: PacketPool> BleBatteryServer<'stack, 'server, 'conn, P> {
@@ -246,14 +238,7 @@ impl<P: PacketPool> BleBatteryServer<'_, '_, '_, P> {
 pub(crate) struct BlePeripheralBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
     battery_levels: [Characteristic<u8>; crate::SPLIT_BATTERY_PERIPHERALS_NUM],
     conn: &'conn GattConnection<'stack, 'server, P>,
-    sub: Subscriber<
-        'static,
-        crate::RawMutex,
-        PeripheralBatteryEvent,
-        { crate::PERIPHERAL_BATTERY_EVENT_CHANNEL_SIZE },
-        { crate::PERIPHERAL_BATTERY_EVENT_SUB_SIZE },
-        { crate::PERIPHERAL_BATTERY_EVENT_PUB_SIZE },
-    >,
+    sub: <PeripheralBatteryEvent as SubscribableEvent>::Subscriber,
 }
 
 #[cfg(feature = "split")]
