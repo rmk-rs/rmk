@@ -10,8 +10,8 @@ use crate::hid::MouseReport;
 const INTERVAL: Duration = Duration::from_millis(20);
 // A stalled HID writer must not replay the entire pause as one large motion.
 const MAX_ELAPSED_MS: u64 = 4 * INTERVAL.as_millis();
-// Milliseconds, quarter-speed gears, and a 181/256 diagonal projection share this denominator.
-const UNITS_PER_COUNT: u64 = 1000 * 4 * 256;
+// Keep 1/64000-count fractions so each axis's remainder fits in u16.
+const UNITS_PER_COUNT: u32 = 1000 * 4 * 16;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Speed {
@@ -45,8 +45,9 @@ impl Speed {
 struct Motion {
     held: [i8; 2],
     /// Fractional distance along each axis, cleared when its direction changes.
-    remainder: [u32; 2],
-    started_ms: u64,
+    remainder: [u16; 2],
+    /// Saturates at the longest configurable acceleration time.
+    age_ms: u16,
     last_update: Instant,
 }
 
@@ -54,7 +55,7 @@ impl Motion {
     const IDLE: Self = Self {
         held: [0; 2],
         remainder: [0; 2],
-        started_ms: 0,
+        age_ms: 0,
         last_update: Instant::MIN,
     };
 
@@ -68,37 +69,41 @@ impl Motion {
             return [0, 0];
         }
         let end = now.as_millis();
-        let begin = self.last_update.as_millis().max(end.saturating_sub(MAX_ELAPSED_MS));
+        let delta = end - self.last_update.as_millis();
+        self.age_ms = (u64::from(self.age_ms) + delta).min(u64::from(u16::MAX)) as u16;
+        let elapsed = delta.min(MAX_ELAPSED_MS) as u32;
         self.last_update = now;
-        let elapsed = end - begin;
-        let quarter_millicounts = match rate {
-            Rate::Fixed(quarters_per_second) => u64::from(quarters_per_second) * elapsed,
+        let quarters_per_second = match rate {
+            Rate::Fixed(rate) => rate,
             Rate::Ramp(config) => {
                 let initial = u32::from(config.initial_speed());
                 let max = u32::from(config.max_speed());
                 let duration = u32::from(config.acceleration_time_ms());
-                let age = (end - self.started_ms).min(u64::from(duration)) as u32;
+                let age = u32::from(self.age_ms);
                 let speed = if age < duration {
                     initial + (max - initial) * age / duration
                 } else {
                     max
                 };
-                4 * u64::from(speed) * elapsed
+                4 * speed
             }
         };
 
+        // At most 8 × u16::MAX quarter-counts/s over 80 ms, so this product fits in u32.
+        let quarter_millicounts = u64::from(quarters_per_second * elapsed);
         let projection = if self.held[0] != 0 && self.held[1] != 0 {
             181
         } else {
             256
         };
+        let projected = ((quarter_millicounts * projection) >> 4) as u32;
         core::array::from_fn(|axis| {
             let direction = i16::from(self.held[axis].signum());
             if direction == 0 {
                 return 0;
             }
-            let total = u64::from(self.remainder[axis]) + quarter_millicounts * projection;
-            self.remainder[axis] = (total % UNITS_PER_COUNT) as u32;
+            let total = u32::from(self.remainder[axis]) + projected;
+            self.remainder[axis] = (total % UNITS_PER_COUNT) as u16;
             // Even at 2 × u16::MAX counts/s an 80 ms interval fits in a signed 16-bit HID axis.
             direction * (total / UNITS_PER_COUNT) as i16
         })
@@ -117,7 +122,7 @@ impl Motion {
         self.held[axis] = next;
         self.remainder[axis] = 0;
         if was_idle {
-            self.started_ms = now.as_millis();
+            self.age_ms = 0;
             self.last_update = now;
             if pressed {
                 delta[axis] = i16::from(sign);
@@ -191,7 +196,7 @@ impl MouseState {
                 [report.x, report.y] = self.cursor.advance(now, cursor_rate);
                 [report.pan, report.wheel] = self.wheel.advance(now, wheel_rate);
                 if speed == Speed::Normal && matches!(old_speed, Speed::Slow | Speed::Medium) {
-                    self.cursor.started_ms = now.as_millis();
+                    self.cursor.age_ms = 0;
                 }
                 return motion_report(report);
             }
@@ -250,7 +255,7 @@ impl MouseState {
 }
 
 fn motion_report(report: MouseReport) -> Option<MouseReport> {
-    (report.x != 0 || report.y != 0 || report.pan != 0 || report.wheel != 0).then_some(report)
+    ((report.x | report.y | report.pan | report.wheel) != 0).then_some(report)
 }
 
 #[cfg(test)]
@@ -350,6 +355,38 @@ mod tests {
         assert_eq!(mouse.tick(4000, cfg).unwrap().wheel, -1);
         assert!(mouse.key(MouseWheelDown, false, 4000, cfg).is_none());
         assert!(mouse.tick(8000, cfg).is_none());
+    }
+
+    #[test]
+    fn slow_diagonal_scrolling_accumulates_fractional_distance() {
+        let cfg = MouseKeyConfig::new(0, 600, 200, 1);
+        let mut mouse = MouseState::new();
+        mouse.key(MouseAccel0, true, 0, cfg);
+        mouse.key(MouseWheelDown, true, 0, cfg);
+        mouse.key(HidKeyCode::MouseWheelLeft, true, 0, cfg);
+        let (mut pan, mut wheel) = (0, 0);
+        for t in (20..=60_000).step_by(20) {
+            if let Some(r) = mouse.tick(t, cfg) {
+                pan += r.pan;
+                wheel += r.wheel;
+            }
+        }
+        // 0.25 units/s × 60 s × 181/256 gives 10 whole units along each axis.
+        assert_eq!((pan, wheel), (-10, -10));
+        mouse.key(MouseWheelDown, false, 60_000, cfg);
+        mouse.key(HidKeyCode::MouseWheelLeft, false, 60_000, cfg);
+        assert!(mouse.tick(60_020, cfg).is_none());
+        assert_eq!(mouse.next_deadline(), None);
+    }
+
+    #[test]
+    fn long_holds_stay_at_top_speed_after_the_maximum_ramp_time() {
+        let cfg = MouseKeyConfig::new(0, 1000, u16::MAX, 10);
+        let mut mouse = MouseState::new();
+        mouse.key(MouseRight, true, 0, cfg);
+        for (ms, expected) in [(65_535, 80), (65_555, 20), (131_071, 80), (131_091, 20)] {
+            assert_eq!(mouse.tick(ms, cfg).unwrap().x, expected, "held for {ms} ms");
+        }
     }
 
     #[test]
