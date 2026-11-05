@@ -56,7 +56,7 @@ pub(crate) mod device_info;
 #[cfg(feature = "host")]
 pub(crate) mod host;
 pub(crate) mod led;
-#[cfg(all(feature = "_nrf", feature = "_ble", target_arch = "arm", target_os = "none"))]
+#[cfg(all(feature = "_nrf_ble", target_arch = "arm", target_os = "none"))]
 mod p256;
 pub mod passkey;
 pub(crate) mod profile;

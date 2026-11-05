@@ -405,13 +405,13 @@ impl<F: AsyncNorFlash> Storage<F> {
 
         // `start_addr == 0` means the last `num_sectors` sectors, except on nRF BLE builds without
         // DFU, which keep the historical 0x6_0000; with DFU rmk-boot places the partition.
-        #[cfg(all(feature = "_nrf", feature = "_ble", not(feature = "_dfu")))]
+        #[cfg(all(feature = "_nrf_ble", not(feature = "_dfu")))]
         let start_addr = if storage_config.start_addr == 0 {
             0x0006_0000
         } else {
             storage_config.start_addr
         };
-        #[cfg(not(all(feature = "_nrf", feature = "_ble", not(feature = "_dfu"))))]
+        #[cfg(not(all(feature = "_nrf_ble", not(feature = "_dfu"))))]
         let start_addr = storage_config.start_addr;
 
         let storage_range = if start_addr == 0 {

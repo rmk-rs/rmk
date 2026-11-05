@@ -18,7 +18,7 @@ use rand_chacha::rand_core::{RngCore, SeedableRng};
 static RNG: Mutex<CriticalSectionRawMutex, RefCell<Option<ChaCha12Rng>>> = Mutex::new(RefCell::new(None));
 
 /// ESP: the hardware RNG is true random while Bluetooth is on, which it is by now.
-#[cfg(all(feature = "_esp", feature = "_ble"))]
+#[cfg(feature = "_esp_ble")]
 pub(crate) async fn init<C: ControllerCmdSync<LeRand>>(_controller: &C) {
     let mut bytes = [0; 32];
     esp_hal::rng::Rng::new().read(&mut bytes);
@@ -34,7 +34,7 @@ pub(crate) async fn init<C: ControllerCmdSync<LeRand>>(_controller: &C) {
 }
 
 /// nRF: the SoftDevice Controller owns the chip's RNG and runs `LE Rand` directly.
-#[cfg(not(any(all(feature = "_esp", feature = "_ble"), feature = "pico_w_ble")))]
+#[cfg(not(any(feature = "_esp_ble", feature = "pico_w_ble")))]
 pub(crate) async fn init<C: trouble_host::Controller + ControllerCmdSync<LeRand>>(controller: &C) {
     let mut bytes = [0; 32];
     for chunk in bytes.as_chunks_mut::<8>().0 {
