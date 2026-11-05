@@ -14,7 +14,8 @@
 #[cfg(feature = "host")]
 use core::ops::Range;
 
-use heapless::Deque;
+use heapless::{Deque, Vec};
+use rmk_types::action::Action;
 #[cfg(feature = "host")]
 use rmk_types::constants::MACRO_CHUNK_SIZE;
 use rmk_types::keyboard_macros::MacroOp;
@@ -75,6 +76,14 @@ pub(crate) struct Macros<'a> {
     #[cfg(all(feature = "host", feature = "storage"))]
     stored: bool,
     queue: Deque<Cursor, 4>,
+    /// The slots held at their pause, each keeping a place in `queue` for the
+    /// ops after it.
+    held: Vec<u8, 4>,
+    /// What the macros pressed and have not released, in press order.
+    pressed: Vec<Action, 8>,
+    /// Set when a macro change stopped playback; everything in `pressed` is
+    /// released before the queue plays on.
+    releasing: bool,
 }
 
 impl<'a> Macros<'a> {
@@ -91,6 +100,9 @@ impl<'a> Macros<'a> {
             #[cfg(all(feature = "host", feature = "storage"))]
             stored,
             queue: Deque::new(),
+            held: Vec::new(),
+            pressed: Vec::new(),
+            releasing: false,
         }
     }
 
@@ -100,6 +112,13 @@ impl<'a> Macros<'a> {
         // Past the last slot the buffer holds whatever a longer save left behind.
         if slot as usize >= crate::MACRO_MAX_NUM {
             return true;
+        }
+        // Only a press that kept a place gets its release half.
+        if !pressed {
+            let Some(i) = self.held.iter().position(|&s| s == slot) else {
+                return true;
+            };
+            self.held.swap_remove(i);
         }
         let buf = &*self.buf;
         // Without Vial a host's buffer is lossless, so the defaults only seed it.
@@ -153,13 +172,37 @@ impl<'a> Macros<'a> {
             }
             (false, None) => return true,
         }
-        half.pos >= half.end || self.queue.push_back(half).is_ok()
+        let hold = pressed && pause.is_some();
+        let places = (half.pos < half.end) as usize + hold as usize;
+        if self.queue.len() + self.held.len() + places > self.queue.capacity() {
+            return false;
+        }
+        if hold {
+            let _ = self.held.push(slot);
+        }
+        if half.pos < half.end {
+            let _ = self.queue.push_back(half);
+        }
+        true
     }
 
     /// Pop the next queued op, dropping halves that ran out.
     pub(crate) fn next_op(&mut self) -> Option<MacroOp> {
+        if self.releasing {
+            match self.pressed.pop() {
+                Some(action) => return Some(MacroOp::Release(action)),
+                None => self.releasing = false,
+            }
+        }
         loop {
             if let Some(op) = self.queue.front_mut()?.next(self.buf) {
+                match op {
+                    MacroOp::Press(action) if !self.pressed.contains(&action) => {
+                        let _ = self.pressed.push(action);
+                    }
+                    MacroOp::Release(action) => self.pressed.retain(|a| *a != action),
+                    _ => {}
+                }
                 return Some(op);
             }
             self.queue.pop_front();
@@ -178,7 +221,14 @@ impl<'a> Macros<'a> {
     }
 
     pub(crate) fn is_playing(&self) -> bool {
-        !self.queue.is_empty()
+        !self.queue.is_empty() || self.releasing
+    }
+
+    /// End the macros playing, letting go of what they hold first.
+    #[cfg(feature = "host")]
+    fn stop(&mut self) {
+        self.queue.clear();
+        self.releasing = !self.pressed.is_empty();
     }
 
     #[cfg(feature = "host")]
@@ -195,7 +245,7 @@ impl<'a> Macros<'a> {
             return 0..0;
         }
         self.buf[offset..end].copy_from_slice(&data[..end - offset]);
-        self.queue.clear();
+        self.stop();
         offset / MACRO_CHUNK_SIZE..end.div_ceil(MACRO_CHUNK_SIZE)
     }
 
@@ -206,7 +256,7 @@ impl<'a> Macros<'a> {
             return 0..0;
         }
         self.buf.fill(0);
-        self.queue.clear();
+        self.stop();
         0..self.buf.len() / MACRO_CHUNK_SIZE
     }
 
@@ -221,7 +271,7 @@ impl<'a> Macros<'a> {
     #[cfg(feature = "rynk")]
     pub(crate) fn set_slot(&mut self, slot: u8, bytes: &[u8]) -> Option<Range<usize>> {
         let range = codec::splice(self.buf, slot as usize, bytes)?;
-        self.queue.clear();
+        self.stop();
         Some(range.start / MACRO_CHUNK_SIZE..range.end.div_ceil(MACRO_CHUNK_SIZE))
     }
 }
