@@ -275,7 +275,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
     }
 
     /// Process a single message from the peripheral.
-    async fn process_peripheral_message(&self, split_message: SplitMessage) {
+    pub(crate) async fn process_peripheral_message(&self, split_message: SplitMessage) {
         trace!("Got message from peripheral: {:?}", split_message);
         match split_message {
             SplitMessage::Key(e) => match e.source {
