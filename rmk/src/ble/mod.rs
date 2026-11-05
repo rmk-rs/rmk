@@ -456,7 +456,7 @@ async fn run_ble_keyboard<
             let local_address = cfg!(feature = "ext_adv")
                 .then(|| BdAddr::new(crate::ble::profile::profile_address(address, profile_id)));
 
-            let advertise_and_accept = async {
+            let advertise_and_connect = async {
                 if host_connections[profile_id as usize].is_some()
                     || (NUM_HOST_LINKS == 1 && host_connections.iter().any(Option::is_some))
                 {
@@ -491,8 +491,12 @@ async fn run_ble_keyboard<
             };
 
             // Consume queued wake input before a profile action can cancel the connection flow.
-            let gatt_conn = match select3(advertise_and_accept, BLE_PROFILE_CHANNEL.receive(), completed.receive())
-                .await
+            let gatt_conn = match select3(
+                advertise_and_connect,
+                BLE_PROFILE_CHANNEL.receive(),
+                completed.receive(),
+            )
+            .await
             {
                 Either3::First(Ok(gatt_conn)) => gatt_conn,
                 Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
