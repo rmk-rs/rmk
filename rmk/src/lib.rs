@@ -166,14 +166,21 @@ pub async fn initialize_keymap_and_storage<
     behavior_config: &'a mut config::BehaviorConfig,
     positional_config: &'a PositionalConfig<ROW, COL>,
 ) -> (KeyMap<'a>, Storage<F>) {
-    // `mut` is only taken by the host build's keymap restore below.
-    #[cfg_attr(not(feature = "host"), allow(unused_mut))]
     let mut storage = Storage::new(flash, storage_config).await;
 
     #[cfg(feature = "host")]
     let keymap = KeyMap::new_from_storage(data, Some(&mut storage), behavior_config, positional_config).await;
+    // The host build restores the default layer in `read_layout`, along with the rest of the layout.
     #[cfg(not(feature = "host"))]
-    let keymap = KeyMap::new(data, behavior_config, positional_config).await;
+    let keymap = {
+        if let Ok(Some(storage::StorageValue::DefaultLayer(layer))) =
+            storage.fetch(storage::StorageKey::DefaultLayer).await
+            && (layer as usize) < NUM_LAYER
+        {
+            behavior_config.default_layer = layer;
+        }
+        KeyMap::new(data, behavior_config, positional_config).await
+    };
 
     (keymap, storage)
 }
