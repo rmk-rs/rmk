@@ -76,8 +76,16 @@ pub(crate) fn expand_flash_init(hardware: &Hardware, dfu: Option<&DfuConfig>) ->
             #[cfg(not(feature = "dfu_nrf"))]
             {
                 hardware.storage.as_ref().map(|_| {
-                    quote! {
-                        let storage_partition = ::nrf_mpsl::Flash::take(mpsl, p.NVMC);
+                    if hardware.communication.ble_enabled() {
+                        quote! {
+                            let storage_partition = ::nrf_mpsl::Flash::take(mpsl, p.NVMC);
+                        }
+                    } else {
+                        quote! {
+                            let storage_partition = ::rmk::storage::async_flash_wrapper(
+                                ::embassy_nrf::nvmc::Nvmc::new(p.NVMC)
+                            );
+                        }
                     }
                 })
             }

@@ -99,7 +99,22 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
             } else {
                 quote! { ::rmk::ble::NUM_HOST_LINKS }
             };
+
+            let is_peripheral_not_ble = if peripheral_id.is_some() {
+                match &hardware.board {
+                    BoardConfig::Split(split) => {
+                        split.connection != rmk_config::SplitConnection::Ble
+                    }
+                    _ => false,
+                }
+            } else {
+                false
+            };
+
             let ble_init = match &communication {
+                // we skip ble_init if peripheral is not ble
+                _ if is_peripheral_not_ble => quote! {},
+
                 CommunicationConfig::Ble(_) | CommunicationConfig::Both(_, _) => quote! {
                     // Initialize nrf-sdc and ble stack
                     let mpsl_p = ::nrf_sdc::mpsl::Peripherals::new(p.RTC0, p.TIMER0, p.TEMP, p.PPI_CH19, p.PPI_CH30, p.PPI_CH31);
