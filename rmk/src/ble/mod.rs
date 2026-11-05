@@ -491,45 +491,10 @@ async fn run_ble_keyboard<
             };
 
             // Consume queued wake input before a profile action can cancel the connection flow.
-            let accepted = match select3(advertise_and_accept, BLE_PROFILE_CHANNEL.receive(), completed.receive()).await
+            let gatt_conn = match select3(advertise_and_accept, BLE_PROFILE_CHANNEL.receive(), completed.receive())
+                .await
             {
-                Either3::First(Ok(gatt_conn)) => {
-                    // A replaced advertisement can still deliver a late connection.
-                    #[cfg(feature = "ext_adv")]
-                    if gatt_conn.raw().local_address() != local_address {
-                        warn!("[ble] late connection belongs to another profile");
-                        disconnect(&gatt_conn).await;
-                        continue;
-                    }
-                    let bond_info = profile_manager.bond_info(profile_id);
-                    if let Some(bond) = &bond_info
-                        && !bond.info.identity.match_identity(&gatt_conn.raw().peer_identity())
-                    {
-                        warn!("[ble] peer does not match its profile");
-                        disconnect(&gatt_conn).await;
-                        continue;
-                    }
-                    #[cfg(feature = "dongle")]
-                    if profile_id != DONGLE_PROFILE
-                        && profile_manager.is_bonded_dongle(&gatt_conn.raw().peer_identity())
-                    {
-                        warn!("[ble] dongle connected on a host profile");
-                        disconnect(&gatt_conn).await;
-                        continue;
-                    }
-                    if let Err(e) = gatt_conn.raw().set_bondable(true) {
-                        error!("Set bondable error: {:?}", e);
-                    }
-                    if let Some(bond) = bond_info {
-                        info!("Loading CCCD table: {:?}", bond.cccd_table);
-                        match ClientAttTableView::try_from_raw(&bond.cccd_table) {
-                            Ok(view) => server.set_client_att_table(gatt_conn.raw(), &view),
-                            Err(e) => warn!("Invalid stored CCCD table: {:?}", e),
-                        }
-                    }
-                    host_connections[profile_id as usize] = Some(gatt_conn.raw().clone());
-                    gatt_conn
-                }
+                Either3::First(Ok(gatt_conn)) => gatt_conn,
                 Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
                     advertising_paused = true;
                     set_ble_state(BleState::Inactive);
@@ -596,7 +561,40 @@ async fn run_ble_keyboard<
                     continue;
                 }
             };
-            accepted_connections.send((accepted, profile_id)).await;
+
+            // A replaced advertisement can still deliver a late connection.
+            #[cfg(feature = "ext_adv")]
+            if gatt_conn.raw().local_address() != local_address {
+                warn!("[ble] late connection belongs to another profile");
+                disconnect(&gatt_conn).await;
+                continue;
+            }
+            let bond_info = profile_manager.bond_info(profile_id);
+            if let Some(bond) = &bond_info
+                && !bond.info.identity.match_identity(&gatt_conn.raw().peer_identity())
+            {
+                warn!("[ble] peer does not match its profile");
+                disconnect(&gatt_conn).await;
+                continue;
+            }
+            #[cfg(feature = "dongle")]
+            if profile_id != DONGLE_PROFILE && profile_manager.is_bonded_dongle(&gatt_conn.raw().peer_identity()) {
+                warn!("[ble] dongle connected on a host profile");
+                disconnect(&gatt_conn).await;
+                continue;
+            }
+            if let Err(e) = gatt_conn.raw().set_bondable(true) {
+                error!("Set bondable error: {:?}", e);
+            }
+            if let Some(bond) = bond_info {
+                info!("Loading CCCD table: {:?}", bond.cccd_table);
+                match ClientAttTableView::try_from_raw(&bond.cccd_table) {
+                    Ok(view) => server.set_client_att_table(gatt_conn.raw(), &view),
+                    Err(e) => warn!("Invalid stored CCCD table: {:?}", e),
+                }
+            }
+            host_connections[profile_id as usize] = Some(gatt_conn.raw().clone());
+            accepted_connections.send((gatt_conn, profile_id)).await;
         }
     };
 
