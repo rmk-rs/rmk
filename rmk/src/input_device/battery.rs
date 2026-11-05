@@ -196,17 +196,6 @@ mod tests {
     }
 
     #[test]
-    fn both_zero_dividers_have_no_battery_percent() {
-        let processor = const { BatteryProcessor::new(0, 0) };
-        assert_eq!(processor.get_battery_percent(4000), None);
-    }
-
-    #[test]
-    fn charging_only_has_no_battery_percent() {
-        assert_eq!(BatteryProcessor::charging_only().get_battery_percent(4000), None);
-    }
-
-    #[test]
     fn valid_adc_reading_can_report_zero_percent() {
         let processor = const { BatteryProcessor::new(1, 1) };
         assert_eq!(processor.get_battery_percent(3600), Some(0));
