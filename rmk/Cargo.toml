@@ -227,7 +227,7 @@ nrf52832 = ["_nrf", "_no_usb"]
 nrf52811 = ["_nrf", "_no_usb"]
 ## Enable hardware support for nrf52810.
 nrf52810 = ["_nrf", "_no_usb"]
-_nrf = ["dep:embassy-nrf"]
+_nrf = ["dep:embassy-nrf", "dep:p256-cortex-m4", "dep:zeroize"]
 
 #! ### ESP hardware feature flags
 #!
@@ -242,40 +242,38 @@ esp32h2 = ["_esp", "_no_usb"]
 esp32s3 = ["_esp"]
 ## Enable hardware support for esp32s31.
 esp32s31 = ["_esp", "_usb_high_speed"]
-_esp = ["dep:esp-hal"]
+_esp = ["dep:esp-hal", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
 
 #! ### BLE feature flags
 #!
 #! ⚠️ Due to the limitation of docs.rs, functions gated by BLE features won't show in docs.rs. You have to head to [`examples`](https://github.com/rmk-rs/rmk/tree/main/examples) folder of RMK repo for their usages.
 ## Enable feature if you want to use nRF54LM20 with BLE.
-nrf54lm20_ble = ["nrf54lm20", "_nrf_ble"]
+nrf54lm20_ble = ["nrf54lm20", "_ble"]
 ## Enable feature if you want to use nRF54L15 with BLE.
-nrf54l15_ble = ["nrf54l15", "_nrf_ble"]
+nrf54l15_ble = ["nrf54l15", "_ble"]
 ## Enable feature if you want to use nRF52840 with BLE.
-nrf52840_ble = ["nrf52840", "_nrf_ble"]
+nrf52840_ble = ["nrf52840", "_ble"]
 ## Enable feature if you want to use nRF52833 with BLE.
-nrf52833_ble = ["nrf52833", "_nrf_ble"]
+nrf52833_ble = ["nrf52833", "_ble"]
 ## Enable feature if you want to use nRF52820 with BLE. The chip has no SAADC, so `NrfAdc` is unavailable.
-nrf52820_ble = ["nrf52820", "_nrf_ble"]
+nrf52820_ble = ["nrf52820", "_ble"]
 ## Enable feature if you want to use nRF52832 with BLE.
-nrf52832_ble = ["nrf52832", "_nrf_ble"]
+nrf52832_ble = ["nrf52832", "_ble"]
 ## Enable feature if you want to use nRF52811 with BLE.
-nrf52811_ble = ["nrf52811", "_nrf_ble"]
+nrf52811_ble = ["nrf52811", "_ble"]
 ## Enable feature if you want to use nRF52810 with BLE.
-nrf52810_ble = ["nrf52810", "_nrf_ble"]
-_nrf_ble = ["_nrf", "_ble", "dep:p256-cortex-m4", "dep:zeroize"]
+nrf52810_ble = ["nrf52810", "_ble"]
 
 ## Enable feature if you want to use ESP32C3 with BLE.
-esp32c3_ble = ["esp32c3", "_esp_ble"]
+esp32c3_ble = ["esp32c3", "_ble"]
 ## Enable feature if you want to use ESP32C6 with BLE.
-esp32c6_ble = ["esp32c6", "_esp_ble"]
+esp32c6_ble = ["esp32c6", "_ble"]
 ## Enable feature if you want to use ESP32H2 with BLE.
-esp32h2_ble = ["esp32h2", "_esp_ble"]
+esp32h2_ble = ["esp32h2", "_ble"]
 ## Enable feature if you want to use ESP32S3 with BLE.
-esp32s3_ble = ["esp32s3", "_esp_ble"]
+esp32s3_ble = ["esp32s3", "_ble"]
 ## Enable feature if you want to use ESP32-S31 with BLE and high-speed USB.
-esp32s31_ble = ["esp32s31", "_esp_ble"]
-_esp_ble = ["_esp", "_ble", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
+esp32s31_ble = ["esp32s31", "_ble"]
 
 ## Enable feature if you want to use RP2040W with BLE.
 pico_w_ble = ["_ble", "_no_subrating", "dep:embassy-rp", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
