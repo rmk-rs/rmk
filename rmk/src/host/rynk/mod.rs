@@ -404,7 +404,7 @@ mod tests {
             assert!(matches!(
                 (cmd, BLE_PROFILE_CHANNEL.try_receive()),
                 (Cmd::SwitchBleProfile, Ok(BleProfileAction::Switch(0)))
-                    | (Cmd::ClearBleProfile, Ok(BleProfileAction::ClearSlot(0)))
+                    | (Cmd::ClearBleProfile, Ok(BleProfileAction::ClearBond(0)))
                     | (Cmd::DisconnectBleProfile, Ok(BleProfileAction::Disconnect(0)))
             ));
         }

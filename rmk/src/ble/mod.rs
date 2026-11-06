@@ -532,45 +532,39 @@ async fn run_ble_keyboard<
                     continue;
                 }
                 Either3::Second(action) => {
-                    use crate::ble::profile::BleProfileAction::{
-                        ClearBond, ClearSlot, Disconnect, Next, Pair, Previous, Switch,
-                    };
+                    use crate::ble::profile::BleProfileAction::{ClearBond, Disconnect, Next, Pair, Previous, Switch};
 
                     let last_host = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
                     let slot = match action {
-                        Switch(slot) | Pair(slot) | ClearSlot(slot) | Disconnect(slot) => slot,
-                        ClearBond => profile_id,
+                        Switch(slot) | Pair(slot) | ClearBond(slot) | Disconnect(slot) => slot,
                         Next if profile_id < last_host => profile_id + 1,
                         Next => 0,
                         Previous => profile_id.checked_sub(1).unwrap_or(last_host),
                     };
-                    if matches!(action, Disconnect(_) | ClearSlot(_)) {
+                    if matches!(action, Disconnect(_) | ClearBond(_)) {
                         if slot == profile_id {
                             disconnected_by_user = true;
                             profile_manager.cancel_pairing(slot);
                             set_ble_state(BleState::Inactive);
                         }
                         disconnect_profile(slot, &mut host_connections, &completed).await;
-                        if matches!(action, ClearSlot(_)) {
+                        if matches!(action, ClearBond(_)) {
                             profile_manager.clear_bond(slot);
                         }
                         continue;
                     }
-                    let clear_bond = matches!(action, ClearBond);
                     let pair = matches!(action, Pair(_)) && profile_manager.bond_info(slot).is_some();
-                    if !clear_bond && !pair && slot == profile_id && !disconnected_by_user {
+                    if !pair && slot == profile_id && !disconnected_by_user {
                         continue;
                     }
                     disconnected_by_user = false;
                     report_activity();
                     adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
                     // Close the target first, so pairing never switches to a link about to drop.
-                    if clear_bond || pair {
+                    if pair {
                         disconnect_profile(slot, &mut host_connections, &completed).await;
                     }
-                    if clear_bond {
-                        profile_manager.clear_bond(slot);
-                    } else if slot != profile_id {
+                    if slot != profile_id {
                         let keep_connected = NUM_HOST_LINKS > 1
                             && host_connections[profile_id as usize].as_ref().is_some_and(|conn| {
                                 conn.security_level().is_ok_and(|level| level.encrypted())
@@ -1462,7 +1456,7 @@ mod tests {
 
     #[test]
     fn cycling_uses_available_host_profiles() {
-        use crate::ble::profile::BleProfileAction::{ClearSlot, Next, Previous};
+        use crate::ble::profile::BleProfileAction::{ClearBond, Next, Previous};
         use crate::channel::BLE_PROFILE_CHANNEL;
         use crate::state::{CONNECTION_STATUS, current_profile};
 
@@ -1472,7 +1466,7 @@ mod tests {
             for (action, expected) in [(Previous, crate::NUM_BLE_PROFILE.saturating_sub(1) as u8), (Next, 0)] {
                 BLE_PROFILE_CHANNEL.send(action).await;
                 // The one-slot queue makes this wait until the preceding action was consumed.
-                BLE_PROFILE_CHANNEL.send(ClearSlot(0)).await;
+                BLE_PROFILE_CHANNEL.send(ClearBond(0)).await;
                 assert_eq!(current_profile(), expected);
             }
         });
@@ -1490,7 +1484,7 @@ mod tests {
             status.get_and(|s| s.ble.state == BleState::Advertising).await;
             for (action, bonded) in [
                 (BleProfileAction::Disconnect(0), true),
-                (BleProfileAction::ClearSlot(0), false),
+                (BleProfileAction::ClearBond(0), false),
             ] {
                 BLE_PROFILE_CHANNEL.send(action).await;
                 embassy_time::with_timeout(
@@ -1574,7 +1568,10 @@ mod tests {
                         ],
                     }),
                     _ if BOND_SLOTS > 1 => BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await,
-                    _ => BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond).await,
+                    _ => {
+                        BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(0)).await;
+                        BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(0)).await;
+                    }
                 }
                 let resumed = status.get_and(|s| s.ble.state == BleState::Advertising).await;
                 assert_eq!(resumed.ble.profile, u8::from(wake == 2 && BOND_SLOTS > 1));
