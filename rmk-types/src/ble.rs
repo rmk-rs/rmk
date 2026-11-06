@@ -7,21 +7,21 @@ use serde::{Deserialize, Serialize};
 /// UUIDs (6) and the appearance (4) claim the rest of its 31 bytes.
 pub const BLE_ADV_NAME_MAX_LEN: usize = 16;
 
-/// Connection and advertising state of the selected BLE profile; background links are not reflected here.
+/// Connection and advertising state of one BLE host or dongle profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum BleState {
-    /// The selected profile is advertising.
+    /// The profile is advertising.
     Advertising,
-    /// The selected profile has an encrypted host connection.
+    /// The profile has an encrypted connection.
     Connected,
-    /// The selected profile is idle, with no host connection ready for input.
+    /// The profile has no connection ready for input.
     Inactive,
 }
 
-/// Selected BLE profile, its connection state, and whether it currently has bond information.
+/// A BLE host or dongle profile's connection state and effective bond information.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
@@ -29,7 +29,7 @@ pub enum BleState {
 pub struct BleStatus {
     pub profile: u8,
     pub state: BleState,
-    /// Whether the active BLE profile currently has bond information, independent of connection state.
+    /// Whether this profile currently has effective bond information, independent of connection state.
     pub bonded: bool,
 }
 

@@ -15,6 +15,47 @@ pub(crate) static CONNECTION_STATUS: Watch<
     { crate::CONNECTION_STATUS_CHANGE_EVENT_SUB_SIZE },
 > = Watch::new_with(ConnectionStatus::new());
 
+#[cfg(all(feature = "_ble", feature = "rynk"))]
+static BLE_PROFILE_STATUSES: Watch<RawMutex, [BleStatus; crate::ble::profile::BOND_SLOTS], 0> = Watch::new();
+
+#[cfg(all(feature = "_ble", feature = "rynk"))]
+pub(crate) fn init_ble_profile_statuses(statuses: [BleStatus; crate::ble::profile::BOND_SLOTS]) {
+    BLE_PROFILE_STATUSES.sender().send(statuses);
+    CONNECTION_STATUS.sender().send_if_modified(|_| true);
+}
+
+#[cfg(all(feature = "_ble", feature = "rynk"))]
+pub(crate) fn ble_profile_status(profile: u8) -> Option<BleStatus> {
+    BLE_PROFILE_STATUSES
+        .try_get()
+        .map(|statuses| statuses[profile as usize])
+}
+
+#[cfg(feature = "_ble")]
+pub(crate) fn update_ble_profile_status(profile: u8, f: impl Fn(&mut BleStatus)) {
+    let background_changed = Cell::new(false);
+    update_status(|c| {
+        if c.ble.profile == profile {
+            f(&mut c.ble);
+        } else {
+            #[cfg(feature = "rynk")]
+            BLE_PROFILE_STATUSES.sender().send_if_modified(|statuses| {
+                let Some(statuses) = statuses else { return false };
+                let status = &mut statuses[profile as usize];
+                let previous = *status;
+                f(status);
+                let changed = *status != previous;
+                background_changed.set(changed);
+                changed
+            });
+        }
+    });
+    if background_changed.get() {
+        // A background link changes the list without changing the input route.
+        CONNECTION_STATUS.sender().send_if_modified(|_| true);
+    }
+}
+
 pub(crate) fn active_transport() -> Option<ConnectionType> {
     current_connection_status().decide_active()
 }
@@ -60,6 +101,14 @@ pub(crate) fn update_status(f: impl Fn(&mut ConnectionStatus)) {
         let new = *c;
         if prev == new {
             return false;
+        }
+        #[cfg(all(feature = "_ble", feature = "rynk"))]
+        if prev.ble != new.ble {
+            BLE_PROFILE_STATUSES.sender().send_if_modified(|statuses| {
+                let Some(statuses) = statuses else { return false };
+                statuses[new.ble.profile as usize] = new.ble;
+                true
+            });
         }
         change.set(Some((prev, new)));
         true
@@ -222,6 +271,47 @@ mod tests {
 
         let event = block_on(sub.next_event());
         assert_eq!(event.0.preferred, ConnectionType::Ble);
+    }
+
+    #[cfg(all(feature = "_ble", feature = "rynk"))]
+    #[test]
+    fn background_profile_changes_notify_without_rerouting_input() {
+        let _guard = state_test_lock().lock().unwrap();
+        reset_state();
+        crate::test_support::reset_ble_profile_statuses();
+        set_ble_status(BleStatus {
+            profile: 0,
+            state: BleState::Connected,
+            bonded: true,
+        });
+        set_preferred_connection(ConnectionType::Ble);
+        let original = super::current_connection_status();
+        let mut sub = ConnectionStatusChangeEvent::subscriber();
+        crate::channel::BLE_REPORT_CHANNEL
+            .try_send(pressed_keyboard_report())
+            .unwrap();
+
+        for state in [BleState::Connected, BleState::Inactive] {
+            super::update_ble_profile_status(1, |status| {
+                status.state = state;
+                status.bonded = true;
+            });
+            let event = block_on(embassy_time::with_timeout(Duration::from_millis(10), sub.next_event())).unwrap();
+            assert_eq!(event.0, original);
+            assert_eq!(
+                super::ble_profile_status(1),
+                Some(BleStatus {
+                    profile: 1,
+                    state,
+                    bonded: true
+                })
+            );
+            assert_eq!(super::current_connection_status(), original);
+        }
+        assert!(
+            matches!(crate::channel::BLE_REPORT_CHANNEL.try_receive(), Ok(Report::KeyboardReport(r)) if r.modifier == 0x02)
+        );
+        assert!(crate::channel::BLE_REPORT_CHANNEL.try_receive().is_err());
     }
 
     #[test]

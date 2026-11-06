@@ -107,6 +107,7 @@ impl Default for ProfileInfo {
 pub(crate) enum BleProfileAction {
     Switch(u8),
     Pair(u8),
+    Disconnect(u8),
     Previous,
     Next,
     ClearBond,
@@ -201,8 +202,8 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
         } else if state.try_get().as_ref() == Some(&info) {
             return;
         }
+        crate::state::update_ble_profile_status(info.slot_num, |status| status.bonded = !info.removed);
         state.sender().send(info);
-        set_ble_bonded(self.bond_info(current_profile()).is_some());
     }
 
     pub(crate) fn update_profile_cccd_table(
@@ -259,13 +260,17 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
                 removed: true,
                 ..Default::default()
             });
-            set_ble_bonded(self.bond_info(current_profile()).is_some());
+            crate::state::update_ble_profile_status(slot, |status| status.bonded = false);
         }
     }
 
     /// Apply a selected profile outside the cancellable action wait.
     pub(crate) fn switch_profile(&self, profile: u8, state: BleState) {
-        self.repairing.set(None);
+        if let Some(previous) = self.repairing.take() {
+            crate::state::update_ble_profile_status(previous, |status| {
+                status.bonded = self.bond_info(previous).is_some();
+            });
+        }
         set_ble_status(BleStatus {
             profile,
             state,

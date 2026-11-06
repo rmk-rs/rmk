@@ -318,13 +318,15 @@ endpoints! {
     GetConnectionType = 0x0701: () => ConnectionType;
     /// Full `ConnectionStatus` snapshot.
     GetConnectionStatus = 0x0702: () => ConnectionStatus;
-    /// Active profile, BLE state, and whether that profile currently has bond information.
+    /// Connection state and effective bond information for the requested profile.
     #[cfg(feature = "_ble")]
-    GetBleStatus = 0x0703: () => BleStatus;
+    GetBleStatus = 0x0703: u8 => BleStatus;
     #[cfg(feature = "_ble")]
     SwitchBleProfile = 0x0704: u8 => ();
     #[cfg(feature = "_ble")]
     ClearBleProfile = 0x0705: u8 => ();
+    #[cfg(feature = "_ble")]
+    DisconnectBleProfile = 0x0706: u8 => ();
 
     // Status (0x08xx).
     GetCurrentLayer = 0x0801: () => u8;

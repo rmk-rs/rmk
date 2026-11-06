@@ -246,6 +246,7 @@ fn exemplars() -> Exemplars {
         ble_enabled: false,
         num_ble_profiles: 13,
         max_connections: 14,
+        dongle_profile: Some(3),
         max_payload_size: 15,
         max_bulk_keys: 16,
         max_bulk_items: 17,
@@ -966,7 +967,7 @@ fn wire_frames_locked() {
             encode_frame(Cmd::GetLedIndicator, SEQ, &Ok::<LedIndicator, RynkError>(led)),
         ),
         // Connection / status rows behind `_ble` and `split`.
-        ("GetBleStatus request ()", encode_frame(Cmd::GetBleStatus, SEQ, &())),
+        ("GetBleStatus request 1", encode_frame(Cmd::GetBleStatus, SEQ, &1u8)),
         (
             "GetBleStatus reply Ok(BleStatus{1,Advertising,bonded})",
             encode_frame(Cmd::GetBleStatus, SEQ, &Ok::<BleStatus, RynkError>(ex.connection.ble)),
@@ -986,6 +987,14 @@ fn wire_frames_locked() {
         (
             "ClearBleProfile reply Ok(())",
             encode_frame(Cmd::ClearBleProfile, SEQ, &Ok::<(), RynkError>(())),
+        ),
+        (
+            "DisconnectBleProfile request 1",
+            encode_frame(Cmd::DisconnectBleProfile, SEQ, &1u8),
+        ),
+        (
+            "DisconnectBleProfile reply Ok(())",
+            encode_frame(Cmd::DisconnectBleProfile, SEQ, &Ok::<(), RynkError>(())),
         ),
         (
             "GetBatteryStatus request ()",
@@ -1245,6 +1254,12 @@ mod protocol_reference {
              `DeviceCapabilities::max_connections` reports the maximum simultaneous BLE host and dongle connections (0 without BLE, 1 in Legacy mode). USB and split peripheral links are excluded.\n\n\
              `DeviceCapabilities` also advertises `bulk_transfer_supported` and the paging strides `max_bulk_keys` (worst-case keys per `GetKeymapBulk` page) and `max_bulk_items` (worst-case entries per `GetComboBulk`/`GetMorseBulk` page). A bulk read names a start — for the keymap `(layer, row, col)`, read forward through the flat row-major, layer-major keymap; for combos and morses a slot index — and returns as many consecutive entries as fit in one payload, or fewer at the end. A host pages by advancing its start by the stride; a short page ends the read. A bulk write carries a start plus a list of entries and is packed by encoded size up to `max_payload_size`. A reply that does not fit beside other pipelined requests answers `Busy`; retry once they complete.\n\n\
              `GetLayout` serves the compressed layout blob {ble_chunk} bytes per call: the request is a byte offset and `LayoutChunk` carries `total_len` plus that page's bytes. `GetMacro`/`SetMacro` move one whole macro per call, a `MacroOp` list indexed below `max_macros`; every macro shares one buffer of `macro_space_size` bytes, in the list's postcard encoding plus a length prefix per slot, so a write that no longer fits answers `Invalid`; `macros_writable` is false on a firmware without storage, whose `SetMacro` answers `Unimplemented`.\n\n\
+             ## Connections\n\n\
+             `num_ble_profiles` counts ordinary host slots; `dongle_profile` identifies the optional dongle slot. Enumerate those slots with `GetBleStatus(slot)`. Its `BleStatus` reports the requested slot, connection state, and effective bond information. It answers `NotReady` until BLE state initialization finishes. Only `Connected` means an encrypted connection is ready for input.\n\n\
+             `GetConnectionStatus` retains the selected profile in `ble.profile`. Resolve the actual input transport with `ConnectionStatus::decide_active()`; USB can carry input while BLE remains connected. `GetConnectionType` reads the transport preference, not the active route.\n\n\
+             `SwitchBleProfile`, `DisconnectBleProfile`, and `ClearBleProfile` accept ordinary host and dongle slots. Success means the action was queued, not that disconnect or flash persistence has finished. A full action queue answers `NotReady`. The requesting link may close before its reply arrives; the queued action still runs.\n\n\
+             `DisconnectBleProfile` retains the bond. `ClearBleProfile` requires unlocking and forgets the bond even while offline. Either command stops automatic reconnection of the selected slot until an explicit selection or pairing action, or a restart. Ordinary key and pointing input do not resume it. Selecting the same slot explicitly resumes it. Other slots keep their connections.\n\n\
+             `ConnectionChange` also notifies background profile changes, even when its overall routing payload is unchanged. Refresh the profile list after each notification; intermediate updates may be coalesced. Readback describes live state and does not acknowledge flash persistence.\n\n\
              ## Errors\n\n\
              A request's response is postcard `Result<T, RynkError>`; the `Err` side is one of these variants.\n\n\
              {errors}\n\

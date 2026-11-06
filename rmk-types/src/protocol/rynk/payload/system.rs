@@ -65,6 +65,8 @@ pub struct DeviceCapabilities {
     /// Maximum simultaneous BLE host and dongle connections.
     /// Excludes USB and split peripheral links; zero when BLE is unavailable.
     pub max_connections: u8,
+    /// Dedicated dongle slot, when the keyboard supports one.
+    pub dongle_profile: Option<u8>,
 
     // -- Protocol limits --
     pub max_payload_size: u16,
@@ -206,6 +208,7 @@ mod tests {
             ble_enabled: true,
             num_ble_profiles: 4,
             max_connections: 4,
+            dongle_profile: Some(4),
             max_payload_size: 256,
             max_bulk_keys: 32,
             max_bulk_items: 8,
@@ -231,6 +234,7 @@ mod tests {
             ble_enabled: false,
             num_ble_profiles: 0,
             max_connections: 0,
+            dongle_profile: None,
             max_payload_size: 0,
             max_bulk_keys: 0,
             max_bulk_items: 0,
