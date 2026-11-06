@@ -10,6 +10,24 @@ keyboard = "boards/split.toml"
 unilateral_tap = false
 permissive_hold = true
 
+# A prepared non-bindable replacement must not start another fork when the
+# releasing Morse key flushes it; that used to leave layer 1 active after release.
+[[test]]
+name = "morse_release_flush_applies_non_bindable_fork_only_once"
+behavior.morse = { hold_timeout = "200ms", quick_tap_timeout = "0ms", enable_flow_tap = false, morses = [{ tap = "Z", hold = "LShift" }] }
+behavior.fork.forks = [
+  { trigger = "A", negative_output = "B", positive_output = "B", match_any = "LShift", bindable = false },
+  { trigger = "B", negative_output = "MO(1)", positive_output = "MO(1)", match_any = "LShift", bindable = false },
+]
+steps = [
+  { press = [1, 2] },
+  { press = [1, 0] },
+  { release = [1, 2] },
+  { release = [1, 0] },
+  { tap = { pos = [1, 3], duration = 10 } },
+]
+expect = [["Z"], ["Z", "B"], ["B"], [], ["W"], []]
+
 [[test]]
 name = "mt_1"
 steps = [
@@ -200,7 +218,7 @@ steps = [
   { delay = 100 },
   { release = [1, 0] },
 ]
-expect = [["B"], ["B", "A"], ["A"], ["C", "A"], ["A"], []]
+expect = [["B"], [], ["C"], ["C", "A"], ["A"], []]
 
 [[test]]
 name = "rolling_release_order_2"
@@ -268,7 +286,7 @@ steps = [
   { release = [1, 1] },  # Release B
   { release = [1, 7] },  # Release C
 ]
-expect = [["A"], [], ["LShift"], ["LShift", "D"], ["LShift"], [], ["C"], []]
+expect = [["A"], [], ["LShift"], ["LShift", "D"], ["LShift"], ["LShift", "C"], ["C"], []]
 
 [[test]]
 name = "flow_tap"
@@ -320,7 +338,8 @@ expect = [["LShift"], ["LShift", "C"], ["LShift"], []]
 # Same shape with a gap longer than the hold timeout: the re-press is due
 # before the first tap's gap, so a duplicate entry would be the one picked by
 # next_timeout, and its lone hold fires as B instead of the hold-after-tap
-# that the continued pattern resolves to.
+# that the continued pattern resolves to. Its delivery now waits for the
+# preceding tap-hold owner, so Shift is reported before C.
 [[test]]
 name = "tap_dance_continues_behind_permissive_hold_key_short_hold"
 behavior.morse.profiles.p0 = { hold_timeout = "100ms", gap_timeout = "400ms" }
@@ -333,4 +352,4 @@ steps = [
   { release = [1, 2] },
   { release = [1, 1] },
 ]
-expect = [["C"], ["C", "LShift"], ["LShift"], []]
+expect = [["LShift"], ["LShift", "C"], ["LShift"], []]

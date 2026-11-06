@@ -40,7 +40,7 @@ use rmk::hid::{KeyboardReport, Report};
 use rmk::input_device::rotary_encoder::Direction;
 use rmk::keyboard::Keyboard;
 use rmk::keymap::{KeyMap, KeymapData};
-use rmk::types::action::{EncoderAction, KeyAction};
+use rmk::types::action::{EncoderAction, KeyAction, TouchAction};
 use rmk_types::keycode::HidKeyCode;
 
 const TIMEOUT_SECS: u64 = 5;
@@ -78,17 +78,24 @@ fn reset() {
     rmk::test_support::clear_flash_channel();
 }
 
-pub struct SimKeyboardBuilder<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCODER: usize> {
+pub struct SimKeyboardBuilder<
+    const ROW: usize,
+    const COL: usize,
+    const NUM_LAYER: usize,
+    const NUM_ENCODER: usize,
+    const NUM_TOUCHPAD: usize = 0,
+> {
     keymap: [[[KeyAction; COL]; ROW]; NUM_LAYER],
     encoder_map: [[EncoderAction; NUM_ENCODER]; NUM_LAYER],
+    touch_map: [[TouchAction; NUM_TOUCHPAD]; NUM_LAYER],
     behavior_config: BehaviorConfig,
     positional_config: PositionalConfig<ROW, COL>,
     #[cfg(feature = "host")]
     rmk_config: RmkConfig<'static>,
 }
 
-impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCODER: usize>
-    SimKeyboardBuilder<ROW, COL, NUM_LAYER, NUM_ENCODER>
+impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCODER: usize, const NUM_TOUCHPAD: usize>
+    SimKeyboardBuilder<ROW, COL, NUM_LAYER, NUM_ENCODER, NUM_TOUCHPAD>
 {
     pub fn hands(mut self, hands: [[Hand; COL]; ROW]) -> Self {
         self.positional_config.hand = hands;
@@ -112,10 +119,26 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
     pub fn encoders<const NEW_NUM_ENCODER: usize>(
         self,
         encoder_map: [[EncoderAction; NEW_NUM_ENCODER]; NUM_LAYER],
-    ) -> SimKeyboardBuilder<ROW, COL, NUM_LAYER, NEW_NUM_ENCODER> {
+    ) -> SimKeyboardBuilder<ROW, COL, NUM_LAYER, NEW_NUM_ENCODER, NUM_TOUCHPAD> {
         SimKeyboardBuilder {
             keymap: self.keymap,
             encoder_map,
+            touch_map: self.touch_map,
+            behavior_config: self.behavior_config,
+            positional_config: self.positional_config,
+            #[cfg(feature = "host")]
+            rmk_config: self.rmk_config,
+        }
+    }
+
+    pub fn touchpads<const NEW_NUM_TOUCHPAD: usize>(
+        self,
+        touch_map: [[TouchAction; NEW_NUM_TOUCHPAD]; NUM_LAYER],
+    ) -> SimKeyboardBuilder<ROW, COL, NUM_LAYER, NUM_ENCODER, NEW_NUM_TOUCHPAD> {
+        SimKeyboardBuilder {
+            keymap: self.keymap,
+            encoder_map: self.encoder_map,
+            touch_map,
             behavior_config: self.behavior_config,
             positional_config: self.positional_config,
             #[cfg(feature = "host")]
@@ -124,7 +147,9 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
     }
 
     pub async fn build(self) -> SimKeyboard {
-        let data = Box::leak(Box::new(KeymapData::new_with_encoder(self.keymap, self.encoder_map)));
+        let data = Box::leak(Box::new(
+            KeymapData::new_with_encoder(self.keymap, self.encoder_map).with_touch(self.touch_map),
+        ));
         let behavior = Box::leak(Box::new(self.behavior_config));
         let positional = Box::leak(Box::new(self.positional_config));
         let keymap = Box::leak(Box::new(KeyMap::new(data, behavior, positional).await));
@@ -144,7 +169,9 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
     /// the same flash sees what this one wrote.
     #[cfg(feature = "storage")]
     pub async fn build_with_flash<F: NorFlash + 'static>(self, flash: F) -> SimKeyboard {
-        let data = Box::leak(Box::new(KeymapData::new_with_encoder(self.keymap, self.encoder_map)));
+        let data = Box::leak(Box::new(
+            KeymapData::new_with_encoder(self.keymap, self.encoder_map).with_touch(self.touch_map),
+        ));
         let (keymap, mut storage) = rmk::initialize_keymap_and_storage(
             data,
             BlockingAsync::new(flash),
@@ -169,8 +196,9 @@ impl<const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCOD
 
 enum SimStep {
     Event(KeyboardEvent),
+    InjectedEvent(KeyboardEvent),
     Delay(Duration),
-    ExpectReport(Report),
+    ExpectReport(Report, Duration),
     ExpectNoReport(Duration),
     HostSend(Vec<u8>),
     ExpectHostFrame(Vec<u8>),
@@ -208,6 +236,7 @@ impl SimKeyboard {
         SimKeyboardBuilder {
             keymap,
             encoder_map: [const { [] }; NUM_LAYER],
+            touch_map: [const { [] }; NUM_LAYER],
             behavior_config: BehaviorConfig::default(),
             positional_config: PositionalConfig::default(),
             #[cfg(feature = "host")]
@@ -215,8 +244,15 @@ impl SimKeyboard {
         }
     }
 
-    fn event(&mut self, event: KeyboardEvent) -> &mut Self {
+    pub fn event(&mut self, event: KeyboardEvent) -> &mut Self {
         self.steps.push(SimStep::Event(event));
+        self
+    }
+
+    /// Inject a transport fault, not a physical transition. Normal events still
+    /// enforce balanced inputs, and final report/held-state checks still apply.
+    pub fn inject_event(&mut self, event: KeyboardEvent) -> &mut Self {
+        self.steps.push(SimStep::InjectedEvent(event));
         self
     }
 
@@ -273,7 +309,15 @@ impl SimKeyboard {
     }
 
     pub fn expect_report(&mut self, report: Report) -> &mut Self {
-        self.steps.push(SimStep::ExpectReport(report));
+        self.steps.push(SimStep::ExpectReport(report, TIMEOUT));
+        self
+    }
+
+    pub fn within(&mut self, ms: u64) -> &mut Self {
+        match self.steps.last_mut() {
+            Some(SimStep::ExpectReport(_, timeout)) => *timeout = Duration::from_millis(ms),
+            _ => panic!("within() must follow a report expectation"),
+        }
         self
     }
 
@@ -435,14 +479,21 @@ async fn run_steps(steps: Vec<SimStep>, to_device: &Link, from_device: &Link) {
                 with_timeout(sender.publish_async(event), &waiting).await;
             }
             SimStep::Delay(duration) => Timer::after(duration).await,
-            SimStep::ExpectReport(expected) => {
+            SimStep::InjectedEvent(event) => {
+                with_timeout(sender.publish_async(event), "publishing injected input blocked").await;
+            }
+            SimStep::ExpectReport(expected, timeout) => {
                 let at = format!("expect[{expects}]");
                 expects += 1;
                 let waiting = format!(
-                    "{at}: no HID report within {TIMEOUT_SECS}s, expected {}",
+                    "{at}: no HID report within {}ms, expected {}",
+                    timeout.as_millis(),
                     summary(&expected)
                 );
-                let actual = with_timeout(REPORT_CHANNEL.receive(), &waiting).await;
+                let actual = match select(Timer::after(timeout), REPORT_CHANNEL.receive()).await {
+                    Either::First(_) => panic!("{waiting}"),
+                    Either::Second(report) => report,
+                };
                 if !same_report(&expected, &actual) {
                     panic!(
                         "{at}: HID report mismatch\n  expected {}\n    actual {}",
@@ -661,6 +712,20 @@ mod self_check {
     use rmk::test_support::test_block_on;
 
     use super::{HidKeyCode, SimKeyboard};
+
+    #[test]
+    #[should_panic(expected = "no HID report within 5ms")]
+    fn a_report_deadline_fails_without_waiting_for_the_global_timeout() {
+        test_block_on(async {
+            SimKeyboard::builder([[[k!(A)]]])
+                .build()
+                .await
+                .expect_keys([HidKeyCode::A])
+                .within(5)
+                .run()
+                .await;
+        });
+    }
 
     #[test]
     #[should_panic(expected = "unexpected trailing HID report")]

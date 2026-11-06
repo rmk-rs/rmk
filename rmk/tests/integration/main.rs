@@ -10,6 +10,7 @@
 // subset of it — so per-row dead code is expected, not a finding.
 #![allow(dead_code)]
 
+mod ordered;
 mod simulator;
 
 #[cfg(feature = "_ble")]

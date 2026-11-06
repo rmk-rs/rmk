@@ -40,7 +40,7 @@ steps = [
   { release = [1, 1] },  # Release B — held on the other press, so it is a mod
   { release = [1, 7] },  # Release C
 ]
-expect = [["LShift"], [], ["C"], []]
+expect = [["LShift"], ["LShift", "C"], ["C"], []]
 
 [[test]]
 name = "three_key_in_window"
