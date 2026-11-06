@@ -345,7 +345,7 @@ pub(crate) struct RmkConstantsConfig {
     /// The number of available BLE profiles
     #[serde_inline_default(3)]
     pub ble_profiles_num: usize,
-    /// BLE Split Central sleep timeout in seconds (0 = disabled)
+    /// Unibody/split central sleep timeout in seconds, independent of transport (0 = disabled).
     #[serde_inline_default(0)]
     pub split_central_sleep_timeout_seconds: u32,
     /// Maximum number of auto mouse layer entries; auto-derived from `[[behavior.auto_mouse_layer]]` if unset.

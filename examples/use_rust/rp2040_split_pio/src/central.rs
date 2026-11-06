@@ -101,7 +101,10 @@ async fn main(_spawner: Spawner) {
 
     // Start
     join(
-        run_all!(matrix, storage, usb_transport, wpm_processor, keyboard),
+        rmk::join_all!(
+            rmk::sleep::run_sleep_manager(),
+            run_all!(matrix, storage, usb_transport, wpm_processor, keyboard)
+        ),
         run_peripheral_manager(
             0,
             uart_receiver,

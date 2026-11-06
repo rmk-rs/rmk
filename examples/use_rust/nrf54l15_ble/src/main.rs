@@ -214,5 +214,9 @@ async fn main(spawner: Spawner) {
     let mut ble_transport = BleTransport::new(sdc, ble_addr(), rmk_config).with_host_service(&host_service);
     let mut wpm_processor = WpmProcessor::new();
 
-    run_all!(matrix, storage, ble_transport, wpm_processor, keyboard).await;
+    rmk::join_all!(
+        rmk::sleep::run_sleep_manager(),
+        run_all!(matrix, storage, ble_transport, wpm_processor, keyboard)
+    )
+    .await;
 }

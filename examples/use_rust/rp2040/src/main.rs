@@ -97,5 +97,9 @@ async fn main(_spawner: Spawner) {
     let mut watchdog_runner = Rp2040Watchdog::default_runner(embassy_rp::watchdog::Watchdog::new(p.WATCHDOG));
 
     // Start
-    run_all!(matrix, storage, usb_transport, wpm_processor, keyboard, watchdog_runner).await;
+    rmk::join_all!(
+        rmk::sleep::run_sleep_manager(),
+        run_all!(matrix, storage, usb_transport, wpm_processor, keyboard, watchdog_runner)
+    )
+    .await;
 }

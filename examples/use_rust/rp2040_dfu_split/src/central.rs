@@ -123,15 +123,18 @@ async fn main(_spawner: Spawner) {
     let uart_receiver = BufferedUart::new(p.UART0, p.PIN_0, p.PIN_1, Irqs, tx_buf, rx_buf, uart::Config::default());
 
     join(
-        run_all!(
-            matrix,
-            storage,
-            usb_transport,
-            dfu_iface,
-            wpm_processor,
-            dfu_led_processor,
-            keyboard,
-            watchdog_runner
+        rmk::join_all!(
+            rmk::sleep::run_sleep_manager(),
+            run_all!(
+                matrix,
+                storage,
+                usb_transport,
+                dfu_iface,
+                wpm_processor,
+                dfu_led_processor,
+                keyboard,
+                watchdog_runner
+            )
         ),
         // use UpdatePolicy::Force to force the peripheral update at every start of central
         run_peripheral_manager(

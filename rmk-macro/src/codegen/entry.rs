@@ -135,7 +135,11 @@ pub(crate) fn rmk_entry_select(
             let keyboard_task = quote! {
                 keyboard.run(),
             };
-            let mut tasks = vec![devices_task, keyboard_task];
+            let mut tasks = vec![
+                devices_task,
+                keyboard_task,
+                quote! { ::rmk::sleep::run_sleep_manager() },
+            ];
             tasks.extend(registered_processors);
             tasks.extend(transport_tasks);
             if let Some(t) = &watchdog_task {
@@ -247,7 +251,11 @@ pub(crate) fn rmk_entry_unibody(
         keyboard.run()
     };
 
-    let mut tasks = vec![devices_task, keyboard_task];
+    let mut tasks = vec![
+        devices_task,
+        keyboard_task,
+        quote! { ::rmk::sleep::run_sleep_manager() },
+    ];
     if !processors_task.is_empty() {
         tasks.push(processors_task);
     }
@@ -363,5 +371,45 @@ pub(crate) fn join_all_tasks(tasks: Vec<TokenStream2>) -> TokenStream2 {
     let joined = expand_tasks(tasks);
     quote! {
         #joined.await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use rmk_config::KeyboardTomlConfig;
+
+    use super::*;
+
+    // Entry generation owns sleep management independently of BLE. Check that
+    // USB, BLE, dual-transport, and split entries neither omit nor duplicate the task.
+    #[test]
+    fn sleep_manager_runs_once_for_each_keyboard_transport() {
+        for example in [
+            "rp2040",
+            "esp32c3_ble",
+            "nrf52840_ble",
+            "rp2040_split",
+            "nrf52840_ble_split",
+        ] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../examples/use_config/{example}/keyboard.toml"));
+            let config = KeyboardTomlConfig::new_from_toml_path(&path);
+            let entry = rmk_entry_select(
+                &config.hardware().unwrap(),
+                &config.host(),
+                &config.behavior().unwrap(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+            );
+            assert_eq!(
+                entry.to_string().matches("run_sleep_manager").count(),
+                1,
+                "{example}"
+            );
+        }
     }
 }

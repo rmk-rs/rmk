@@ -269,15 +269,18 @@ async fn main(spawner: Spawner) {
         PointingDevice::<Pmw3610<_, _, _>>::new(0, trackball_spi, trackball_cs, trackball_motion, trackball_config);
     let mut trackball_processor = PointingProcessor::new(&keymap, PointingProcessorConfig::default());
 
-    run_all!(
-        matrix,
-        storage,
-        usb_transport,
-        ble_transport,
-        wpm_processor,
-        keyboard,
-        trackball,
-        trackball_processor
+    rmk::join_all!(
+        rmk::sleep::run_sleep_manager(),
+        run_all!(
+            matrix,
+            storage,
+            usb_transport,
+            ble_transport,
+            wpm_processor,
+            keyboard,
+            trackball,
+            trackball_processor
+        )
     )
     .await;
 }

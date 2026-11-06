@@ -7,12 +7,12 @@ use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
 
 use super::ble_server::Server;
-use crate::ble::sleep::SLEEPING_STATE;
 use crate::core_traits::Runnable;
 #[cfg(feature = "split")]
 use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
 use crate::keyboard::LAST_KEY_TIMESTAMP;
+use crate::sleep::SLEEPING_STATE;
 
 const CHARACTERISTIC_PRESENTATION_FORMAT_UINT8: u8 = 0x04;
 const CHARACTERISTIC_PRESENTATION_FORMAT_EXPONENT_ZERO: u8 = 0x00;

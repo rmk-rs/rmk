@@ -27,23 +27,26 @@ static SLEEP_INPUT: Signal<crate::RawMutex, bool> = Signal::new();
 
 /// Report keyboard activity: wake the keyboard up, or restart the idle timeout
 /// when it's already awake.
-pub(crate) fn report_activity() {
+pub fn report_activity() {
     SLEEP_INPUT.signal(false);
 }
 
 /// Ask the keyboard to sleep now instead of waiting out the idle timeout. Sent
 /// when the host suspends us or when advertising times out.
-pub(crate) fn request_sleep() {
+pub fn request_sleep() {
     SLEEP_INPUT.signal(true);
 }
 
 /// The keyboard's one sleep manager.
 ///
-/// Run by [`crate::ble::BleTransport`], the single always-present BLE task, so
-/// the state can never get stuck: split or not, connected or not, inputs always
-/// reach it. Disabled when the configured timeout
-/// (`split_central_sleep_timeout_seconds`) is 0, the default.
-pub(crate) async fn run_sleep_manager() {
+/// Run once alongside the keyboard and transport tasks on a unibody or split
+/// central. Split peripherals follow the central's sleep events instead.
+/// The configuration macros start this task automatically; Rust API users must
+/// join it with their other tasks.
+///
+/// When `split_central_sleep_timeout_seconds` is 0 (the default), both automatic
+/// sleep and explicit sleep requests are disabled.
+pub async fn run_sleep_manager() {
     if SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS == 0 {
         info!("Sleep management disabled (timeout = 0)");
         core::future::pending::<()>().await;
@@ -96,21 +99,42 @@ mod tests {
     }
 
     fn sleeping() -> bool {
-        SLEEPING_STATE.load(Ordering::Acquire)
+        crate::state::current_sleep_state()
+    }
+
+    #[test]
+    fn zero_timeout_disables_idle_sleep_and_requests() {
+        assert_eq!(SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS, 0);
+        block_on(async {
+            select(run_sleep_manager(), async {
+                request_sleep();
+                Timer::after_secs(2).await;
+                assert!(!sleeping());
+                report_activity();
+                Timer::after_secs(2).await;
+                assert!(!sleeping());
+            })
+            .await;
+        });
     }
 
     #[test]
     fn sleeps_when_idle_and_wakes_on_activity() {
+        use crate::event::{EventSubscriber, SubscribableEvent};
+
         with_sleep_manager(async {
+            let mut events = SleepStateEvent::subscriber();
             Timer::after_millis(900).await;
             assert!(!sleeping(), "still inside the idle timeout");
 
             Timer::after_millis(200).await;
             assert!(sleeping(), "idle timeout elapsed");
+            assert_eq!(events.next_event().await, SleepStateEvent::new(true));
 
             report_activity();
             Timer::after_millis(10).await;
             assert!(!sleeping(), "activity wakes the keyboard");
+            assert_eq!(events.next_event().await, SleepStateEvent::new(false));
         });
     }
 
@@ -124,6 +148,42 @@ mod tests {
                 assert!(!sleeping(), "activity must restart the idle timeout");
                 report_activity();
             }
+        });
+    }
+
+    #[test]
+    fn keyboard_activity_restarts_timeout_and_wakes_from_sleep() {
+        use embassy_futures::select::select3;
+        use rmk_types::action::KeyAction;
+
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::core_traits::Runnable;
+        use crate::event::KeyboardEvent;
+        use crate::keyboard::Keyboard;
+        use crate::keymap::{KeyMap, KeymapData};
+
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 1> = PositionalConfig::default();
+            let mut data: KeymapData<1, 1, 1, 0> = KeymapData::new([[[KeyAction::No]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut keyboard = Keyboard::new(&keymap);
+
+            let script = async {
+                for pressed in [true, false, true, false] {
+                    Timer::after_millis(600).await;
+                    assert!(!sleeping(), "key activity must restart the idle timeout");
+                    publish_event(KeyboardEvent::key(0, 0, pressed));
+                    Timer::after_millis(1).await;
+                }
+                Timer::after_millis(1100).await;
+                assert!(sleeping());
+                publish_event(KeyboardEvent::key(0, 0, true));
+                Timer::after_millis(1).await;
+                assert!(!sleeping(), "key activity must wake the keyboard");
+            };
+
+            select3(manage_sleep_state(Duration::from_secs(1)), keyboard.run(), script).await;
         });
     }
 
