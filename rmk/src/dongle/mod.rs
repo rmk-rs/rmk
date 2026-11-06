@@ -195,8 +195,7 @@ where
         let scan = ScanHandler::new();
         let mut profile_manager = ProfileManager::new();
         profile_manager.load_bonded_devices().await;
-        let bond = profile_manager.bond_info(BOND_SLOT);
-        load_stack_bond(stack, bond.as_ref().map(|bond| &bond.info));
+        load_stack_bond(stack, profile_manager.bond_info(BOND_SLOT).map(|bond| bond.info));
         let mut central = DongleCentral {
             stack,
             scan: &scan,
@@ -412,7 +411,7 @@ where
                 // Save the new bond — also when the bonded keyboard cleared its side
                 // and re-paired, otherwise we keep an old key nothing accepts anymore.
                 Ok(ConnectionEvent::PairingComplete { bond: Some(bond), .. }) => {
-                    load_stack_bond(self.stack, Some(&bond));
+                    load_stack_bond(self.stack, Some(bond.clone()));
                     self.profiles.set_bond(ProfileInfo {
                         slot_num: BOND_SLOT,
                         removed: false,

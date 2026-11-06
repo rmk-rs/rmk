@@ -32,8 +32,8 @@ pub(crate) fn profile_address(base: [u8; 6], profile: u8) -> [u8; 6] {
     addr
 }
 
-/// Replace the stack's bond table with the bond selected by the connection owner.
-pub(crate) fn load_stack_bond<C: Controller, P: PacketPool>(stack: &Stack<'_, C, P>, bond: Option<&BondInformation>) {
+/// Make `bond` the stack's only key: the stack holds just the active profile's bond.
+pub(crate) fn load_stack_bond<C: Controller, P: PacketPool>(stack: &Stack<'_, C, P>, bond: Option<BondInformation>) {
     // The stack can also hold keys from an unfinished pairing.
     while let Some(identity) = stack.with_bond_information(|bonds| bonds.first().map(|b| b.identity)) {
         if let Err(e) = stack.remove_bond_information(identity) {
@@ -43,7 +43,7 @@ pub(crate) fn load_stack_bond<C: Controller, P: PacketPool>(stack: &Stack<'_, C,
     }
     if let Some(bond) = bond {
         debug!("Loading bond for peer {:?}", bond.identity);
-        if let Err(e) = stack.add_bond_information(bond.clone()) {
+        if let Err(e) = stack.add_bond_information(bond) {
             debug!("Add bond info error: {:?}", e);
         }
     }
@@ -161,7 +161,7 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
         });
     }
 
-    /// Read the live bond stored in `profile`.
+    /// The bond `profile` uses, or `None` while it re-pairs.
     pub(crate) fn bond_info(&self, profile: u8) -> Option<ProfileInfo> {
         if self.repairing.get() == Some(profile) {
             return None;
@@ -201,10 +201,8 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
         } else if state.try_get().as_ref() == Some(&info) {
             return;
         }
-        if info.slot_num == current_profile() {
-            set_ble_bonded(!info.removed);
-        }
         state.sender().send(info);
+        set_ble_bonded(self.bond_info(current_profile()).is_some());
     }
 
     pub(crate) fn update_profile_cccd_table(
@@ -261,9 +259,7 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
                 removed: true,
                 ..Default::default()
             });
-            if slot == current_profile() {
-                set_ble_bonded(false);
-            }
+            set_ble_bonded(self.bond_info(current_profile()).is_some());
         }
     }
 
@@ -383,7 +379,7 @@ mod tests {
         stack.with_bond_information(|bonds| assert_eq!(bonds, &[replacement]));
         assert_eq!(manager.bond_info(0), Some(old.clone()));
 
-        load_stack_bond(&stack, Some(&old.info));
+        load_stack_bond(&stack, Some(old.info.clone()));
         stack.with_bond_information(|bonds| assert_eq!(bonds, &[old.info]));
     }
 
@@ -435,7 +431,7 @@ mod tests {
         test_block_on(async {
             for selected in [1, 0, 1] {
                 manager.switch_profile(selected, BleState::Inactive);
-                load_stack_bond(&stack, manager.bond_info(selected).as_ref().map(|bond| &bond.info));
+                load_stack_bond(&stack, manager.bond_info(selected).map(|bond| bond.info));
                 assert_eq!(current_profile(), selected);
                 assert!(current_ble_status().bonded);
                 stack.with_bond_information(|bonds| {

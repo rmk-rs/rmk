@@ -475,8 +475,7 @@ async fn run_ble_keyboard<
                 };
 
                 let bond = profile_manager.bond_info(profile_id);
-                load_stack_bond(stack, bond.as_ref().map(|bond| &bond.info));
-                let adv = match bond {
+                let adv = match &bond {
                     #[cfg(feature = "dongle")]
                     Some(bond) if profile_id == DONGLE_PROFILE => Adv::Directed(bond.info.identity.addr),
                     #[cfg(feature = "dongle")]
@@ -486,6 +485,7 @@ async fn run_ble_keyboard<
                         bonded: bond.is_some(),
                     },
                 };
+                load_stack_bond(stack, bond.map(|bond| bond.info));
                 set_ble_state(BleState::Advertising);
                 advertise(
                     &mut peripheral,
@@ -562,10 +562,7 @@ async fn run_ble_keyboard<
                             _ => BleState::Inactive,
                         };
                         profile_manager.switch_profile(slot, state);
-                        if host_connections[slot as usize].is_some() {
-                            let bond = profile_manager.bond_info(slot);
-                            load_stack_bond(stack, bond.as_ref().map(|bond| &bond.info));
-                        }
+                        load_stack_bond(stack, profile_manager.bond_info(slot).map(|bond| bond.info));
                         for (i, conn) in host_connections.iter().enumerate() {
                             if let Some(conn) = conn
                                 && let Err(e) = conn.set_bondable(i == slot as usize)
