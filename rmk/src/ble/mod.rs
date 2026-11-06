@@ -459,9 +459,7 @@ async fn run_ble_keyboard<
                 .then(|| BdAddr::new(crate::ble::profile::profile_address(address, profile_id)));
 
             let advertise_and_connect = async {
-                if host_connections[profile_id as usize].is_some()
-                    || (NUM_HOST_LINKS == 1 && host_connections.iter().any(Option::is_some))
-                {
+                if host_connections[profile_id as usize].is_some() {
                     return core::future::pending().await;
                 }
 
