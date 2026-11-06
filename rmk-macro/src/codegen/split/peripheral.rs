@@ -9,6 +9,7 @@ use rmk_config::resolved::hardware::{
 use syn::ItemMod;
 
 use super::central::expand_serial_init;
+use crate::codegen::chip::bind_interrupt::expand_external_flash_interrupt;
 use crate::codegen::chip::chip_init::expand_chip_init;
 use crate::codegen::chip::comm::expand_usb_init;
 use crate::codegen::chip::flash::{expand_dfu_interface, expand_flash_init};
@@ -117,22 +118,7 @@ fn expand_bind_interrupt_for_split_peripheral(
 
     // External DFU flash SPI interrupt for nRF52 — the peripheral's DFU
     // config can differ from the central's, so this uses the per-side one.
-    let ext_flash_spi_interrupt = {
-        let ext_flash = dfu.and_then(|d| d.external_flash.as_ref());
-        if let Some(ext_flash) = ext_flash {
-            match chip.series {
-                ChipSeries::Nrf52 => {
-                    let instance = format_ident!("{}", ext_flash.spi.instance);
-                    quote! {
-                        #instance => ::embassy_nrf::spim::InterruptHandler<::embassy_nrf::peripherals::#instance>;
-                    }
-                }
-                _ => quote! {},
-            }
-        } else {
-            quote! {}
-        }
-    };
+    let ext_flash_spi_interrupt = expand_external_flash_interrupt(&chip.series, dfu);
 
     let display_interrupt = match &hardware.board {
         BoardConfig::Split(split_config) => {

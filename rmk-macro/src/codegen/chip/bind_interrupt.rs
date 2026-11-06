@@ -6,7 +6,9 @@ use std::collections::HashSet;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use rmk_config::resolved::Hardware;
-use rmk_config::resolved::hardware::{BoardConfig, DfuConfig, InputDeviceConfig, UniBodyConfig};
+use rmk_config::resolved::hardware::{
+    BoardConfig, ChipSeries, DfuConfig, InputDeviceConfig, UniBodyConfig,
+};
 use syn::{ItemFn, ItemMod};
 
 use crate::codegen::display::expand_display_interrupt;
@@ -77,6 +79,21 @@ pub(crate) fn find_extern_irqs(item_mod: &ItemMod) -> Vec<TokenStream2> {
     extern_irqs
 }
 
+/// Bind the configured side's external flash SPIM interrupt on nRF52.
+pub(crate) fn expand_external_flash_interrupt(
+    chip: &ChipSeries,
+    dfu: Option<&DfuConfig>,
+) -> Option<TokenStream2> {
+    if *chip != ChipSeries::Nrf52 {
+        return None;
+    }
+    let flash = dfu?.external_flash.as_ref()?;
+    let instance = format_ident!("{}", flash.spi.instance);
+    Some(quote! {
+        #instance => ::embassy_nrf::spim::InterruptHandler<::embassy_nrf::peripherals::#instance>;
+    })
+}
+
 /// Expand default `bind_interrupt!` for different chips and nrf-sdc config for nRF52
 pub(crate) fn bind_interrupt_default(
     hardware: &Hardware,
@@ -122,23 +139,7 @@ pub(crate) fn bind_interrupt_default(
     };
     let iqs5xx_interrupt = expand_iqs5xx_interrupts(&chip.series, &iqs5xx_config);
 
-    // External DFU flash SPI interrupt for nRF52
-    let ext_flash_spi_interrupt = {
-        let ext_flash = dfu.and_then(|d| d.external_flash.as_ref());
-        if let Some(ext_flash) = ext_flash {
-            match chip.series {
-                rmk_config::resolved::hardware::ChipSeries::Nrf52 => {
-                    let instance = format_ident!("{}", ext_flash.spi.instance);
-                    quote! {
-                        #instance => ::embassy_nrf::spim::InterruptHandler<::embassy_nrf::peripherals::#instance>;
-                    }
-                }
-                _ => quote! {},
-            }
-        } else {
-            quote! {}
-        }
-    };
+    let ext_flash_spi_interrupt = expand_external_flash_interrupt(&chip.series, dfu);
 
     match chip.series {
         rmk_config::resolved::hardware::ChipSeries::Stm32 => {
