@@ -19,7 +19,7 @@ use crate::event::{
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) enum SplitDriverError {
+pub enum SplitDriverError {
     SerialError,
     EmptyMessage,
     DeserializeError,
@@ -29,12 +29,12 @@ pub(crate) enum SplitDriverError {
 }
 
 /// Split message reader from other split devices
-pub(crate) trait SplitReader {
+pub trait SplitReader {
     async fn read(&mut self) -> Result<SplitMessage, SplitDriverError>;
 }
 
 /// Split message writer to other split devices
-pub(crate) trait SplitWriter {
+pub trait SplitWriter {
     async fn write(&mut self, message: &SplitMessage) -> Result<usize, SplitDriverError>;
 }
 
@@ -75,7 +75,7 @@ fn update_slot(id: usize, f: impl FnOnce(&mut PeripheralSlot)) -> bool {
 }
 
 /// Latch peripheral `id`'s connected state and broadcast the change.
-pub(crate) fn set_peripheral_connected(id: usize, connected: bool) {
+pub fn set_peripheral_connected(id: usize, connected: bool) {
     if update_slot(id, |s| s.connected = connected) {
         publish_event(PeripheralConnectedEvent { id, connected });
     }
@@ -148,7 +148,7 @@ mod tests {
 
 /// PeripheralManager runs on the central and manages communication with one split peripheral.
 /// It publishes input events from that peripheral and sends the central's state changes back.
-pub(crate) struct PeripheralManager<T: SplitReader + SplitWriter> {
+pub struct PeripheralManager<T: SplitReader + SplitWriter> {
     /// Receiver
     pub(crate) transceiver: T,
     /// Peripheral id
@@ -166,7 +166,7 @@ pub(crate) struct PeripheralManager<T: SplitReader + SplitWriter> {
 }
 
 impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
-    pub(crate) fn new(
+    pub fn new(
         transceiver: T,
         id: usize,
         matrix_config: PeripheralMatrixConfig,
@@ -203,7 +203,7 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
     /// The manager receives from the peripheral and publishes input events.
     /// It also syncs the central's `ConnectionStatus` to the peripheral on every
     /// change as an informational signal
-    pub(crate) async fn run(mut self) {
+    pub async fn run(mut self) {
         use crate::event::EventSubscriber;
 
         let mut indicator_sub = crate::event::LedIndicatorEvent::subscriber();

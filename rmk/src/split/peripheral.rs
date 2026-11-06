@@ -78,12 +78,12 @@ pub async fn run_rmk_split_peripheral<
 }
 
 /// The split peripheral instance.
-pub(crate) struct SplitPeripheral<S: SplitWriter + SplitReader> {
+pub struct SplitPeripheral<S: SplitWriter + SplitReader> {
     split_driver: S,
 }
 
 impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
-    pub(crate) fn new(split_driver: S) -> Self {
+    pub fn new(split_driver: S) -> Self {
         Self { split_driver }
     }
 
@@ -91,7 +91,7 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
     ///
     /// The peripheral uses the general matrix, does scanning and sends key events through `SplitWriter`.
     /// It also receives split messages from the central through `SplitReader`.
-    pub(crate) async fn run(&mut self) {
+    pub async fn run(&mut self) {
         // Proactively announce our firmware hash so the central can detect
         // us even when it booted first and already gave up waiting for a query response.
         #[cfg(feature = "dfu_split")]

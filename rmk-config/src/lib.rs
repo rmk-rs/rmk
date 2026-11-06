@@ -1105,6 +1105,8 @@ pub enum SplitConnection {
     #[default]
     Ble,
     Serial,
+    /// Run the `split_task` future supplied by the board initialization.
+    Custom,
 }
 
 /// Configurations for split keyboards
