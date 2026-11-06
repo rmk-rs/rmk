@@ -193,6 +193,7 @@ fn validate_split_config(split: &SplitConfig, layout: Option<&LayoutTomlConfig>)
                 }
             }
         }
+        SplitConnection::Custom => {}
     }
 
     let regions: Vec<_> = boards()

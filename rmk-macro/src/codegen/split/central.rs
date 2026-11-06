@@ -19,7 +19,7 @@ pub(crate) fn expand_split_central_config(hardware: &Hardware) -> proc_macro2::T
 fn expand_split_communication_config(chip: &ChipModel, split_config: &SplitConfig) -> TokenStream2 {
     match split_config.connection {
         // The BLE transport loads its peripherals' addresses itself.
-        SplitConnection::Ble => quote! {},
+        SplitConnection::Ble | SplitConnection::Custom => quote! {},
         SplitConnection::Serial => {
             // We need to initialize serial instance for serial
             let serial_config: Vec<SerialConfig> = split_config

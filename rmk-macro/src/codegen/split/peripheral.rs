@@ -587,13 +587,17 @@ fn expand_split_peripheral_entry(
     };
 
     match split_config.connection {
-        SplitConnection::Ble => {
-            let peripheral_run = quote! {
-                ::rmk::split::peripheral::run_rmk_split_peripheral(
-                    #id,
-                    ble_controller,
-                    ble_addr,
-                )
+        SplitConnection::Ble | SplitConnection::Custom => {
+            let peripheral_run = if split_config.connection == SplitConnection::Custom {
+                quote! { split_task }
+            } else {
+                quote! {
+                    ::rmk::split::peripheral::run_rmk_split_peripheral(
+                        #id,
+                        ble_controller,
+                        ble_addr,
+                    )
+                }
             };
             // Build task list: device, processor (if any), peripheral, registered_processors, dfu
             let mut tasks = vec![device_task];
