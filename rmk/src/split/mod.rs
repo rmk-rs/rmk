@@ -19,6 +19,11 @@ pub mod rp;
 #[cfg(not(feature = "_ble"))]
 pub mod serial;
 
+/// Check the task supplied by a custom split transport at compile time.
+pub fn require_split_task<F: core::future::Future<Output = ()>>(task: F) -> F {
+    task
+}
+
 /// Maximum size of a split message
 pub const SPLIT_MESSAGE_MAX_SIZE: usize = SplitMessage::POSTCARD_MAX_SIZE + 4;
 

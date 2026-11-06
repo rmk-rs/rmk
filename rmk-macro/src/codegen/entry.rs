@@ -144,7 +144,7 @@ pub(crate) fn rmk_entry_select(
             match split_config.connection {
                 SplitConnection::Ble | SplitConnection::Custom => {
                     if split_config.connection == SplitConnection::Custom {
-                        tasks.push(quote! { split_task });
+                        tasks.push(quote! { ::rmk::split::require_split_task(split_task) });
                     }
                     if !processors.is_empty() {
                         tasks.push(processors_task);

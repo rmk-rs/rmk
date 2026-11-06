@@ -589,7 +589,7 @@ fn expand_split_peripheral_entry(
     match split_config.connection {
         SplitConnection::Ble | SplitConnection::Custom => {
             let peripheral_run = if split_config.connection == SplitConnection::Custom {
-                quote! { split_task }
+                quote! { ::rmk::split::require_split_task(split_task) }
             } else {
                 quote! {
                     ::rmk::split::peripheral::run_rmk_split_peripheral(
