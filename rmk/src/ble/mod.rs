@@ -459,9 +459,7 @@ async fn run_ble_keyboard<
                 .then(|| BdAddr::new(crate::ble::profile::profile_address(address, profile_id)));
 
             let advertise_and_connect = async {
-                if host_connections[profile_id as usize].is_some()
-                    || (NUM_HOST_LINKS == 1 && host_connections.iter().any(Option::is_some))
-                {
+                if host_connections[profile_id as usize].is_some() {
                     return core::future::pending().await;
                 }
 
@@ -540,13 +538,13 @@ async fn run_ble_keyboard<
                     }
                     report_activity();
                     adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
-                    if clear_bond {
+                    // Close the target first, so pairing never switches to a link about to drop.
+                    if clear_bond || pair {
                         disconnect_profile(slot, &mut host_connections, &completed).await;
-                        profile_manager.clear_bond(slot);
-                        continue;
                     }
-
-                    if slot != profile_id {
+                    if clear_bond {
+                        profile_manager.clear_bond(slot);
+                    } else if slot != profile_id {
                         let keep_connected = NUM_HOST_LINKS > 1
                             && host_connections[profile_id as usize].as_ref().is_some_and(|conn| {
                                 conn.security_level().is_ok_and(|level| level.encrypted())
@@ -577,7 +575,6 @@ async fn run_ble_keyboard<
                         }
                     }
                     if pair {
-                        disconnect_profile(slot, &mut host_connections, &completed).await;
                         profile_manager.start_pairing(slot);
                     }
                     continue;
