@@ -224,6 +224,13 @@ forks = [
   { trigger = "Dot", negative_output = "Dot", positive_output = "WM(Semicolon, LShift)", match_any = "LShift|RShift" }
 ]
 
+[behavior.mouse_key]
+# Cursor speeds in HID counts/second, ramp duration, and wheel units/second
+initial_speed = 0
+max_speed = 600
+acceleration_time = "200ms"
+scroll_speed = 10
+
 # Auto mouse layer: activate a layer on pointing-device motion, see the Behavior documentation page.
 # Note the double brackets [[ ]], one entry per pointing device id
 [[behavior.auto_mouse_layer]]
@@ -372,10 +379,6 @@ adc_divider_total = 2806
 
 # RMK internal configuration
 [rmk]
-# Mouse key interval (ms) - controls mouse movement speed
-mouse_key_interval = 20
-# Mouse wheel interval (ms) - controls scrolling speed
-mouse_wheel_interval = 80
 # Maximum number of combos keyboard can store
 combo_max_num = 8
 # Maximum number of keys pressed simultaneously in a combo

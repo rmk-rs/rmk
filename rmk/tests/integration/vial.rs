@@ -1,6 +1,7 @@
 //! Via/Vial host exchanges and their live-keyboard integration tests.
 
 use rmk::config::BehaviorConfig;
+use rmk::hid::{MouseReport, Report as HidReport};
 use rmk::test_support::{test_block_on, to_via_keycode};
 use rmk::types::action::{Action, EncoderAction, KeyAction};
 use rmk::types::constants::{MACRO_MAX_NUM, MACRO_SPACE_SIZE};
@@ -88,6 +89,36 @@ fn keymap_write_changes_the_key() {
             .expect_keys([])
             .run()
             .await;
+    });
+}
+
+#[test]
+fn vial_mouse_speed_codes_round_trip_and_select_three_distinct_rates() {
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[k!(A), k!(MouseRight)]]]).build().await;
+        let movement = |x| {
+            HidReport::MouseReport(MouseReport {
+                x,
+                ..Default::default()
+            })
+        };
+        // With the default 600 counts/s cursor, a 10ms hold adds 1, 3 or 12 counts after the first step.
+        for (code, delta) in [(0xddu16, 1), (0xde, 3), (0xdf, 12)] {
+            let mut write = via(ViaCommand::DynamicKeymapSetKeyCode);
+            write[4..6].copy_from_slice(&code.to_be_bytes());
+            keyboard.echo(write);
+            let read = via(ViaCommand::DynamicKeymapGetKeyCode);
+            let mut reply = read;
+            reply[4..6].copy_from_slice(&code.to_be_bytes());
+            keyboard.host_exchange(read, reply);
+            keyboard
+                .press(0, 0)
+                .tap(0, 1, 10)
+                .release(0, 0)
+                .expect_report(movement(1))
+                .expect_report(movement(delta));
+        }
+        keyboard.run().await;
     });
 }
 
