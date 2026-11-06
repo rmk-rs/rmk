@@ -443,8 +443,31 @@ async fn connect_session(mut steps: Vec<Step>, trailing: Vec<Step>) -> (Client, 
 async fn capability_gate_rejects_without_wire_send() {
     let (client, _driver) = connect_session(handshake_steps(caps()), vec![Step::Hang]).await;
     assert!(!client.capabilities.ble_enabled);
-    let r = client.get_battery_status().await;
-    assert!(matches!(r, Err(RynkHostError::Unsupported(Cmd::GetBatteryStatus, _))));
+    let r = client.get_ble_status().await;
+    assert!(matches!(r, Err(RynkHostError::Unsupported(Cmd::GetBleStatus, _))));
+}
+
+// Battery reporting is independent of whether the keyboard has a BLE transport.
+#[tokio::test]
+async fn battery_status_is_supported_without_ble() {
+    let status = BatteryStatus::Available {
+        charge_state: rmk_types::battery::ChargeState::Discharging,
+        level: Some(73),
+    };
+    let (client, mut driver) = connect_session(
+        handshake_steps(caps()),
+        vec![
+            Step::AwaitWrites(3),
+            Step::Chunk(reply(Cmd::GetBatteryStatus, 3, status)),
+            Step::Hang,
+        ],
+    )
+    .await;
+    assert!(!client.capabilities.ble_enabled);
+    assert_eq!(
+        drive(&mut driver, &client, client.get_battery_status()).await.unwrap(),
+        status
+    );
 }
 
 #[tokio::test]
