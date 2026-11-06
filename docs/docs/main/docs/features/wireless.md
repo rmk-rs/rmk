@@ -54,17 +54,17 @@ RMK has multiple BLE profile support. The number of profiles can be set in the [
 
 Vial user keycodes can be configured to operate wireless profiles. Suppose that you have N BLE profiles, then:
 
-- `User0` - `User(N-1)`: switch to a specific profile. Hold the key for 5 seconds to clear that profile's bond and pair a new host: the keyboard switches to the cleared profile and advertises openly.
+- `User0` - `User(N-1)`: switch to a specific profile. Hold the key for 5 seconds to pair a new host with that profile: the keyboard switches to it and advertises for a new host. The old bond stays until a new host pairs, and comes back if you switch profiles or advertising times out first.
 - `UserN`: switch to the next profile
 - `User(N+1)`: switch to the previous profile
 - `User(N+2)`: clear current profile bond info
 - `User(N+3)`: switch default output between USB/BLE
 - `User(N+4)`: clear the stored split peer bond — hold the key for 5 seconds (BLE split keyboards only)
-- `User(N+5)`: switch to the dongle bond slot, a slot of its own that profile cycling never reaches. Hold the key for 5 seconds to clear that bond and go looking for another dongle. Keyboards built with the `dongle` feature only — see [Dongle](./dongle).
+- `User(N+5)`: switch to the dongle bond slot, a slot of its own that profile cycling never reaches. Hold the key for 5 seconds to look for another dongle; the current dongle bond stays until a new dongle pairs. Keyboards built with the `dongle` feature only — see [Dongle](./dongle).
 
 Vial also provides a way to customize the displayed keycode, see `customKeycodes` in [this example](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/vial.json). If `customKeycodes` are configured, the `User0` ~ `User(N+3)` will be displayed as `BT0`, ..., `Switch Output`.
 
-If you've connected a host to a profile, other devices will not be able to connect to this profile: the keyboard immediately disconnects any device that doesn't match the profile's stored bond. To pair a different host to that profile, clear it first, for example by holding the profile's key for 5 seconds.
+A paired profile reconnects to its host. While that host isn't connected, another host can pair with the active profile and replaces the old host once pairing finishes.
 
 ## BLE Passkey Entry
 
