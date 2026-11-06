@@ -342,7 +342,8 @@ impl<'a> Keyboard<'a> {
                 // combo containing this key may fire.
                 let mut timeout_event = key.event;
                 timeout_event.pressed = false;
-                self.trigger_delayed_combo(&key.action, timeout_event).await;
+                self.trigger_delayed_combo(&key.action, timeout_event, key.timeout_time)
+                    .await;
 
                 if let Some(key) = self
                     .held_buffer
@@ -1012,7 +1013,7 @@ impl<'a> Keyboard<'a> {
     /// - `key_action`: The action of the key that triggered this function
     /// - `event`: The keyboard event. When pressing (interrupting), trigger any delayed combo.
     ///   When releasing, only trigger combos that contain the key_action.
-    async fn trigger_delayed_combo(&mut self, key_action: &KeyAction, event: KeyboardEvent) {
+    async fn trigger_delayed_combo(&mut self, key_action: &KeyAction, event: KeyboardEvent, at: Instant) {
         let delayed = self.keymap.with_combos(|combos| {
             combos
                 .iter()
@@ -1025,7 +1026,7 @@ impl<'a> Keyboard<'a> {
                 .map(|(_, i)| i)
         });
         if let Some(idx) = delayed {
-            self.fire_combo(idx, Instant::now()).await;
+            self.fire_combo(idx, at).await;
         }
     }
 
@@ -1070,7 +1071,7 @@ impl<'a> Keyboard<'a> {
 
         // First, when releasing a key, check whether there's untriggered combo, if so, triggerer it first
         if !event.pressed {
-            self.trigger_delayed_combo(key_action, event).await;
+            self.trigger_delayed_combo(key_action, event, event_time).await;
         }
 
         // If this is a re-press of a key belonging to an already-triggered combo
@@ -1185,14 +1186,14 @@ impl<'a> Keyboard<'a> {
             }
 
             // When no key is updated(the combo is interruptted), or a key is released,
-            self.dispatch_combos(key_action, event).await;
+            self.dispatch_combos(key_action, event, event_time).await;
             true
         }
     }
 
     // Dispatch combo keys buffered in the held buffer when the combo isn't being triggered.
-    async fn dispatch_combos(&mut self, key_action: &KeyAction, event: KeyboardEvent) {
-        self.trigger_delayed_combo(key_action, event).await;
+    async fn dispatch_combos(&mut self, key_action: &KeyAction, event: KeyboardEvent, at: Instant) {
+        self.trigger_delayed_combo(key_action, event, at).await;
 
         // Dispatch every waiting key, earliest press first. Dispatching one key can
         // remove and re-push others, so look the next one up again instead of
@@ -2051,6 +2052,37 @@ mod test {
         let key = keyboard.next_buffered_key().unwrap();
         embassy_time::Timer::at(key.timeout_time).await;
         keyboard.fire_buffered_key_timeout(key).await;
+    }
+
+    #[test]
+    fn delayed_combo_uses_release_or_deadline_time_for_its_morse_output() {
+        block_on(async {
+            for timeout in [false, true] {
+                let at = Instant::now();
+                let mut behavior = BehaviorConfig::default();
+                let mut combo = Combo::new(rmk_types::combo::Combo::new([k!(D), k!(F)], th!(B, LShift), None));
+                combo.update(&k!(D), KeyboardEvent::key(2, 3, true), 0);
+                combo.update(&k!(F), KeyboardEvent::key(2, 4, true), 0);
+                assert!(combo.is_pending());
+                behavior.combo.combos[0] = Some(combo);
+                let mut keyboard = create_test_keyboard_with_config(behavior);
+                embassy_time::Timer::after_millis(2).await;
+                if timeout {
+                    let key = HeldKey::new(KeyboardEvent::key(2, 3, true), k!(D), KeyState::WaitingCombo, at, at);
+                    keyboard.held_buffer.push(key);
+                    keyboard.fire_buffered_key_timeout(key).await;
+                } else {
+                    keyboard
+                        .process_combo(&k!(D), KeyboardEvent::key(2, 3, false), at)
+                        .await;
+                }
+                let output = keyboard
+                    .held_buffer
+                    .find_source(KeyboardEvent::combo(0, true).source)
+                    .expect("delayed combo must start its Morse output");
+                assert_eq!(output.press_time, at, "timeout trigger: {timeout}");
+            }
+        });
     }
 
     fn create_test_keyboard_with_forks(fork1: Fork, fork2: Fork) -> Keyboard<'static> {
