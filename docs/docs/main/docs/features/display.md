@@ -205,7 +205,7 @@ Feature-gated fields (require the corresponding RMK feature to be enabled):
 | `ble_status`            | `_ble`           | Active BLE profile, connection state, and bond presence |
 | `central_connected`     | `split`          | Whether the central is connected (peripheral side)      |
 | `peripherals_connected` | `split`          | Per-peripheral connection state array                   |
-| `peripheral_batteries`  | `split` + `_ble` | Per-peripheral battery state array                      |
+| `peripheral_batteries`  | `split`         | Per-peripheral battery state array                      |
 | `dongle_state`          | `dongle`         | The dongle's link to its keyboard (`DongleState`)       |
 
 ::: tip `key_press_latch` vs `key_pressed`

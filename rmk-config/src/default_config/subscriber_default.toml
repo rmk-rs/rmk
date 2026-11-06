@@ -65,6 +65,7 @@ events = [
 [[subscriber]]
 features = ["rynk"]
 events = [
+    { name = "battery_status" },
     { name = "layer_change" },
     { name = "wpm_update" },
     { name = "connection_status_change" },
@@ -75,10 +76,8 @@ events = [
 [[subscriber]]
 features = ["rynk", "_ble"]
 events = [
-    # battery_status is only subscribed under `_ble`; needs one slot per
-    # concurrent session (USB + BLE = 2).
-    { name = "battery_status", count = 2 },
     # Second session slot for the always-on topics on dual-transport boards.
+    { name = "battery_status" },
     { name = "layer_change" },
     { name = "wpm_update" },
     { name = "connection_status_change" },
@@ -114,6 +113,8 @@ events = [
 [[subscriber]]
 features = ["split"]
 events = [
+    # split/peripheral.rs: BatteryStatusEvent::subscriber(), on every transport.
+    { name = "battery_status" },
     # split/peripheral.rs: KeyboardEvent::subscriber()
     { name = "keyboard" },
     # split/peripheral.rs: PointingEvent::subscriber()
@@ -138,8 +139,6 @@ features = ["split", "_ble"]
 events = [
     # split/ble/peripheral.rs: KeyboardEvent::subscriber() (temporary, on timeout)
     { name = "keyboard" },
-    # split/peripheral.rs: BatteryStatusEvent::subscriber() (cfg _ble)
-    { name = "battery_status" },
     # split/driver.rs: ClearPeerEvent::subscriber() (cfg _ble)
     # Covers up to 2 peripherals; for 3+ peripherals override subs in keyboard.toml
     { name = "clear_peer", count = 2 },

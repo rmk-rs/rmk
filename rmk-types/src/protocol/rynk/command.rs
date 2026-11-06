@@ -21,7 +21,6 @@ use super::{
     StorageResetMode,
 };
 use crate::action::{EncoderAction, KeyAction};
-#[cfg(feature = "_ble")]
 use crate::battery::BatteryStatus;
 #[cfg(feature = "_ble")]
 use crate::ble::BleStatus;
@@ -329,7 +328,6 @@ endpoints! {
     // Status (0x08xx).
     GetCurrentLayer = 0x0801: () => u8;
     GetMatrixState = 0x0802: () => MatrixState;
-    #[cfg(feature = "_ble")]
     GetBatteryStatus = 0x0803: () => BatteryStatus;
     #[cfg(feature = "split")]
     GetPeripheralStatus = 0x0804: u8 => PeripheralStatus;
@@ -351,7 +349,6 @@ topics! {
     ConnectionChange = 0x8003: ConnectionStatus;
     SleepState = 0x8004: bool;
     LedIndicatorChange = 0x8005: LedIndicator;
-    #[cfg(feature = "_ble")]
     BatteryStatusChange = 0x8006: BatteryStatus;
 }
 
