@@ -115,7 +115,7 @@ fn expected_capabilities(layers: u8) -> rmk_types::protocol::rynk::DeviceCapabil
         num_split_peripherals: 1,
         ble_enabled: true,
         num_ble_profiles: 3,
-        max_ble_connections: if cfg!(feature = "ext_adv") {
+        max_connections: if cfg!(feature = "ext_adv") {
             3 + u8::from(cfg!(feature = "dongle"))
         } else {
             1

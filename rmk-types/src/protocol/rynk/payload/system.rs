@@ -62,8 +62,9 @@ pub struct DeviceCapabilities {
     pub num_split_peripherals: u8,
     pub ble_enabled: bool,
     pub num_ble_profiles: u8,
-    /// Maximum simultaneous BLE profile connections; zero when BLE is unavailable.
-    pub max_ble_connections: u8,
+    /// Maximum simultaneous BLE host and dongle connections.
+    /// Excludes USB and split peripheral links; zero when BLE is unavailable.
+    pub max_connections: u8,
 
     // -- Protocol limits --
     pub max_payload_size: u16,
@@ -204,7 +205,7 @@ mod tests {
             num_split_peripherals: 0,
             ble_enabled: true,
             num_ble_profiles: 4,
-            max_ble_connections: 4,
+            max_connections: 4,
             max_payload_size: 256,
             max_bulk_keys: 32,
             max_bulk_items: 8,
@@ -229,7 +230,7 @@ mod tests {
             num_split_peripherals: 0,
             ble_enabled: false,
             num_ble_profiles: 0,
-            max_ble_connections: 0,
+            max_connections: 0,
             max_payload_size: 0,
             max_bulk_keys: 0,
             max_bulk_items: 0,
