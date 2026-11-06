@@ -193,9 +193,9 @@ where
             .build();
         let stack = &stack;
         let scan = ScanHandler::new();
-        let mut profile_manager = ProfileManager::new(stack);
+        let mut profile_manager = ProfileManager::new();
         profile_manager.load_bonded_devices().await;
-        profile_manager.update_stack_bonds();
+        profile_manager.update_stack_bonds(stack);
         let mut central = DongleCentral {
             stack,
             scan: &scan,
@@ -220,7 +220,7 @@ struct DongleCentral<'b, 's: 'b, C: Controller + ControllerCmdAsync<LeSetPhy>> {
     stack: &'b Stack<'s, C, DefaultPacketPool>,
     scan: &'b ScanHandler,
     router: &'b DongleRouter,
-    profiles: &'b ProfileManager<'b, 's, C, DefaultPacketPool, 1>,
+    profiles: &'b ProfileManager<1>,
     /// The last state published, so a path that ends where it began says nothing.
     state: Cell<DongleState>,
 }
@@ -417,6 +417,7 @@ where
                         info: bond,
                         cccd_table: heapless::Vec::new(),
                     });
+                    self.profiles.update_stack_bonds(self.stack);
                     return true;
                 }
                 Ok(ConnectionEvent::Encrypted { .. } | ConnectionEvent::PairingComplete { .. }) => return true,
@@ -424,6 +425,7 @@ where
                     warn!("[dongle] pairing failed: {:?}", e);
                     if peer == Peer::Bonded {
                         self.profiles.clear_bond(BOND_SLOT);
+                        self.profiles.update_stack_bonds(self.stack);
                     }
                     return false;
                 }
@@ -434,6 +436,7 @@ where
                     if peer == Peer::Bonded && reason == Status::AUTHENTICATION_FAILURE {
                         warn!("[dongle] bonded keyboard refused our key, dropping the bond");
                         self.profiles.clear_bond(BOND_SLOT);
+                        self.profiles.update_stack_bonds(self.stack);
                     }
                     return false;
                 }
