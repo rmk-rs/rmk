@@ -736,7 +736,6 @@ async fn gatt_events_task(
 
         match event {
             GattConnectionEvent::Disconnected { reason } => {
-                crate::state::update_ble_profile_status(profile_id, |status| status.state = BleState::Inactive);
                 #[cfg(feature = "passkey_entry")]
                 passkey_state.clear();
                 info!("[gatt] disconnected: {:?}", reason);
