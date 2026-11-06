@@ -457,6 +457,8 @@ async fn run_ble_keyboard<
         // When advertising stops; `None` after a timeout until input opens a new
         // window. Retries and connections that never encrypt keep the window.
         let mut adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
+        // Set when the selected profile is disconnected or cleared on request; it
+        // stays silent until a profile action selects or pairs it again.
         let mut disconnected_by_user = false;
         // Let USB detection run before the first advertisement.
         Timer::after_millis(10).await;

@@ -4,7 +4,7 @@ use embassy_sync::watch::Receiver;
 pub use rmk_types::connection::{ConnectionStatus, ConnectionType};
 
 /// Latest connection status after a change. Intermediate updates may be coalesced.
-/// Background BLE changes can notify with the same routing snapshot; refresh the profile list too.
+/// With `rynk`, a background BLE profile change also notifies, repeating the current status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ConnectionStatusChangeEvent(pub ConnectionStatus);

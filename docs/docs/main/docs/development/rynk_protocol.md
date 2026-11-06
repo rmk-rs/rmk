@@ -48,15 +48,23 @@ Each peer holds one frame in a buffer of `rynk_buffer_size` bytes (a `[rmk]` opt
 
 ## Connections
 
-`num_ble_profiles` counts ordinary host slots; `dongle_profile` identifies the optional dongle slot. Enumerate those slots with `GetBleStatus(slot)`. Its `BleStatus` reports the requested slot, connection state, and effective bond information. It answers `NotReady` until BLE state initialization finishes. Only `Connected` means an encrypted connection is ready for input.
+A BLE keyboard has `num_ble_profiles` host profiles, indexed from 0, plus a dongle profile at index `dongle_profile` when that is set. Every command in this section that takes a profile index accepts any of them and answers `Invalid` for any other index.
 
-`GetConnectionStatus` retains the selected profile in `ble.profile`. Resolve the actual input transport with `ConnectionStatus::decide_active()`; USB can carry input while BLE remains connected. `GetConnectionType` reads the transport preference, not the active route.
+`GetBleStatus(profile)` reads one profile's `state` and `bonded` flag. Only `Connected` means an encrypted link that can carry input. `bonded` is false while the profile re-pairs. The command answers `NotReady` until the keyboard has loaded its bonds after boot.
 
-`SwitchBleProfile`, `DisconnectBleProfile`, and `ClearBleProfile` accept ordinary host and dongle slots. Success means the action was queued, not that disconnect or flash persistence has finished. A full action queue answers `NotReady`. The requesting link may close before its reply arrives; the queued action still runs.
+`GetConnectionStatus` reports only the selected profile, in `ble`. To find which transport carries input, call `ConnectionStatus::decide_active()` on the result: USB can carry input while BLE stays connected. `GetConnectionType` returns the preferred transport, not the active one.
 
-`DisconnectBleProfile` retains the bond. `ClearBleProfile` requires unlocking and forgets the bond even while offline. Either command stops automatic reconnection of the selected slot until an explicit selection or pairing action, or a restart. Ordinary key and pointing input do not resume it. Selecting the same slot explicitly resumes it. Other slots keep their connections.
+| Command                | Effect                                                | Bond                       | Needs unlock |
+| ---------------------- | ----------------------------------------------------- | -------------------------- | ------------ |
+| `SwitchBleProfile`     | Selects the profile and advertises if it has no link. | Kept                       | No           |
+| `DisconnectBleProfile` | Closes the profile's link.                            | Kept                       | No           |
+| `ClearBleProfile`      | Closes the profile's link.                            | Forgotten, even if offline | Yes          |
 
-`ConnectionChange` also notifies background profile changes, even when its overall routing payload is unchanged. Refresh the profile list after each notification; intermediate updates may be coalesced. Readback describes live state and does not acknowledge flash persistence.
+These three commands queue the action and reply once it is queued, before the link closes or the bond change reaches flash. A full queue answers `NotReady`. If the action closes the link that sent the request, the reply may never arrive, but the action still runs.
+
+A disconnected or forgotten profile stays offline until it is selected or paired again, or the keyboard restarts. Key presses and pointer motion don't wake it, but `SwitchBleProfile` on the same index does. Other profiles keep their connections.
+
+`ConnectionChange` also fires, with an unchanged payload, when a background profile connects, disconnects, or changes its bond. Pushes can be coalesced, so re-read every profile with `GetBleStatus` after each one.
 
 ## Errors
 
@@ -116,12 +124,12 @@ The lock belongs to the connection and starts locked; `Lock` or disconnection re
 | `0x0502` | `SetFork`              | `SetForkRequest`       | `()`                    |         |                                                                              |
 | `0x0601` | `GetBehaviorConfig`    | `()`                   | `BehaviorConfig`        |         |                                                                              |
 | `0x0602` | `SetBehaviorConfig`    | `BehaviorConfig`       | `()`                    |         |                                                                              |
-| `0x0701` | `GetConnectionType`    | `()`                   | `ConnectionType`        |         |                                                                              |
-| `0x0702` | `GetConnectionStatus`  | `()`                   | `ConnectionStatus`      |         | Full `ConnectionStatus` snapshot.                                            |
-| `0x0703` | `GetBleStatus`         | `u8`                   | `BleStatus`             | `_ble`  | Connection state and effective bond information for the requested profile.   |
-| `0x0704` | `SwitchBleProfile`     | `u8`                   | `()`                    | `_ble`  |                                                                              |
-| `0x0705` | `ClearBleProfile`      | `u8`                   | `()`                    | `_ble`  |                                                                              |
-| `0x0706` | `DisconnectBleProfile` | `u8`                   | `()`                    | `_ble`  |                                                                              |
+| `0x0701` | `GetConnectionType`    | `()`                   | `ConnectionType`        |         | Preferred transport, not the active one.                                     |
+| `0x0702` | `GetConnectionStatus`  | `()`                   | `ConnectionStatus`      |         | Full `ConnectionStatus` snapshot; `ble` is the selected profile.             |
+| `0x0703` | `GetBleStatus`         | `u8`                   | `BleStatus`             | `_ble`  | State and bond of one host or dongle profile.                                |
+| `0x0704` | `SwitchBleProfile`     | `u8`                   | `()`                    | `_ble`  | Select a profile.                                                            |
+| `0x0705` | `ClearBleProfile`      | `u8`                   | `()`                    | `_ble`  | Disconnect a profile and forget its bond.                                    |
+| `0x0706` | `DisconnectBleProfile` | `u8`                   | `()`                    | `_ble`  | Disconnect a profile and keep its bond.                                      |
 | `0x0801` | `GetCurrentLayer`      | `()`                   | `u8`                    |         |                                                                              |
 | `0x0802` | `GetMatrixState`       | `()`                   | `MatrixState`           |         |                                                                              |
 | `0x0803` | `GetBatteryStatus`     | `()`                   | `BatteryStatus`         | `_ble`  |                                                                              |

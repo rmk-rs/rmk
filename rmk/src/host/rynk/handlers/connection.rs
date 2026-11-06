@@ -47,8 +47,8 @@ impl Handle<SwitchBleProfile> for RynkService<'_> {
     }
 }
 
-/// `Cmd::ClearBleProfile` — wipes the bond at the given slot without
-/// requiring a prior switch (uses [`BleProfileAction::ClearSlot`]).
+/// `Cmd::ClearBleProfile` — disconnects the given slot and wipes its bond
+/// without requiring a prior switch.
 #[cfg(feature = "_ble")]
 impl Handle<ClearBleProfile> for RynkService<'_> {
     async fn handle(&self, slot: u8) -> Result<(), RynkError> {
@@ -59,6 +59,7 @@ impl Handle<ClearBleProfile> for RynkService<'_> {
     }
 }
 
+/// `Cmd::DisconnectBleProfile` — disconnects the given slot and keeps its bond.
 #[cfg(feature = "_ble")]
 impl Handle<DisconnectBleProfile> for RynkService<'_> {
     async fn handle(&self, slot: u8) -> Result<(), RynkError> {

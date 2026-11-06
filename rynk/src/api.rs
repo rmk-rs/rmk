@@ -364,7 +364,8 @@ impl Client {
         self.request::<command::GetLedIndicator>(&()).await
     }
 
-    /// Read the preferred transport (USB / BLE). Use connection status for the active route.
+    /// Read the preferred transport (USB / BLE), not the active one. For the active transport,
+    /// call [`ConnectionStatus::decide_active`] on [`get_connection_status`](Self::get_connection_status).
     pub async fn get_connection_type(&self) -> Result<ConnectionType, RynkHostError> {
         self.request::<command::GetConnectionType>(&()).await
     }
@@ -376,7 +377,7 @@ impl Client {
         self.request::<command::GetConnectionStatus>(&()).await
     }
 
-    /// Read a host or dongle profile's connection state and effective bond. Requires
+    /// Read one host or dongle profile's connection state and bond. Requires
     /// [`DeviceCapabilities::ble_enabled`]; nothing is sent otherwise.
     pub async fn get_ble_status(&self, slot: u8) -> Result<BleStatus, RynkHostError> {
         self.require_ble(Cmd::GetBleStatus)?;
@@ -390,15 +391,16 @@ impl Client {
         self.request::<command::SwitchBleProfile>(&slot).await
     }
 
-    /// Queue forgetting `slot` after unlocking; success acknowledges enqueueing, not flash persistence.
-    /// The requesting host can disconnect before it receives the reply.
+    /// Queue disconnecting `slot` and forgetting its bond; requires an unlocked connection.
+    /// The reply confirms the queue, not the flash write, and may never reach a host on that slot.
+    /// The slot stays offline until it is selected again. Requires [`DeviceCapabilities::ble_enabled`].
     pub async fn clear_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
         self.require_ble(Cmd::ClearBleProfile)?;
         self.request::<command::ClearBleProfile>(&slot).await
     }
 
-    /// Queue a disconnect without forgetting the bond. Explicitly select the slot to reconnect.
-    /// The requesting host can disconnect before it receives the reply.
+    /// Queue disconnecting `slot` and keep its bond. The reply may never reach a host on that slot.
+    /// The slot stays offline until it is selected again. Requires [`DeviceCapabilities::ble_enabled`].
     pub async fn disconnect_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
         self.require_ble(Cmd::DisconnectBleProfile)?;
         self.request::<command::DisconnectBleProfile>(&slot).await

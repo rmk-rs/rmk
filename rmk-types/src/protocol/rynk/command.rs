@@ -315,16 +315,20 @@ endpoints! {
     SetBehaviorConfig = 0x0602: BehaviorConfig => ();
 
     // Connection (0x07xx).
+    /// Preferred transport, not the active one.
     GetConnectionType = 0x0701: () => ConnectionType;
-    /// Full `ConnectionStatus` snapshot.
+    /// Full `ConnectionStatus` snapshot; `ble` is the selected profile.
     GetConnectionStatus = 0x0702: () => ConnectionStatus;
-    /// Connection state and effective bond information for the requested profile.
+    /// State and bond of one host or dongle profile.
     #[cfg(feature = "_ble")]
     GetBleStatus = 0x0703: u8 => BleStatus;
+    /// Select a profile.
     #[cfg(feature = "_ble")]
     SwitchBleProfile = 0x0704: u8 => ();
+    /// Disconnect a profile and forget its bond.
     #[cfg(feature = "_ble")]
     ClearBleProfile = 0x0705: u8 => ();
+    /// Disconnect a profile and keep its bond.
     #[cfg(feature = "_ble")]
     DisconnectBleProfile = 0x0706: u8 => ();
 

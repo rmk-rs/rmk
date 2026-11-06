@@ -15,21 +15,22 @@ pub const BLE_ADV_NAME_MAX_LEN: usize = 16;
 pub enum BleState {
     /// The profile is advertising.
     Advertising,
-    /// The profile has an encrypted connection.
+    /// The profile has an encrypted connection that can carry input.
     Connected,
     /// The profile has no connection ready for input.
     Inactive,
 }
 
-/// A BLE host or dongle profile's connection state and effective bond information.
+/// Connection state and bond of one BLE host or dongle profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct BleStatus {
+    /// Host or dongle profile index.
     pub profile: u8,
     pub state: BleState,
-    /// Whether this profile currently has effective bond information, independent of connection state.
+    /// Whether the profile holds a bond, independent of connection state. False while it re-pairs.
     pub bonded: bool,
 }
 

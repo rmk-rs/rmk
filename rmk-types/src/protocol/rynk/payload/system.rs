@@ -61,11 +61,12 @@ pub struct DeviceCapabilities {
     pub is_split: bool,
     pub num_split_peripherals: u8,
     pub ble_enabled: bool,
+    /// Host profiles, indexed from 0; excludes the dongle profile.
     pub num_ble_profiles: u8,
     /// Maximum simultaneous BLE host and dongle connections.
     /// Excludes USB and split peripheral links; zero when BLE is unavailable.
     pub max_connections: u8,
-    /// Dedicated dongle slot, when the keyboard supports one.
+    /// Index of the dongle profile; `None` without dongle support.
     pub dongle_profile: Option<u8>,
 
     // -- Protocol limits --
