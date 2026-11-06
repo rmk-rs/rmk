@@ -77,7 +77,10 @@ impl Handle<GetCapabilities> for RynkService<'_> {
             max_connections: crate::ble::NUM_HOST_LINKS as u8,
             #[cfg(not(feature = "_ble"))]
             max_connections: 0,
-            dongle_profile: cfg!(all(feature = "_ble", feature = "dongle")).then_some(constants::NUM_BLE_PROFILE as u8),
+            #[cfg(all(feature = "_ble", feature = "dongle"))]
+            dongle_profile: Some(crate::ble::profile::DONGLE_PROFILE),
+            #[cfg(not(all(feature = "_ble", feature = "dongle")))]
+            dongle_profile: None,
 
             // Protocol limits
             max_payload_size: RYNK_MAX_PAYLOAD_SIZE as u16,

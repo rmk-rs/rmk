@@ -71,7 +71,7 @@ impl Handle<DisconnectBleProfile> for RynkService<'_> {
 
 #[cfg(feature = "_ble")]
 impl RynkService<'_> {
-    /// `Invalid` for a BLE profile slot past the configured profile count.
+    /// `Invalid` for a slot past the host profiles and the dongle slot.
     fn check_ble_profile_slot(slot: u8) -> Result<(), RynkError> {
         if (slot as usize) >= crate::ble::profile::BOND_SLOTS {
             Err(RynkError::Invalid)
