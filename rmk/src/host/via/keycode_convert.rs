@@ -39,11 +39,11 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
                 }
             },
             Action::KeyWithModifier(k, m) => ((m.into_packed_bits() as u16) << 8) | k as u16,
-            Action::LayerToggleOnly(l) => 0x5200 | l as u16,
-            Action::LayerOn(l) => 0x5220 | l as u16,
-            Action::DefaultLayer(l) => 0x5240 | l as u16,
-            Action::PersistentDefaultLayer(l) => 0x52E0 | l as u16,
-            Action::LayerToggle(l) => 0x5260 | l as u16,
+            Action::LayerToggleOnly(l) if l < 32 => 0x5200 | l as u16,
+            Action::LayerOn(l) if l < 32 => 0x5220 | l as u16,
+            Action::DefaultLayer(l) if l < 32 => 0x5240 | l as u16,
+            Action::PersistentDefaultLayer(l) if l < 32 => 0x52E0 | l as u16,
+            Action::LayerToggle(l) if l < 32 => 0x5260 | l as u16,
             Action::TriLayerLower => 0x7c77,
             Action::TriLayerUpper => 0x7c78,
             Action::TriggerMacro(idx) => 0x7700 + (idx as u16),
@@ -98,7 +98,7 @@ pub(crate) fn to_via_keycode(key_action: KeyAction) -> u16 {
             // Layer tap toggle: tap toggles layer `l`, hold activates it momentarily
             Action::LayerOn(l) if tap == Action::LayerToggle(l) && l < 32 => 0x52C0 | l as u16,
             Action::LayerOn(l) => {
-                if l > 16 {
+                if l >= 16 {
                     0
                 } else {
                     let keycode = match tap {
@@ -618,7 +618,28 @@ mod test {
                 assert_eq!(to_via_keycode(KeyAction::Single(action)), keycode);
             }
         }
-        assert_eq!(to_via_keycode(KeyAction::Single(Action::OneShotLayer(32))), 0);
+        for action in [
+            Action::LayerToggleOnly(32),
+            Action::LayerOn(32),
+            Action::DefaultLayer(32),
+            Action::LayerToggle(32),
+            Action::OneShotLayer(32),
+            Action::PersistentDefaultLayer(32),
+        ] {
+            assert_eq!(to_via_keycode(KeyAction::Single(action)), 0, "{action:?}");
+        }
+    }
+
+    #[test]
+    fn test_convert_layer_tap_range() {
+        // LT(15, A), the highest layer the keycode can carry
+        let lt = KeyAction::TapHold(Action::Key(KeyCode::Hid(HidKeyCode::A)), Action::LayerOn(15), u8::MAX);
+        assert_eq!(lt, from_via_keycode(0x4F04));
+        assert_eq!(0x4F04, to_via_keycode(lt));
+
+        // LT(16, A) has no keycode; packing it would yield 0x5004, which is LM(0, LAlt)
+        let lt = KeyAction::TapHold(Action::Key(KeyCode::Hid(HidKeyCode::A)), Action::LayerOn(16), u8::MAX);
+        assert_eq!(0, to_via_keycode(lt));
     }
 
     #[test]
