@@ -7,8 +7,8 @@
 //! `Action`'s `#[cfg(feature = "steno")]` variant would shift every postcard
 //! discriminant after it.
 //!
-//! Endpoint coverage lives in `tests/scenarios/rynk_*.toml`. Typed capability
-//! expectations and cases that rebuild keyboards over one flash stay here.
+//! Endpoint coverage lives in `tests/scenarios/rynk_*.toml`; this file keeps the
+//! cases TOML cannot express.
 
 use rmk::event::{LedIndicatorEvent, SleepStateEvent, WpmUpdateEvent, publish_event_async};
 use rmk::k;
@@ -92,12 +92,13 @@ fn payload<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> T {
     serde_json::from_str(json).unwrap_or_else(|e| panic!("rynk {what} payload `{json}`: {e}"))
 }
 
-// Connection capacity depends on the feature set, so these handshake cases use
-// Rust expectations while the fixed endpoint payloads stay in TOML scenarios.
+// Connection capacity depends on the feature set, which TOML cannot spell.
+// Pinned because every host sizes its transfers from these values.
 #[cfg(all(feature = "storage", feature = "_ble", feature = "split"))]
-fn expected_capabilities(layers: u8) -> rmk_types::protocol::rynk::DeviceCapabilities {
-    rmk_types::protocol::rynk::DeviceCapabilities {
-        num_layers: layers,
+#[test]
+fn capabilities_report_the_live_board() {
+    let capabilities = rmk_types::protocol::rynk::DeviceCapabilities {
+        num_layers: 1,
         num_rows: 1,
         num_cols: 2,
         num_encoders: 0,
@@ -124,10 +125,20 @@ fn expected_capabilities(layers: u8) -> rmk_types::protocol::rynk::DeviceCapabil
         max_bulk_keys: 47,
         max_bulk_items: 7,
         bulk_transfer_supported: true,
-    }
+    };
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[k!(A), k!(No)]]]).build().await;
+        keyboard
+            .host_exchange(
+                frame(Cmd::GetCapabilities, 1, &()),
+                frame(Cmd::GetCapabilities, 1, &Ok::<_, RynkError>(capabilities)),
+            )
+            .run()
+            .await;
+    });
 }
 
-#[cfg(all(feature = "storage", feature = "_ble", feature = "split"))]
+// Topics stay muted until `GetCapabilities` is served; these cases skip its reply.
 #[test]
 fn layer_changes_are_pushed_after_the_handshake() {
     use rmk_types::action::{Action, KeyAction};
@@ -138,10 +149,8 @@ fn layer_changes_are_pushed_after_the_handshake() {
             .build()
             .await;
         keyboard
-            .host_exchange(
-                frame(Cmd::GetCapabilities, 1, &()),
-                frame(Cmd::GetCapabilities, 1, &Ok::<_, RynkError>(expected_capabilities(2))),
-            )
+            .host_send(frame(Cmd::GetCapabilities, 1, &()))
+            .skip_host_frame()
             .press(0, 1)
             .rynk_topic(Cmd::LayerChange, "1")
             .release(0, 1)
@@ -151,15 +160,14 @@ fn layer_changes_are_pushed_after_the_handshake() {
     });
 }
 
-#[cfg(all(feature = "storage", feature = "_ble", feature = "split"))]
+#[cfg(feature = "_ble")]
 #[test]
 fn state_changes_are_pushed_after_the_handshake() {
     test_block_on(async {
         let mut keyboard = SimKeyboard::builder([[[k!(A), k!(No)]]]).build().await;
-        keyboard.host_exchange(
-            frame(Cmd::GetCapabilities, 1, &()),
-            frame(Cmd::GetCapabilities, 1, &Ok::<_, RynkError>(expected_capabilities(1))),
-        );
+        keyboard
+            .host_send(frame(Cmd::GetCapabilities, 1, &()))
+            .skip_host_frame();
         for (topic, payload) in [
             (Cmd::WpmUpdate, "42"),
             (Cmd::SleepState, "true"),
