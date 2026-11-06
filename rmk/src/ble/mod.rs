@@ -35,7 +35,7 @@ use crate::ble::led::BleLedReader;
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
 #[cfg(feature = "dongle")]
 use crate::ble::profile::DONGLE_PROFILE;
-use crate::ble::profile::{BOND_SLOTS, ProfileInfo, ProfileManager};
+use crate::ble::profile::{BOND_SLOTS, ProfileInfo, ProfileManager, load_stack_bond};
 use crate::ble::sleep::{report_activity, request_sleep};
 use crate::channel::{BLE_PROFILE_CHANNEL, BLE_REPORT_CHANNEL, LED_SIGNAL};
 use crate::config::{BleBatteryConfig, DeviceConfig, RmkConfig};
@@ -470,8 +470,9 @@ async fn run_ble_keyboard<
                     advertising_paused = false;
                 }
 
-                profile_manager.update_stack_bonds(stack);
-                let adv = match profile_manager.bond_info(profile_id) {
+                let bond = profile_manager.bond_info(profile_id);
+                load_stack_bond(stack, bond.as_ref().map(|bond| &bond.info));
+                let adv = match bond {
                     #[cfg(feature = "dongle")]
                     Some(bond) if profile_id == DONGLE_PROFILE => Adv::Directed(bond.info.identity.addr),
                     #[cfg(feature = "dongle")]
@@ -540,13 +541,14 @@ async fn run_ble_keyboard<
                     }
 
                     if slot != profile_id {
-                        let active = crate::state::current_ble_status();
-                        let bonded = profile_manager.bond_info(profile_id).is_some_and(|bond| {
-                            host_connections[profile_id as usize]
-                                .as_ref()
-                                .is_some_and(|conn| bond.info.identity.match_identity(&conn.peer_identity()))
-                        });
-                        if NUM_HOST_LINKS == 1 || !bonded || active.state != BleState::Connected {
+                        let keep_connected = NUM_HOST_LINKS > 1
+                            && host_connections[profile_id as usize].as_ref().is_some_and(|conn| {
+                                conn.security_level().is_ok_and(|level| level.encrypted())
+                                    && profile_manager
+                                        .bond_info(profile_id)
+                                        .is_some_and(|bond| bond.info.identity.match_identity(&conn.peer_identity()))
+                            });
+                        if !keep_connected {
                             disconnect_profile(profile_id, &mut host_connections, &completed).await;
                         }
                         let state = match &host_connections[slot as usize] {
@@ -556,7 +558,10 @@ async fn run_ble_keyboard<
                             _ => BleState::Inactive,
                         };
                         profile_manager.switch_profile(slot, state);
-                        profile_manager.update_stack_bonds(stack);
+                        if host_connections[slot as usize].is_some() {
+                            let bond = profile_manager.bond_info(slot);
+                            load_stack_bond(stack, bond.as_ref().map(|bond| &bond.info));
+                        }
                         for (i, conn) in host_connections.iter().enumerate() {
                             if let Some(conn) = conn
                                 && let Err(e) = conn.set_bondable(i == slot as usize)

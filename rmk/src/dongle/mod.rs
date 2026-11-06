@@ -38,7 +38,7 @@ use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 use vial_router as router;
 
 use crate::ble::adv::Adv;
-use crate::ble::profile::{ProfileInfo, ProfileManager};
+use crate::ble::profile::{ProfileInfo, ProfileManager, load_stack_bond};
 use crate::ble::scan::{DONGLE_SCAN_WINDOW, connect, scan_config, start_scan};
 use crate::ble::{CentralCmds, wait_for_stack_started};
 use crate::channel::send_hid_report;
@@ -195,7 +195,8 @@ where
         let scan = ScanHandler::new();
         let mut profile_manager = ProfileManager::new();
         profile_manager.load_bonded_devices().await;
-        profile_manager.update_stack_bonds(stack);
+        let bond = profile_manager.bond_info(BOND_SLOT);
+        load_stack_bond(stack, bond.as_ref().map(|bond| &bond.info));
         let mut central = DongleCentral {
             stack,
             scan: &scan,
@@ -411,13 +412,13 @@ where
                 // Save the new bond — also when the bonded keyboard cleared its side
                 // and re-paired, otherwise we keep an old key nothing accepts anymore.
                 Ok(ConnectionEvent::PairingComplete { bond: Some(bond), .. }) => {
+                    load_stack_bond(self.stack, Some(&bond));
                     self.profiles.set_bond(ProfileInfo {
                         slot_num: BOND_SLOT,
                         removed: false,
                         info: bond,
                         cccd_table: heapless::Vec::new(),
                     });
-                    self.profiles.update_stack_bonds(self.stack);
                     return true;
                 }
                 Ok(ConnectionEvent::Encrypted { .. } | ConnectionEvent::PairingComplete { .. }) => return true,
@@ -425,7 +426,7 @@ where
                     warn!("[dongle] pairing failed: {:?}", e);
                     if peer == Peer::Bonded {
                         self.profiles.clear_bond(BOND_SLOT);
-                        self.profiles.update_stack_bonds(self.stack);
+                        load_stack_bond(self.stack, None);
                     }
                     return false;
                 }
@@ -436,7 +437,7 @@ where
                     if peer == Peer::Bonded && reason == Status::AUTHENTICATION_FAILURE {
                         warn!("[dongle] bonded keyboard refused our key, dropping the bond");
                         self.profiles.clear_bond(BOND_SLOT);
-                        self.profiles.update_stack_bonds(self.stack);
+                        load_stack_bond(self.stack, None);
                     }
                     return false;
                 }
