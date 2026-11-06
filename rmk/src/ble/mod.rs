@@ -542,21 +542,19 @@ async fn run_ble_keyboard<
                         Next => 0,
                         Previous => profile_id.checked_sub(1).unwrap_or(last_host),
                     };
-                    let clear_bond = matches!(action, ClearBond | ClearSlot(_));
                     if matches!(action, Disconnect(_) | ClearSlot(_)) {
                         if slot == profile_id {
                             disconnected_by_user = true;
                             profile_manager.cancel_pairing(slot);
-                        }
-                        disconnect_profile(slot, &mut host_connections, &completed).await;
-                        if slot == profile_id {
                             set_ble_state(BleState::Inactive);
                         }
-                        if clear_bond {
+                        disconnect_profile(slot, &mut host_connections, &completed).await;
+                        if matches!(action, ClearSlot(_)) {
                             profile_manager.clear_bond(slot);
                         }
                         continue;
                     }
+                    let clear_bond = matches!(action, ClearBond);
                     let pair = matches!(action, Pair(_)) && profile_manager.bond_info(slot).is_some();
                     if !clear_bond && !pair && slot == profile_id && !disconnected_by_user {
                         continue;
