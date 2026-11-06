@@ -2,7 +2,9 @@ use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use rmk_types::action::KeyAction;
 use rmk_types::constants::{COMBO_MAX_LENGTH, COMBO_MAX_NUM, MORSE_MAX_NUM};
 use rmk_types::morse::{DOUBLE_TAP, HOLD, HOLD_AFTER_TAP, Morse, MorseMode, TAP};
-use rmk_types::protocol::vial::{SettingKey, VIAL_EP_SIZE, VIAL_PROTOCOL_VERSION, VialCommand, VialDynamic};
+use rmk_types::protocol::vial::{
+    SettingKey, VIAL_COMBO_MAX_LENGTH, VIAL_EP_SIZE, VIAL_PROTOCOL_VERSION, VialCommand, VialDynamic,
+};
 
 use crate::config::VialConfig;
 use crate::hid::ViaReport;
@@ -329,7 +331,7 @@ pub(crate) async fn process_vial<'a>(
                     ctx.with_combos(|combos| {
                         if let Some(Some(combo)) = combos.get(combo_idx) {
                             // Combo components
-                            for i in 0..COMBO_MAX_LENGTH {
+                            for i in 0..VIAL_COMBO_MAX_LENGTH {
                                 let kc = combo.config.actions.get(i).copied().unwrap_or(KeyAction::No);
                                 LittleEndian::write_u16(
                                     &mut report.input_data[1 + i * 2..3 + i * 2],
@@ -338,11 +340,11 @@ pub(crate) async fn process_vial<'a>(
                             }
                             // Combo output
                             LittleEndian::write_u16(
-                                &mut report.input_data[1 + COMBO_MAX_LENGTH * 2..3 + COMBO_MAX_LENGTH * 2],
+                                &mut report.input_data[1 + VIAL_COMBO_MAX_LENGTH * 2..3 + VIAL_COMBO_MAX_LENGTH * 2],
                                 to_via_keycode(combo.config.output),
                             );
                         } else {
-                            report.input_data[1..3 + COMBO_MAX_LENGTH * 2].fill(0);
+                            report.input_data[1..3 + VIAL_COMBO_MAX_LENGTH * 2].fill(0);
                         }
                     });
                 }
@@ -356,7 +358,7 @@ pub(crate) async fn process_vial<'a>(
 
                     let mut actions = heapless::Vec::<KeyAction, COMBO_MAX_LENGTH>::new();
                     let mut overflow = false;
-                    for i in 0..COMBO_MAX_LENGTH {
+                    for i in 0..VIAL_COMBO_MAX_LENGTH {
                         let action =
                             from_via_keycode(LittleEndian::read_u16(&report.output_data[4 + i * 2..6 + i * 2]));
                         if !action.is_empty() && actions.push(action).is_err() {
@@ -368,7 +370,7 @@ pub(crate) async fn process_vial<'a>(
                         return;
                     }
                     let output = from_via_keycode(LittleEndian::read_u16(
-                        &report.output_data[4 + COMBO_MAX_LENGTH * 2..6 + COMBO_MAX_LENGTH * 2],
+                        &report.output_data[4 + VIAL_COMBO_MAX_LENGTH * 2..6 + VIAL_COMBO_MAX_LENGTH * 2],
                     ));
                     let config = ComboConfig {
                         actions,

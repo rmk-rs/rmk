@@ -8,7 +8,8 @@ use rmk::types::keyboard_macros::MacroOp;
 use rmk::types::keycode::{HidKeyCode, KeyCode};
 use rmk::{k, macros, text};
 use rmk_types::protocol::vial::{
-    SettingKey, VIA_PROTOCOL_VERSION, VIAL_EP_SIZE as REPORT, ViaCommand, VialCommand, VialDynamic,
+    SettingKey, VIA_PROTOCOL_VERSION, VIAL_COMBO_MAX_LENGTH, VIAL_EP_SIZE as REPORT, ViaCommand, VialCommand,
+    VialDynamic,
 };
 
 use crate::simulator::SimKeyboard;
@@ -51,7 +52,7 @@ impl SimKeyboard {
 
     fn set_combo<const N: usize>(&mut self, index: u8, actions: [KeyAction; N], output: KeyAction) {
         let mut request = dynamic(VialDynamic::DynamicVialComboSet, index);
-        const MAX: usize = rmk::test_support::COMBO_MAX_LENGTH;
+        const MAX: usize = VIAL_COMBO_MAX_LENGTH;
         assert!(N <= MAX);
         for (idx, action) in actions.into_iter().enumerate() {
             let start = 4 + idx * 2;
@@ -154,6 +155,25 @@ fn combo_and_behavior_writes_change_the_chord() {
             .expect_keys([])
             .run()
             .await;
+    });
+}
+
+#[test]
+fn combo_reads_back_as_a_vial_entry() {
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[k!(A), k!(B)]]]).build().await;
+        keyboard.set_combo(0, [k!(A), k!(B)], k!(C));
+        let request = dynamic(VialDynamic::DynamicVialComboGet, 0);
+        let mut reply = request;
+        reply[0] = 0;
+        for (idx, action) in [k!(A), k!(B), KeyAction::No, KeyAction::No, k!(C)]
+            .into_iter()
+            .enumerate()
+        {
+            reply[1 + idx * 2..3 + idx * 2].copy_from_slice(&to_via_keycode(action).to_le_bytes());
+        }
+        keyboard.host_exchange(request, reply);
+        keyboard.run().await;
     });
 }
 
