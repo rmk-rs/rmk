@@ -19,6 +19,40 @@ hold_on_other_press = true
 hold_timeout = "250ms"
 gap_timeout = "250ms"
 
+# Combo arbitration delivers the second press after the quick-tap deadline,
+# but its captured timestamp is still inside the window.
+[[test]]
+name = "combo_delayed_quick_repress_uses_its_capture_time"
+behavior.morse = { hold_on_other_press = false, normal_mode = true, hold_timeout = "200ms", quick_tap_timeout = "120ms" }
+behavior.combo = { timeout = "50ms", combos = [{ actions = ["MT(B, LShift, p0)", "E"], output = "Z" }] }
+steps = [
+  { tap = { pos = [3, 6], duration = 20 } },
+  { delay = 80 },
+  { press = [3, 6] },
+  { delay = 220 },
+  { release = [3, 6] },
+  { delay = 250 },
+]
+expect = [["B"], [], ["B"], []]
+
+# Captured quick-tap history must not later remove a rebound plain key's
+# ownership and swallow its release after the preceding layer-tap resolves.
+[[test]]
+name = "delayed_quick_repress_rebinds_to_plain_key_without_stale_history"
+behavior.morse = { hold_on_other_press = false, normal_mode = true, hold_timeout = "200ms", quick_tap_timeout = "120ms" }
+steps = [
+  { tap = { pos = [1, 1], duration = 20 } },
+  { delay = 20 },
+  { press = [3, 5] },
+  { delay = 60 },
+  { press = [1, 1] },
+  { delay = 220 },
+  { release = [1, 1] },
+  { release = [3, 5] },
+  { delay = 250 },
+]
+expect = [["B"], [], ["Kp2"], []]
+
 # A double_tap continuation keeps the first release from resolving, so the key
 # waits in `Released(TAP)` and the re-press takes the quick-tap path from there.
 [[test]]
@@ -93,6 +127,7 @@ steps = [
   { press = [3, 6] },
   { delay = 400 },
   { release = [3, 6] },
+  { delay = 250 },
 ]
 expect = [["B"], [], ["B"], []]
 

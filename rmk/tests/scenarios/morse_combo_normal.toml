@@ -36,4 +36,4 @@ steps = [
   { delay = 300 },
   { release = [1, 1] },  # Release B — Normal mode resolves it only on release
 ]
-expect = [["C"], [], ["LShift"], []]
+expect = [["LShift"], ["LShift", "C"], ["LShift"], []]

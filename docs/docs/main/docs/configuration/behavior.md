@@ -237,7 +237,7 @@ The `profile` of a morse key contains all tunable configurations of this morse k
 
 A profile contains the following fields:
 
-- `unilateral_tap`: (Experimental) Enables unilateral tap mode. When enabled, tap action will be triggered when a key from "same" hand is pressed. In current experimental version, the "same" hand is calculated using the `<hand>`, which can be given in `layout.map`. This option is recommended to set to true when `enable_flow_tap` is set to true. In `normal_mode` the tap resolves when the same-hand key is pressed; in `permissive_hold` mode, when it is released. `hold_on_other_press` mode ignores this option, because the hold fires on the other key's press first.
+- `unilateral_tap`: (Experimental) Enables unilateral tap mode using the `<hand>` given in `layout.map`. This option is recommended when `enable_flow_tap` is true. For matrix tap-hold keys, `normal_mode` uses same-hand release evidence at timeout; `permissive_hold` resolves a tap on the same-hand release. General Morse retains its existing policy: Normal resolves on a same-hand press, and PermissiveHold on release. `hold_on_other_press` ignores this option because the hold fires on the other key's press first.
 
 - The morse mode, which can be set by enabling one of these:
   - `permissive_hold`: Enables permissive hold mode. When enabled, hold action will be triggered when a key is pressed and released during tap-hold decision. This option is recommended to set to true when `enable_flow_tap` is set to true.
@@ -249,6 +249,27 @@ A profile contains the following fields:
 - `quick_tap_timeout`: If the same morse/tap-hold key is pressed again within this window after its last release, the tap action fires immediately on press and stays held while the key is held. This lets the OS auto-repeat the tap action instead of triggering the hold action. Disabled by default. Maximum 8191ms (13-bit field).
   - Setting `quick_tap_timeout = "0ms"` explicitly disables quick-tap for that profile, even if a non-zero global default is configured. This lets you opt out on a per-profile basis. Omitting the field entirely causes the profile to inherit the global default.
   - A re-press within the window resolves as a tap even if a `double_tap` action is configured, so double-tapping faster than `quick_tap_timeout` produces two taps instead of the `double_tap` action.
+
+#### Ordered tap-hold
+
+Undecided matrix `MT`, `LT`, and `TH` keys defer following physical actions by
+default. Deferred actions bind on the resolved layer and retain their original
+event timestamps, preserving typing order during rolls and layer-tap chords.
+Encoder and touch input can also wait behind a matrix tap-hold decision, but do
+not own ordered decisions. General Morse and tap-dance retain their existing
+resolver, although their input can be deferred.
+
+Normal mode waits for release or timeout, using same-hand release evidence at
+timeout when unilateral tap is enabled. PermissiveHold resolves on a following
+release; HoldOnOtherPress resolves on the following press. Flow-tap and quick-tap
+remain independently configurable. Waiting adds up to the tapping term of
+latency to following actions; already-emitted ordinary keys can still release.
+
+The bounded store holds 16 press generations, including actions awaiting their
+physical release. Under pressure, the oldest unresolved tap-hold resolves as a
+tap to drain work. If no slot can be freed, a new press is rejected before its
+action executes; admitted releases are retained. A combo that cannot reserve
+output ownership dispatches its waiting members instead.
 
 #### Default profile for Morse/TapDance/TapHold
 
