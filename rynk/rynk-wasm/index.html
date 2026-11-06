@@ -457,9 +457,13 @@
       // Reconnect when idle; disconnect on active transport removal.
       navigator.serial?.addEventListener?.("connect", () => { if (!connected) autoConnect(); });
       navigator.hid?.addEventListener?.("connect", () => { if (!connected) autoConnect(); });
-      const onDrop = () => { if (connected) teardown().then(() => log("\n— transport disconnected —")); };
-      navigator.serial?.addEventListener?.("disconnect", onDrop);
-      navigator.hid?.addEventListener?.("disconnect", onDrop);
+      const onDrop = (removed) => {
+        if (connected && (removed === port || removed === device)) {
+          teardown().then(() => log("\n— transport disconnected —"));
+        }
+      };
+      navigator.serial?.addEventListener?.("disconnect", (event) => onDrop(event.target));
+      navigator.hid?.addEventListener?.("disconnect", (event) => onDrop(event.device));
 
       // Try previously granted devices on load.
       autoConnect();
