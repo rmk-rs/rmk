@@ -32,6 +32,23 @@ pub(crate) fn profile_address(base: [u8; 6], profile: u8) -> [u8; 6] {
     addr
 }
 
+/// Replace the stack's bond table with the bond selected by the connection owner.
+pub(crate) fn load_stack_bond<C: Controller, P: PacketPool>(stack: &Stack<'_, C, P>, bond: Option<&BondInformation>) {
+    // The stack can also hold keys from an unfinished pairing.
+    while let Some(identity) = stack.with_bond_information(|bonds| bonds.first().map(|b| b.identity)) {
+        if let Err(e) = stack.remove_bond_information(identity) {
+            debug!("Remove bond info error: {:?}", e);
+            break;
+        }
+    }
+    if let Some(bond) = bond {
+        debug!("Loading bond for peer {:?}", bond.identity);
+        if let Err(e) = stack.add_bond_information(bond.clone()) {
+            debug!("Add bond info error: {:?}", e);
+        }
+    }
+}
+
 /// BLE profile info
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -99,13 +116,7 @@ pub(crate) enum BleProfileAction {
     ClearSlot(u8),
 }
 
-/// Manage BLE profiles and bonding information
-///
-/// ProfileManager is responsible for:
-/// 1. Managing multiple BLE profiles, allowing users to switch between multiple devices
-/// 2. Storing and loading bonding information for each profile
-/// 3. Updating the bonding information of the active profile to the BLE stack
-/// 4. Handling profile switch, clear, and save operations
+/// Stored bonds and explicit re-pairing state for host or dongle profiles.
 ///
 /// `SLOTS` sizes the cache to the role: [`BOND_SLOTS`] for a keyboard, a single
 /// slot for a dongle.
@@ -178,26 +189,6 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
     pub(crate) fn is_bonded_dongle(&self, identity: &Identity) -> bool {
         self.bond_info(DONGLE_PROFILE)
             .is_some_and(|info| info.info.identity.match_identity(identity))
-    }
-
-    /// Load the selected profile before advertising or resuming an existing connection.
-    pub(crate) fn update_stack_bonds<C: Controller, P: PacketPool>(&self, stack: &Stack<'_, C, P>) {
-        // Drain one at a time rather than collecting: the stack holds bonds this
-        // manager has no slot for — a fresh pairing lands there before we prune —
-        // and a `heapless::Vec` collect panics on the overflow.
-        while let Some(identity) = stack.with_bond_information(|bonds| bonds.first().map(|b| b.identity)) {
-            if let Err(e) = stack.remove_bond_information(identity) {
-                debug!("Remove bond info error: {:?}", e);
-                break; // a bond that won't come off would spin here forever
-            }
-        }
-
-        if let Some(info) = self.bond_info(current_profile()) {
-            debug!("Add bond info of profile {}: {:?}", info.slot_num, info);
-            if let Err(e) = stack.add_bond_information(info.info) {
-                debug!("Add bond info error: {:?}", e);
-            }
-        }
     }
 
     /// Set a slot's bond and initial CCCD state.
@@ -295,7 +286,9 @@ mod tests {
     use bt_hci::controller::ExternalController;
     use bt_hci::transport::{PacketToController, PacketToHost, Transport};
 
-    use super::{DefaultPacketPool, HostResources, LongTermKey, ProfileInfo, ProfileManager, profile_address};
+    use super::{
+        DefaultPacketPool, HostResources, LongTermKey, ProfileInfo, ProfileManager, load_stack_bond, profile_address,
+    };
     use crate::test_support::test_block_on;
 
     #[test]
@@ -390,7 +383,7 @@ mod tests {
         stack.with_bond_information(|bonds| assert_eq!(bonds, &[replacement]));
         assert_eq!(manager.bond_info(0), Some(old.clone()));
 
-        manager.update_stack_bonds(&stack);
+        load_stack_bond(&stack, Some(&old.info));
         stack.with_bond_information(|bonds| assert_eq!(bonds, &[old.info]));
     }
 
@@ -442,7 +435,7 @@ mod tests {
         test_block_on(async {
             for selected in [1, 0, 1] {
                 manager.switch_profile(selected, BleState::Inactive);
-                manager.update_stack_bonds(&stack);
+                load_stack_bond(&stack, manager.bond_info(selected).as_ref().map(|bond| &bond.info));
                 assert_eq!(current_profile(), selected);
                 assert!(current_ble_status().bonded);
                 stack.with_bond_information(|bonds| {
@@ -451,7 +444,7 @@ mod tests {
                 });
             }
             manager.clear_bond(1);
-            manager.update_stack_bonds(&stack);
+            load_stack_bond(&stack, None);
         });
         assert_eq!(current_profile(), 1);
         assert!(!current_ble_status().bonded);
