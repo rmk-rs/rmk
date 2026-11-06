@@ -2,7 +2,7 @@ use core::fmt::Debug;
 
 use embassy_futures::yield_now;
 #[cfg(feature = "_ble")]
-use embassy_sync::signal::Signal;
+use embassy_sync::watch::Watch;
 use embassy_time::{Duration, Instant, Timer, with_deadline};
 use heapless::Vec;
 use rmk_types::action::{Action, KeyAction, KeyboardAction};
@@ -49,7 +49,7 @@ use crate::keymap::HOLD_BUFFER_SIZE;
 
 // Timestamp of the last key action, the value is the number of seconds since the boot
 #[cfg(feature = "_ble")]
-pub(crate) static LAST_KEY_TIMESTAMP: Signal<crate::RawMutex, u32> = Signal::new();
+pub(crate) static LAST_KEY_TIMESTAMP: Watch<crate::RawMutex, u32, { crate::ble::NUM_HOST_LINKS }> = Watch::new();
 
 /// Led states for the keyboard hid report (its value is received by by the light service in a hid report)
 /// LedIndicator type would be nicer, but that does not have const expr constructor
@@ -838,7 +838,7 @@ impl<'a> Keyboard<'a> {
         }
 
         #[cfg(feature = "_ble")]
-        LAST_KEY_TIMESTAMP.signal(Instant::now().as_secs() as u32);
+        LAST_KEY_TIMESTAMP.sender().send(Instant::now().as_secs() as u32);
 
         if !key_action.is_morse() {
             match key_action {
