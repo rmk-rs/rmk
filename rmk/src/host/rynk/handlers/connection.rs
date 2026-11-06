@@ -5,7 +5,7 @@ use rmk_types::ble::BleStatus;
 use rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rmk_types::protocol::rynk::RynkError;
 #[cfg(feature = "_ble")]
-use rmk_types::protocol::rynk::command::{ClearBleProfile, GetBleStatus, SwitchBleProfile};
+use rmk_types::protocol::rynk::command::{ClearBleProfile, DisconnectBleProfile, GetBleStatus, SwitchBleProfile};
 use rmk_types::protocol::rynk::command::{GetConnectionStatus, GetConnectionType};
 
 use super::super::RynkService;
@@ -27,8 +27,9 @@ impl Handle<GetConnectionStatus> for RynkService<'_> {
 
 #[cfg(feature = "_ble")]
 impl Handle<GetBleStatus> for RynkService<'_> {
-    async fn handle(&self, _: ()) -> Result<BleStatus, RynkError> {
-        Ok(self.ctx.connection_status().ble)
+    async fn handle(&self, slot: u8) -> Result<BleStatus, RynkError> {
+        Self::check_ble_profile_slot(slot)?;
+        crate::state::ble_profile_status(slot).ok_or(RynkError::NotReady)
     }
 }
 
@@ -46,23 +47,34 @@ impl Handle<SwitchBleProfile> for RynkService<'_> {
     }
 }
 
-/// `Cmd::ClearBleProfile` — wipes the bond at the given slot without
-/// requiring a prior switch (uses [`BleProfileAction::ClearSlot`]).
+/// `Cmd::ClearBleProfile` — disconnects the given slot and wipes its bond
+/// without requiring a prior switch.
 #[cfg(feature = "_ble")]
 impl Handle<ClearBleProfile> for RynkService<'_> {
     async fn handle(&self, slot: u8) -> Result<(), RynkError> {
         Self::check_ble_profile_slot(slot)?;
         crate::channel::BLE_PROFILE_CHANNEL
-            .try_send(crate::ble::profile::BleProfileAction::ClearSlot(slot))
+            .try_send(crate::ble::profile::BleProfileAction::ClearBond(slot))
+            .map_err(|_| RynkError::NotReady)
+    }
+}
+
+/// `Cmd::DisconnectBleProfile` — disconnects the given slot and keeps its bond.
+#[cfg(feature = "_ble")]
+impl Handle<DisconnectBleProfile> for RynkService<'_> {
+    async fn handle(&self, slot: u8) -> Result<(), RynkError> {
+        Self::check_ble_profile_slot(slot)?;
+        crate::channel::BLE_PROFILE_CHANNEL
+            .try_send(crate::ble::profile::BleProfileAction::Disconnect(slot))
             .map_err(|_| RynkError::NotReady)
     }
 }
 
 #[cfg(feature = "_ble")]
 impl RynkService<'_> {
-    /// `Invalid` for a BLE profile slot past the configured profile count.
+    /// `Invalid` for a slot past the host profiles and the dongle slot.
     fn check_ble_profile_slot(slot: u8) -> Result<(), RynkError> {
-        if (slot as usize) >= crate::NUM_BLE_PROFILE {
+        if (slot as usize) >= crate::ble::profile::BOND_SLOTS {
             Err(RynkError::Invalid)
         } else {
             Ok(())

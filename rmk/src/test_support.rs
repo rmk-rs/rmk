@@ -26,6 +26,19 @@ pub fn set_connection_status(status: rmk_types::connection::ConnectionStatus) {
     crate::state::update_status(|current| *current = status);
 }
 
+#[cfg(all(feature = "rynk", feature = "_ble"))]
+pub fn reset_ble_profile_statuses() {
+    crate::state::init_ble_profile_statuses(core::array::from_fn(|slot| rmk_types::ble::BleStatus {
+        profile: slot as u8,
+        ..Default::default()
+    }));
+}
+
+#[cfg(all(feature = "rynk", feature = "_ble"))]
+pub fn set_ble_profile_status(status: rmk_types::ble::BleStatus) {
+    crate::state::update_ble_profile_status(status.profile, |current| *current = status);
+}
+
 #[cfg(feature = "storage")]
 pub fn clear_flash_channel() {
     crate::storage::clear_flash_channel();

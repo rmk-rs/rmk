@@ -58,7 +58,7 @@ steps = [
 name = "ble_status_mirrors_the_connection_status"
 features = ["_ble"]
 steps = [
-  { rynk = { cmd = "GetBleStatus", reply = { profile = 0, state = "Inactive", bonded = false } } },
+  { rynk = { cmd = "GetBleStatus", payload = 0, reply = { profile = 0, state = "Inactive", bonded = false } } },
   { rynk = { cmd = "GetBatteryStatus", reply = "Unavailable" } },
 ]
 

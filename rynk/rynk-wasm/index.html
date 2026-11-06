@@ -333,7 +333,7 @@
           await show("led indicator",   () => client.get_led_indicator());
           await show("connection type", () => client.get_connection_type());
           await show("battery",         () => client.get_battery_status());
-          await show("ble status",      () => client.get_ble_status());
+          await show("ble status",      async () => client.get_ble_status((await client.get_connection_status()).ble.profile));
           // Gated behind the lock: shows "⚠ Rejected: Locked" until unlocked.
           await show("matrix state",    () => client.get_matrix_state());
 
@@ -421,7 +421,7 @@
           await show("wpm",           () => c.get_wpm());
           await show("battery",       () => c.get_battery_status());
           await show("led indicator", () => c.get_led_indicator());
-          await show("ble status",    () => c.get_ble_status());
+          await show("ble status",    async () => c.get_ble_status((await c.get_connection_status()).ble.profile));
           await show("matrix state",  () => c.get_matrix_state());
       }));
 

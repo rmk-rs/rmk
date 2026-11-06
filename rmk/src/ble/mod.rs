@@ -417,6 +417,12 @@ async fn run_ble_keyboard<
     let mut profile_manager: ProfileManager<BOND_SLOTS> = ProfileManager::new();
     // Load the bonded devices from storage
     profile_manager.load_bonded_devices().await;
+    #[cfg(feature = "rynk")]
+    crate::state::init_ble_profile_statuses(core::array::from_fn(|slot| rmk_types::ble::BleStatus {
+        profile: slot as u8,
+        state: BleState::Inactive,
+        bonded: profile_manager.bond_info(slot as u8).is_some(),
+    }));
 
     let mut peripheral = stack.peripheral();
     let runner = stack.runner();
@@ -451,6 +457,9 @@ async fn run_ble_keyboard<
         // When advertising stops; `None` after a timeout until input opens a new
         // window. Retries and connections that never encrypt keep the window.
         let mut adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
+        // Set when the selected profile is disconnected or cleared on request; it
+        // stays silent until a profile action selects or pairs it again.
+        let mut disconnected_by_user = false;
         // Let USB detection run before the first advertisement.
         Timer::after_millis(10).await;
 
@@ -460,7 +469,7 @@ async fn run_ble_keyboard<
                 .then(|| BdAddr::new(crate::ble::profile::profile_address(address, profile_id)));
 
             let advertise_and_connect = async {
-                if host_connections[profile_id as usize].is_some() {
+                if disconnected_by_user || host_connections[profile_id as usize].is_some() {
                     return core::future::pending().await;
                 }
 
@@ -515,6 +524,7 @@ async fn run_ble_keyboard<
                     continue;
                 }
                 Either3::First(Err(e)) => {
+                    set_ble_state(BleState::Inactive);
                     #[cfg(feature = "defmt")]
                     let e = defmt::Debug2Format(&e);
                     error!("Advertise error: {:?}", e);
@@ -522,30 +532,39 @@ async fn run_ble_keyboard<
                     continue;
                 }
                 Either3::Second(action) => {
-                    use crate::ble::profile::BleProfileAction::{ClearBond, ClearSlot, Next, Pair, Previous, Switch};
+                    use crate::ble::profile::BleProfileAction::{ClearBond, Disconnect, Next, Pair, Previous, Switch};
 
                     let last_host = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
                     let slot = match action {
-                        Switch(slot) | Pair(slot) | ClearSlot(slot) => slot,
-                        ClearBond => profile_id,
+                        Switch(slot) | Pair(slot) | ClearBond(slot) | Disconnect(slot) => slot,
                         Next if profile_id < last_host => profile_id + 1,
                         Next => 0,
                         Previous => profile_id.checked_sub(1).unwrap_or(last_host),
                     };
-                    let clear_bond = matches!(action, ClearBond | ClearSlot(_));
-                    let pair = matches!(action, Pair(_)) && profile_manager.bond_info(slot).is_some();
-                    if !clear_bond && !pair && slot == profile_id {
+                    if matches!(action, Disconnect(_) | ClearBond(_)) {
+                        if slot == profile_id {
+                            disconnected_by_user = true;
+                            profile_manager.cancel_pairing(slot);
+                            set_ble_state(BleState::Inactive);
+                        }
+                        disconnect_profile(slot, &mut host_connections, &completed).await;
+                        if matches!(action, ClearBond(_)) {
+                            profile_manager.clear_bond(slot);
+                        }
                         continue;
                     }
+                    let pair = matches!(action, Pair(_)) && profile_manager.bond_info(slot).is_some();
+                    if !pair && slot == profile_id && !disconnected_by_user {
+                        continue;
+                    }
+                    disconnected_by_user = false;
                     report_activity();
                     adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
                     // Close the target first, so pairing never switches to a link about to drop.
-                    if clear_bond || pair {
+                    if pair {
                         disconnect_profile(slot, &mut host_connections, &completed).await;
                     }
-                    if clear_bond {
-                        profile_manager.clear_bond(slot);
-                    } else if slot != profile_id {
+                    if slot != profile_id {
                         let keep_connected = NUM_HOST_LINKS > 1
                             && host_connections[profile_id as usize].as_ref().is_some_and(|conn| {
                                 conn.security_level().is_ok_and(|level| level.encrypted())
@@ -555,6 +574,7 @@ async fn run_ble_keyboard<
                             });
                         if !keep_connected {
                             disconnect_profile(profile_id, &mut host_connections, &completed).await;
+                            set_ble_state(BleState::Inactive);
                         }
                         let state = match &host_connections[slot as usize] {
                             Some(conn) if conn.security_level().is_ok_and(|level| level.encrypted()) => {
@@ -579,12 +599,10 @@ async fn run_ble_keyboard<
                 }
                 Either3::Third(ended) => {
                     host_connections[ended as usize].take();
-                    if ended == profile_id {
-                        if crate::state::current_ble_status().state == BleState::Connected {
-                            adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
-                        }
-                        set_ble_state(BleState::Inactive);
+                    if ended == profile_id && crate::state::current_ble_status().state == BleState::Connected {
+                        adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
                     }
+                    crate::state::update_ble_profile_status(ended, |status| status.state = BleState::Inactive);
                     continue;
                 }
             };
@@ -749,9 +767,7 @@ async fn gatt_events_task(
             }
             GattConnectionEvent::Encrypted { security_level, .. } => {
                 info!("[gatt] encrypted: {:?}", security_level);
-                if profile_id == crate::state::current_profile() {
-                    set_ble_state(BleState::Connected);
-                }
+                crate::state::update_ble_profile_status(profile_id, |status| status.state = BleState::Connected);
             }
             GattConnectionEvent::PhyUpdateFailed { .. } | GattConnectionEvent::ConnectionParamsUpdateFailed { .. } => {
                 warn!("[gatt] link parameter update failed");
@@ -1013,9 +1029,7 @@ async fn disconnect_profile(
     while links[profile_id as usize].is_some() {
         let ended = completed.receive().await;
         links[ended as usize].take();
-        if ended == crate::state::current_profile() {
-            set_ble_state(BleState::Inactive);
-        }
+        crate::state::update_ble_profile_status(ended, |status| status.state = BleState::Inactive);
     }
 }
 
@@ -1442,7 +1456,7 @@ mod tests {
 
     #[test]
     fn cycling_uses_available_host_profiles() {
-        use crate::ble::profile::BleProfileAction::{ClearSlot, Next, Previous};
+        use crate::ble::profile::BleProfileAction::{ClearBond, Next, Previous};
         use crate::channel::BLE_PROFILE_CHANNEL;
         use crate::state::{CONNECTION_STATUS, current_profile};
 
@@ -1452,8 +1466,68 @@ mod tests {
             for (action, expected) in [(Previous, crate::NUM_BLE_PROFILE.saturating_sub(1) as u8), (Next, 0)] {
                 BLE_PROFILE_CHANNEL.send(action).await;
                 // The one-slot queue makes this wait until the preceding action was consumed.
-                BLE_PROFILE_CHANNEL.send(ClearSlot(0)).await;
+                BLE_PROFILE_CHANNEL.send(ClearBond(0)).await;
                 assert_eq!(current_profile(), expected);
+            }
+        });
+    }
+
+    #[test]
+    fn remote_disconnect_and_forget_wait_for_explicit_reselection() {
+        use crate::ble::profile::{BleProfileAction, ProfileInfo, ProfileManager};
+        use crate::channel::BLE_PROFILE_CHANNEL;
+        use crate::state::CONNECTION_STATUS;
+        use crate::storage::{StorageKey, StorageValue, read};
+
+        with_stalled_keyboard(&[ProfileInfo::default()], async {
+            let mut status = CONNECTION_STATUS.receiver().unwrap();
+            status.get_and(|s| s.ble.state == BleState::Advertising).await;
+            for (action, bonded) in [
+                (BleProfileAction::Disconnect(0), true),
+                (BleProfileAction::ClearBond(0), false),
+            ] {
+                BLE_PROFILE_CHANNEL.send(action).await;
+                embassy_time::with_timeout(
+                    Duration::from_millis(10),
+                    status.get_and(|s| s.ble.state == BleState::Inactive),
+                )
+                .await
+                .unwrap();
+                publish_event(KeyboardEvent::key(0, 0, true));
+                publish_event(KeyboardEvent::key(0, 0, false));
+                publish_event(PointingEvent {
+                    device_id: 0,
+                    axes: [Axis::X, Axis::Y, Axis::Z].map(|axis| AxisEvent {
+                        typ: AxisValType::Rel,
+                        axis,
+                        value: 1,
+                    }),
+                });
+                embassy_time::Timer::after_millis(10).await;
+                assert_eq!(
+                    current_ble_status(),
+                    BleStatus {
+                        profile: 0,
+                        state: BleState::Inactive,
+                        bonded
+                    }
+                );
+                let Some(StorageValue::BondInfo(saved)) = read(StorageKey::BondInfo(0)).await.unwrap() else {
+                    panic!("the slot must retain its stored bond or removal record");
+                };
+                assert_eq!(saved.removed, !bonded);
+                if !bonded {
+                    let mut restored = ProfileManager::<{ super::BOND_SLOTS }>::new();
+                    restored.load_bonded_devices().await;
+                    assert!(restored.bond_info(0).is_none());
+                }
+                BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(0)).await;
+                embassy_time::with_timeout(
+                    Duration::from_millis(10),
+                    status.get_and(|s| s.ble.state == BleState::Advertising),
+                )
+                .await
+                .unwrap();
             }
         });
     }
@@ -1494,7 +1568,10 @@ mod tests {
                         ],
                     }),
                     _ if BOND_SLOTS > 1 => BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await,
-                    _ => BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearSlot(0)).await,
+                    _ => {
+                        BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(0)).await;
+                        BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(0)).await;
+                    }
                 }
                 let resumed = status.get_and(|s| s.ble.state == BleState::Advertising).await;
                 assert_eq!(resumed.ble.profile, u8::from(wake == 2 && BOND_SLOTS > 1));
