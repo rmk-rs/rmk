@@ -169,6 +169,43 @@ steps = [
   ] } } },
 ]
 
+[[test]]
+name = "hold_trigger_positions_are_atomically_replaced_and_read_back"
+steps = [
+  { rynk = { cmd = "GetMorseHoldTriggerPositions", reply = { capacity = 16, positions = [] } } },
+  { rynk = { cmd = "SetMorseHoldTriggerPositions", payload = { positions = [
+    { profile = 255, row = 0, col = 0 },
+    { profile = 0, row = 0, col = 2 },
+  ] } } },
+  { rynk = { cmd = "GetMorseHoldTriggerPositions", reply = { capacity = 16, positions = [
+    { profile = 255, row = 0, col = 0 },
+    { profile = 0, row = 0, col = 2 },
+  ] } } },
+  { rynk = { cmd = "SetMorseHoldTriggerPositions", payload = { positions = [
+    { profile = 0, row = 0, col = 1 },
+  ] } } },
+  { rynk = { cmd = "GetMorseHoldTriggerPositions", reply = { capacity = 16, positions = [
+    { profile = 0, row = 0, col = 1 },
+  ] } } },
+]
+
+[[test]]
+name = "invalid_hold_trigger_positions_leave_the_table_unchanged"
+steps = [
+  { rynk = { cmd = "SetMorseHoldTriggerPositions", payload = { positions = [
+    { profile = 255, row = 0, col = 2 },
+  ] } } },
+  { rynk = { cmd = "SetMorseHoldTriggerPositions", payload = { positions = [
+    { profile = 255, row = 1, col = 0 },
+  ] }, error = "Invalid" } },
+  { rynk = { cmd = "SetMorseHoldTriggerPositions", payload = { positions = [
+    { profile = 16, row = 0, col = 0 },
+  ] }, error = "Invalid" } },
+  { rynk = { cmd = "GetMorseHoldTriggerPositions", reply = { capacity = 16, positions = [
+    { profile = 255, row = 0, col = 2 },
+  ] } } },
+]
+
 # A fork rewrites the trigger's output when the match state holds; with no
 # modifier down, the negative branch is what reaches the host.
 [[test]]

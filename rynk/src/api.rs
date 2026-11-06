@@ -24,9 +24,9 @@ use rmk_types::morse::Morse;
 use rmk_types::protocol::rynk::{
     BehaviorConfig, Cmd, DeviceCapabilities, DeviceInfo, GetComboBulkRequest, GetComboBulkResponse, GetEncoderRequest,
     GetKeymapBulkRequest, GetKeymapBulkResponse, GetMorseBulkRequest, GetMorseBulkResponse, KeyPosition, LockStatus,
-    MatrixState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest, SetComboRequest, SetEncoderRequest,
-    SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest, SetMorseBulkRequest, SetMorseRequest,
-    StorageResetMode, command,
+    MatrixState, MorseHoldTriggerPositionState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest,
+    SetComboRequest, SetEncoderRequest, SetForkRequest, SetKeyRequest, SetKeymapBulkRequest, SetMacroRequest,
+    SetMorseBulkRequest, SetMorseHoldTriggerPositionsRequest, SetMorseRequest, StorageResetMode, command,
 };
 #[cfg(feature = "alloc")]
 use rmk_types::protocol::rynk::{RYNK_HEADER_SIZE, RynkError, max_wire_size};
@@ -292,6 +292,19 @@ impl Client {
     pub async fn set_morse_bulk(&self, request: SetMorseBulkRequest) -> Result<(), RynkHostError> {
         self.require_bulk_transfer(Cmd::SetMorseBulk)?;
         self.request::<command::SetMorseBulk>(&request).await
+    }
+
+    /// Read the complete profile-keyed positional hold-trigger table.
+    pub async fn get_morse_hold_trigger_positions(&self) -> Result<MorseHoldTriggerPositionState, RynkHostError> {
+        self.request::<command::GetMorseHoldTriggerPositions>(&()).await
+    }
+
+    /// Atomically replace the complete profile-keyed positional hold-trigger table.
+    pub async fn set_morse_hold_trigger_positions(
+        &self,
+        request: SetMorseHoldTriggerPositionsRequest,
+    ) -> Result<(), RynkHostError> {
+        self.request::<command::SetMorseHoldTriggerPositions>(&request).await
     }
 
     /// Read macro `index` whole: its ops in order, empty for an unset slot. An

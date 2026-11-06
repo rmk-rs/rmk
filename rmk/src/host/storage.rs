@@ -79,6 +79,9 @@ impl<F: AsyncNorFlash> Storage<F> {
                         *slot = morse;
                     }
                 }
+                (StorageKey::MorseHoldTriggerPositions, StorageValue::MorseHoldTriggerPositions(positions)) => {
+                    behavior.morse.hold_trigger_positions = positions;
+                }
                 _ => continue,
             }
         }

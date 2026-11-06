@@ -1,0 +1,97 @@
+# Positional hold-tap: `hold_trigger_key_positions` lists the key positions allowed to trigger
+# a profile's hold, and any other key settles the tap-hold as a tap. Same as ZMK's
+# `hold-trigger-key-positions`, generalizing `unilateral_tap` from a hand split to an
+# arbitrary set.
+#
+# The fixture uses the shared split board: A@(1,0), MT(B, LShift)@(1,1) and TD(0)@(1,2) on the
+# left, MT(C, LGui)@(1,7) and LT(1, D)@(1,8) on the right, plus the profile-carrying
+# MT(B, LShift, p1)@(3,7). Profile p1 allows only the named left-hand region,
+# so a right-hand key never triggers its hold.
+
+keyboard = "boards/split.toml"
+
+[layout.regions]
+left_home = [[1, 0], [1, 1]]
+
+[behavior.morse.profiles.p1]
+hold_trigger_regions = ["left_home"]
+hold_on_other_press = true
+
+[[test]]
+name = "listed_position_triggers_the_hold"
+steps = [
+  { press = [3, 7] },  # Press MT(B, LShift, p1)
+  { tap = { pos = [1, 0], duration = 10 } },  # left_home is allowed -> hold
+  { release = [3, 7] },
+]
+expect = [["LShift"], ["LShift", "A"], ["LShift"], []]
+
+[[test]]
+name = "unlisted_position_settles_as_tap"
+steps = [
+  { press = [3, 7] },  # Press MT(B, LShift, p1)
+  { tap = { pos = [1, 10], duration = 10 } },  # Y is outside left_home -> tap
+  { release = [3, 7] },
+]
+expect = [["B"], ["B", "Y"], ["B"], []]
+
+# Modifier tagging does not override the positional safety rule. The second right-hand key is
+# itself MT(C, LGui), but it is still excluded from left_home and therefore cannot turn the
+# pending MT(B, LShift, p1) into Shift.
+[[test]]
+name = "unlisted_modifier_tap_hold_still_settles_as_tap"
+steps = [
+  { press = [3, 7] },
+  { tap = { pos = [1, 7], duration = 10 } },
+  { release = [3, 7] },
+]
+expect = [["B"], ["B", "C"], ["B"], []]
+
+# Without an interrupting key the timeout still reaches the hold: the position list restricts
+# which keys may trigger it early, not whether the hold exists at all.
+[[test]]
+name = "hold_alone_is_unrestricted"
+steps = [
+  { tap = { pos = [3, 7], duration = 300 } },
+]
+expect = [["LShift"], []]
+
+# A profile with no list keeps its ordinary behavior.
+[[test]]
+name = "profile_without_positions_is_unrestricted"
+steps = [
+  { press = [1, 1] },  # Press MT(B, LShift), no profile -> no position list
+  { tap = { pos = [1, 0], duration = 10 } },
+  { release = [1, 1] },
+]
+expect = [["A"], [], ["B"], []]
+
+# With `hold_trigger_on_release`, an excluded key produces the tap when it is *released*
+# rather than when it is pressed. This case is the invariance control: a next key that is
+# only tapped settles the tap-hold as a tap either way, so the trace matches
+# `unlisted_position_settles_as_tap`. It is what the deferral must not break.
+[[test]]
+name = "on_release_tapped_key_settles_as_tap_unchanged"
+behavior.morse = { profiles = { p1 = { hold_trigger_on_release = true } } }
+steps = [
+  { press = [3, 7] },  # Press MT(B, LShift, p1)
+  { press = [1, 10] },  # Press Y -- excluded, so the tap waits for its release
+  { release = [1, 10] },
+  { release = [3, 7] },
+]
+expect = [["B"], ["B", "Y"], ["B"], []]
+
+# The behavior the deferral exists for: a next key that is *held* leaves the hold reachable,
+# so the tap-hold still resolves as a modifier. Without `hold_trigger_on_release` the press
+# of the excluded key would have settled it as a tap.
+[[test]]
+name = "on_release_excluded_key_held_leaves_the_hold_reachable"
+behavior.morse = { profiles = { p1 = { hold_trigger_on_release = true } } }
+steps = [
+  { press = [3, 7] },  # Press MT(B, LShift, p1)
+  { press = [1, 10] },  # Press Y and keep holding it
+  { delay = 300 },
+  { release = [3, 7] },
+  { release = [1, 10] },
+]
+expect = [["LShift"], ["LShift", "Y"], ["Y"], []]
