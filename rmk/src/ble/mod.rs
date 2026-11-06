@@ -414,10 +414,9 @@ async fn run_ble_keyboard<
     if crate::ble::passkey::passkey_entry_enabled() {
         stack.set_io_capabilities(IoCapabilities::KeyboardOnly);
     }
-    let mut profile_manager: ProfileManager<_, _, BOND_SLOTS> = ProfileManager::new(stack);
+    let mut profile_manager: ProfileManager<BOND_SLOTS> = ProfileManager::new();
     // Load the bonded devices from storage
     profile_manager.load_bonded_devices().await;
-    profile_manager.update_stack_bonds();
 
     let mut peripheral = stack.peripheral();
     let runner = stack.runner();
@@ -471,13 +470,16 @@ async fn run_ble_keyboard<
                     advertising_paused = false;
                 }
 
+                profile_manager.update_stack_bonds(stack);
                 let adv = match profile_manager.bond_info(profile_id) {
                     #[cfg(feature = "dongle")]
                     Some(bond) if profile_id == DONGLE_PROFILE => Adv::Directed(bond.info.identity.addr),
                     #[cfg(feature = "dongle")]
                     None if profile_id == DONGLE_PROFILE => Adv::DongleSeeking,
-                    Some(_) => Adv::HostReconnect,
-                    None => Adv::Host { name: product_name },
+                    bond => Adv::Host {
+                        name: product_name,
+                        bonded: bond.is_some(),
+                    },
                 };
                 set_ble_state(BleState::Advertising);
                 advertise(
@@ -539,7 +541,12 @@ async fn run_ble_keyboard<
 
                     if slot != profile_id {
                         let active = crate::state::current_ble_status();
-                        if NUM_HOST_LINKS == 1 || !active.bonded || active.state != BleState::Connected {
+                        let bonded = profile_manager.bond_info(profile_id).is_some_and(|bond| {
+                            host_connections[profile_id as usize]
+                                .as_ref()
+                                .is_some_and(|conn| bond.info.identity.match_identity(&conn.peer_identity()))
+                        });
+                        if NUM_HOST_LINKS == 1 || !bonded || active.state != BleState::Connected {
                             disconnect_profile(profile_id, &mut host_connections, &completed).await;
                         }
                         let state = match &host_connections[slot as usize] {
@@ -549,6 +556,7 @@ async fn run_ble_keyboard<
                             _ => BleState::Inactive,
                         };
                         profile_manager.switch_profile(slot, state);
+                        profile_manager.update_stack_bonds(stack);
                         for (i, conn) in host_connections.iter().enumerate() {
                             if let Some(conn) = conn
                                 && let Err(e) = conn.set_bondable(i == slot as usize)
@@ -575,35 +583,41 @@ async fn run_ble_keyboard<
 
             let conn = gatt_conn.raw();
             let peer = conn.peer_identity();
-            match profile_manager.bond_info(profile_id) {
-                // A replaced advertisement can still deliver a late connection.
-                #[cfg(feature = "ext_adv")]
-                _ if conn.local_address() != local_address => warn!("[ble] late connection belongs to another profile"),
-                Some(bond) if !bond.info.identity.match_identity(&peer) => {
-                    warn!("[ble] peer does not match its profile")
-                }
-                #[cfg(feature = "dongle")]
-                _ if profile_id != DONGLE_PROFILE && profile_manager.is_bonded_dongle(&peer) => {
-                    warn!("[ble] dongle connected on a host profile");
-                }
-                bond_info => {
-                    if let Err(e) = conn.set_bondable(true) {
-                        error!("Set bondable error: {:?}", e);
-                        continue;
+            let bond_info = profile_manager.bond_info(profile_id);
+            // A replaced advertisement can still deliver a late connection.
+            #[cfg(feature = "ext_adv")]
+            if conn.local_address() != local_address {
+                warn!("[ble] late connection belongs to another profile");
+                disconnect(&gatt_conn).await;
+                continue;
+            }
+            #[cfg(feature = "dongle")]
+            if (profile_id == DONGLE_PROFILE
+                && bond_info
+                    .as_ref()
+                    .is_some_and(|bond| !bond.info.identity.match_identity(&peer)))
+                || (profile_id != DONGLE_PROFILE && profile_manager.is_bonded_dongle(&peer))
+            {
+                warn!("[ble] peer does not match its dongle profile");
+                disconnect(&gatt_conn).await;
+                continue;
+            }
+            if let Err(e) = conn.set_bondable(true) {
+                error!("Set bondable error: {:?}", e);
+                continue;
+            }
+            if let Some(bond) = bond_info {
+                if bond.info.identity.match_identity(&peer) {
+                    match ClientAttTableView::try_from_raw(&bond.cccd_table) {
+                        Ok(view) => server.set_client_att_table(conn, &view),
+                        Err(e) => warn!("Invalid stored CCCD table: {:?}", e),
                     }
-                    if let Some(bond) = bond_info {
-                        info!("Loading CCCD table: {:?}", bond.cccd_table);
-                        match ClientAttTableView::try_from_raw(&bond.cccd_table) {
-                            Ok(view) => server.set_client_att_table(conn, &view),
-                            Err(e) => warn!("Invalid stored CCCD table: {:?}", e),
-                        }
-                    }
-                    host_connections[profile_id as usize] = Some(conn.clone());
-                    accepted_connections.send((gatt_conn, profile_id)).await;
-                    continue;
+                } else if let Err(e) = stack.remove_bond_information(bond.info.identity) {
+                    warn!("Remove previous peer from BLE stack: {:?}", e);
                 }
             }
-            disconnect(&gatt_conn).await;
+            host_connections[profile_id as usize] = Some(conn.clone());
+            accepted_connections.send((gatt_conn, profile_id)).await;
         }
     };
 
@@ -660,11 +674,11 @@ pub(crate) async fn ble_task<C: Controller, P: PacketPool, E: EventHandler>(mut 
 ///
 /// This function will handle the GATT events and process them.
 /// This is how we interact with read and write requests.
-async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
+async fn gatt_events_task(
     server: &Server<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     profile_id: u8,
-    profile_manager: &ProfileManager<'_, '_, C, DefaultPacketPool, BOND_SLOTS>,
+    profile_manager: &ProfileManager<BOND_SLOTS>,
     #[cfg(feature = "host")] host: Option<&HostConnection<'_>>,
 ) {
     let level = &server.battery_service.level;
@@ -723,9 +737,7 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
                 #[cfg(feature = "passkey_entry")]
                 passkey_state.clear();
                 error!("[gatt] pairing error: {:?}", err);
-                if profile_manager.repairing.get() == Some(profile_id) {
-                    conn.raw().disconnect();
-                }
+                conn.raw().disconnect();
             }
             GattConnectionEvent::Encrypted { security_level, .. } => {
                 info!("[gatt] encrypted: {:?}", security_level);
@@ -876,7 +888,7 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
                     if let Some(table) = server.get_client_att_table(conn.raw())
                         && let Ok(bytes) = heapless::Vec::from_slice(table.raw())
                     {
-                        profile_manager.update_profile_cccd_table(profile_id, bytes);
+                        profile_manager.update_profile_cccd_table(profile_id, &conn.raw().peer_identity(), bytes);
                     }
                 }
                 match result {
@@ -1057,7 +1069,7 @@ async fn serve_keyboard_connection<
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     stack: &Stack<'_, C, DefaultPacketPool>,
     profile_id: u8,
-    profile_manager: &ProfileManager<'_, '_, C, DefaultPacketPool, BOND_SLOTS>,
+    profile_manager: &ProfileManager<BOND_SLOTS>,
     config: &BleBatteryConfig,
     #[cfg(feature = "host")] host_service: Option<&crate::host::HostService<'_>>,
 ) {
