@@ -1,7 +1,7 @@
 //! Manage BLE profiles and bonding information
 
-#[cfg(feature = "_ble")]
-use bt_hci::{cmd::le::LeSetPhy, controller::ControllerCmdAsync};
+use core::cell::Cell;
+
 use embassy_futures::select::{Either, select, select_array};
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::Watch;
@@ -30,6 +30,23 @@ pub(crate) fn profile_address(base: [u8; 6], profile: u8) -> [u8; 6] {
     let mut addr = base;
     addr[3] = addr[3].wrapping_add(profile);
     addr
+}
+
+/// Make `bond` the stack's only key: the stack holds just the active profile's bond.
+pub(crate) fn load_stack_bond<C: Controller, P: PacketPool>(stack: &Stack<'_, C, P>, bond: Option<BondInformation>) {
+    // The stack can also hold keys from an unfinished pairing.
+    while let Some(identity) = stack.with_bond_information(|bonds| bonds.first().map(|b| b.identity)) {
+        if let Err(e) = stack.remove_bond_information(identity) {
+            debug!("Remove bond info error: {:?}", e);
+            break;
+        }
+    }
+    if let Some(bond) = bond {
+        debug!("Loading bond for peer {:?}", bond.identity);
+        if let Err(e) = stack.add_bond_information(bond) {
+            debug!("Add bond info error: {:?}", e);
+        }
+    }
 }
 
 /// BLE profile info
@@ -89,6 +106,7 @@ impl Default for ProfileInfo {
 #[derive(Debug)]
 pub(crate) enum BleProfileAction {
     Switch(u8),
+    Pair(u8),
     Previous,
     Next,
     ClearBond,
@@ -98,44 +116,23 @@ pub(crate) enum BleProfileAction {
     ClearSlot(u8),
 }
 
-/// Manage BLE profiles and bonding information
-///
-/// ProfileManager is responsible for:
-/// 1. Managing multiple BLE profiles, allowing users to switch between multiple devices
-/// 2. Storing and loading bonding information for each profile
-/// 3. Updating the bonding information of the active profile to the BLE stack
-/// 4. Handling profile switch, clear, and save operations
+/// Stored bonds and explicit re-pairing state for host or dongle profiles.
 ///
 /// `SLOTS` sizes the cache to the role: [`BOND_SLOTS`] for a keyboard, a single
 /// slot for a dongle.
-#[cfg(feature = "_ble")]
-pub(crate) struct ProfileManager<
-    'b,
-    's,
-    C: Controller + ControllerCmdAsync<LeSetPhy>,
-    P: PacketPool,
-    const SLOTS: usize,
-> where
-    's: 'b,
-{
+pub(crate) struct ProfileManager<const SLOTS: usize> {
     profiles: [Watch<crate::RawMutex, ProfileInfo, 1>; SLOTS],
     updated_active_profile: Signal<crate::RawMutex, ()>,
-    /// BLE stack
-    stack: &'b Stack<'s, C, P>,
+    repairing: Cell<Option<u8>>,
 }
 
-#[cfg(feature = "_ble")]
-impl<'b, 's, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool, const SLOTS: usize>
-    ProfileManager<'b, 's, C, P, SLOTS>
-where
-    's: 'b,
-{
+impl<const SLOTS: usize> ProfileManager<SLOTS> {
     /// Create a new profile manager
-    pub(crate) fn new(stack: &'b Stack<'s, C, P>) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             profiles: [const { Watch::new() }; SLOTS],
             updated_active_profile: Signal::new(),
-            stack,
+            repairing: Cell::new(None),
         }
     }
 
@@ -164,9 +161,24 @@ where
         });
     }
 
-    /// Read the live bond stored in `profile`.
+    /// The bond `profile` uses, or `None` while it re-pairs.
     pub(crate) fn bond_info(&self, profile: u8) -> Option<ProfileInfo> {
+        if self.repairing.get() == Some(profile) {
+            return None;
+        }
         self.profiles.get(profile as usize)?.try_get_and(|info| !info.removed)
+    }
+
+    pub(super) fn start_pairing(&self, slot: u8) {
+        self.repairing.set(Some(slot));
+        set_ble_bonded(false);
+    }
+
+    pub(super) fn cancel_pairing(&self, slot: u8) {
+        if self.repairing.get() == Some(slot) {
+            self.repairing.set(None);
+            set_ble_bonded(self.bond_info(current_profile()).is_some());
+        }
     }
 
     /// Check if the `identity` is the bonded dongle's identity.
@@ -179,57 +191,31 @@ where
             .is_some_and(|info| info.info.identity.match_identity(identity))
     }
 
-    /// Update bonding information in the stack according to the current active profile
-    ///
-    /// Also republishes `BleStatus::bonded`. Every change to `profiles` that can
-    /// alter bond presence is followed by this call, so the flag is derived here once
-    /// instead of at each mutation site.
-    pub(crate) fn update_stack_bonds(&self) {
-        // Drain one at a time rather than collecting: the stack holds bonds this
-        // manager has no slot for — a fresh pairing lands there before we prune —
-        // and a `heapless::Vec` collect panics on the overflow.
-        while let Some(identity) = self
-            .stack
-            .with_bond_information(|bonds| bonds.first().map(|b| b.identity))
-        {
-            if let Err(e) = self.stack.remove_bond_information(identity) {
-                debug!("Remove bond info error: {:?}", e);
-                break; // a bond that won't come off would spin here forever
-            }
-        }
-
-        let active = self.bond_info(current_profile());
-        set_ble_bonded(active.is_some());
-
-        if let Some(info) = active {
-            debug!("Add bond info of profile {}: {:?}", info.slot_num, info);
-            if let Err(e) = self.stack.add_bond_information(info.info) {
-                debug!("Add bond info error: {:?}", e);
-            }
-        }
-    }
-
     /// Set a slot's bond and initial CCCD state.
     pub(crate) fn set_bond(&self, info: ProfileInfo) {
         let Some(state) = self.profiles.get(info.slot_num as usize) else {
             return;
         };
-        let old = state.try_get();
-        if old.as_ref() == Some(&info) {
+        if self.repairing.get() == Some(info.slot_num) {
+            self.repairing.set(None);
+        } else if state.try_get().as_ref() == Some(&info) {
             return;
         }
-        let bond_changed = old.as_ref().is_none_or(|old| old.removed || old.info != info.info);
         state.sender().send(info);
-        if bond_changed {
-            self.update_stack_bonds();
-        }
+        set_ble_bonded(self.bond_info(current_profile()).is_some());
     }
 
-    pub(crate) fn update_profile_cccd_table(&self, slot: u8, table: heapless::Vec<u8, CCCD_TABLE_SIZE>) {
+    pub(crate) fn update_profile_cccd_table(
+        &self,
+        slot: u8,
+        peer: &Identity,
+        table: heapless::Vec<u8, CCCD_TABLE_SIZE>,
+    ) {
         if let Some(state) = self.profiles.get(slot as usize) {
             state.sender().send_if_modified(|info| {
                 if let Some(info) = info
-                    && !info.removed
+                    && !(info.removed || self.repairing.get() == Some(slot))
+                    && info.info.identity.match_identity(peer)
                     && info.cccd_table != table
                 {
                     info.cccd_table = table.clone();
@@ -264,24 +250,27 @@ where
 
     /// Clear bonding information of the specified slot.
     pub(crate) fn clear_bond(&self, slot: u8) {
+        if self.repairing.get() == Some(slot) {
+            self.repairing.set(None);
+        }
         if let Some(state) = self.profiles.get(slot as usize) {
             state.sender().send(ProfileInfo {
                 slot_num: slot,
                 removed: true,
                 ..Default::default()
             });
-            self.update_stack_bonds();
+            set_ble_bonded(self.bond_info(current_profile()).is_some());
         }
     }
 
     /// Apply a selected profile outside the cancellable action wait.
     pub(crate) fn switch_profile(&self, profile: u8, state: BleState) {
+        self.repairing.set(None);
         set_ble_status(BleStatus {
             profile,
             state,
             bonded: self.bond_info(profile).is_some(),
         });
-        self.update_stack_bonds();
         crate::channel::BLE_REPORT_CHANNEL.clear();
         self.updated_active_profile.signal(());
         info!("Switched to BLE profile: {}", profile);
@@ -293,7 +282,9 @@ mod tests {
     use bt_hci::controller::ExternalController;
     use bt_hci::transport::{PacketToController, PacketToHost, Transport};
 
-    use super::{DefaultPacketPool, HostResources, LongTermKey, ProfileInfo, ProfileManager, profile_address};
+    use super::{
+        DefaultPacketPool, HostResources, LongTermKey, ProfileInfo, ProfileManager, load_stack_bond, profile_address,
+    };
     use crate::test_support::test_block_on;
 
     #[test]
@@ -328,34 +319,94 @@ mod tests {
         }
     }
 
-    type TestManager<'b, 's, const SLOTS: usize> =
-        ProfileManager<'b, 's, ExternalController<TestTransport, 1>, DefaultPacketPool, SLOTS>;
+    #[test]
+    fn bond_and_cccd_updates_target_the_requested_profile() {
+        let manager = ProfileManager::<2>::new();
+        let first = ProfileInfo::default();
+        let mut second = ProfileInfo {
+            slot_num: 1,
+            ..Default::default()
+        };
+        second.info.ltk = LongTermKey(1);
+        manager.set_bond(first.clone());
+        manager.set_bond(second.clone());
 
-    fn with_manager<const SLOTS: usize>(test: impl FnOnce(&mut TestManager<'_, '_, SLOTS>)) {
-        crate::ble::rng::seed([7; 32]);
-        let mut resources = HostResources::<DefaultPacketPool, 1, 1>::new();
-        let stack = trouble_host::new(ExternalController::<_, 1>::new(TestTransport), &mut resources).build();
-        let mut manager = ProfileManager::new(&stack);
-        test(&mut manager);
+        second.cccd_table = heapless::Vec::from_slice(&[1, 2]).unwrap();
+        manager.update_profile_cccd_table(1, &second.info.identity, second.cccd_table.clone());
+        assert_eq!(manager.bond_info(0), Some(first));
+        assert_eq!(manager.bond_info(1), Some(second));
     }
 
     #[test]
-    fn bond_and_cccd_updates_target_the_requested_profile() {
-        with_manager::<2>(|manager| {
-            let first = ProfileInfo::default();
-            let mut second = ProfileInfo {
-                slot_num: 1,
-                ..Default::default()
-            };
-            second.info.ltk = LongTermKey(1);
-            manager.set_bond(first.clone());
-            manager.set_bond(second.clone());
+    fn notification_settings_belong_to_the_bonded_peer() {
+        let manager = ProfileManager::<1>::new();
+        let old = ProfileInfo {
+            cccd_table: heapless::Vec::from_slice(&[1, 2]).unwrap(),
+            ..Default::default()
+        };
+        let mut replacement = old.clone();
+        replacement.info.identity.addr = trouble_host::prelude::Address::random([1, 2, 3, 4, 5, 0xC6]);
+        replacement.info.ltk = LongTermKey(42);
+        replacement.cccd_table = heapless::Vec::from_slice(&[3, 4]).unwrap();
+        manager.set_bond(old.clone());
 
-            second.cccd_table = heapless::Vec::from_slice(&[1, 2]).unwrap();
-            manager.update_profile_cccd_table(1, second.cccd_table.clone());
-            assert_eq!(manager.bond_info(0), Some(first));
-            assert_eq!(manager.bond_info(1), Some(second));
+        manager.update_profile_cccd_table(0, &replacement.info.identity, replacement.cccd_table.clone());
+        assert_eq!(manager.bond_info(0), Some(old.clone()));
+
+        manager.set_bond(replacement.clone());
+        manager.update_profile_cccd_table(0, &old.info.identity, old.cccd_table);
+        assert_eq!(manager.bond_info(0), Some(replacement));
+    }
+
+    #[test]
+    fn background_profile_changes_do_not_replace_active_pairing_keys() {
+        let manager = ProfileManager::<2>::new();
+        crate::ble::rng::seed([7; 32]);
+        let mut resources = HostResources::<DefaultPacketPool, 1, 1>::new();
+        let stack = trouble_host::new(ExternalController::<_, 1>::new(TestTransport), &mut resources).build();
+        let old = ProfileInfo::default();
+        let mut replacement = old.info.clone();
+        replacement.identity.addr = trouble_host::prelude::Address::random([1, 2, 3, 4, 5, 0xC6]);
+        replacement.ltk = LongTermKey(42);
+        manager.set_bond(old.clone());
+        stack.add_bond_information(replacement.clone()).unwrap();
+
+        manager.set_bond(ProfileInfo {
+            slot_num: 1,
+            ..Default::default()
         });
+        manager.clear_bond(1);
+        stack.with_bond_information(|bonds| assert_eq!(bonds, &[replacement]));
+        assert_eq!(manager.bond_info(0), Some(old.clone()));
+
+        load_stack_bond(&stack, Some(old.info.clone()));
+        stack.with_bond_information(|bonds| assert_eq!(bonds, &[old.info]));
+    }
+
+    #[test]
+    fn repairing_retains_old_bond_until_replacement() {
+        let manager = ProfileManager::<2>::new();
+        let old = ProfileInfo::default();
+        manager.set_bond(old.clone());
+        manager.start_pairing(0);
+        manager.update_profile_cccd_table(0, &old.info.identity, heapless::Vec::from_slice(&[1]).unwrap());
+        manager.cancel_pairing(1);
+        assert!(manager.bond_info(0).is_none());
+        manager.cancel_pairing(0);
+        assert_eq!(manager.bond_info(0), Some(old.clone()));
+
+        manager.start_pairing(0);
+        let mut replacement = old;
+        replacement.info.ltk = LongTermKey(42);
+        manager.set_bond(replacement.clone());
+        assert_eq!(manager.repairing.get(), None);
+        manager.cancel_pairing(0);
+        assert_eq!(manager.bond_info(0), Some(replacement));
+
+        manager.start_pairing(0);
+        manager.clear_bond(0);
+        assert_eq!(manager.repairing.get(), None);
+        assert!(manager.bond_info(0).is_none());
     }
 
     #[test]
@@ -364,33 +415,38 @@ mod tests {
 
         use crate::state::{current_ble_status, current_profile};
 
-        with_manager::<2>(|manager| {
-            for slot in 0..2 {
-                let mut info = ProfileInfo {
-                    slot_num: slot,
-                    ..Default::default()
-                };
-                info.info.ltk = LongTermKey(slot.into());
-                manager.set_bond(info);
+        let manager = ProfileManager::<2>::new();
+        crate::ble::rng::seed([7; 32]);
+        let mut resources = HostResources::<DefaultPacketPool, 1, 1>::new();
+        let stack = trouble_host::new(ExternalController::<_, 1>::new(TestTransport), &mut resources).build();
+        for slot in 0..2 {
+            let mut info = ProfileInfo {
+                slot_num: slot,
+                ..Default::default()
+            };
+            info.info.ltk = LongTermKey(slot.into());
+            manager.set_bond(info);
+        }
+        manager.start_pairing(0);
+        test_block_on(async {
+            for selected in [1, 0, 1] {
+                manager.switch_profile(selected, BleState::Inactive);
+                load_stack_bond(&stack, manager.bond_info(selected).map(|bond| bond.info));
+                assert_eq!(current_profile(), selected);
+                assert!(current_ble_status().bonded);
+                stack.with_bond_information(|bonds| {
+                    assert_eq!(bonds.len(), 1);
+                    assert_eq!(bonds[0].ltk, LongTermKey(selected.into()));
+                });
             }
-            test_block_on(async {
-                for selected in [1, 0, 1] {
-                    manager.switch_profile(selected, BleState::Inactive);
-                    assert_eq!(current_profile(), selected);
-                    assert!(current_ble_status().bonded);
-                    manager.stack.with_bond_information(|bonds| {
-                        assert_eq!(bonds.len(), 1);
-                        assert_eq!(bonds[0].ltk, LongTermKey(selected.into()));
-                    });
-                }
-                manager.clear_bond(1);
-            });
-            assert_eq!(current_profile(), 1);
-            assert!(!current_ble_status().bonded);
-            assert!(manager.bond_info(1).is_none());
-            assert!(manager.bond_info(0).is_some());
-            manager.stack.with_bond_information(|bonds| assert!(bonds.is_empty()));
+            manager.clear_bond(1);
+            load_stack_bond(&stack, None);
         });
+        assert_eq!(current_profile(), 1);
+        assert!(!current_ble_status().bonded);
+        assert!(manager.bond_info(1).is_none());
+        assert!(manager.bond_info(0).is_some());
+        stack.with_bond_information(|bonds| assert!(bonds.is_empty()));
     }
 
     #[test]
@@ -402,58 +458,56 @@ mod tests {
         use crate::storage::{Storage, StorageKey, StorageValue, async_flash_wrapper, read};
         use crate::test_support::{InMemoryFlash, clear_flash_channel, set_connection_status};
 
-        with_manager::<2>(|manager| {
-            clear_flash_channel();
-            let mut host = ProfileInfo {
-                slot_num: 1,
-                ..Default::default()
-            };
-            host.info.ltk = LongTermKey(42);
-            host.cccd_table = heapless::Vec::from_slice(&[1, 2]).unwrap();
-            manager.set_bond(ProfileInfo::default());
-            manager.set_bond(host.clone());
-            manager.clear_bond(0);
-            test_block_on(async {
-                manager.switch_profile(1, rmk_types::ble::BleState::Inactive);
-                let flash = InMemoryFlash::<16_384, 4_096, 1>::new();
-                let reboot = flash.clone();
-                let mut storage = Box::pin(Storage::new(async_flash_wrapper(flash), &StorageConfig::default())).await;
-                let saved = async {
-                    for slot in 0..2 {
-                        loop {
-                            if let Some(StorageValue::BondInfo(info)) = read(StorageKey::BondInfo(slot)).await.unwrap()
-                            {
-                                if slot == 0 {
-                                    assert!(info.removed);
-                                } else {
-                                    assert_eq!(info, host);
-                                }
-                                break;
-                            }
-                        }
-                    }
+        let manager = ProfileManager::<2>::new();
+        clear_flash_channel();
+        let mut host = ProfileInfo {
+            slot_num: 1,
+            ..Default::default()
+        };
+        host.info.ltk = LongTermKey(42);
+        host.cccd_table = heapless::Vec::from_slice(&[1, 2]).unwrap();
+        manager.set_bond(ProfileInfo::default());
+        manager.set_bond(host.clone());
+        manager.clear_bond(0);
+        test_block_on(async {
+            manager.switch_profile(1, rmk_types::ble::BleState::Inactive);
+            let flash = InMemoryFlash::<16_384, 4_096, 1>::new();
+            let reboot = flash.clone();
+            let mut storage = Box::pin(Storage::new(async_flash_wrapper(flash), &StorageConfig::default())).await;
+            let saved = async {
+                for slot in 0..2 {
                     loop {
-                        if let Some(StorageValue::ActiveBleProfile(active)) =
-                            read(StorageKey::ActiveBleProfile).await.unwrap()
-                        {
-                            assert_eq!(active, 1);
+                        if let Some(StorageValue::BondInfo(info)) = read(StorageKey::BondInfo(slot)).await.unwrap() {
+                            if slot == 0 {
+                                assert!(info.removed);
+                            } else {
+                                assert_eq!(info, host);
+                            }
                             break;
                         }
                     }
-                };
-                select3(manager.run(), storage.run(), saved).await;
-                drop(storage);
+                }
+                loop {
+                    if let Some(StorageValue::ActiveBleProfile(active)) =
+                        read(StorageKey::ActiveBleProfile).await.unwrap()
+                    {
+                        assert_eq!(active, 1);
+                        break;
+                    }
+                }
+            };
+            select3(manager.run(), storage.run(), saved).await;
+            drop(storage);
 
-                clear_flash_channel();
-                set_connection_status(Default::default());
-                let mut restored: TestManager<'_, '_, 2> = ProfileManager::new(manager.stack);
-                let mut storage = Box::pin(Storage::new(async_flash_wrapper(reboot), &StorageConfig::default())).await;
-                select(restored.load_bonded_devices(), storage.run()).await;
-                assert!(restored.bond_info(0).is_none());
-                assert_eq!(restored.bond_info(1), Some(host));
-                assert_eq!(crate::state::current_profile(), 1);
-                assert!(crate::state::current_ble_status().bonded);
-            });
+            clear_flash_channel();
+            set_connection_status(Default::default());
+            let mut restored = ProfileManager::<2>::new();
+            let mut storage = Box::pin(Storage::new(async_flash_wrapper(reboot), &StorageConfig::default())).await;
+            select(restored.load_bonded_devices(), storage.run()).await;
+            assert!(restored.bond_info(0).is_none());
+            assert_eq!(restored.bond_info(1), Some(host));
+            assert_eq!(crate::state::current_profile(), 1);
+            assert!(crate::state::current_ble_status().bonded);
         });
     }
 }

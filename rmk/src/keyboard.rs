@@ -1701,11 +1701,10 @@ impl<'a> Keyboard<'a> {
             return;
         };
 
-        // Tapping a bond slot switches to it; holding it forgets the bond, switches, then re-pairs.
+        // Keep the old bond until a replacement pairing succeeds.
         if id < NUM_BLE_PROFILE as u8 {
-            info!("Profile key held: clearing bond on profile {}", id);
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearSlot(id)).await;
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
+            info!("Profile key held: re-pairing profile {}", id);
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Pair(id)).await;
         }
         #[cfg(feature = "split")]
         if id == NUM_BLE_PROFILE as u8 + 4 {
@@ -1715,11 +1714,8 @@ impl<'a> Keyboard<'a> {
         #[cfg(feature = "dongle")]
         if id == NUM_BLE_PROFILE as u8 + 5 {
             use crate::ble::profile::DONGLE_PROFILE;
-            info!("Dongle key held: clearing dongle bond, seeking a dongle");
-            BLE_PROFILE_CHANNEL
-                .send(BleProfileAction::ClearSlot(DONGLE_PROFILE))
-                .await;
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(DONGLE_PROFILE)).await;
+            info!("Dongle key held: re-pairing dongle profile");
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Pair(DONGLE_PROFILE)).await;
         }
     }
 
