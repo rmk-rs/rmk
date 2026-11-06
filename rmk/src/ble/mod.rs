@@ -15,7 +15,7 @@ use embassy_futures::select::{Either, Either3, select, select3, select5};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use rmk_types::ble::BleState;
 use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
@@ -447,7 +447,10 @@ async fn run_ble_keyboard<
         // Keep each host or dongle handle indexed by profile until its GATT worker finishes.
         let mut host_connections: [Option<Connection<'_, DefaultPacketPool>>; BOND_SLOTS] =
             core::array::from_fn(|_| None);
-        let mut advertising_paused = false;
+        const ADV_TIMEOUT: Duration = Duration::from_secs(300);
+        // When advertising stops; `None` after a timeout until input opens a new
+        // window. Retries and connections that never encrypt keep the window.
+        let mut adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
         Timer::after_millis(10).await;
 
         loop {
@@ -462,13 +465,16 @@ async fn run_ble_keyboard<
                     return core::future::pending().await;
                 }
 
-                if advertising_paused {
-                    let mut keys = crate::event::KeyboardEvent::subscriber();
-                    let mut pointing = crate::event::PointingEvent::subscriber();
-                    let _ = select(keys.next_message_pure(), pointing.next_message_pure()).await;
-                    report_activity();
-                    advertising_paused = false;
-                }
+                let deadline = match adv_deadline {
+                    Some(deadline) => deadline,
+                    None => {
+                        let mut keys = crate::event::KeyboardEvent::subscriber();
+                        let mut pointing = crate::event::PointingEvent::subscriber();
+                        let _ = select(keys.next_message_pure(), pointing.next_message_pure()).await;
+                        report_activity();
+                        *adv_deadline.insert(Instant::now() + ADV_TIMEOUT)
+                    }
+                };
 
                 let bond = profile_manager.bond_info(profile_id);
                 load_stack_bond(stack, bond.as_ref().map(|bond| &bond.info));
@@ -488,7 +494,7 @@ async fn run_ble_keyboard<
                     &server.server,
                     adv,
                     local_address,
-                    Duration::from_secs(300),
+                    deadline.saturating_duration_since(Instant::now()),
                 )
                 .await
             };
@@ -504,7 +510,7 @@ async fn run_ble_keyboard<
                 Either3::First(Ok(gatt_conn)) => gatt_conn,
                 Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
                     profile_manager.cancel_pairing(profile_id);
-                    advertising_paused = true;
+                    adv_deadline = None;
                     set_ble_state(BleState::Inactive);
                     request_sleep();
                     continue;
@@ -533,7 +539,7 @@ async fn run_ble_keyboard<
                         continue;
                     }
                     report_activity();
-                    advertising_paused = false;
+                    adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
                     if clear_bond {
                         disconnect_profile(slot, &mut host_connections, &completed).await;
                         profile_manager.clear_bond(slot);
@@ -579,8 +585,10 @@ async fn run_ble_keyboard<
                 Either3::Third(ended) => {
                     host_connections[ended as usize].take();
                     if ended == profile_id {
+                        if crate::state::current_ble_status().state == BleState::Connected {
+                            adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
+                        }
                         set_ble_state(BleState::Inactive);
-                        advertising_paused = false;
                     }
                     continue;
                 }
@@ -1524,7 +1532,7 @@ mod tests {
     }
 
     #[test]
-    fn each_advertising_attempt_gets_a_fresh_timeout() {
+    fn restarted_advertising_keeps_its_window() {
         use crate::ble::profile::BleProfileAction;
         use crate::channel::BLE_PROFILE_CHANNEL;
         use crate::state::{CONNECTION_STATUS, current_profile};
@@ -1533,20 +1541,18 @@ mod tests {
             let mut status = CONNECTION_STATUS.receiver().unwrap();
             status.get_and(|s| s.ble.state == BleState::Advertising).await;
             MockDriver::get().advance(Duration::from_secs(150));
+            // A same-profile switch restarts advertising, as a rejected connection does.
             BLE_PROFILE_CHANNEL
                 .send(BleProfileAction::Switch(current_profile()))
                 .await;
             embassy_time::Timer::after_millis(1).await;
-            MockDriver::get().advance(Duration::from_secs(150));
-            embassy_time::Timer::after_millis(1).await;
-            assert_eq!(current_ble_status().state, BleState::Advertising);
             MockDriver::get().advance(Duration::from_secs(150));
             embassy_time::with_timeout(
                 Duration::from_millis(10),
                 status.get_and(|s| s.ble.state == BleState::Inactive),
             )
             .await
-            .expect("a new advertising attempt must expire after its own full timeout");
+            .expect("restarting advertising must not extend its window");
         });
     }
 }
