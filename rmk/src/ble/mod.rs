@@ -448,8 +448,6 @@ async fn run_ble_keyboard<
         let mut host_connections: [Option<Connection<'_, DefaultPacketPool>>; BOND_SLOTS] =
             core::array::from_fn(|_| None);
         const ADV_TIMEOUT: Duration = Duration::from_secs(300);
-        // When advertising stops; `None` after a timeout until input opens a new
-        // window. Retries and connections that never encrypt keep the window.
         let mut adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
         // Let USB detection run before the first advertisement.
         Timer::after_millis(10).await;
