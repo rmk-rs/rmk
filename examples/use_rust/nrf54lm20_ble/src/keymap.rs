@@ -14,7 +14,7 @@ pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
             [k!(Tab),      k!(Q),    k!(W),    k!(E),    k!(R),     k!(T),      k!(Y),          k!(U)],
             [k!(CapsLock), k!(A),    k!(S),    k!(D),    k!(F),     k!(G),      k!(H),          k!(J)],
             [k!(LShift),   k!(Z),    k!(X),    k!(C),    k!(V),     k!(B),      k!(N),          k!(M)],
-            [k!(LCtrl),    k!(LGui), k!(LAlt), mo!(1),   k!(Space), k!(Enter),  k!(Backspace),  k!(Delete)]
+            [k!(LCtrl),    k!(LGui), k!(LAlt), mo!(1),   k!(Space), k!(Enter),  k!(Backspace),  user!(8)]
         ]),
         layer!([
             [k!(Grave),    k!(F1),   k!(F2),   k!(F3),   k!(F4),    k!(F5),     k!(F6),         k!(F7)],
