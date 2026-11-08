@@ -26,6 +26,10 @@ pub(crate) const DONGLE_PROFILE: u8 = NUM_BLE_PROFILE as u8;
 pub(crate) const BOND_SLOTS: usize = NUM_BLE_PROFILE + cfg!(feature = "dongle") as usize;
 
 /// A fixed profile address that preserves the base address's random-address type bits.
+///
+/// Bytes are little-endian, so byte 3 is in the random part and byte 5 keeps the
+/// static random marker (top two bits set). Profile 0 keeps the base address, so
+/// a profile-0 bond made before per-profile addresses keeps working.
 pub(crate) fn profile_address(base: [u8; 6], profile: u8) -> [u8; 6] {
     let mut addr = base;
     addr[3] = addr[3].wrapping_add(profile);
@@ -331,6 +335,38 @@ mod tests {
             }
         }
         assert_eq!(profile_address([1, 2, 3, 0xFF, 5, 0xC6], 1), [1, 2, 3, 0, 5, 0xC6]);
+    }
+
+    #[test]
+    fn profile_addresses_stay_valid_static_random() {
+        // Bases as RMK builds them on nRF52: FICR DEVICEID with 0xC0 ORed into the top byte.
+        for base in [
+            [0xE7, 0x25, 0x8F, 0xC7, 0x0A, 0xD8],
+            [0x01, 0x00, 0x00, 0xFF, 0x00, 0xC0],
+            [0x18, 0xE2, 0x21, 0x80, 0xC0, 0xC7],
+        ] {
+            for profile in 0..=u8::MAX {
+                let addr = profile_address(base, profile);
+                assert_eq!(addr, profile_address(base, profile), "derivation is deterministic");
+                assert_eq!(
+                    addr[5] & 0xC0,
+                    0xC0,
+                    "static random addresses keep the top two bits set"
+                );
+                assert_eq!(addr[5], base[5]);
+                let random_part =
+                    u64::from_le_bytes([addr[0], addr[1], addr[2], addr[3], addr[4], addr[5] & 0x3F, 0, 0]);
+                assert_ne!(random_part, 0, "random part must not be all zeros");
+                assert_ne!(random_part, 0x3FFF_FFFF_FFFF, "random part must not be all ones");
+                for other in 0..profile {
+                    assert_ne!(
+                        addr,
+                        profile_address(base, other),
+                        "profiles {profile} and {other} collide"
+                    );
+                }
+            }
+        }
     }
 
     struct TestTransport;

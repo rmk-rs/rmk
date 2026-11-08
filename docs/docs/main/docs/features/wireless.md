@@ -66,6 +66,8 @@ Vial also provides a way to customize the displayed keycode, see `customKeycodes
 
 If you've connected a host to a profile, other devices will not be able to connect to this profile: the keyboard immediately disconnects any device that doesn't match the profile's stored bond. To pair a different host to that profile, clear it first, for example by holding the profile's key for 5 seconds.
 
+With the `ext_adv` feature, each profile advertises from its own static random address, derived from the keyboard's address. A host only sees the keyboard while its own profile is active, so a second bonded host in range can no longer take the connection meant for the selected profile. Profile 0 keeps the keyboard's address, so its bond survives the upgrade; hosts paired on profiles 1 and up see a new address and must forget the keyboard and pair once again. After a profile switch or a wake, the keyboard advertises every 30 ms for 30 seconds, then every 200 ms.
+
 ## BLE Passkey Entry
 
 When pairing with a new host device over BLE, the host may request a passkey for secure pairing.

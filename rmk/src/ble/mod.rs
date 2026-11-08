@@ -163,6 +163,9 @@ pub const fn calculate_sdc_memory_size(
 // Fixed ATT/SMP/signalling channels do not consume dynamic L2CAP slots.
 const L2CAP_CHANNELS_MAX: usize = 0;
 
+/// How long host advertising uses the fast interval after a profile switch or a wake.
+const HOST_FAST_WINDOW: Duration = Duration::from_secs(30);
+
 // Custom messages share the GATT write dispatcher with the host protocol.
 const GATT_WRITE_BUFFER_SIZE: usize = {
     #[cfg(feature = "host")]
@@ -262,6 +265,7 @@ where
             .build();
         run_ble_keyboard(
             &stack,
+            self.address,
             &self.device_config,
             &self.config,
             #[cfg(feature = "host")]
@@ -316,6 +320,7 @@ impl<
         join3(
             run_ble_keyboard(
                 &stack,
+                self.address,
                 &self.device_config,
                 &self.config,
                 #[cfg(feature = "host")]
@@ -331,15 +336,21 @@ impl<
 
 /// Owns the GATT server and the profile manager, and advertises→connects→
 /// serves forever, joined with the stack runner and the sleep manager.
+///
+/// `address` is the stack's static random address. With `ext_adv`, each host
+/// profile advertises from its own address derived from it.
 async fn run_ble_keyboard<
     #[cfg(feature = "host")] 'r,
     C: Controller + ExtAdvCmds + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 >(
     stack: &Stack<'_, C, DefaultPacketPool>,
+    address: [u8; 6],
     device_config: &DeviceConfig<'static>,
     config: &BleBatteryConfig,
     #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
 ) -> ! {
+    #[cfg(not(feature = "ext_adv"))]
+    let _ = address;
     let product_name = device_config.product_name;
 
     info!("Starting advertising and GATT service");
@@ -389,46 +400,75 @@ async fn run_ble_keyboard<
         // Deadline at which the current advertising session stops; `None` until
         // the first advertise below sets it.
         let mut adv_deadline: Option<Instant> = None;
+        // Host advertising stays fast until this instant. Boot counts as a wake;
+        // profile switches and wakes from the advertising timeout restart it.
+        let mut fast_until = Instant::now() + HOST_FAST_WINDOW;
         loop {
+            let profile = crate::state::current_profile();
+            let now = Instant::now();
+            let fast = now < fast_until;
             // On the dongle slot, advertise directed to the bonded dongle or
             // as a seeking broadcast; on the normal profiles, plain HID.
             #[cfg(feature = "dongle")]
-            let adv = if crate::state::current_profile() == crate::ble::profile::DONGLE_PROFILE {
+            let adv = if profile == crate::ble::profile::DONGLE_PROFILE {
                 match profile_manager.bond_info(crate::ble::profile::DONGLE_PROFILE) {
                     Some(info) => Adv::Directed(info.info.identity.addr),
                     None => Adv::DongleSeeking,
                 }
             } else {
-                Adv::Host { name: product_name }
+                Adv::Host {
+                    name: product_name,
+                    fast,
+                }
             };
             #[cfg(not(feature = "dongle"))]
-            let adv = Adv::Host { name: product_name };
+            let adv = Adv::Host {
+                name: product_name,
+                fast,
+            };
+            // Each host profile advertises from its own address, so a host only
+            // ever sees the keyboard while its own profile is active. The dongle
+            // slot keeps the stack address its bond was made with.
+            #[cfg(feature = "ext_adv")]
+            let local_address = Some(BdAddr::new(crate::ble::profile::profile_address(address, profile)));
+            #[cfg(all(feature = "ext_adv", feature = "dongle"))]
+            let local_address = local_address.filter(|_| profile != crate::ble::profile::DONGLE_PROFILE);
+            #[cfg(not(feature = "ext_adv"))]
+            let local_address = None;
 
             // Wait for 10ms to ensure the USB is checked
             Timer::after_millis(10).await;
-            info!("[adv] advertising");
+            info!("[adv] advertising, fast: {}", fast);
             set_ble_state(BleState::Advertising);
 
             // Advertise only for the time left in this session, so rejected
-            // reconnects can't push the timeout out indefinitely.
-            let now = Instant::now();
+            // reconnects can't push the timeout out indefinitely. During the
+            // fast window, stop at its end to restart with the slow interval.
             let deadline = *adv_deadline.get_or_insert(now + Duration::from_secs(300));
-            let timeout = deadline.saturating_duration_since(now);
+            let stop_at = if fast { deadline.min(fast_until) } else { deadline };
+            let timeout = stop_at.saturating_duration_since(now);
 
             match select(
-                advertise(&mut peripheral, &server.server, adv, None, timeout),
+                advertise(&mut peripheral, &server.server, adv, local_address, timeout),
                 profile_manager.update_profile(),
             )
             .await
             {
                 Either::First(Ok(conn)) => {
                     info!("[adv] connection established");
+                    // A host can still connect to the address of the profile
+                    // that was active a moment ago; that is not this profile's host.
+                    #[cfg(feature = "ext_adv")]
+                    if profile != crate::state::current_profile() || conn.raw().local_address() != local_address {
+                        warn!("[ble] connection arrived on a non-active profile's address, disconnecting");
+                        disconnect(&conn).await;
+                        continue;
+                    }
                     if let Err(e) = conn.raw().set_bondable(true) {
                         error!("Set bondable error: {:?}", e);
                     }
                     // Do NOT emit BleState::Connected here. gatt_events_task emits
                     // Connected when it sees GattConnectionEvent::Encrypted.
-                    let profile = crate::state::current_profile();
                     // Check the bond info after the connection is just created.
                     if let Some(bond) = profile_manager.bond_info(profile)
                         && !bond.info.identity.match_identity(&conn.raw().peer_identity())
@@ -463,7 +503,12 @@ async fn run_ble_keyboard<
                     {
                         // When the profile changes, manually disconnect from the current host
                         disconnect(&conn).await;
+                        fast_until = Instant::now() + HOST_FAST_WINDOW;
                     }
+                }
+                Either::First(Err(BleHostError::BleHost(Error::Timeout))) if Instant::now() < deadline => {
+                    // Only the fast window ended: keep this session, advertise slowly.
+                    continue;
                 }
                 Either::First(Err(BleHostError::BleHost(Error::Timeout))) => {
                     warn!("Advertising timeout, sleep and wait for any key");
@@ -481,6 +526,7 @@ async fn run_ble_keyboard<
                     let _ = select(key_wake.next_message_pure(), pointing_wake.next_message_pure()).await;
 
                     report_activity();
+                    fast_until = Instant::now() + HOST_FAST_WINDOW;
                 }
                 Either::First(Err(e)) => {
                     #[cfg(feature = "defmt")]
@@ -488,7 +534,7 @@ async fn run_ble_keyboard<
                     error!("Advertise error: {:?}", e);
                     Timer::after_millis(200).await;
                 }
-                Either::Second(()) => {}
+                Either::Second(()) => fast_until = Instant::now() + HOST_FAST_WINDOW,
             };
 
             // Starts a fresh advertising session.
