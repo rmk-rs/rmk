@@ -47,7 +47,7 @@ const LOGO: [u8; 512] = [
 pub struct LogoRenderer;
 
 impl DisplayRenderer<BinaryColor> for LogoRenderer {
-    fn render<D: DrawTarget<Color = BinaryColor>>(&mut self, ctx: &RenderContext, display: &mut D) {
+    async fn render<D: DrawTarget<Color = BinaryColor>>(&mut self, ctx: &RenderContext, display: &mut D) {
         display.clear(BinaryColor::Off).ok();
         if ctx.sleeping {
             return;
