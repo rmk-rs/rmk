@@ -58,9 +58,6 @@ pub(crate) fn expand_device_config(
 
 /// The `[host].unlock_keys` list as a `&'static [(u8, u8)]` literal (empty when unset).
 fn unlock_keys_tokens(host: &Host) -> proc_macro2::TokenStream {
-    if host.unlock_keys.is_empty() {
-        return quote! { &[] };
-    }
     let keys_expr = host.unlock_keys.iter().map(|key| {
         let row = key[0];
         let col = key[1];
