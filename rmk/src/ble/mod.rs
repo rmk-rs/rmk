@@ -559,6 +559,7 @@ async fn run_ble_keyboard<
                         _ => BleState::Inactive,
                     };
                     profile_manager.switch_profile(slot, state);
+                    BLE_REPORT_CHANNEL.clear();
                     continue;
                 }
                 Either3::Third(ended) => {
