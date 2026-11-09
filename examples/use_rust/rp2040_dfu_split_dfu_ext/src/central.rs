@@ -20,7 +20,7 @@ use embassy_rp::{bind_interrupts, dma};
 use panic_probe as _;
 use rmk::config::{BehaviorConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig};
 use rmk::debounce::default_debouncer::DefaultDebouncer;
-use rmk::dfu::{FlashDfuHandler, FlashMutex, Partition, partitions_from_linkerscript};
+use rmk::dfu::{partitions_from_linkerscript, FlashDfuHandler, FlashMutex, Partition};
 use rmk::driver::w25q::W25qNorFlash;
 use rmk::futures::future::join;
 use rmk::host::HostService;
@@ -33,7 +33,7 @@ use rmk::split::{PeripheralMatrixConfig, SPLIT_MESSAGE_MAX_SIZE};
 use rmk::storage::async_flash_wrapper;
 use rmk::usb::UsbTransport;
 use rmk::watchdog::Rp2040Watchdog;
-use rmk::{KeymapData, initialize_keymap_and_storage, run_all};
+use rmk::{initialize_keymap_and_storage, run_all, KeymapData};
 use static_cell::StaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
