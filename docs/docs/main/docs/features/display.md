@@ -142,9 +142,6 @@ let mut oled = DisplayProcessor::new(display)
 ## Custom Renderers
 
 Implement `DisplayRenderer<C>` for your color type (`BinaryColor` for monochrome OLEDs).
-The `render` method is asynchronous; simple renderers can draw without awaiting.
-For expensive rendering, split the work into chunks and call
-`rmk::embassy_futures::yield_now().await` between chunks so other tasks can run:
 
 ```rust
 use core::fmt::Write as _;
