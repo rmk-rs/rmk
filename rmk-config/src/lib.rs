@@ -18,7 +18,6 @@ pub mod resolved;
 pub mod usb_interrupt_map;
 pub(crate) mod behavior;
 pub(crate) mod board;
-pub(crate) mod host;
 pub(crate) mod keycode_alias;
 pub(crate) mod keymap;
 pub mod layout;

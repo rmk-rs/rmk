@@ -39,7 +39,7 @@
 //! struct BigLayer;
 //!
 //! impl DisplayRenderer<BinaryColor> for BigLayer {
-//!     fn render<D: DrawTarget<Color = BinaryColor>>(
+//!     async fn render<D: DrawTarget<Color = BinaryColor>>(
 //!         &mut self, ctx: &RenderContext, display: &mut D,
 //!     ) {
 //!         let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
@@ -198,7 +198,7 @@ pub trait DisplayDriver: DrawTarget {
 /// struct MyRenderer;
 ///
 /// impl DisplayRenderer<BinaryColor> for MyRenderer {
-///     fn render<D: DrawTarget<Color = BinaryColor>>(
+///     async fn render<D: DrawTarget<Color = BinaryColor>>(
 ///         &mut self,
 ///         ctx: &RenderContext,
 ///         display: &mut D,
@@ -215,7 +215,7 @@ pub trait DisplayRenderer<C: PixelColor> {
     ///
     /// The renderer is responsible for clearing the display if needed.
     /// After this method returns, the caller flushes the display buffer.
-    fn render<D: DrawTarget<Color = C>>(&mut self, ctx: &RenderContext, display: &mut D);
+    async fn render<D: DrawTarget<Color = C>>(&mut self, ctx: &RenderContext, display: &mut D);
 }
 
 /// Processor that renders keyboard state on a display.
@@ -343,7 +343,7 @@ where
             self.initialized = true;
         }
 
-        self.renderer.render(&self.ctx, &mut self.display);
+        self.renderer.render(&self.ctx, &mut self.display).await;
         self.ctx.key_press_latch = false;
         self.display.flush().await;
 
