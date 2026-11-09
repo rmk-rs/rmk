@@ -124,18 +124,15 @@ async fn main(_spawner: Spawner) {
 
     let mut watchdog_runner = Nrf52Watchdog::default_runner(p.WDT);
 
-    rmk::join_all!(
-        rmk::sleep::run_sleep_manager(),
-        run_all!(
-            matrix,
-            storage,
-            usb_transport,
-            dfu_iface,
-            wpm_processor,
-            keyboard,
-            watchdog_runner,
-            dfu_led_processor,
-        )
+    run_all!(
+        matrix,
+        storage,
+        usb_transport,
+        dfu_iface,
+        wpm_processor,
+        keyboard,
+        watchdog_runner,
+        dfu_led_processor,
     )
     .await;
 }

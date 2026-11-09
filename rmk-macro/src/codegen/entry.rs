@@ -135,11 +135,7 @@ pub(crate) fn rmk_entry_select(
             let keyboard_task = quote! {
                 keyboard.run(),
             };
-            let mut tasks = vec![
-                devices_task,
-                keyboard_task,
-                quote! { ::rmk::sleep::run_sleep_manager() },
-            ];
+            let mut tasks = vec![devices_task, keyboard_task];
             tasks.extend(registered_processors);
             tasks.extend(transport_tasks);
             if let Some(t) = &watchdog_task {
@@ -251,11 +247,7 @@ pub(crate) fn rmk_entry_unibody(
         keyboard.run()
     };
 
-    let mut tasks = vec![
-        devices_task,
-        keyboard_task,
-        quote! { ::rmk::sleep::run_sleep_manager() },
-    ];
+    let mut tasks = vec![devices_task, keyboard_task];
     if !processors_task.is_empty() {
         tasks.push(processors_task);
     }
@@ -382,10 +374,8 @@ mod tests {
 
     use super::*;
 
-    // Entry generation owns sleep management independently of BLE. Check that
-    // USB, BLE, dual-transport, and split entries neither omit nor duplicate the task.
     #[test]
-    fn sleep_manager_runs_once_for_each_keyboard_transport() {
+    fn keyboard_owns_sleep_management_for_each_transport() {
         for example in [
             "rp2040",
             "esp32c3_ble",
@@ -407,7 +397,7 @@ mod tests {
             );
             assert_eq!(
                 entry.to_string().matches("run_sleep_manager").count(),
-                1,
+                0,
                 "{example}"
             );
         }

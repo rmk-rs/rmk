@@ -183,9 +183,5 @@ async fn main(spawner: Spawner) {
     )
     .with_host_service(&host_service);
 
-    rmk::join_all!(
-        rmk::sleep::run_sleep_manager(),
-        run_all!(matrix, storage, usb_transport, ble_transport, wpm_processor, keyboard)
-    )
-    .await;
+    run_all!(matrix, storage, usb_transport, ble_transport, wpm_processor, keyboard).await;
 }

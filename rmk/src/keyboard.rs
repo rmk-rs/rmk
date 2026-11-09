@@ -141,6 +141,14 @@ impl Runnable for Keyboard<'_> {
     /// Main keyboard processing task, it receives input devices result, processes keys.
     /// The report is sent using `send_report`.
     async fn run(&mut self) -> ! {
+        embassy_futures::join::join(self.run_keyboard(), crate::sleep::run_sleep_manager())
+            .await
+            .0
+    }
+}
+
+impl Keyboard<'_> {
+    async fn run_keyboard(&mut self) -> ! {
         loop {
             // Wait for the next event, but wake up at the earliest pending deadline.
             // `with_deadline` polls the subscriber first, so a queued event is handled first.

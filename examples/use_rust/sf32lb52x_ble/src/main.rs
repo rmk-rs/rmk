@@ -258,21 +258,18 @@ async fn main(_spawner: Spawner) {
     let mut ble_transport = BleTransport::new(&stack, rmk_config).await;
     let mut wpm_processor = WpmProcessor::new();
 
-    rmk::join_all!(
-        rmk::sleep::run_sleep_manager(),
-        run_all!(
-            matrix,
-            encoder,
-            storage,
-            disp0,
-            disp1,
-            disp2,
-            usb_transport,
-            ble_transport,
-            wpm_processor,
-            keyboard,
-            host_service
-        )
+    run_all!(
+        matrix,
+        encoder,
+        storage,
+        disp0,
+        disp1,
+        disp2,
+        usb_transport,
+        ble_transport,
+        wpm_processor,
+        keyboard,
+        host_service
     )
     .await;
 }

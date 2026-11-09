@@ -62,14 +62,10 @@ split_central_sleep_timeout_seconds = 600
 
 When the keyboard falls asleep, RMK publishes a `SleepStateEvent`. Display and other device handlers can use this event to save power; the manager itself does not put the MCU into deep sleep. Key or pointing activity wakes the keyboard up. Split peripherals follow the central's sleep state rather than running their own idle timers.
 
-The configuration macros start the manager automatically. With the Rust API, run it once alongside the keyboard and transport tasks:
+`Keyboard::run()` starts the manager automatically for both the configuration macros and the Rust API. Run the keyboard alongside your other devices and transports as usual:
 
 ```rust
-rmk::join_all!(
-    rmk::sleep::run_sleep_manager(),
-    run_all!(matrix, storage, usb_transport, keyboard),
-)
-.await;
+run_all!(matrix, storage, usb_transport, keyboard).await;
 ```
 
 Custom inputs and transports can call `rmk::sleep::report_activity()` to wake the keyboard or restart its idle timeout, and `rmk::sleep::request_sleep()` to request immediate sleep. A timeout of `0` disables both idle sleep and explicit sleep requests.

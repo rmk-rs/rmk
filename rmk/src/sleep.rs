@@ -39,14 +39,12 @@ pub fn request_sleep() {
 
 /// The keyboard's one sleep manager.
 ///
-/// Run once alongside the keyboard and transport tasks on a unibody or split
-/// central. Split peripherals follow the central's sleep events instead.
-/// The configuration macros start this task automatically; Rust API users must
-/// join it with their other tasks.
+/// Started by `Keyboard::run` on a unibody or split central. Split peripherals
+/// follow the central's sleep events instead.
 ///
 /// When `split_central_sleep_timeout_seconds` is 0 (the default), both automatic
 /// sleep and explicit sleep requests are disabled.
-pub async fn run_sleep_manager() {
+pub(crate) async fn run_sleep_manager() {
     if SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS == 0 {
         info!("Sleep management disabled (timeout = 0)");
         core::future::pending::<()>().await;
@@ -100,6 +98,33 @@ mod tests {
 
     fn sleeping() -> bool {
         crate::state::current_sleep_state()
+    }
+
+    #[test]
+    fn keyboard_runs_configured_sleep_manager() {
+        use rmk_types::action::KeyAction;
+
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::core_traits::Runnable;
+        use crate::keyboard::Keyboard;
+        use crate::keymap::{KeyMap, KeymapData};
+
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 1> = PositionalConfig::default();
+            let mut data: KeymapData<1, 1, 1, 0> = KeymapData::new([[[KeyAction::No]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut keyboard = Keyboard::new(&keymap);
+
+            select(keyboard.run(), async {
+                Timer::after_secs(u64::from(SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS) + 1).await;
+                assert_eq!(sleeping(), SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS != 0);
+                report_activity();
+                Timer::after_millis(1).await;
+                assert!(!sleeping(), "the keyboard's sleep manager must process activity");
+            })
+            .await;
+        });
     }
 
     #[test]

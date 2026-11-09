@@ -72,9 +72,5 @@ async fn main(_spawner: Spawner) {
     let mut wpm_processor = WpmProcessor::new();
 
     // Start
-    rmk::join_all!(
-        rmk::sleep::run_sleep_manager(),
-        run_all!(matrix, usb_transport, wpm_processor, keyboard)
-    )
-    .await;
+    run_all!(matrix, usb_transport, wpm_processor, keyboard).await;
 }

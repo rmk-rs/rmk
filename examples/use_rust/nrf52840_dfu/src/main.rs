@@ -113,17 +113,14 @@ async fn main(_spawner: Spawner) {
     let mut usb_transport = UsbTransport::new(driver, rmk_config.device_config).with_host_service(&host_service);
     let mut wpm_processor = WpmProcessor::new();
 
-    rmk::join_all!(
-        rmk::sleep::run_sleep_manager(),
-        run_all!(
-            matrix,
-            storage,
-            usb_transport,
-            dfu_iface,
-            wpm_processor,
-            keyboard,
-            dfu_led_processor, // , dfu_lock
-        )
+    run_all!(
+        matrix,
+        storage,
+        usb_transport,
+        dfu_iface,
+        wpm_processor,
+        keyboard,
+        dfu_led_processor, // , dfu_lock
     )
     .await;
 }
