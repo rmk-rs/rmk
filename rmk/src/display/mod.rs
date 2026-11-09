@@ -215,7 +215,6 @@ pub trait DisplayRenderer<C: PixelColor> {
     ///
     /// The renderer is responsible for clearing the display if needed.
     /// After this method returns, the caller flushes the display buffer.
-    /// Long renders should yield between chunks to let other tasks run.
     async fn render<D: DrawTarget<Color = C>>(&mut self, ctx: &RenderContext, display: &mut D);
 }
 
