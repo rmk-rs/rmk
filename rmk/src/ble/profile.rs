@@ -282,7 +282,6 @@ where
             bonded: self.bond_info(profile).is_some(),
         });
         self.update_stack_bonds();
-        crate::channel::BLE_REPORT_CHANNEL.clear();
         self.updated_active_profile.signal(());
         info!("Switched to BLE profile: {}", profile);
     }
