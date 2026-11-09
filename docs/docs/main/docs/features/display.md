@@ -141,7 +141,7 @@ let mut oled = DisplayProcessor::new(display)
 
 ## Custom Renderers
 
-Implement `DisplayRenderer<C>` for your color type (`BinaryColor` for monochrome OLEDs):
+Implement `DisplayRenderer<C>` for your color type (`BinaryColor` for monochrome OLEDs).
 
 ```rust
 use core::fmt::Write as _;
@@ -157,7 +157,7 @@ use rmk::display::{DisplayRenderer, RenderContext};
 pub struct MyRenderer;
 
 impl DisplayRenderer<BinaryColor> for MyRenderer {
-    fn render<D: DrawTarget<Color = BinaryColor>>(&mut self, ctx: &RenderContext, display: &mut D) {
+    async fn render<D: DrawTarget<Color = BinaryColor>>(&mut self, ctx: &RenderContext, display: &mut D) {
         display.clear(BinaryColor::Off).ok();
 
         let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);

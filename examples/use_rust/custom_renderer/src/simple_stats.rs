@@ -15,7 +15,7 @@ use rmk::display::{DisplayRenderer, RenderContext};
 pub struct SimpleStatsRenderer;
 
 impl DisplayRenderer<BinaryColor> for SimpleStatsRenderer {
-    fn render<D: DrawTarget<Color = BinaryColor>>(&mut self, ctx: &RenderContext, display: &mut D) {
+    async fn render<D: DrawTarget<Color = BinaryColor>>(&mut self, ctx: &RenderContext, display: &mut D) {
         display.clear(BinaryColor::Off).ok();
 
         let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
