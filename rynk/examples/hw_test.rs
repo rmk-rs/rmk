@@ -392,12 +392,10 @@ async fn run_all(client: &Client, over_ble: bool) -> Result<(), Box<dyn std::err
 
     info!("── connection ──");
     report(&mut fails, "get_connection_type", client.get_connection_type().await);
-    report(
-        &mut fails,
-        "get_connection_status",
-        client.get_connection_status().await,
-    );
-    match client.get_ble_status().await {
+    let connection_status = client.get_connection_status().await;
+    let selected = connection_status.as_ref().map_or(0, |status| status.ble.profile);
+    report(&mut fails, "get_connection_status", connection_status);
+    match client.get_ble_status(selected).await {
         Ok(s) => {
             info!("  ✓ {:<22} {s:?}", "get_ble_status");
             // Re-selecting the active profile is a no-op.

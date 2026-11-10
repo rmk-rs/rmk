@@ -9,7 +9,7 @@ use trouble_host::{BondInformation, LongTermKey};
 
 use super::ble_server::CCCD_TABLE_SIZE;
 use crate::NUM_BLE_PROFILE;
-use crate::state::{current_profile, set_ble_bonded, set_ble_status};
+use crate::state::{current_profile, set_ble_status};
 #[cfg(feature = "storage")]
 use crate::storage::{StorageItem, StorageKey, StorageValue, read, store};
 
@@ -105,9 +105,10 @@ impl Default for ProfileInfo {
 pub(crate) enum BleProfileAction {
     Switch(u8),
     Pair(u8),
+    Disconnect(u8),
     Previous,
     Next,
-    /// Clear the bond for the specified profile.
+    /// Clear a slot's bond without selecting or reconnecting it.
     ClearBond(u8),
 }
 
@@ -177,8 +178,8 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
         if state.try_get().as_ref() == Some(&info) {
             return;
         }
+        crate::state::update_ble_profile_status(info.slot_num, |status| status.bonded = !info.removed);
         state.sender().send(info);
-        set_ble_bonded(self.bond_info(current_profile()).is_some());
     }
 
     pub(crate) fn update_profile_cccd_table(
@@ -232,7 +233,7 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
                 removed: true,
                 ..Default::default()
             });
-            set_ble_bonded(self.bond_info(current_profile()).is_some());
+            crate::state::update_ble_profile_status(slot, |status| status.bonded = false);
         }
     }
 

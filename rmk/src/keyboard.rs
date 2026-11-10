@@ -1669,9 +1669,9 @@ impl<'a> Keyboard<'a> {
                     BLE_PROFILE_CHANNEL.send(BleProfileAction::Previous).await;
                 } else if id == NUM_BLE_PROFILE as u8 + 2 {
                     // Clear bond on current profile
-                    BLE_PROFILE_CHANNEL
-                        .send(BleProfileAction::ClearBond(crate::state::current_profile()))
-                        .await;
+                    let slot = crate::state::current_profile();
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(slot)).await;
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(slot)).await;
                 } else if id == NUM_BLE_PROFILE as u8 + 3 {
                     // Toggle preferred transport (USB <-> BLE);
                     // only meaningful when both transports exist in this build.
@@ -2029,11 +2029,18 @@ mod test {
         let target = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
         BLE_PROFILE_CHANNEL.clear();
         crate::state::update_status(|status| status.ble.profile = target);
-        block_on(keyboard.process_user(crate::NUM_BLE_PROFILE as u8 + 2, KeyboardEvent::key(0, 0, false)));
-        crate::state::update_status(|status| status.ble.profile = 0);
+        let (_, actions) = block_on(embassy_futures::join::join(
+            keyboard.process_user(crate::NUM_BLE_PROFILE as u8 + 2, KeyboardEvent::key(0, 0, false)),
+            async {
+                let cleared = BLE_PROFILE_CHANNEL.receive().await;
+                crate::state::update_status(|status| status.ble.profile = 0);
+                (cleared, BLE_PROFILE_CHANNEL.receive().await)
+            },
+        ));
         assert!(matches!(
-            BLE_PROFILE_CHANNEL.try_receive(),
-            Ok(BleProfileAction::ClearBond(slot)) if slot == target
+            actions,
+            (BleProfileAction::ClearBond(cleared), BleProfileAction::Switch(selected))
+                if cleared == target && selected == target
         ));
     }
 

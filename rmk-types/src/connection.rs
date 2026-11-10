@@ -40,6 +40,7 @@ pub enum UsbState {
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct ConnectionStatus {
     pub usb: UsbState,
+    /// The selected BLE profile; background profiles are not reflected here.
     pub ble: BleStatus,
     /// Tiebreaker when both transports are ready.
     pub preferred: ConnectionType,

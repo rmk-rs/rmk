@@ -58,6 +58,12 @@ pub async fn connect(link: JsByteLink) -> Result<RynkClient, JsValue> {
     })
 }
 
+/// Resolve the input route using the same rules as the firmware.
+#[wasm_bindgen]
+pub fn decide_active_connection(status: ConnectionStatus) -> Option<ConnectionType> {
+    status.decide_active()
+}
+
 impl RynkClient {
     /// Run one client future full-duplex: race it against locking the driver.
     /// The lock winner pumps both directions for every parked call, and
@@ -175,7 +181,8 @@ endpoints! {
     // connection
     get_connection_type() -> ConnectionType,
     get_connection_status() -> ConnectionStatus,
-    get_ble_status() -> BleStatus,
+    get_ble_status(slot: u8) -> BleStatus,
     switch_ble_profile(slot: u8) -> (),
     clear_ble_profile(slot: u8) -> (),
+    disconnect_ble_profile(slot: u8) -> (),
 }

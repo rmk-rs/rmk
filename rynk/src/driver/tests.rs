@@ -443,7 +443,7 @@ async fn connect_session(mut steps: Vec<Step>, trailing: Vec<Step>) -> (Client, 
 async fn capability_gate_rejects_without_wire_send() {
     let (client, _driver) = connect_session(handshake_steps(caps()), vec![Step::Hang]).await;
     assert!(!client.capabilities.ble_enabled);
-    let r = client.get_ble_status().await;
+    let r = client.get_ble_status(0).await;
     assert!(matches!(r, Err(RynkHostError::Unsupported(Cmd::GetBleStatus, _))));
 }
 

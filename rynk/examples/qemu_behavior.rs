@@ -292,7 +292,7 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
 
     // Every capability-gated command the fixture lacks is rejected client-side,
     // before touching the wire.
-    expect_unsupported("get_ble_status", client.get_ble_status().await);
+    expect_unsupported("get_ble_status", client.get_ble_status(0).await);
     expect_unsupported("switch_ble_profile", client.switch_ble_profile(0).await);
     expect_unsupported("clear_ble_profile", client.clear_ble_profile(0).await);
     expect_unsupported("get_peripheral_status", client.get_peripheral_status(0).await);
