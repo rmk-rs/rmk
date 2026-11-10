@@ -458,7 +458,7 @@
       navigator.serial?.addEventListener?.("connect", () => { if (!connected) autoConnect(); });
       navigator.hid?.addEventListener?.("connect", () => { if (!connected) autoConnect(); });
       const onDrop = (removed) => {
-        if (connected && (removed === port || removed === device)) {
+        if (removed === port || removed === device) {
           teardown().then(() => log("\n— transport disconnected —"));
         }
       };
