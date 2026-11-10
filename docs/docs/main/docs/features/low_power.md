@@ -72,7 +72,9 @@ A sleeping split central keeps its radio idle rather than scanning, so a periphe
 
 Two related behaviors are always on:
 
-- When BLE advertising times out without a connection (after 5 minutes), the keyboard sleeps immediately and waits for a key or pointing event before it advertises again.
+- When BLE advertising times out without a connection (after 5 minutes), unibody keyboards and split centrals stop advertising until a key or pointing event.
+  They enter sleep only when `split_central_sleep_timeout_seconds` is nonzero.
+  Split peripherals enter sleep regardless of that setting and wait for a key event before advertising again.
 - `NrfAdc` takes a `light_sleep` interval as its last argument. When the analog inputs have been idle for more than 1.2 seconds, the ADC polls at that interval instead of `polling_interval`. A joystick configured in `keyboard.toml` uses 350ms.
 
 ### Split central sleep using BLE Connection Subrating (tested on nrf52840 only)
