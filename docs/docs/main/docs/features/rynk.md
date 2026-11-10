@@ -24,14 +24,20 @@ Through Rynk, a host tool can read and change:
 - Combos, forks, tap-dance / morse keys, and macros
 - Tap-hold and other behavior settings
 
-It can also watch live status — the current layer, a key tester (matrix state),
-typing speed (WPM), the caps-lock/num-lock indicators, sleep state, battery
-level, and, on wireless boards, the connection status, each BLE profile's
-connection state and bond (including the dongle's), and split peripheral status.
-It can also switch to, disconnect, or forget a BLE profile. It can read the
-device info (RMK version, USB IDs, names) and the physical layout, so a tool can
-draw your keyboard. Finally it can reboot the keyboard, enter the bootloader,
-and reset stored settings.
+It can also show live status:
+
+- The current layer, typing speed (WPM), the caps-lock/num-lock indicators, and
+  sleep state
+- A key tester that shows which keys are held (the matrix state)
+- On wireless boards: battery level, whether the keyboard types over USB or
+  Bluetooth, and which BLE profiles are connected and paired
+- On split keyboards: the status of each peripheral
+
+On wireless boards, it can also switch to, disconnect, or forget a BLE profile;
+see [Managing BLE profiles](#managing-ble-profiles). It can read the device info
+(RMK version, USB IDs, names) and the physical layout, so a tool can draw your
+keyboard. Finally it can reboot the keyboard, enter the bootloader, and reset
+stored settings.
 
 ## Enable Rynk
 
@@ -102,6 +108,29 @@ and
 
 A ready-made desktop app is not available yet.
 
+## Managing BLE profiles
+
+On a wireless keyboard, a host tool shows each BLE profile, plus the
+[dongle](./dongle) slot if your keyboard has one, and whether it's connected and
+paired with a host. For any profile, the tool can:
+
+- **Switch** — type on that profile, the same as pressing its profile key (see
+  [Multiple-Profile Support](./wireless#multiple-profile-support)). If its host
+  isn't connected, the keyboard advertises so the host can reconnect, or so a
+  new host can pair if the profile has none.
+- **Disconnect** — drop the connection and keep the pairing.
+- **Forget** — drop the connection and delete the pairing, so the host must pair
+  again. You must [unlock](#locking-dangerous-operations) the keyboard first.
+
+A profile you disconnect or forget stays offline until you switch to it again,
+from the host tool or with its profile key. Typing doesn't reconnect it, and
+your other profiles stay connected. Disconnecting the profile you type on
+doesn't move typing to another profile; switch to the one you want.
+
+If the host tool reaches the keyboard over the profile you disconnect or forget,
+the tool loses its connection and may report that the request failed. The
+change still happens.
+
 ## Locking dangerous operations
 
 By default Rynk locks the operations that could plant a persistent implant or
@@ -116,7 +145,7 @@ There are three tiers:
   available so on-the-fly configuration is friction-free.
 - **Locked** — the dangerous ones, always gated: entering the bootloader,
   resetting stored settings and bonds, reading the live key matrix (a keylogger
-  if left open), and clearing a BLE bond. A host tool gets a "locked" error
+  if left open), and forgetting a BLE profile. A host tool gets a "locked" error
   until you unlock.
 - **Config writes** — open by default, because on-the-fly configuration is the
   point. Set `write_requires_unlock = true` to move every write (keymap, macros,

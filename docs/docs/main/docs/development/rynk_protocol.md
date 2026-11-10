@@ -48,23 +48,23 @@ Each peer holds one frame in a buffer of `rynk_buffer_size` bytes (a `[rmk]` opt
 
 ## Connections
 
-A BLE keyboard has `num_ble_profiles` host profiles, indexed from 0, plus a dongle profile at index `dongle_profile` when that is set. Every command in this section that takes a profile index accepts any of them and answers `Invalid` for any other index.
+`DeviceCapabilities` lists the BLE profiles a host can address: host profiles `0..num_ble_profiles`, plus the dongle profile at index `dongle_profile` when it is set. The profile commands below answer `Invalid` for any other index.
 
-`GetBleStatus(profile)` reads one profile's `state` and `bonded` flag. Only `Connected` means an encrypted link that can carry input. `bonded` is false while the profile re-pairs. The command answers `NotReady` until the keyboard has loaded its bonds after boot.
+To show every profile, call `GetBleStatus` once per index. `state` is `Connected` only when the profile has an encrypted link that can carry input. `bonded` reports whether the profile has a paired host, and is false while the profile waits to pair a new one. Right after boot, before the keyboard has loaded its bonds, `GetBleStatus` answers `NotReady`; retry.
 
-`GetConnectionStatus` reports only the selected profile, in `ble`. To find which transport carries input, call `ConnectionStatus::decide_active()` on the result: USB can carry input while BLE stays connected. `GetConnectionType` returns the preferred transport, not the active one.
+To keep that list current, re-read every profile after each `ConnectionChange` push. A change on any profile triggers a push, but the payload describes only the selected profile, and several changes can arrive as one push.
 
-| Command                | Effect                                                | Bond                       | Needs unlock |
-| ---------------------- | ----------------------------------------------------- | -------------------------- | ------------ |
-| `SwitchBleProfile`     | Selects the profile and advertises if it has no link. | Kept                       | No           |
-| `DisconnectBleProfile` | Closes the profile's link.                            | Kept                       | No           |
-| `ClearBleProfile`      | Closes the profile's link.                            | Forgotten, even if offline | Yes          |
+To show which transport carries input, read `GetConnectionStatus`. USB is ready when `usb` is `Configured` or `Suspended`, BLE is ready when `ble.state` is `Connected`, and `preferred` decides when both are ready; `ConnectionStatus::decide_active()` (`decide_active_connection` in `rynk-wasm`) applies this rule. `GetConnectionType` returns only `preferred`.
 
-These three commands queue the action and reply once it is queued, before the link closes or the bond change reaches flash. A full queue answers `NotReady`. If the action closes the link that sent the request, the reply may never arrive, but the action still runs.
+| Command                | Effect                                                      | Bond                     | Needs unlock |
+| ---------------------- | ----------------------------------------------------------- | ------------------------ | ------------ |
+| `SwitchBleProfile`     | Selects the profile and advertises if it has no connection. | Kept                     | No           |
+| `DisconnectBleProfile` | Closes the profile's connection.                            | Kept                     | No           |
+| `ClearBleProfile`      | Closes the profile's connection.                            | Deleted, even if offline | Yes          |
 
-A disconnected or forgotten profile stays offline until it is selected or paired again, or the keyboard restarts. Key presses and pointer motion don't wake it, but `SwitchBleProfile` on the same index does. Other profiles keep their connections.
+These commands answer `Ok` once the keyboard accepts the action, before it takes effect; watch `ConnectionChange` for the result. `NotReady` means earlier profile actions are still pending; retry. If the action closes the link the request arrived on, the link can drop before the reply arrives, but the action still runs.
 
-`ConnectionChange` also fires, with an unchanged payload, when a background profile connects, disconnects, or changes its bond. Pushes can be coalesced, so re-read every profile with `GetBleStatus` after each one.
+A disconnected or cleared profile stays offline until it is selected again, by `SwitchBleProfile` (even on the already selected index) or the user's profile keys. Typing doesn't reconnect it, and other profiles keep their connections. After a restart, the keyboard advertises on the selected profile as usual.
 
 ## Errors
 
