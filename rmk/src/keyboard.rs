@@ -15,8 +15,6 @@ use rmk_types::morse::{MorseMode, MorsePattern, TAP};
 use rmk_types::mouse_button::MouseButtons;
 use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 
-#[cfg(feature = "_ble")]
-use crate::ble::sleep::report_activity;
 use crate::channel::send_hid_report;
 use crate::core_traits::Runnable;
 #[cfg(all(feature = "split", feature = "_ble"))]
@@ -32,6 +30,7 @@ use crate::keyboard::held_buffer::{HeldBuffer, HeldKey, KeyState};
 use crate::keyboard::mouse::{MouseAction, MouseState};
 use crate::keyboard::oneshot::OneShotState;
 use crate::keymap::KeyMap;
+use crate::sleep::report_activity;
 use crate::{COMBO_MAX_NUM, FORK_MAX_NUM, boot};
 
 pub(crate) mod auto_mouse_layer;
@@ -142,6 +141,14 @@ impl Runnable for Keyboard<'_> {
     /// Main keyboard processing task, it receives input devices result, processes keys.
     /// The report is sent using `send_report`.
     async fn run(&mut self) -> ! {
+        embassy_futures::join::join(self.run_keyboard(), crate::sleep::run_sleep_manager())
+            .await
+            .0
+    }
+}
+
+impl Keyboard<'_> {
+    async fn run_keyboard(&mut self) -> ! {
         loop {
             // Wait for the next event, but wake up at the earliest pending deadline.
             // `with_deadline` polls the subscriber first, so a queued event is handled first.
@@ -381,7 +388,6 @@ impl<'a> Keyboard<'a> {
         self.keymap.update_matrix_state(&event);
 
         // Report activity for sleep management
-        #[cfg(feature = "_ble")]
         report_activity();
 
         if let KeyboardEventSource::KeyCode(keycode) = event.source {

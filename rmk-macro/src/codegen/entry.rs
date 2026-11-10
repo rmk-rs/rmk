@@ -365,3 +365,41 @@ pub(crate) fn join_all_tasks(tasks: Vec<TokenStream2>) -> TokenStream2 {
         #joined.await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use rmk_config::KeyboardTomlConfig;
+
+    use super::*;
+
+    #[test]
+    fn keyboard_owns_sleep_management_for_each_transport() {
+        for example in [
+            "rp2040",
+            "esp32c3_ble",
+            "nrf52840_ble",
+            "rp2040_split",
+            "nrf52840_ble_split",
+        ] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../examples/use_config/{example}/keyboard.toml"));
+            let config = KeyboardTomlConfig::new_from_toml_path(&path);
+            let entry = rmk_entry_select(
+                &config.hardware().unwrap(),
+                &config.host(),
+                &config.behavior().unwrap(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+            );
+            assert_eq!(
+                entry.to_string().matches("run_sleep_manager").count(),
+                0,
+                "{example}"
+            );
+        }
+    }
+}

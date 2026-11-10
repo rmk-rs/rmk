@@ -31,17 +31,9 @@ pub(crate) fn current_usb_state() -> UsbState {
     CONNECTION_STATUS.lock(|c| c.get().usb)
 }
 
-/// Current central sleep state for host polling. Sourced from the BLE sleep
-/// manager's `SLEEPING_STATE`; always `false` in builds without BLE.
+/// Current unibody/central sleep state for host polling and split synchronization.
 pub(crate) fn current_sleep_state() -> bool {
-    #[cfg(feature = "_ble")]
-    {
-        crate::ble::sleep::SLEEPING_STATE.load(core::sync::atomic::Ordering::Acquire)
-    }
-    #[cfg(not(feature = "_ble"))]
-    {
-        false
-    }
+    crate::sleep::SLEEPING_STATE.load(core::sync::atomic::Ordering::Acquire)
 }
 
 /// The BLE half of [`current_connection_status`], with the same subscribe-first rule.
