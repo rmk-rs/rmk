@@ -137,11 +137,31 @@ fn capabilities_report_the_live_board() {
     });
 }
 
+// The profile list's length depends on the feature set, which TOML cannot spell.
+#[test]
+fn connection_reads_agree_with_each_other() {
+    use rmk_types::connection::UsbState;
+
+    let status = serde_json::to_string(&ConnectionStatus {
+        usb: UsbState::Configured,
+        ..Default::default()
+    })
+    .unwrap();
+    test_block_on(async {
+        SimKeyboard::builder([[[k!(A)]]])
+            .build()
+            .await
+            .rynk::<command::GetConnectionType>("null", RynkReply::Ok(r#""Usb""#))
+            .rynk::<command::GetConnectionStatus>("null", RynkReply::Ok(&status))
+            .run()
+            .await;
+    });
+}
+
 #[cfg(feature = "_ble")]
 #[test]
 fn profile_commands_accept_every_host_and_dongle_slot() {
     use rmk::config::{LockConfig, RmkConfig};
-    use rmk_types::ble::BleStatus;
 
     test_block_on(async {
         let mut keyboard = SimKeyboard::builder([[[k!(A)]]])
@@ -158,13 +178,7 @@ fn profile_commands_accept_every_host_and_dongle_slot() {
         let mut actions = Vec::new();
         for slot in 0..slots {
             let request = slot.to_string();
-            let status = serde_json::to_string(&BleStatus {
-                profile: slot as u8,
-                ..Default::default()
-            })
-            .unwrap();
             keyboard
-                .rynk::<command::GetBleStatus>(&request, RynkReply::Ok(&status))
                 .rynk::<command::SwitchBleProfile>(&request, RynkReply::Ok("null"))
                 .rynk::<command::DisconnectBleProfile>(&request, RynkReply::Ok("null"))
                 .rynk::<command::ClearBleProfile>(&request, RynkReply::Ok("null"));
@@ -177,7 +191,6 @@ fn profile_commands_accept_every_host_and_dongle_slot() {
         if let Ok(invalid) = u8::try_from(slots) {
             let request = invalid.to_string();
             keyboard
-                .rynk::<command::GetBleStatus>(&request, RynkReply::Err(RynkError::Invalid))
                 .rynk::<command::SwitchBleProfile>(&request, RynkReply::Err(RynkError::Invalid))
                 .rynk::<command::DisconnectBleProfile>(&request, RynkReply::Err(RynkError::Invalid))
                 .rynk::<command::ClearBleProfile>(&request, RynkReply::Err(RynkError::Invalid));
@@ -188,39 +201,6 @@ fn profile_commands_accept_every_host_and_dongle_slot() {
 }
 
 // Topics stay muted until `GetCapabilities` is served; these cases skip its reply.
-#[cfg(feature = "_ble")]
-#[test]
-fn background_profile_changes_refresh_the_list_without_changing_the_route() {
-    use rmk_types::ble::{BleState, BleStatus};
-    use rmk_types::connection::UsbState;
-
-    test_block_on(async {
-        let mut keyboard = SimKeyboard::builder([[[k!(A), k!(No)]]]).build().await;
-        keyboard
-            .host_send(frame(Cmd::GetCapabilities, 1, &()))
-            .skip_host_frame();
-        let route = ConnectionStatus {
-            usb: UsbState::Configured,
-            ..Default::default()
-        };
-        let route_json = serde_json::to_string(&route).unwrap();
-        for state in [BleState::Connected, BleState::Inactive] {
-            let background = BleStatus {
-                profile: 1,
-                state,
-                bonded: true,
-            };
-            let expected = serde_json::to_string(&background).unwrap();
-            keyboard
-                .publish(async move { rmk::test_support::set_ble_profile_status(background) })
-                .rynk_topic(Cmd::ConnectionChange, &route_json)
-                .rynk::<command::GetBleStatus>("1", RynkReply::Ok(&expected))
-                .rynk::<command::GetConnectionStatus>("null", RynkReply::Ok(&route_json));
-        }
-        keyboard.run().await;
-    });
-}
-
 #[test]
 fn layer_changes_are_pushed_after_the_handshake() {
     use rmk_types::action::{Action, KeyAction};
@@ -245,6 +225,20 @@ fn layer_changes_are_pushed_after_the_handshake() {
 #[cfg(feature = "_ble")]
 #[test]
 fn state_changes_are_pushed_after_the_handshake() {
+    use rmk_types::ble::{BleState, BleStatus};
+    use rmk_types::connection::{ConnectionType, UsbState};
+
+    let mut connection = ConnectionStatus {
+        usb: UsbState::Suspended,
+        selected: 1,
+        preferred: ConnectionType::Ble,
+        ..Default::default()
+    };
+    connection.ble[1] = BleStatus {
+        state: BleState::Advertising,
+        bonded: true,
+    };
+    let connection = serde_json::to_string(&connection).unwrap();
     test_block_on(async {
         let mut keyboard = SimKeyboard::builder([[[k!(A), k!(No)]]]).build().await;
         keyboard
@@ -254,10 +248,7 @@ fn state_changes_are_pushed_after_the_handshake() {
             (Cmd::WpmUpdate, "42"),
             (Cmd::SleepState, "true"),
             (Cmd::LedIndicatorChange, r#"{"caps_lock":true}"#),
-            (
-                Cmd::ConnectionChange,
-                r#"{"usb":"Suspended","ble":{"profile":1,"state":"Advertising","bonded":true},"preferred":"Ble"}"#,
-            ),
+            (Cmd::ConnectionChange, connection.as_str()),
             (
                 Cmd::BatteryStatusChange,
                 r#"{"Available":{"charge_state":"Discharging","level":85}}"#,

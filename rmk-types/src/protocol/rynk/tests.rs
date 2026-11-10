@@ -278,11 +278,18 @@ fn exemplars() -> Exemplars {
     };
     let connection = ConnectionStatus {
         usb: UsbState::Configured,
-        ble: BleStatus {
-            profile: 1,
-            state: BleState::Advertising,
-            bonded: true,
-        },
+        ble: heapless::Vec::from_slice(&[
+            BleStatus {
+                state: BleState::Connected,
+                bonded: true,
+            },
+            BleStatus {
+                state: BleState::Advertising,
+                bonded: true,
+            },
+        ])
+        .unwrap(),
+        selected: 1,
         preferred: ConnectionType::Ble,
     };
     // All three sub-bitfields distinct so a StateBits field swap shows.
@@ -516,7 +523,7 @@ fn wire_values_locked() {
         ("DeviceInfo{1.2.3,4,5,RMK,..}", encode(&ex.device_info)),
         ("BehaviorConfig{50..120}", encode(&ex.behavior)),
         (
-            "ConnectionStatus{Configured,{1,Adv,bonded},Ble}",
+            "ConnectionStatus{Configured,[Conn,Adv],s=1,Ble}",
             encode(&ex.connection)
         ),
         ("ProtocolVersion{1,0}", encode(&ProtocolVersion { major: 1, minor: 0 })),
@@ -531,9 +538,8 @@ fn wire_values_locked() {
         ("BleState::Connected", encode(&BleState::Connected)),
         ("BleState::Inactive", encode(&BleState::Inactive)),
         (
-            "BleStatus{2,Connected,bonded}",
+            "BleStatus{Connected,bonded}",
             encode(&BleStatus {
-                profile: 2,
                 state: BleState::Connected,
                 bonded: true,
             })
@@ -923,11 +929,11 @@ fn wire_frames_locked() {
             encode_frame(Cmd::GetConnectionStatus, SEQ, &())
         ),
         (
-            "GetConnectionStatus reply Ok(ConnectionStatus{Configured,{1,Adv,bonded},Ble})",
+            "GetConnectionStatus reply Ok(ConnectionStatus{Configured,[Conn,Adv],s=1,Ble})",
             encode_frame(
                 Cmd::GetConnectionStatus,
                 SEQ,
-                &Ok::<ConnectionStatus, RynkError>(ex.connection)
+                &Ok::<ConnectionStatus, RynkError>(ex.connection.clone())
             ),
         ),
         // Status (0x08xx).
@@ -967,11 +973,6 @@ fn wire_frames_locked() {
             encode_frame(Cmd::GetLedIndicator, SEQ, &Ok::<LedIndicator, RynkError>(led)),
         ),
         // Connection / status rows behind `_ble` and `split`.
-        ("GetBleStatus request 1", encode_frame(Cmd::GetBleStatus, SEQ, &1u8)),
-        (
-            "GetBleStatus reply Ok(BleStatus{1,Advertising,bonded})",
-            encode_frame(Cmd::GetBleStatus, SEQ, &Ok::<BleStatus, RynkError>(ex.connection.ble)),
-        ),
         (
             "SwitchBleProfile request 1",
             encode_frame(Cmd::SwitchBleProfile, SEQ, &1u8)
@@ -1023,7 +1024,7 @@ fn wire_frames_locked() {
         ("LayerChange topic 3", encode_frame(Cmd::LayerChange, 0, &3u8)),
         ("WpmUpdate topic 42", encode_frame(Cmd::WpmUpdate, 0, &42u16)),
         (
-            "ConnectionChange topic ConnectionStatus{Configured,{1,Adv,bonded},Ble}",
+            "ConnectionChange topic ConnectionStatus{Configured,[Conn,Adv],s=1,Ble}",
             encode_frame(Cmd::ConnectionChange, 0, &ex.connection)
         ),
         ("SleepState topic true", encode_frame(Cmd::SleepState, 0, &true)),
@@ -1256,9 +1257,8 @@ mod protocol_reference {
              `GetLayout` serves the compressed layout blob {ble_chunk} bytes per call: the request is a byte offset and `LayoutChunk` carries `total_len` plus that page's bytes. `GetMacro`/`SetMacro` move one whole macro per call, a `MacroOp` list indexed below `max_macros`; every macro shares one buffer of `macro_space_size` bytes, in the list's postcard encoding plus a length prefix per slot, so a write that no longer fits answers `Invalid`; `macros_writable` is false on a firmware without storage, whose `SetMacro` answers `Unimplemented`.\n\n\
              ## Connections\n\n\
              `DeviceCapabilities` lists the BLE profiles a host can address: host profiles `0..num_ble_profiles`, plus the dongle profile at index `dongle_profile` when it is set. The profile commands below answer `Invalid` for any other index.\n\n\
-             To show every profile, call `GetBleStatus` once per index. `state` is `Connected` only when the profile has an encrypted link that can carry input. `bonded` reports whether the profile has a paired host, and is false while the profile waits to pair a new one. Right after boot, before the keyboard has loaded its bonds, `GetBleStatus` answers `NotReady`; retry.\n\n\
-             To keep that list current, re-read every profile after each `ConnectionChange` push. A change on any profile triggers a push, but the payload describes only the selected profile, and several changes can arrive as one push.\n\n\
-             To show which transport carries input, read `GetConnectionStatus`. USB is ready when `usb` is `Configured` or `Suspended`, BLE is ready when `ble.state` is `Connected`, and `preferred` decides when both are ready; `ConnectionStatus::decide_active()` (`decide_active_connection` in `rynk-wasm`) applies this rule. `GetConnectionType` returns only `preferred`.\n\n\
+             `GetConnectionStatus` returns every profile at once, and each `ConnectionChange` push carries the same payload. `ble[i]` is profile `i`, so `ble` holds the host profiles, then the dongle profile; without BLE (`ble_enabled` false) its entries stay `Inactive`. `selected` is the profile that carries input when BLE is active. `state` is `Connected` only when the profile has an encrypted link that can carry input. `bonded` reports whether the profile has a paired host, and is false while the selected profile waits to pair a new one.\n\n\
+             The transport that carries input follows one rule: USB is ready when `usb` is `Configured` or `Suspended`, BLE is ready when `ble[selected].state` is `Connected`, and `preferred` decides when both are ready; `ConnectionStatus::decide_active()` (`decide_active_connection` in `rynk-wasm`) applies this rule. `GetConnectionType` returns only `preferred`.\n\n\
              {profile_actions}\n\
              These commands answer `Ok` once the keyboard accepts the action, before it takes effect; watch `ConnectionChange` for the result. `NotReady` means earlier profile actions are still pending; retry. If the action closes the link the request arrived on, the link can drop before the reply arrives, but the action still runs.\n\n\
              A disconnected or cleared profile stays offline until it is selected again, by `SwitchBleProfile` (even on the already selected index) or the user's profile keys. Typing doesn't reconnect it, and other profiles keep their connections. After a restart, the keyboard advertises on the selected profile as usual.\n\n\

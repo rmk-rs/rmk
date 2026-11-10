@@ -50,11 +50,9 @@ Each peer holds one frame in a buffer of `rynk_buffer_size` bytes (a `[rmk]` opt
 
 `DeviceCapabilities` lists the BLE profiles a host can address: host profiles `0..num_ble_profiles`, plus the dongle profile at index `dongle_profile` when it is set. The profile commands below answer `Invalid` for any other index.
 
-To show every profile, call `GetBleStatus` once per index. `state` is `Connected` only when the profile has an encrypted link that can carry input. `bonded` reports whether the profile has a paired host, and is false while the profile waits to pair a new one. Right after boot, before the keyboard has loaded its bonds, `GetBleStatus` answers `NotReady`; retry.
+`GetConnectionStatus` returns every profile at once, and each `ConnectionChange` push carries the same payload. `ble[i]` is profile `i`, so `ble` holds the host profiles, then the dongle profile; without BLE (`ble_enabled` false) its entries stay `Inactive`. `selected` is the profile that carries input when BLE is active. `state` is `Connected` only when the profile has an encrypted link that can carry input. `bonded` reports whether the profile has a paired host, and is false while the selected profile waits to pair a new one.
 
-To keep that list current, re-read every profile after each `ConnectionChange` push. A change on any profile triggers a push, but the payload describes only the selected profile, and several changes can arrive as one push.
-
-To show which transport carries input, read `GetConnectionStatus`. USB is ready when `usb` is `Configured` or `Suspended`, BLE is ready when `ble.state` is `Connected`, and `preferred` decides when both are ready; `ConnectionStatus::decide_active()` (`decide_active_connection` in `rynk-wasm`) applies this rule. `GetConnectionType` returns only `preferred`.
+The transport that carries input follows one rule: USB is ready when `usb` is `Configured` or `Suspended`, BLE is ready when `ble[selected].state` is `Connected`, and `preferred` decides when both are ready; `ConnectionStatus::decide_active()` (`decide_active_connection` in `rynk-wasm`) applies this rule. `GetConnectionType` returns only `preferred`.
 
 | Command                | Effect                                                      | Bond                     | Needs unlock |
 | ---------------------- | ----------------------------------------------------------- | ------------------------ | ------------ |
@@ -125,8 +123,7 @@ The lock belongs to the connection and starts locked; `Lock` or disconnection re
 | `0x0601` | `GetBehaviorConfig`    | `()`                   | `BehaviorConfig`        |         |                                                                              |
 | `0x0602` | `SetBehaviorConfig`    | `BehaviorConfig`       | `()`                    |         |                                                                              |
 | `0x0701` | `GetConnectionType`    | `()`                   | `ConnectionType`        |         | Preferred transport, not the active one.                                     |
-| `0x0702` | `GetConnectionStatus`  | `()`                   | `ConnectionStatus`      |         | Full `ConnectionStatus` snapshot; `ble` is the selected profile.             |
-| `0x0703` | `GetBleStatus`         | `u8`                   | `BleStatus`             | `_ble`  | State and bond of one host or dongle profile.                                |
+| `0x0702` | `GetConnectionStatus`  | `()`                   | `ConnectionStatus`      |         | Full `ConnectionStatus` snapshot, every BLE profile included.                |
 | `0x0704` | `SwitchBleProfile`     | `u8`                   | `()`                    | `_ble`  | Select a profile.                                                            |
 | `0x0705` | `ClearBleProfile`      | `u8`                   | `()`                    | `_ble`  | Disconnect a profile and forget its bond.                                    |
 | `0x0706` | `DisconnectBleProfile` | `u8`                   | `()`                    | `_ble`  | Disconnect a profile and keep its bond.                                      |

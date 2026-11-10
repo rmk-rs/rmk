@@ -22,8 +22,6 @@ use super::{
 };
 use crate::action::{EncoderAction, KeyAction};
 use crate::battery::BatteryStatus;
-#[cfg(feature = "_ble")]
-use crate::ble::BleStatus;
 use crate::combo::Combo;
 use crate::connection::{ConnectionStatus, ConnectionType};
 use crate::fork::Fork;
@@ -316,11 +314,8 @@ endpoints! {
     // Connection (0x07xx).
     /// Preferred transport, not the active one.
     GetConnectionType = 0x0701: () => ConnectionType;
-    /// Full `ConnectionStatus` snapshot; `ble` is the selected profile.
+    /// Full `ConnectionStatus` snapshot, every BLE profile included.
     GetConnectionStatus = 0x0702: () => ConnectionStatus;
-    /// State and bond of one host or dongle profile.
-    #[cfg(feature = "_ble")]
-    GetBleStatus = 0x0703: u8 => BleStatus;
     /// Select a profile.
     #[cfg(feature = "_ble")]
     SwitchBleProfile = 0x0704: u8 => ();

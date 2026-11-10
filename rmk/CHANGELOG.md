@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: Use bare `#[register_processor]` to run the type's `Runnable`. See [processor migration](https://rmk.rs/docs/migration/v09_v10#processors).
 - **BREAKING**: Keyboard macros are reworked around `MacroOp` lists.
 - **BREAKING**: Bump Rynk protocol version to 0.2: now `GetMacro`/`SetMacro` read and write a whole macro by index, `BleStatus` gained a `bonded` field, changing its wire format and that of `ConnectionStatus`, and `Fork` gained a `layers` field.
+- **BREAKING**: `ConnectionStatus.ble` lists every BLE profile, indexed by profile number, and the new `ConnectionStatus.selected` names the selected one; `ConnectionStatus` is no longer `Copy`, and `BleStatus` drops its `profile` field. Rynk's `GetBleStatus` is removed, since `GetConnectionStatus` returns every profile, and the display's `RenderContext.ble_status` becomes `connection`.
 - **BREAKING**: Serial numbers no longer contain the RMK version, so they stay the same across upgrades. USB, BLE, and Rynk report a protocol marker followed by a configured device serial ID or one derived from the hardware UID. `DeviceConfig.serial_number` now owns the complete string built by `build_serial_number`; `DeviceConfig` is `Clone` rather than `Copy`. `RMK_BUILD_INFO` is removed. See [serial number migration](https://rmk.rs/docs/migration/v09_v10#serial-numbers).
 
 ### Added

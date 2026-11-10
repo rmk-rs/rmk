@@ -15,7 +15,6 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use rynk::rmk_types::action::{EncoderAction, KeyAction};
 use rynk::rmk_types::battery::BatteryStatus;
-use rynk::rmk_types::ble::BleStatus;
 use rynk::rmk_types::combo::Combo;
 use rynk::rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rynk::rmk_types::fork::Fork;
@@ -181,7 +180,6 @@ endpoints! {
     // connection
     get_connection_type() -> ConnectionType,
     get_connection_status() -> ConnectionStatus,
-    get_ble_status(slot: u8) -> BleStatus,
     switch_ble_profile(slot: u8) -> (),
     clear_ble_profile(slot: u8) -> (),
     disconnect_ble_profile(slot: u8) -> (),

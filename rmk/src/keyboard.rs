@@ -2028,12 +2028,12 @@ mod test {
         let mut keyboard = create_test_keyboard();
         let target = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
         BLE_PROFILE_CHANNEL.clear();
-        crate::state::update_status(|status| status.ble.profile = target);
+        crate::state::update_status(|status| status.selected = target);
         let (_, actions) = block_on(embassy_futures::join::join(
             keyboard.process_user(crate::NUM_BLE_PROFILE as u8 + 2, KeyboardEvent::key(0, 0, false)),
             async {
                 let cleared = BLE_PROFILE_CHANNEL.receive().await;
-                crate::state::update_status(|status| status.ble.profile = 0);
+                crate::state::update_status(|status| status.selected = 0);
                 (cleared, BLE_PROFILE_CHANNEL.receive().await)
             },
         ));

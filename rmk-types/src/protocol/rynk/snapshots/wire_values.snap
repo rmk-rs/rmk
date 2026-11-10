@@ -32,12 +32,12 @@ BehaviorConfig{50..120}                          32 3c 46 50 da 80 a6 86 e8 8d 0
 BleState::Advertising                            00
 BleState::Connected                              01
 BleState::Inactive                               02
-BleStatus{2,Connected,bonded}                    02 01 01
+BleStatus{Connected,bonded}                      01 01
 ChargeState::Charging                            00
 ChargeState::Discharging                         01
 ChargeState::Unknown                             02
 Combo{[Single(A)],Morse(1),L2}                   01 02 01 00 04 05 01 01 02
-ConnectionStatus{Configured,{1,Adv,bonded},Ble}  02 01 00 01 01
+ConnectionStatus{Configured,[Conn,Adv],s=1,Ble}  02 02 01 01 00 01 01 01
 ConnectionType::Ble                              01
 ConnectionType::Usb                              00
 DeviceCapabilities{1..17}                        01 02 03 04 05 06 07 08 01 09 0a 0b 01 00 01 0c 00 0d 0e 01 03 0f 10 11 01

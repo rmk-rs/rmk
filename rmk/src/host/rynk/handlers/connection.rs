@@ -1,11 +1,9 @@
 //! Connection handlers — USB/BLE preferred-transport read, BLE profile management.
 
-#[cfg(feature = "_ble")]
-use rmk_types::ble::BleStatus;
 use rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rmk_types::protocol::rynk::RynkError;
 #[cfg(feature = "_ble")]
-use rmk_types::protocol::rynk::command::{ClearBleProfile, DisconnectBleProfile, GetBleStatus, SwitchBleProfile};
+use rmk_types::protocol::rynk::command::{ClearBleProfile, DisconnectBleProfile, SwitchBleProfile};
 use rmk_types::protocol::rynk::command::{GetConnectionStatus, GetConnectionType};
 
 use super::super::RynkService;
@@ -22,14 +20,6 @@ impl Handle<GetConnectionType> for RynkService<'_> {
 impl Handle<GetConnectionStatus> for RynkService<'_> {
     async fn handle(&self, _: ()) -> Result<ConnectionStatus, RynkError> {
         Ok(self.ctx.connection_status())
-    }
-}
-
-#[cfg(feature = "_ble")]
-impl Handle<GetBleStatus> for RynkService<'_> {
-    async fn handle(&self, slot: u8) -> Result<BleStatus, RynkError> {
-        Self::check_ble_profile_slot(slot)?;
-        crate::state::ble_profile_status(slot).ok_or(RynkError::NotReady)
     }
 }
 
@@ -74,7 +64,7 @@ impl Handle<DisconnectBleProfile> for RynkService<'_> {
 impl RynkService<'_> {
     /// `Invalid` for a slot past the host profiles and the dongle slot.
     fn check_ble_profile_slot(slot: u8) -> Result<(), RynkError> {
-        if (slot as usize) >= crate::ble::profile::BOND_SLOTS {
+        if (slot as usize) >= crate::BOND_SLOTS {
             Err(RynkError::Invalid)
         } else {
             Ok(())

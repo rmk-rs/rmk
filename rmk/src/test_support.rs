@@ -18,25 +18,12 @@ pub fn to_via_keycode(action: rmk_types::action::KeyAction) -> u16 {
 }
 
 #[cfg(all(feature = "_no_usb", feature = "_ble"))]
-pub fn set_ble_state(state: rmk_types::ble::BleState) {
-    crate::state::set_ble_state(state);
+pub fn set_ble_state(profile: u8, state: rmk_types::ble::BleState) {
+    crate::state::set_ble_state(profile, state);
 }
 
 pub fn set_connection_status(status: rmk_types::connection::ConnectionStatus) {
-    crate::state::update_status(|current| *current = status);
-}
-
-#[cfg(all(feature = "rynk", feature = "_ble"))]
-pub fn reset_ble_profile_statuses() {
-    crate::state::init_ble_profile_statuses(core::array::from_fn(|slot| rmk_types::ble::BleStatus {
-        profile: slot as u8,
-        ..Default::default()
-    }));
-}
-
-#[cfg(all(feature = "rynk", feature = "_ble"))]
-pub fn set_ble_profile_status(status: rmk_types::ble::BleStatus) {
-    crate::state::update_ble_profile_status(status.profile, |current| *current = status);
+    crate::state::update_status(|current| *current = status.clone());
 }
 
 #[cfg(feature = "storage")]

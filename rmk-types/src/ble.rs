@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 pub const BLE_ADV_NAME_MAX_LEN: usize = 16;
 
 /// Connection and advertising state of one BLE host or dongle profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
@@ -18,45 +18,17 @@ pub enum BleState {
     /// The profile has an encrypted connection that can carry input.
     Connected,
     /// The profile has no connection ready for input.
+    #[default]
     Inactive,
 }
 
 /// Connection state and bond of one BLE host or dongle profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct BleStatus {
-    /// Host or dongle profile index.
-    pub profile: u8,
     pub state: BleState,
     /// Whether the profile holds a bond, independent of connection state. False while it re-pairs.
     pub bonded: bool,
-}
-
-impl Default for BleStatus {
-    fn default() -> Self {
-        Self {
-            profile: 0,
-            state: BleState::Inactive,
-            bonded: false,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{BleState, BleStatus};
-
-    #[test]
-    fn default_ble_status_is_profile_zero_and_inactive() {
-        assert_eq!(
-            BleStatus::default(),
-            BleStatus {
-                profile: 0,
-                state: BleState::Inactive,
-                bonded: false,
-            }
-        );
-    }
 }

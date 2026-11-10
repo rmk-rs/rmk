@@ -23,6 +23,7 @@ use rmk_types::led_indicator::LedIndicator;
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 
+use crate::BOND_SLOTS;
 use crate::ble::adv::{Adv, advertise};
 use crate::ble::battery_service::BleBatteryServer;
 #[cfg(feature = "split")]
@@ -36,7 +37,7 @@ use crate::ble::led::BleLedReader;
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
 #[cfg(feature = "dongle")]
 use crate::ble::profile::DONGLE_PROFILE;
-use crate::ble::profile::{BOND_SLOTS, ProfileInfo, ProfileManager, load_stack_bond};
+use crate::ble::profile::{ProfileInfo, ProfileManager, load_stack_bond};
 use crate::ble::sleep::{report_activity, request_sleep};
 use crate::channel::{BLE_PROFILE_CHANNEL, BLE_REPORT_CHANNEL, LED_SIGNAL};
 use crate::config::{BleBatteryConfig, DeviceConfig, RmkConfig};
@@ -119,11 +120,7 @@ impl<T: ControllerCmdSync<LeSetScanParams>> CentralCmds for T {}
 
 /// Host and dongle connections: one per profile on extended-HCI controllers.
 #[doc(hidden)]
-pub const NUM_HOST_LINKS: usize = if cfg!(feature = "ext_adv") {
-    crate::ble::profile::BOND_SLOTS
-} else {
-    1
-};
+pub const NUM_HOST_LINKS: usize = if cfg!(feature = "ext_adv") { BOND_SLOTS } else { 1 };
 const _: () = core::assert!(
     BOND_SLOTS > 0,
     "BLE requires at least one bond slot; set ble_profiles_num > 0 or enable dongle"
@@ -418,12 +415,6 @@ async fn run_ble_keyboard<
     let mut profile_manager: ProfileManager<BOND_SLOTS> = ProfileManager::new();
     // Load the bonded devices from storage
     profile_manager.load_bonded_devices().await;
-    #[cfg(feature = "rynk")]
-    crate::state::init_ble_profile_statuses(core::array::from_fn(|slot| rmk_types::ble::BleStatus {
-        profile: slot as u8,
-        state: BleState::Inactive,
-        bonded: profile_manager.bond_info(slot as u8).is_some(),
-    }));
 
     let mut peripheral = stack.peripheral();
     let runner = stack.runner();
@@ -498,7 +489,7 @@ async fn run_ble_keyboard<
                     },
                 };
                 load_stack_bond(stack, bond.as_ref().map(|bond| bond.info.clone()));
-                set_ble_state(BleState::Advertising);
+                set_ble_state(profile_id, BleState::Advertising);
                 advertise(
                     &mut peripheral,
                     &server.server,
@@ -520,14 +511,14 @@ async fn run_ble_keyboard<
                 Either3::First(Ok(gatt_conn)) => gatt_conn,
                 Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
                     repairing = None;
-                    set_ble_bonded(profile_manager.bond_info(profile_id).is_some());
+                    set_ble_bonded(profile_id, profile_manager.bond_info(profile_id).is_some());
                     adv_deadline = None;
-                    set_ble_state(BleState::Inactive);
+                    set_ble_state(profile_id, BleState::Inactive);
                     request_sleep();
                     continue;
                 }
                 Either3::First(Err(e)) => {
-                    set_ble_state(BleState::Inactive);
+                    set_ble_state(profile_id, BleState::Inactive);
                     #[cfg(feature = "defmt")]
                     let e = defmt::Debug2Format(&e);
                     error!("Advertise error: {:?}", e);
@@ -548,8 +539,8 @@ async fn run_ble_keyboard<
                         if slot == profile_id {
                             disconnected_by_user = true;
                             repairing = None;
-                            set_ble_bonded(profile_manager.bond_info(slot).is_some());
-                            set_ble_state(BleState::Inactive);
+                            set_ble_bonded(slot, profile_manager.bond_info(slot).is_some());
+                            set_ble_state(slot, BleState::Inactive);
                         }
                         disconnect_profile(slot, &mut host_connections, &completed).await;
                         if matches!(action, ClearBond(_)) {
@@ -570,7 +561,7 @@ async fn run_ble_keyboard<
                     disconnected_by_user = false;
                     // End re-pairing before a switch leaves this profile's status behind.
                     repairing = None;
-                    set_ble_bonded(profile_manager.bond_info(profile_id).is_some());
+                    set_ble_bonded(profile_id, profile_manager.bond_info(profile_id).is_some());
                     report_activity();
                     adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
                     // Close the target first, so pairing never switches to a link about to drop.
@@ -587,21 +578,15 @@ async fn run_ble_keyboard<
                                         .is_some_and(|bond| bond.info.identity.match_identity(&conn.peer_identity()))
                             });
                         if !keep_connected {
-                            set_ble_state(BleState::Inactive);
+                            set_ble_state(profile_id, BleState::Inactive);
                             disconnect_profile(profile_id, &mut host_connections, &completed).await;
                         }
-                        let state = match host_connections.get(&slot) {
-                            Some(conn) if conn.security_level().is_ok_and(|level| level.encrypted()) => {
-                                BleState::Connected
-                            }
-                            _ => BleState::Inactive,
-                        };
-                        profile_manager.switch_profile(slot, state);
+                        profile_manager.switch_profile(slot);
                         BLE_REPORT_CHANNEL.clear();
                     }
                     if let Some(ltk) = pair {
                         repairing = Some(ltk);
-                        set_ble_bonded(false);
+                        set_ble_bonded(slot, false);
                     }
                     continue;
                 }
@@ -610,7 +595,7 @@ async fn run_ble_keyboard<
                     if ended == profile_id && crate::state::current_ble_status().state == BleState::Connected {
                         adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
                     }
-                    crate::state::update_ble_profile_status(ended, |status| status.state = BleState::Inactive);
+                    set_ble_state(ended, BleState::Inactive);
                     continue;
                 }
             };
@@ -686,7 +671,7 @@ async fn disconnect_profile(
     loop {
         let ended = completed.receive().await;
         connections.remove(&ended);
-        crate::state::update_ble_profile_status(ended, |status| status.state = BleState::Inactive);
+        set_ble_state(ended, BleState::Inactive);
         if ended == slot {
             return;
         }
@@ -793,7 +778,7 @@ async fn gatt_events_task(
             }
             GattConnectionEvent::Encrypted { security_level, .. } => {
                 info!("[gatt] encrypted: {:?}", security_level);
-                crate::state::update_ble_profile_status(profile_id, |status| status.state = BleState::Connected);
+                set_ble_state(profile_id, BleState::Connected);
             }
             GattConnectionEvent::PhyUpdateFailed { .. } | GattConnectionEvent::ConnectionParamsUpdateFailed { .. } => {
                 warn!("[gatt] link parameter update failed");
@@ -1139,9 +1124,9 @@ async fn serve_keyboard_connection<
 
     let writer_task = async {
         loop {
-            status.get_and(|s| s.ble.profile == profile_id).await;
+            status.get_and(|s| s.selected == profile_id).await;
             while let Either::Second(report) = select(
-                status.get_and(|s| s.ble.profile != profile_id),
+                status.get_and(|s| s.selected != profile_id),
                 BLE_REPORT_CHANNEL.receive(),
             )
             .await
@@ -1282,7 +1267,7 @@ mod tests {
     use rmk_types::ble::{BleState, BleStatus};
 
     use crate::event::{Axis, AxisEvent, AxisValType, KeyboardEvent, PointingEvent, publish_event};
-    use crate::state::{current_ble_status, set_ble_state, set_ble_status};
+    use crate::state::current_ble_status;
     use crate::test_support::test_block_on as block_on;
 
     #[cfg(all(feature = "dongle", feature = "custom_message"))]
@@ -1315,52 +1300,6 @@ mod tests {
     fn ble_status_test_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    #[test]
-    fn set_ble_state_preserves_current_profile() {
-        let _guard = ble_status_test_lock().lock().unwrap();
-
-        set_ble_status(BleStatus {
-            profile: 2,
-            state: BleState::Inactive,
-            bonded: true,
-        });
-        set_ble_state(BleState::Advertising);
-
-        assert_eq!(
-            current_ble_status(),
-            BleStatus {
-                profile: 2,
-                state: BleState::Advertising,
-                bonded: true,
-            }
-        );
-    }
-
-    #[test]
-    fn selecting_an_unconnected_profile_sets_inactive() {
-        let _guard = ble_status_test_lock().lock().unwrap();
-
-        set_ble_status(BleStatus {
-            profile: 1,
-            state: BleState::Connected,
-            bonded: false,
-        });
-        set_ble_status(BleStatus {
-            profile: 3,
-            state: BleState::Inactive,
-            bonded: true,
-        });
-
-        assert_eq!(
-            current_ble_status(),
-            BleStatus {
-                profile: 3,
-                state: BleState::Inactive,
-                bonded: true,
-            }
-        );
     }
 
     fn with_stalled_keyboard(bonds: &[super::ProfileInfo], test: impl core::future::Future<Output = ()>) {
@@ -1438,13 +1377,15 @@ mod tests {
         };
         with_stalled_keyboard(core::slice::from_ref(&bond), async {
             let mut status = CONNECTION_STATUS.receiver().unwrap();
-            status.get_and(|s| s.ble.state == BleState::Advertising).await;
+            status
+                .get_and(|s| s.selected_ble().state == BleState::Advertising)
+                .await;
             assert!(current_ble_status().bonded);
 
             BLE_PROFILE_CHANNEL.send(BleProfileAction::Pair(0)).await;
             embassy_time::with_timeout(
                 Duration::from_millis(20),
-                status.get_and(|s| s.ble.profile == 0 && !s.ble.bonded),
+                status.get_and(|s| s.selected == 0 && !s.selected_ble().bonded),
             )
             .await
             .expect("holding the current profile key must start re-pairing");
@@ -1455,8 +1396,8 @@ mod tests {
             assert!(!current_ble_status().bonded);
 
             MockDriver::get().advance(Duration::from_secs(300));
-            let expired = status.get_and(|s| s.ble.state == BleState::Inactive).await;
-            assert!(expired.ble.bonded);
+            let expired = status.get_and(|s| s.selected_ble().state == BleState::Inactive).await;
+            assert!(expired.selected_ble().bonded);
             let Some(StorageValue::BondInfo(saved)) = read(StorageKey::BondInfo(0)).await.unwrap() else {
                 panic!("re-pairing must preserve the stored bond");
             };
@@ -1472,7 +1413,9 @@ mod tests {
 
         with_stalled_keyboard(&[], async {
             let mut status = CONNECTION_STATUS.receiver().unwrap();
-            status.get_and(|s| s.ble.state == BleState::Advertising).await;
+            status
+                .get_and(|s| s.selected_ble().state == BleState::Advertising)
+                .await;
             for (action, expected) in [(Previous, crate::NUM_BLE_PROFILE.saturating_sub(1) as u8), (Next, 0)] {
                 BLE_PROFILE_CHANNEL.send(action).await;
                 // The one-slot queue makes this wait until the preceding action was consumed.
@@ -1491,7 +1434,9 @@ mod tests {
 
         with_stalled_keyboard(&[ProfileInfo::default()], async {
             let mut status = CONNECTION_STATUS.receiver().unwrap();
-            status.get_and(|s| s.ble.state == BleState::Advertising).await;
+            status
+                .get_and(|s| s.selected_ble().state == BleState::Advertising)
+                .await;
             for (action, bonded) in [
                 (BleProfileAction::Disconnect(0), true),
                 (BleProfileAction::ClearBond(0), false),
@@ -1499,7 +1444,7 @@ mod tests {
                 BLE_PROFILE_CHANNEL.send(action).await;
                 embassy_time::with_timeout(
                     Duration::from_millis(10),
-                    status.get_and(|s| s.ble.state == BleState::Inactive),
+                    status.get_and(|s| s.selected_ble().state == BleState::Inactive),
                 )
                 .await
                 .unwrap();
@@ -1517,7 +1462,6 @@ mod tests {
                 assert_eq!(
                     current_ble_status(),
                     BleStatus {
-                        profile: 0,
                         state: BleState::Inactive,
                         bonded
                     }
@@ -1534,7 +1478,7 @@ mod tests {
                 BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(0)).await;
                 embassy_time::with_timeout(
                     Duration::from_millis(10),
-                    status.get_and(|s| s.ble.state == BleState::Advertising),
+                    status.get_and(|s| s.selected_ble().state == BleState::Advertising),
                 )
                 .await
                 .unwrap();
@@ -1551,10 +1495,12 @@ mod tests {
 
         with_stalled_keyboard(&[], async {
             let mut status = CONNECTION_STATUS.receiver().unwrap();
-            status.get_and(|s| s.ble.state == BleState::Advertising).await;
+            status
+                .get_and(|s| s.selected_ble().state == BleState::Advertising)
+                .await;
             for wake in 0..3 {
                 MockDriver::get().advance(Duration::from_secs(300));
-                status.get_and(|s| s.ble.state == BleState::Inactive).await;
+                status.get_and(|s| s.selected_ble().state == BleState::Inactive).await;
                 match wake {
                     0 => publish_event(KeyboardEvent::key(0, 0, true)),
                     1 => publish_event(PointingEvent {
@@ -1583,8 +1529,10 @@ mod tests {
                         BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(0)).await;
                     }
                 }
-                let resumed = status.get_and(|s| s.ble.state == BleState::Advertising).await;
-                assert_eq!(resumed.ble.profile, u8::from(wake == 2 && BOND_SLOTS > 1));
+                let resumed = status
+                    .get_and(|s| s.selected_ble().state == BleState::Advertising)
+                    .await;
+                assert_eq!(resumed.selected, u8::from(wake == 2 && BOND_SLOTS > 1));
             }
         });
     }
@@ -1597,16 +1545,18 @@ mod tests {
 
         with_stalled_keyboard(&[], async {
             let mut status = CONNECTION_STATUS.receiver().unwrap();
-            status.get_and(|s| s.ble.state == BleState::Advertising).await;
+            status
+                .get_and(|s| s.selected_ble().state == BleState::Advertising)
+                .await;
             MockDriver::get().advance(Duration::from_secs(300));
-            status.get_and(|s| s.ble.state == BleState::Inactive).await;
+            status.get_and(|s| s.selected_ble().state == BleState::Inactive).await;
             publish_event(KeyboardEvent::key(0, 0, true));
             BLE_PROFILE_CHANNEL
                 .try_send(BleProfileAction::Switch(current_profile()))
                 .unwrap();
             embassy_time::with_timeout(
                 Duration::from_millis(10),
-                status.get_and(|s| s.ble.state == BleState::Advertising),
+                status.get_and(|s| s.selected_ble().state == BleState::Advertising),
             )
             .await
             .expect("queued profile action must not discard the input that wakes advertising");
@@ -1621,7 +1571,9 @@ mod tests {
 
         with_stalled_keyboard(&[], async {
             let mut status = CONNECTION_STATUS.receiver().unwrap();
-            status.get_and(|s| s.ble.state == BleState::Advertising).await;
+            status
+                .get_and(|s| s.selected_ble().state == BleState::Advertising)
+                .await;
             MockDriver::get().advance(Duration::from_secs(150));
             // A same-profile switch restarts advertising, as a rejected connection does.
             BLE_PROFILE_CHANNEL
@@ -1631,7 +1583,7 @@ mod tests {
             MockDriver::get().advance(Duration::from_secs(150));
             embassy_time::with_timeout(
                 Duration::from_millis(10),
-                status.get_and(|s| s.ble.state == BleState::Inactive),
+                status.get_and(|s| s.selected_ble().state == BleState::Inactive),
             )
             .await
             .expect("restarting advertising must not extend its window");

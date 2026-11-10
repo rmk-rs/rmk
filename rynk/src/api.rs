@@ -14,7 +14,6 @@ use postcard::experimental::max_size::MaxSize;
 use postcard::experimental::serialized_size;
 use rmk_types::action::{EncoderAction, KeyAction};
 use rmk_types::battery::BatteryStatus;
-use rmk_types::ble::BleStatus;
 use rmk_types::combo::Combo;
 use rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rmk_types::fork::Fork;
@@ -369,18 +368,10 @@ impl Client {
         self.request::<command::GetConnectionType>(&()).await
     }
 
-    /// Read the full connection status. This is the same payload the
-    /// `ConnectionChange` topic pushes; use it to catch up after a missed
-    /// push.
+    /// Read the full connection status, every BLE profile included. This is the same
+    /// payload the `ConnectionChange` topic pushes; use it to catch up after a missed push.
     pub async fn get_connection_status(&self) -> Result<ConnectionStatus, RynkHostError> {
         self.request::<command::GetConnectionStatus>(&()).await
-    }
-
-    /// Read one host or dongle profile's connection state and bond. Requires
-    /// [`DeviceCapabilities::ble_enabled`]; nothing is sent otherwise.
-    pub async fn get_ble_status(&self, slot: u8) -> Result<BleStatus, RynkHostError> {
-        self.require_ble(Cmd::GetBleStatus)?;
-        self.request::<command::GetBleStatus>(&slot).await
     }
 
     /// Queue a switch to a host or dongle profile. The switch can disconnect the requesting
