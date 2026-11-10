@@ -73,10 +73,7 @@ impl Handle<GetCapabilities> for RynkService<'_> {
             } else {
                 0
             },
-            #[cfg(feature = "_ble")]
-            max_connections: crate::ble::NUM_HOST_LINKS as u8,
-            #[cfg(not(feature = "_ble"))]
-            max_connections: 0,
+            max_connections: constants::NUM_HOST_LINKS as u8,
             #[cfg(all(feature = "_ble", feature = "dongle"))]
             dongle_profile: Some(crate::ble::profile::DONGLE_PROFILE),
             #[cfg(not(all(feature = "_ble", feature = "dongle")))]

@@ -51,6 +51,10 @@ pub struct BuildConstants {
     pub split_battery_peripheral_ids: Vec<usize>,
     pub split_battery_peripheral_user_descriptions: Vec<String>,
     pub ble_profiles_num: usize,
+    /// Host profiles plus the dongle profile.
+    pub bond_slots: usize,
+    /// Simultaneous BLE host and dongle connections: 0 without BLE.
+    pub num_host_links: usize,
     pub ble_use_2m_phy: bool,
     pub split_central_sleep_timeout_seconds: u32,
     pub auto_mouse_layer_max_num: usize,
@@ -127,31 +131,35 @@ impl crate::KeyboardTomlConfig {
                 }
             }
         }
+        let bond_slots = rmk.ble_profiles_num + usize::from(active_features.contains(&"dongle"));
+        // Extended advertising gives every profile its own link.
+        let num_host_links = match (active_features.contains(&"_ble"), active_features.contains(&"_ext_adv")) {
+            (false, _) => 0,
+            (true, false) => 1,
+            (true, true) => bond_slots,
+        };
+        if bond_slots == 0 && active_features.contains(&"_ble") {
+            return Err("BLE requires at least one bond slot; set ble_profiles_num > 0 or enable dongle".to_string());
+        }
+
         let mut event_config = self.event.clone();
-        if active_features.contains(&"_ble") {
-            let num_host_links = if active_features.contains(&"_ext_adv") {
-                rmk.ble_profiles_num + usize::from(active_features.contains(&"dongle"))
-            } else {
-                1
-            };
-            event_config.connection_status_change.subs += num_host_links;
-            if active_features.contains(&"rynk") {
-                // Each BLE connection forwards topics independently.
-                for event in [
-                    &mut event_config.layer_change,
-                    &mut event_config.wpm_update,
-                    &mut event_config.connection_status_change,
-                    &mut event_config.sleep_state,
-                    &mut event_config.led_indicator,
-                    &mut event_config.battery_status,
-                ] {
-                    event.subs += num_host_links;
-                }
+        event_config.connection_status_change.subs += num_host_links;
+        if active_features.contains(&"rynk") {
+            // Each BLE connection forwards topics independently.
+            for event in [
+                &mut event_config.layer_change,
+                &mut event_config.wpm_update,
+                &mut event_config.connection_status_change,
+                &mut event_config.sleep_state,
+                &mut event_config.led_indicator,
+                &mut event_config.battery_status,
+            ] {
+                event.subs += num_host_links;
             }
-            event_config.battery_status.subs += num_host_links.saturating_sub(1);
-            if !split_battery_peripheral_ids.is_empty() {
-                event_config.peripheral_battery.subs += num_host_links;
-            }
+        }
+        event_config.battery_status.subs += num_host_links.saturating_sub(1);
+        if !split_battery_peripheral_ids.is_empty() {
+            event_config.peripheral_battery.subs += num_host_links;
         }
 
         // Each PointingDevice subscribes to the sleep state. Devices built by
@@ -270,6 +278,7 @@ impl crate::KeyboardTomlConfig {
         validate_u8_capability("morse_max_num", rmk.morse_max_num)?;
         validate_u8_capability("split_peripherals_num", split_peripherals_num)?;
         validate_u8_capability("ble_profiles_num", rmk.ble_profiles_num)?;
+        validate_u8_capability("max_connections", num_host_links)?;
         validate_u8_capability("macro_max_num", rmk.macro_max_num)?;
         validate_u16_capability("macro_space_size", rmk.macro_space_size)?;
         validate_u16_capability("rynk_buffer_size", rmk.rynk_buffer_size)?;
@@ -294,6 +303,8 @@ impl crate::KeyboardTomlConfig {
             split_battery_peripheral_ids,
             split_battery_peripheral_user_descriptions,
             ble_profiles_num: rmk.ble_profiles_num,
+            bond_slots,
+            num_host_links,
             ble_use_2m_phy: self.ble.as_ref().and_then(|ble| ble.use_2m_phy).unwrap_or(true),
             split_central_sleep_timeout_seconds: rmk.split_central_sleep_timeout_seconds,
             auto_mouse_layer_max_num,

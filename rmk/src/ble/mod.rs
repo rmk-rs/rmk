@@ -119,12 +119,7 @@ impl<T: ControllerCmdSync<LeSetScanParams>> CentralCmds for T {}
 
 /// Host and dongle connections: one per profile on extended-HCI controllers.
 #[doc(hidden)]
-pub const NUM_HOST_LINKS: usize = if cfg!(feature = "ext_adv") { BOND_SLOTS } else { 1 };
-const _: () = core::assert!(
-    BOND_SLOTS > 0,
-    "BLE requires at least one bond slot; set ble_profiles_num > 0 or enable dongle"
-);
-const _: () = core::assert!(NUM_HOST_LINKS <= u8::MAX as usize, "BLE host capacity must fit in u8");
+pub const NUM_HOST_LINKS: usize = crate::NUM_HOST_LINKS;
 
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
 /// own — see [`crate::dongle::Dongle`].
