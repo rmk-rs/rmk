@@ -67,8 +67,10 @@ pub struct BuildConstants {
 
 pub struct EventChannel {
     pub name: String,
-    pub channel_size: usize,
-    pub pubs: usize,
+    /// `None` for an event that keeps only its latest value.
+    pub channel_size: Option<usize>,
+    /// `None` for an event that keeps only its latest value.
+    pub pubs: Option<usize>,
     pub subs: usize,
 }
 
@@ -146,15 +148,15 @@ impl crate::KeyboardTomlConfig {
         event_config.connection_status_change.subs += num_host_links;
         if active_features.contains(&"rynk") {
             // Each BLE connection forwards topics independently.
-            for event in [
-                &mut event_config.layer_change,
-                &mut event_config.wpm_update,
-                &mut event_config.connection_status_change,
-                &mut event_config.sleep_state,
-                &mut event_config.led_indicator,
-                &mut event_config.battery_status,
+            for subs in [
+                &mut event_config.layer_change.subs,
+                &mut event_config.wpm_update.subs,
+                &mut event_config.connection_status_change.subs,
+                &mut event_config.sleep_state.subs,
+                &mut event_config.led_indicator.subs,
+                &mut event_config.battery_status.subs,
             ] {
-                event.subs += num_host_links;
+                *subs += num_host_links;
             }
         }
         event_config.battery_status.subs += num_host_links.saturating_sub(1);
@@ -185,8 +187,8 @@ impl crate::KeyboardTomlConfig {
                 vec![$(
                     EventChannel {
                         name: stringify!($field).to_string(),
-                        channel_size: event_config.$field.channel_size,
-                        pubs: event_config.$field.pubs,
+                        channel_size: Some(event_config.$field.channel_size),
+                        pubs: Some(event_config.$field.pubs),
                         subs: event_config.$field.subs,
                     },
                 )*]
@@ -194,7 +196,6 @@ impl crate::KeyboardTomlConfig {
         }
 
         let mut events = event_channels!(
-            connection_status_change,
             modifier,
             keyboard,
             layer_change,
@@ -217,6 +218,12 @@ impl crate::KeyboardTomlConfig {
             custom_message,
             custom_message_out,
         );
+        events.push(EventChannel {
+            name: "connection_status_change".to_string(),
+            channel_size: None,
+            pubs: None,
+            subs: event_config.connection_status_change.subs,
+        });
 
         // Auto-bump subscriber counts based on enabled feature flags.
         // Declarations live in subscriber_default.toml.

@@ -12,6 +12,8 @@ Each event channel has three configurable parameters:
 - **`pubs`**: Number of publishers - how many concurrent tasks can publish
 - **`subs`**: Number of subscribers - how many concurrent tasks can subscribe
 
+`connection_status_change` keeps only the latest status, so it takes `subs` only.
+
 Each event has default values for typical use cases. You can view all defaults in [`rmk-config/src/default_config/event_default.toml`](https://github.com/rmk-rs/rmk/blob/main/rmk-config/src/default_config/event_default.toml).
 
 The `subs` values are base counts. When a Cargo feature is enabled, RMK adds the subscribers its own tasks need on top of `subs`, whether the value comes from the defaults or from your `[event.<name>]` entry. For example, the internal `_ble` feature (enabled by every BLE chip feature) adds 1 to `keyboard` and `pointing`, `split` adds 2 to `led_indicator`, and `display` adds 1 to `wpm_update`, `modifier`, `sleep_state`, `layer_change`, `battery_status` and `led_indicator`. The full list of bumps is in [`rmk-config/src/default_config/subscriber_default.toml`](https://github.com/rmk-rs/rmk/blob/main/rmk-config/src/default_config/subscriber_default.toml). If you add your own subscribers, raise `subs` from its default by that number; you don't need to count the feature-gated built-in subscribers.
@@ -65,7 +67,7 @@ peripheral_battery.subs = 4
 | `charging_state`           | `ChargingStateEvent`          | channel_size=2                  |
 | `battery_status`           | `BatteryStatusEvent`          | subs=0                          |
 | **Connection Events**      |                               |                                 |
-| `connection_status_change` | `ConnectionStatusChangeEvent` | channel_size=2, pubs=2          |
+| `connection_status_change` | `ConnectionStatusChangeEvent` | subs only                       |
 | **Split Events**           |                               |                                 |
 | `peripheral_connected`     | `PeripheralConnectedEvent`    |                                 |
 | `central_connected`        | `CentralConnectedEvent`       |                                 |

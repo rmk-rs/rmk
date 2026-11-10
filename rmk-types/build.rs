@@ -201,11 +201,10 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     // Event channels
     for ev in &bc.events {
         let upper = ev.name.to_uppercase();
-        lines.push(format!(
-            "pub const {upper}_EVENT_CHANNEL_SIZE: usize = {};",
-            ev.channel_size
-        ));
-        lines.push(format!("pub const {upper}_EVENT_PUB_SIZE: usize = {};", ev.pubs));
+        if let (Some(channel_size), Some(pubs)) = (ev.channel_size, ev.pubs) {
+            lines.push(format!("pub const {upper}_EVENT_CHANNEL_SIZE: usize = {channel_size};"));
+            lines.push(format!("pub const {upper}_EVENT_PUB_SIZE: usize = {pubs};"));
+        }
         lines.push(format!("pub const {upper}_EVENT_SUB_SIZE: usize = {};", ev.subs));
     }
 
