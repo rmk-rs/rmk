@@ -48,7 +48,7 @@ use crate::sleep::{report_activity, request_sleep};
 use crate::split::PeripheralMatrixConfig;
 #[cfg(feature = "split")]
 use crate::split::ble::central::{run_peripheral_session, scan_and_connect_peripherals};
-use crate::state::{CONNECTION_STATUS, set_ble_bonded, set_ble_state};
+use crate::state::{CONNECTION_STATUS, set_ble_state};
 
 pub(crate) mod adv;
 pub(crate) mod battery_service;
@@ -443,8 +443,6 @@ async fn run_ble_keyboard<
         // Set when the selected profile is disconnected or cleared on request; it
         // stays silent until a profile action selects or pairs it again.
         let mut disconnected_by_user = false;
-        // While re-pairing, the current profile hides this stored key until a new pairing replaces it.
-        let mut repairing: Option<trouble_host::LongTermKey> = None;
         // Let USB detection run before the first advertisement.
         Timer::after_millis(10).await;
 
@@ -452,9 +450,7 @@ async fn run_ble_keyboard<
             let profile_id = crate::state::current_profile();
             let local_address = cfg!(feature = "ext_adv")
                 .then(|| BdAddr::new(crate::ble::profile::profile_address(address, profile_id)));
-            let bond = profile_manager
-                .bond_info(profile_id)
-                .filter(|bond| repairing != Some(bond.info.ltk));
+            let bond = profile_manager.bond_info(profile_id);
 
             let advertise_and_connect = async {
                 if disconnected_by_user || host_connections.contains_key(&profile_id) {
@@ -504,8 +500,7 @@ async fn run_ble_keyboard<
             {
                 Either3::First(Ok(gatt_conn)) => gatt_conn,
                 Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
-                    repairing = None;
-                    set_ble_bonded(profile_id, profile_manager.bond_info(profile_id).is_some());
+                    profile_manager.set_pairing(None);
                     adv_deadline = None;
                     set_ble_state(profile_id, BleState::Inactive);
                     request_sleep();
@@ -532,8 +527,7 @@ async fn run_ble_keyboard<
                     if matches!(action, Disconnect(_) | ClearBond(_)) {
                         if slot == profile_id {
                             disconnected_by_user = true;
-                            repairing = None;
-                            set_ble_bonded(slot, profile_manager.bond_info(slot).is_some());
+                            profile_manager.set_pairing(None);
                             set_ble_state(slot, BleState::Inactive);
                         }
                         disconnect_profile(slot, &mut host_connections, &completed).await;
@@ -542,29 +536,23 @@ async fn run_ble_keyboard<
                         }
                         continue;
                     }
-                    let pair = match action {
-                        Pair(_) => profile_manager
-                            .bond_info(slot)
-                            .map(|bond| bond.info.ltk)
-                            .filter(|&ltk| repairing != Some(ltk)),
-                        _ => None,
-                    };
-                    if pair.is_none() && slot == profile_id && !disconnected_by_user {
+                    // A slot already pairing hides its bond, so pairing it again changes nothing.
+                    let pair = matches!(action, Pair(_)) && profile_manager.bond_info(slot).is_some();
+                    if !pair && slot == profile_id && !disconnected_by_user {
                         continue;
                     }
                     disconnected_by_user = false;
                     // End re-pairing before a switch leaves this profile's status behind.
-                    repairing = None;
-                    set_ble_bonded(profile_id, profile_manager.bond_info(profile_id).is_some());
+                    profile_manager.set_pairing(None);
                     report_activity();
                     adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
                     // Close the target first, so pairing never switches to a link about to drop.
-                    if pair.is_some() {
+                    if pair {
                         disconnect_profile(slot, &mut host_connections, &completed).await;
                     }
                     if slot != profile_id {
-                        // Keep a paired link unless the target needs its place.
-                        let keep_connected = (host_connections.contains_key(&slot) || !host_connections.is_full())
+                        // Keep a paired link when every profile has a link of its own.
+                        let keep_connected = NUM_HOST_LINKS > 1
                             && host_connections.get(&profile_id).is_some_and(|conn| {
                                 conn.security_level().is_ok_and(|level| level.encrypted())
                                     && profile_manager
@@ -578,9 +566,8 @@ async fn run_ble_keyboard<
                         profile_manager.switch_profile(slot);
                         BLE_REPORT_CHANNEL.clear();
                     }
-                    if let Some(ltk) = pair {
-                        repairing = Some(ltk);
-                        set_ble_bonded(slot, false);
+                    if pair {
+                        profile_manager.set_pairing(Some(slot));
                     }
                     continue;
                 }

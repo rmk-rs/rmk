@@ -1,5 +1,7 @@
 //! Manage BLE profiles and bonding information
 
+use core::cell::Cell;
+
 use embassy_futures::select::{Either, select, select_array};
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::Watch;
@@ -113,6 +115,8 @@ pub(crate) enum BleProfileAction {
 pub(crate) struct ProfileManager<const SLOTS: usize> {
     profiles: [Watch<crate::RawMutex, ProfileInfo, 1>; SLOTS],
     updated_active_profile: Signal<crate::RawMutex, ()>,
+    /// The slot whose stored bond stays hidden until a new host pairs with it.
+    pairing: Cell<Option<u8>>,
 }
 
 impl<const SLOTS: usize> ProfileManager<SLOTS> {
@@ -121,6 +125,7 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
         Self {
             profiles: [const { Watch::new() }; SLOTS],
             updated_active_profile: Signal::new(),
+            pairing: Cell::new(None),
         }
     }
 
@@ -151,9 +156,19 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
         select_ble_profile(profile);
     }
 
-    /// Read the live bond stored in `profile`.
+    /// Read the live bond stored in `profile`; `None` while the profile pairs a new host.
     pub(crate) fn bond_info(&self, profile: u8) -> Option<ProfileInfo> {
+        if self.pairing.get() == Some(profile) {
+            return None;
+        }
         self.profiles.get(profile as usize)?.try_get_and(|info| !info.removed)
+    }
+
+    /// Hide `slot`'s stored bond until a new host pairs with it; `None` restores the hidden bond.
+    pub(crate) fn set_pairing(&self, slot: Option<u8>) {
+        for slot in [self.pairing.replace(slot), slot].into_iter().flatten() {
+            set_ble_bonded(slot, self.bond_info(slot).is_some());
+        }
     }
 
     /// Check if the `identity` is the bonded dongle's identity.
@@ -174,6 +189,9 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
         if state.try_get().as_ref() == Some(&info) {
             return;
         }
+        // A new bond ends pairing on its slot.
+        self.pairing
+            .set(self.pairing.get().filter(|&slot| slot != info.slot_num));
         set_ble_bonded(info.slot_num, !info.removed);
         state.sender().send(info);
     }
@@ -320,6 +338,25 @@ mod tests {
         manager.set_bond(replacement.clone());
         manager.update_profile_cccd_table(0, &old.info.identity, old.cccd_table);
         assert_eq!(manager.bond_info(0), Some(replacement));
+    }
+
+    #[test]
+    fn a_new_bond_ends_pairing_on_its_slot() {
+        use crate::state::current_connection_status;
+
+        let manager = ProfileManager::<1>::new();
+        let old = ProfileInfo::default();
+        manager.set_bond(old.clone());
+        manager.set_pairing(Some(0));
+        assert!(manager.bond_info(0).is_none());
+        assert!(!current_connection_status().ble[0].bonded);
+
+        let mut new = old;
+        new.info.ltk = LongTermKey(42);
+        manager.set_bond(new.clone());
+        manager.set_pairing(None);
+        assert_eq!(manager.bond_info(0), Some(new));
+        assert!(current_connection_status().ble[0].bonded);
     }
 
     #[test]
