@@ -134,14 +134,17 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
             };
         }
 
-        let profile =
-            if let Ok(Some(StorageValue::ActiveBleProfile(profile))) = read(StorageKey::ActiveBleProfile).await {
+        let profile = match read(StorageKey::ActiveBleProfile).await {
+            // A build with more profiles may have saved a profile this build lacks.
+            Ok(Some(StorageValue::ActiveBleProfile(profile))) if (profile as usize) < SLOTS => {
                 debug!("Loaded active profile: {}", profile);
                 profile
-            } else {
+            }
+            _ => {
                 debug!("Loaded default active profile",);
                 0
-            };
+            }
+        };
         for slot in 0..SLOTS as u8 {
             set_ble_bonded(slot, self.bond_info(slot).is_some());
         }
@@ -441,5 +444,28 @@ mod tests {
             assert_eq!(crate::state::current_profile(), 1);
             assert!(crate::state::current_ble_status().bonded);
         });
+    }
+
+    #[test]
+    fn a_saved_profile_this_build_lacks_selects_the_first() {
+        use embassy_futures::select::select;
+
+        use crate::config::StorageConfig;
+        use crate::core_traits::Runnable;
+        use crate::storage::{Storage, StorageItem, async_flash_wrapper, store};
+        use crate::test_support::{InMemoryFlash, clear_flash_channel, set_connection_status};
+
+        clear_flash_channel();
+        set_connection_status(Default::default());
+        test_block_on(async {
+            let flash = async_flash_wrapper(InMemoryFlash::<16_384, 4_096, 1>::new());
+            let mut storage = Box::pin(Storage::new(flash, &StorageConfig::default())).await;
+            select(storage.run(), async {
+                store(StorageItem::ActiveBleProfile(2)).await.unwrap();
+                ProfileManager::<2>::new().load_bonded_devices().await;
+            })
+            .await;
+        });
+        assert_eq!(crate::state::current_profile(), 0);
     }
 }
