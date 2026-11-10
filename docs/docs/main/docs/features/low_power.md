@@ -53,22 +53,16 @@ If your firmware already has a `bind_interrupts!` block (for example, for USB), 
 
 ## Idle sleep
 
-RMK's idle sleep manager works independently of BLE. Set `split_central_sleep_timeout_seconds` in the `[rmk]` section of `keyboard.toml` (default `0`, disabled) to put the keyboard to sleep after that many seconds without key or pointing activity. Despite the name, it applies to unibody and split central keyboards with any transport:
+Set `split_central_sleep_timeout_seconds` in the `[rmk]` section of `keyboard.toml` (default `0`, disabled) to put the keyboard to sleep after that many seconds without key or pointing activity. Despite the name, it applies to every keyboard, not only split centrals:
 
 ```toml
 [rmk]
 split_central_sleep_timeout_seconds = 600
 ```
 
-When the keyboard falls asleep, RMK publishes a `SleepStateEvent`. Display and other device handlers can use this event to save power; the manager itself does not put the MCU into deep sleep. Key or pointing activity wakes the keyboard up. Split peripherals follow the central's sleep state rather than running their own idle timers.
+When the keyboard falls asleep, RMK publishes a `SleepStateEvent`. Display and other device handlers can use this event to save power. Key or pointing activity wakes the keyboard up.
 
-`Keyboard::run()` starts the manager automatically for both the configuration macros and the Rust API. Run the keyboard alongside your other devices and transports as usual:
-
-```rust
-run_all!(matrix, storage, usb_transport, keyboard).await;
-```
-
-Custom inputs and transports can call `rmk::sleep::report_activity()` to wake the keyboard or restart its idle timeout, and `rmk::sleep::request_sleep()` to request immediate sleep. A timeout of `0` disables both idle sleep and explicit sleep requests.
+You can call `rmk::sleep::report_activity()` explicitly to wake the keyboard or restart its idle timeout, and `rmk::sleep::request_sleep()` to request immediate sleep. A timeout of `0` disables both idle sleep and explicit sleep requests.
 
 ### BLE behavior
 
@@ -78,7 +72,7 @@ A sleeping split central keeps its radio idle rather than scanning, so a periphe
 
 Two related behaviors are always on:
 
-- When BLE advertising times out without a connection (after 5 minutes), advertising waits for a key or pointing event before restarting. It also requests sleep, which takes effect only when the sleep manager is enabled.
+- When BLE advertising times out without a connection (after 5 minutes), the keyboard sleeps immediately and waits for a key or pointing event before it advertises again.
 - `NrfAdc` takes a `light_sleep` interval as its last argument. When the analog inputs have been idle for more than 1.2 seconds, the ADC polls at that interval instead of `polling_interval`. A joystick configured in `keyboard.toml` uses 350ms.
 
 ### Split central sleep using BLE Connection Subrating (tested on nrf52840 only)
