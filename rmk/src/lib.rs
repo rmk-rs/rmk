@@ -43,9 +43,13 @@ compile_error!(
      runs over the wired split transport. Disable `dfu_split` on BLE builds."
 );
 
-// The DFU features are layered: `dfu` is the base, and everything on top of
-// it needs a chip backend (`dfu_rp` or `dfu_nrf`) to provide the updater.
-#[cfg(all(feature = "_dfu", not(any(feature = "dfu_rp", feature = "dfu_nrf"))))]
+// Firmware DFU builds require a chip backend. Host tests use the generic
+// updater through the test-only `std` feature.
+#[cfg(all(
+    feature = "_dfu",
+    not(feature = "std"),
+    not(any(feature = "dfu_rp", feature = "dfu_nrf"))
+))]
 compile_error!("feature `_dfu` requires `dfu_rp` or `dfu_nrf`");
 #[cfg(all(feature = "dfu_split", not(feature = "_dfu")))]
 compile_error!("feature `dfu_split` requires the `_dfu` feature — enable `dfu_rp` or `dfu_nrf`");
