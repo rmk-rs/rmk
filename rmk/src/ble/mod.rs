@@ -564,7 +564,6 @@ async fn run_ble_keyboard<
                             disconnect_profile(profile_id, &mut host_connections, &completed).await;
                         }
                         profile_manager.switch_profile(slot);
-                        BLE_REPORT_CHANNEL.clear();
                     }
                     if pair {
                         profile_manager.set_pairing(Some(slot));

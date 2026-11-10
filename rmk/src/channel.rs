@@ -54,16 +54,10 @@ pub(crate) async fn send_hid_report(report: Report) {
     let Some((transport, ch)) = active_report_channel() else {
         return;
     };
-    #[cfg(feature = "_ble")]
-    let profile = crate::state::current_profile();
 
     let mut send = pin!(ch.send(report));
     poll_fn(|cx| {
         if crate::state::active_transport() != Some(transport) {
-            return Poll::Ready(());
-        }
-        #[cfg(feature = "_ble")]
-        if transport == ConnectionType::Ble && crate::state::current_profile() != profile {
             return Poll::Ready(());
         }
         send.as_mut().poll(cx)

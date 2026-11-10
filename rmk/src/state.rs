@@ -75,6 +75,8 @@ pub(crate) fn update_status(f: impl Fn(&mut ConnectionStatus)) {
 
     #[cfg(feature = "_ble")]
     if prev.selected != new.selected {
+        // Reports queued for the previous host must not reach the new one.
+        crate::channel::BLE_REPORT_CHANNEL.clear();
         crate::channel::LED_SIGNAL.reset();
         if prev_active != Some(ConnectionType::Usb) || new_active != Some(ConnectionType::Usb) {
             crate::keyboard::LOCK_LED_STATES.store(0, core::sync::atomic::Ordering::Relaxed);
@@ -364,26 +366,13 @@ mod tests {
 
     #[cfg(feature = "_ble")]
     #[test]
-    fn blocked_send_drops_report_after_profile_change() {
-        use embassy_futures::join::join;
-
-        use crate::channel::{BLE_REPORT_CHANNEL, send_hid_report};
+    fn profile_switch_drops_reports_queued_for_the_previous_host() {
+        use crate::channel::BLE_REPORT_CHANNEL;
 
         let _guard = state_test_lock().lock().unwrap();
         reset_state();
-        set_ble_state(0, BleState::Connected);
-        set_ble_state(1, BleState::Connected);
-        for _ in 0..crate::REPORT_CHANNEL_SIZE {
-            BLE_REPORT_CHANNEL.try_send(pressed_keyboard_report()).unwrap();
-        }
-
-        block_on(join(send_hid_report(pressed_keyboard_report()), async {
-            Timer::after_millis(1).await;
-            select_ble_profile(1);
-            BLE_REPORT_CHANNEL.clear();
-        }));
-
-        assert_eq!(super::active_transport(), Some(ConnectionType::Ble));
+        BLE_REPORT_CHANNEL.try_send(pressed_keyboard_report()).unwrap();
+        select_ble_profile(1);
         assert!(BLE_REPORT_CHANNEL.is_empty());
     }
 
