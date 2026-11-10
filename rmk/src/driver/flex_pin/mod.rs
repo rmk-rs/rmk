@@ -1,6 +1,6 @@
 use embedded_hal::digital::{ErrorType, InputPin, OutputPin};
 
-#[cfg(feature = "_nrf_ble")]
+#[cfg(feature = "_nrf")]
 pub mod nrf;
 #[cfg(feature = "rp2040")]
 pub mod rp;

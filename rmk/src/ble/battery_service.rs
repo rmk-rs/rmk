@@ -2,7 +2,6 @@ use core::sync::atomic::Ordering;
 
 use embassy_futures::join::join;
 use embassy_futures::select::{Either, select};
-use embassy_sync::pubsub::Subscriber;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
@@ -99,10 +98,11 @@ fn add_peripheral_battery_level<M: embassy_sync::blocking_mutex::raw::RawMutex, 
         [CharacteristicProp::Read, CharacteristicProp::Notify],
         0u8,
     );
+    let description = u16::try_from(peripheral_id + 1).expect("peripheral id exceeds GATT namespace range");
     level.add_descriptor_small(
         descriptors::CHARACTERISTIC_PRESENTATION_FORMAT,
         permissions,
-        peripheral_battery_presentation_format(peripheral_id),
+        battery_presentation_format(description),
     );
     level.add_descriptor_ro(
         descriptors::CHARACTERISTIC_USER_DESCRIPTION,
@@ -113,23 +113,10 @@ fn add_peripheral_battery_level<M: embassy_sync::blocking_mutex::raw::RawMutex, 
     level.build()
 }
 
-#[cfg(feature = "split")]
-fn peripheral_battery_presentation_format(peripheral_id: usize) -> [u8; 7] {
-    let description = u16::try_from(peripheral_id + 1).expect("peripheral id exceeds GATT namespace range");
-    battery_presentation_format(description)
-}
-
 pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
     battery_level: Characteristic<u8>,
     conn: &'conn GattConnection<'stack, 'server, P>,
-    sub: Subscriber<
-        'static,
-        crate::RawMutex,
-        BatteryStatusEvent,
-        { crate::BATTERY_STATUS_EVENT_CHANNEL_SIZE },
-        { crate::BATTERY_STATUS_EVENT_SUB_SIZE },
-        { crate::BATTERY_STATUS_EVENT_PUB_SIZE },
-    >,
+    sub: <BatteryStatusEvent as SubscribableEvent>::Subscriber,
 }
 
 impl<'stack, 'server, 'conn, P: PacketPool> BleBatteryServer<'stack, 'server, 'conn, P> {
@@ -229,14 +216,7 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
 pub(crate) struct BlePeripheralBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
     battery_levels: [Characteristic<u8>; crate::SPLIT_BATTERY_PERIPHERALS_NUM],
     conn: &'conn GattConnection<'stack, 'server, P>,
-    sub: Subscriber<
-        'static,
-        crate::RawMutex,
-        PeripheralBatteryEvent,
-        { crate::PERIPHERAL_BATTERY_EVENT_CHANNEL_SIZE },
-        { crate::PERIPHERAL_BATTERY_EVENT_SUB_SIZE },
-        { crate::PERIPHERAL_BATTERY_EVENT_PUB_SIZE },
-    >,
+    sub: <PeripheralBatteryEvent as SubscribableEvent>::Subscriber,
 }
 
 #[cfg(feature = "split")]
@@ -319,22 +299,6 @@ mod cpf_tests {
             battery_presentation_format(CHARACTERISTIC_PRESENTATION_FORMAT_DESCRIPTION_MAIN),
             [0x04, 0x00, 0xAD, 0x27, 0x01, 0x06, 0x01]
         );
-        assert_eq!(
-            battery_presentation_format(0x0001),
-            [0x04, 0x00, 0xAD, 0x27, 0x01, 0x01, 0x00]
-        );
-        assert_eq!(
-            battery_presentation_format(0x0002),
-            [0x04, 0x00, 0xAD, 0x27, 0x01, 0x02, 0x00]
-        );
-        assert_eq!(
-            battery_presentation_format(0x0003),
-            [0x04, 0x00, 0xAD, 0x27, 0x01, 0x03, 0x00]
-        );
-        assert_eq!(
-            battery_presentation_format(0x000F),
-            [0x04, 0x00, 0xAD, 0x27, 0x01, 0x0F, 0x00]
-        );
     }
 }
 
@@ -345,7 +309,6 @@ mod tests {
 
     use super::{
         BatteryService, MAIN_BATTERY_PRESENTATION_FORMAT, add_peripheral_battery_level, find_peripheral_battery_slot,
-        peripheral_battery_presentation_format,
     };
 
     fn descriptor_value<M: RawMutex, const N: usize>(
@@ -369,7 +332,7 @@ mod tests {
         let main = BatteryService::new(&mut table);
         let peripherals = [
             add_peripheral_battery_level(&mut table, 0, "Left"),
-            add_peripheral_battery_level(&mut table, 2, "Right"),
+            add_peripheral_battery_level(&mut table, 254, "Right"),
         ];
 
         assert_eq!(table.len(), 21);
@@ -406,7 +369,7 @@ mod tests {
                 peripherals[1],
                 trouble_host::prelude::descriptors::CHARACTERISTIC_PRESENTATION_FORMAT.into()
             ),
-            [0x04, 0x00, 0xAD, 0x27, 0x01, 0x03, 0x00].as_slice()
+            [0x04, 0x00, 0xAD, 0x27, 0x01, 0xFF, 0x00].as_slice()
         );
         for level in core::iter::once(&main.level).chain(peripherals.iter()) {
             assert_eq!(
@@ -439,14 +402,6 @@ mod tests {
             b"Right".as_slice()
         );
         assert_ne!(peripherals[0].handle, peripherals[1].handle);
-    }
-
-    #[test]
-    fn peripheral_battery_presentation_format_maps_id_254_to_assigned_description() {
-        assert_eq!(
-            peripheral_battery_presentation_format(254),
-            [0x04, 0x00, 0xAD, 0x27, 0x01, 0xFF, 0x00]
-        );
     }
 
     #[test]

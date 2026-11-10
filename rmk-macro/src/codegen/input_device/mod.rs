@@ -8,7 +8,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use rmk_config::PointingAccelerationConfig;
 use rmk_config::resolved::Hardware;
-use rmk_config::resolved::hardware::{BoardConfig, InputDeviceConfig, UniBodyConfig};
+use rmk_config::resolved::hardware::{BoardConfig, InputDeviceConfig};
 
 pub(crate) mod adc;
 pub(crate) mod battery;
@@ -74,22 +74,8 @@ pub(crate) fn expand_input_device_config(
     }
 
     // generate encoder configuration
-    let (device_initializer, processor_initializer) = match board {
-        BoardConfig::UniBody(UniBodyConfig { input_device, .. }) => {
-            expand_encoder_device(0, input_device.clone().encoder.unwrap_or(Vec::new()), chip)
-        }
-        BoardConfig::Split(split_config) => expand_encoder_device(
-            0,
-            split_config
-                .central
-                .input_device
-                .clone()
-                .unwrap_or(InputDeviceConfig::default())
-                .encoder
-                .unwrap_or(Vec::new()),
-            chip,
-        ),
-    };
+    let (device_initializer, processor_initializer) =
+        expand_encoder_device(0, input_device.encoder.unwrap_or_default(), chip);
     for initializer in device_initializer {
         initialization.extend(initializer.initializer);
         let device_name = initializer.var_name;
@@ -103,21 +89,8 @@ pub(crate) fn expand_input_device_config(
     }
 
     // generate PMW3610 configuration
-    let (pmw3610_device_initializers, pmw3610_processor_initializers) = match board {
-        BoardConfig::UniBody(UniBodyConfig { input_device, .. }) => {
-            expand_pmw3610_device(input_device.clone().pmw3610.unwrap_or(Vec::new()), chip)
-        }
-        BoardConfig::Split(split_config) => expand_pmw3610_device(
-            split_config
-                .central
-                .input_device
-                .clone()
-                .unwrap_or(InputDeviceConfig::default())
-                .pmw3610
-                .unwrap_or(Vec::new()),
-            chip,
-        ),
-    };
+    let (pmw3610_device_initializers, pmw3610_processor_initializers) =
+        expand_pmw3610_device(input_device.pmw3610.unwrap_or_default(), chip);
 
     for initializer in pmw3610_device_initializers {
         initialization.extend(initializer.initializer);
@@ -155,21 +128,8 @@ pub(crate) fn expand_input_device_config(
     }
 
     // generate PMW33xx configuration
-    let (pmw33xx_device_initializers, pmw33xx_processor_initializers) = match board {
-        BoardConfig::UniBody(UniBodyConfig { input_device, .. }) => {
-            expand_pmw33xx_device(input_device.clone().pmw33xx.unwrap_or(Vec::new()), chip)
-        }
-        BoardConfig::Split(split_config) => expand_pmw33xx_device(
-            split_config
-                .central
-                .input_device
-                .clone()
-                .unwrap_or(InputDeviceConfig::default())
-                .pmw33xx
-                .unwrap_or(Vec::new()),
-            chip,
-        ),
-    };
+    let (pmw33xx_device_initializers, pmw33xx_processor_initializers) =
+        expand_pmw33xx_device(input_device.pmw33xx.unwrap_or_default(), chip);
 
     for initializer in pmw33xx_device_initializers {
         initialization.extend(initializer.initializer);
@@ -207,21 +167,8 @@ pub(crate) fn expand_input_device_config(
     }
 
     // generate IQS5xx configuration
-    let (iqs5xx_device_initializers, iqs5xx_processor_initializers) = match board {
-        BoardConfig::UniBody(UniBodyConfig { input_device, .. }) => {
-            expand_iqs5xx_device(input_device.clone().iqs5xx.unwrap_or(Vec::new()), chip)
-        }
-        BoardConfig::Split(split_config) => expand_iqs5xx_device(
-            split_config
-                .central
-                .input_device
-                .clone()
-                .unwrap_or(InputDeviceConfig::default())
-                .iqs5xx
-                .unwrap_or(Vec::new()),
-            chip,
-        ),
-    };
+    let (iqs5xx_device_initializers, iqs5xx_processor_initializers) =
+        expand_iqs5xx_device(input_device.iqs5xx.unwrap_or_default(), chip);
 
     for initializer in iqs5xx_device_initializers {
         initialization.extend(initializer.initializer);

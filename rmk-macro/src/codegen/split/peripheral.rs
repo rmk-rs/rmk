@@ -9,6 +9,7 @@ use rmk_config::resolved::hardware::{
 use syn::ItemMod;
 
 use super::central::expand_serial_init;
+use crate::codegen::chip::bind_interrupt::expand_external_flash_interrupt;
 use crate::codegen::chip::chip_init::expand_chip_init;
 use crate::codegen::chip::comm::expand_usb_init;
 use crate::codegen::chip::flash::{expand_dfu_interface, expand_flash_init};
@@ -117,22 +118,7 @@ fn expand_bind_interrupt_for_split_peripheral(
 
     // External DFU flash SPI interrupt for nRF52 — the peripheral's DFU
     // config can differ from the central's, so this uses the per-side one.
-    let ext_flash_spi_interrupt = {
-        let ext_flash = dfu.and_then(|d| d.external_flash.as_ref());
-        if let Some(ext_flash) = ext_flash {
-            match chip.series {
-                ChipSeries::Nrf52 => {
-                    let instance = format_ident!("{}", ext_flash.spi.instance);
-                    quote! {
-                        #instance => ::embassy_nrf::spim::InterruptHandler<::embassy_nrf::peripherals::#instance>;
-                    }
-                }
-                _ => quote! {},
-            }
-        } else {
-            quote! {}
-        }
-    };
+    let ext_flash_spi_interrupt = expand_external_flash_interrupt(&chip.series, dfu);
 
     let display_interrupt = match &hardware.board {
         BoardConfig::Split(split_config) => {
@@ -166,18 +152,6 @@ fn expand_bind_interrupt_for_split_peripheral(
                 quote! {
                     USBD => ::embassy_nrf::usb::InterruptHandler<::embassy_nrf::peripherals::USBD>;
                 }
-            } else {
-                quote! {}
-            };
-
-            let ble_config = communication.get_ble_config().unwrap();
-            let support_subrating = if is_feature_enabled(&get_rmk_features(), "subrating") {
-                quote! { .support_connection_subrating_peripheral() }
-            } else {
-                quote! {}
-            };
-            let tx_power = if let Some(pwr) = ble_config.default_tx_power {
-                quote! { .default_tx_power(#pwr)?  }
             } else {
                 quote! {}
             };
@@ -218,6 +192,37 @@ fn expand_bind_interrupt_for_split_peripheral(
                     use ::embassy_nrf::spim;
                     use embassy_nrf::peripherals;
                 }
+            } else {
+                quote! {}
+            };
+
+            if split_config.connection != SplitConnection::Ble {
+                let clock_power_handler = usb_enabled.then(|| {
+                    quote! {
+                        CLOCK_POWER => ::embassy_nrf::usb::vbus_detect::InterruptHandler;
+                    }
+                });
+                return quote! {
+                    #spim_import
+                    ::embassy_nrf::bind_interrupts!(struct Irqs {
+                        #usb_interrupt
+                        #clock_power_handler
+                        #pmw33xx_spi_interrupts
+                        #ext_flash_spi_interrupt
+                        #iqs5xx_interrupt
+                        #display_interrupt
+                    });
+                };
+            }
+
+            let ble_config = communication.get_ble_config().unwrap();
+            let support_subrating = if is_feature_enabled(&get_rmk_features(), "subrating") {
+                quote! { .support_connection_subrating_peripheral() }
+            } else {
+                quote! {}
+            };
+            let tx_power = if let Some(pwr) = ble_config.default_tx_power {
+                quote! { .default_tx_power(#pwr)?  }
             } else {
                 quote! {}
             };
@@ -789,6 +794,57 @@ pub(crate) fn expand_peripheral_input_device_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nrf_serial_peripheral_does_not_initialize_host_ble() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/use_config/nrf52840_ble_split/keyboard.toml");
+        let mut hardware = rmk_config::KeyboardTomlConfig::new_from_toml_path(&path)
+            .hardware()
+            .unwrap();
+        let features = Some(vec!["usb_log".into()]);
+        let ble = expand_bind_interrupt_for_split_peripheral(
+            &hardware.chip,
+            &hardware,
+            0,
+            &features,
+            None,
+        )
+        .to_string();
+        assert!(ble.contains("build_sdc"));
+
+        // we test serial peripheral case
+        let BoardConfig::Split(split) = &mut hardware.board else {
+            panic!("expected split fixture");
+        };
+
+        split.connection = SplitConnection::Serial;
+        // The central still has BLE enabled; the peripheral must only use its wired link.
+        assert!(hardware.communication.ble_enabled());
+        for usb_only in [false, true] {
+            if usb_only {
+                hardware.communication = rmk_config::resolved::hardware::CommunicationConfig::Usb(
+                    hardware.communication.get_usb_info().unwrap(),
+                );
+            }
+            let irqs = expand_bind_interrupt_for_split_peripheral(
+                &hardware.chip,
+                &hardware,
+                0,
+                &features,
+                None,
+            )
+            .to_string();
+            assert!(irqs.contains("USBD"));
+            assert!(irqs.contains("vbus_detect"));
+            let init =
+                crate::codegen::chip::chip_init::chip_init_default(&hardware, Some(0)).to_string();
+            for generated in [&irqs, &init] {
+                assert!(!generated.contains("nrf_sdc"));
+                assert!(!generated.contains("mpsl"));
+            }
+        }
+    }
 
     #[test]
     fn serial_peripheral_runs_battery_processors() {

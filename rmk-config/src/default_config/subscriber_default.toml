@@ -66,18 +66,12 @@ events = [
 [[subscriber]]
 features = ["rynk"]
 events = [
+    { name = "battery_status" },
     { name = "layer_change" },
     { name = "wpm_update" },
     { name = "connection_status_change" },
     { name = "sleep_state" },
     { name = "led_indicator" },
-]
-
-[[subscriber]]
-features = ["rynk", "_ble"]
-events = [
-    # Battery topics exist only in BLE-enabled firmware, including over USB.
-    { name = "battery_status" },
 ]
 
 # --- Dongle-gated internal subscribers (both binaries enable `dongle`) ---
@@ -108,6 +102,8 @@ events = [
 [[subscriber]]
 features = ["split"]
 events = [
+    # split/peripheral.rs: BatteryStatusEvent::subscriber(), on every transport.
+    { name = "battery_status" },
     # split/peripheral.rs: KeyboardEvent::subscriber()
     { name = "keyboard" },
     # split/peripheral.rs: PointingEvent::subscriber()
@@ -132,8 +128,6 @@ features = ["split", "_ble"]
 events = [
     # split/ble/peripheral.rs: KeyboardEvent::subscriber() (temporary, on timeout)
     { name = "keyboard" },
-    # split/peripheral.rs: BatteryStatusEvent::subscriber() (cfg _ble)
-    { name = "battery_status" },
     # split/driver.rs: ClearPeerEvent::subscriber() (cfg _ble)
     # Covers up to 2 peripherals; for 3+ peripherals override subs in keyboard.toml
     { name = "clear_peer", count = 2 },

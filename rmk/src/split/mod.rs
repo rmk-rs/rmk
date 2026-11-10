@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "dfu_split")]
 use serde::{Deserializer, Serializer};
 
-#[cfg(feature = "_ble")]
-use crate::event::BatteryStatusEvent;
-use crate::event::{KeyboardEvent, PointingEvent};
+use crate::event::{BatteryStatusEvent, KeyboardEvent, PointingEvent};
 
 #[cfg(feature = "_ble")]
 pub mod ble;
@@ -65,7 +63,6 @@ pub(crate) enum SplitMessage {
     /// Sleep state from central to peripheral.
     SleepState(bool),
     /// Battery status, from peripheral to central
-    #[cfg(feature = "_ble")]
     BatteryStatus(BatteryStatusEvent),
 
     // -----------------------------------------------------------------------
