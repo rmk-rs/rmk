@@ -22,8 +22,8 @@ const DONGLE_SEEKING: u8 = 1;
 pub(crate) enum Adv<'a> {
     /// A peer that already knows us: ADV_DIRECT_IND carries no data, only this address.
     Directed(Address),
-    /// Any BLE host, which finds us as a standard HID keyboard.
-    Host { name: &'a str, bonded: bool },
+    /// Any BLE host, which finds us as a standard HID keyboard; `fast` shortens the interval.
+    Host { name: &'a str, fast: bool },
     /// The split central that owns peripheral `id`.
     SplitPeripheral { id: u8 },
     /// An RMK dongle whose pairing window is open.
@@ -97,7 +97,7 @@ impl Adv<'_> {
     /// All variants use legacy PDUs, which require the 1M primary PHY.
     fn params(&self) -> AdvertisementParameters {
         let interval = match self {
-            Self::Host { bonded: false, .. } => Duration::from_millis(200),
+            Self::Host { fast: false, .. } => Duration::from_millis(200),
             _ => Duration::from_millis(50),
         };
         AdvertisementParameters {
@@ -159,11 +159,11 @@ mod tests {
         for adv in [
             Adv::Host {
                 name: LONGEST_NAME,
-                bonded: false,
+                fast: false,
             },
             Adv::Host {
                 name: LONGEST_NAME,
-                bonded: true,
+                fast: true,
             },
             Adv::Directed(Address::random([1, 2, 3, 4, 5, 0xC6])),
             Adv::SplitPeripheral { id: 0xFF },
@@ -175,7 +175,7 @@ mod tests {
         assert!(
             Adv::Host {
                 name: "0123456789abcdefg",
-                bonded: false,
+                fast: false,
             }
             .build(&mut [0; 31])
             .is_err()
@@ -183,9 +183,9 @@ mod tests {
     }
 
     #[test]
-    fn bonded_and_unbonded_hosts_advertise_keyboard_discovery_data() {
-        for bonded in [false, true] {
-            let adv = Adv::Host { name: "RMK", bonded };
+    fn fast_and_slow_hosts_advertise_keyboard_discovery_data() {
+        for fast in [false, true] {
+            let adv = Adv::Host { name: "RMK", fast };
             let mut buf = [0; 31];
             let Advertisement::ConnectableScannableUndirected { adv_data, scan_data } = adv.build(&mut buf).unwrap()
             else {
@@ -200,7 +200,7 @@ mod tests {
             assert!(scan_data.is_empty());
             assert_eq!(
                 adv.params().interval_min,
-                embassy_time::Duration::from_millis(if bonded { 50 } else { 200 })
+                embassy_time::Duration::from_millis(if fast { 50 } else { 200 })
             );
         }
     }

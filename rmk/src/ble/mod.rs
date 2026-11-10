@@ -441,6 +441,8 @@ async fn run_ble_keyboard<
         // Keep host and dongle handles until their GATT workers finish.
         let mut host_connections = LinearMap::<u8, Connection<'_, DefaultPacketPool>, NUM_HOST_LINKS>::new();
         const ADV_TIMEOUT: Duration = Duration::from_secs(300);
+        // A bonded host usually reconnects soon, so its advertising starts fast and then slows.
+        const FAST_ADV_DURATION: Duration = Duration::from_secs(30);
         let mut adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
         // Set when the selected profile is disconnected or cleared on request; it
         // stays silent until a profile action selects or pairs it again.
@@ -470,6 +472,7 @@ async fn run_ble_keyboard<
                     }
                 };
 
+                let fast_until = deadline - (ADV_TIMEOUT - FAST_ADV_DURATION);
                 let adv = match &bond {
                     #[cfg(feature = "dongle")]
                     Some(bond) if profile_id == DONGLE_PROFILE => Adv::Directed(bond.info.identity.addr),
@@ -477,8 +480,13 @@ async fn run_ble_keyboard<
                     None if profile_id == DONGLE_PROFILE => Adv::DongleSeeking,
                     bond => Adv::Host {
                         name: product_name,
-                        bonded: bond.is_some(),
+                        fast: bond.is_some() && Instant::now() < fast_until,
                     },
+                };
+                // Fast advertising stops early, so it restarts at the slow interval.
+                let stop = match adv {
+                    Adv::Host { fast: true, .. } => fast_until,
+                    _ => deadline,
                 };
                 load_stack_bond(stack, bond.as_ref().map(|bond| bond.info.clone()));
                 set_ble_state(profile_id, BleState::Advertising);
@@ -487,7 +495,7 @@ async fn run_ble_keyboard<
                     &server.server,
                     adv,
                     local_address,
-                    deadline.saturating_duration_since(Instant::now()),
+                    stop.saturating_duration_since(Instant::now()),
                 )
                 .await
             };
@@ -501,6 +509,12 @@ async fn run_ble_keyboard<
             .await
             {
                 Either3::First(Ok(gatt_conn)) => gatt_conn,
+                // Only fast advertising ended; the advertising period continues.
+                Either3::First(Err(BleHostError::BleHost(Error::Timeout)))
+                    if adv_deadline.is_some_and(|deadline| Instant::now() < deadline) =>
+                {
+                    continue;
+                }
                 Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
                     profile_manager.set_pairing(None);
                     adv_deadline = None;
@@ -1685,6 +1699,25 @@ mod tests {
             )
             .await
             .expect("an unencrypted link must not extend advertising");
+        });
+    }
+
+    #[test]
+    fn bonded_advertising_starts_fast_then_slows_within_its_period() {
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
+            advertising(&hci, 0).await;
+            MockDriver::get().advance(Duration::from_secs(31));
+            advertising(&hci, 1).await;
+            // In 0.625 ms units: 50 ms, then 200 ms.
+            assert_eq!(hci.advertising_intervals(), [80, 320]);
+            MockDriver::get().advance(Duration::from_secs(270));
+            embassy_time::with_timeout(
+                Duration::from_millis(10),
+                until(|s| s.selected_ble().state == BleState::Inactive),
+            )
+            .await
+            .expect("slow advertising must end with its period");
         });
     }
 }

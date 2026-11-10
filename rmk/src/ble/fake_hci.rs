@@ -62,6 +62,23 @@ impl FakeController {
         enables.iter().filter(|params| params[0] == 1).count()
     }
 
+    /// The minimum interval of every advertising setup, in 0.625 ms units.
+    pub(crate) fn advertising_intervals(&self) -> Vec<u32> {
+        #[cfg(feature = "ext_adv")]
+        let intervals = self
+            .sent::<bt_hci::cmd::le::LeSetExtAdvParams>()
+            .iter()
+            .map(|params| u32::from_le_bytes([params[3], params[4], params[5], 0]))
+            .collect();
+        #[cfg(not(feature = "ext_adv"))]
+        let intervals = self
+            .sent::<bt_hci::cmd::le::LeSetAdvParams>()
+            .iter()
+            .map(|params| u16::from_le_bytes([params[0], params[1]]).into())
+            .collect();
+        intervals
+    }
+
     /// A host at random address `peer` connects to the advertisement on `handle`.
     pub(crate) fn connect(&self, handle: u16, peer: [u8; 6]) {
         let [lo, hi] = handle.to_le_bytes();
