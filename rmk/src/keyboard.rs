@@ -2,7 +2,7 @@ use core::fmt::Debug;
 
 use embassy_futures::yield_now;
 #[cfg(feature = "_ble")]
-use embassy_sync::signal::Signal;
+use embassy_sync::watch::Watch;
 use embassy_time::{Duration, Instant, Timer, with_deadline};
 use heapless::Vec;
 use rmk_types::action::{Action, KeyAction, KeyboardAction};
@@ -49,7 +49,7 @@ use crate::keymap::HOLD_BUFFER_SIZE;
 
 // Timestamp of the last key action, the value is the number of seconds since the boot
 #[cfg(feature = "_ble")]
-pub(crate) static LAST_KEY_TIMESTAMP: Signal<crate::RawMutex, u32> = Signal::new();
+pub(crate) static LAST_KEY_TIMESTAMP: Watch<crate::RawMutex, u32, { crate::ble::NUM_HOST_LINKS }> = Watch::new();
 
 /// Led states for the keyboard hid report (its value is received by by the light service in a hid report)
 /// LedIndicator type would be nicer, but that does not have const expr constructor
@@ -838,7 +838,7 @@ impl<'a> Keyboard<'a> {
         }
 
         #[cfg(feature = "_ble")]
-        LAST_KEY_TIMESTAMP.signal(Instant::now().as_secs() as u32);
+        LAST_KEY_TIMESTAMP.sender().send(Instant::now().as_secs() as u32);
 
         if !key_action.is_morse() {
             match key_action {
@@ -1669,7 +1669,9 @@ impl<'a> Keyboard<'a> {
                     BLE_PROFILE_CHANNEL.send(BleProfileAction::Previous).await;
                 } else if id == NUM_BLE_PROFILE as u8 + 2 {
                     // Clear bond on current profile
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond).await;
+                    BLE_PROFILE_CHANNEL
+                        .send(BleProfileAction::ClearBond(crate::state::current_profile()))
+                        .await;
                 } else if id == NUM_BLE_PROFILE as u8 + 3 {
                     // Toggle preferred transport (USB <-> BLE);
                     // only meaningful when both transports exist in this build.
@@ -1701,11 +1703,10 @@ impl<'a> Keyboard<'a> {
             return;
         };
 
-        // Tapping a bond slot switches to it; holding it forgets the bond, switches, then re-pairs.
+        // Keep the old bond until a replacement pairing succeeds.
         if id < NUM_BLE_PROFILE as u8 {
-            info!("Profile key held: clearing bond on profile {}", id);
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearSlot(id)).await;
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
+            info!("Profile key held: re-pairing profile {}", id);
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Pair(id)).await;
         }
         #[cfg(feature = "split")]
         if id == NUM_BLE_PROFILE as u8 + 4 {
@@ -1715,11 +1716,8 @@ impl<'a> Keyboard<'a> {
         #[cfg(feature = "dongle")]
         if id == NUM_BLE_PROFILE as u8 + 5 {
             use crate::ble::profile::DONGLE_PROFILE;
-            info!("Dongle key held: clearing dongle bond, seeking a dongle");
-            BLE_PROFILE_CHANNEL
-                .send(BleProfileAction::ClearSlot(DONGLE_PROFILE))
-                .await;
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(DONGLE_PROFILE)).await;
+            info!("Dongle key held: re-pairing dongle profile");
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Pair(DONGLE_PROFILE)).await;
         }
     }
 
@@ -2019,6 +2017,24 @@ mod test {
 
     fn create_test_keyboard() -> Keyboard<'static> {
         create_test_keyboard_with_config(BehaviorConfig::default())
+    }
+
+    #[cfg(feature = "_ble")]
+    #[test]
+    fn clear_profile_key_keeps_the_target_selected_when_queued() {
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+
+        let mut keyboard = create_test_keyboard();
+        let target = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
+        BLE_PROFILE_CHANNEL.clear();
+        crate::state::update_status(|status| status.ble.profile = target);
+        block_on(keyboard.process_user(crate::NUM_BLE_PROFILE as u8 + 2, KeyboardEvent::key(0, 0, false)));
+        crate::state::update_status(|status| status.ble.profile = 0);
+        assert!(matches!(
+            BLE_PROFILE_CHANNEL.try_receive(),
+            Ok(BleProfileAction::ClearBond(slot)) if slot == target
+        ));
     }
 
     async fn force_timeout_first_hold(keyboard: &mut Keyboard<'static>) {
