@@ -104,7 +104,8 @@ use crate::fmt::Debug;
 
 const I2C_ADDR: u8 = 0x74; // default I2C bus address according to §8.2.
 
-const END_SESSION: [u8; 2] = [0xEE, 0xEE]; // §8.7. Address + dummy data byte; a zero-data write doesn't actually trigger end-of-comms.
+// §8.7: writing any byte to register 0xEEEE ends the communication window.
+const END_SESSION: [u8; 3] = [0xEE, 0xEE, 0x00];
 
 #[input_device(publish = TouchpadEvent)]
 pub struct Iqs5xx<I, RDY>
@@ -499,5 +500,30 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use embedded_hal_mock::eh1::{digital, i2c};
+
+    use super::*;
+    use crate::test_support::test_block_on;
+
+    #[test]
+    fn motion_read_ends_the_communication_window() {
+        let bus = i2c::Mock::new(&[
+            i2c::Transaction::transaction_start(I2C_ADDR),
+            i2c::Transaction::write(I2C_ADDR, vec![0x00, 0x0C]),
+            i2c::Transaction::read(I2C_ADDR, vec![0; MOTION_LEN]),
+            i2c::Transaction::write(I2C_ADDR, vec![0xEE, 0xEE, 0x00]),
+            i2c::Transaction::transaction_end(I2C_ADDR),
+        ]);
+        let mut ready = digital::Mock::new(&[digital::Transaction::wait_for_state(digital::State::High)]);
+        let mut device = Iqs5xx::new(0, bus, Some(ready.clone()));
+
+        test_block_on(device.read_motion()).unwrap();
+        device.i2c.done();
+        ready.done();
     }
 }

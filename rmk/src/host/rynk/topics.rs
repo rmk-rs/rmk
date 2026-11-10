@@ -8,11 +8,9 @@
 use futures::FutureExt;
 use rmk_types::protocol::rynk::TopicEvent;
 
-#[cfg(feature = "_ble")]
-use crate::event::BatteryStatusEvent;
 use crate::event::{
-    ConnectionStatusChangeEvent, EventSubscriber, LayerChangeEvent, LedIndicatorEvent, SleepStateEvent,
-    SubscribableEvent, WpmUpdateEvent,
+    BatteryStatusEvent, ConnectionStatusChangeEvent, EventSubscriber, LayerChangeEvent, LedIndicatorEvent,
+    SleepStateEvent, SubscribableEvent, WpmUpdateEvent,
 };
 
 pub(super) struct TopicSubscribers {
@@ -21,7 +19,6 @@ pub(super) struct TopicSubscribers {
     conn: <ConnectionStatusChangeEvent as SubscribableEvent>::Subscriber,
     sleep: <SleepStateEvent as SubscribableEvent>::Subscriber,
     led: <LedIndicatorEvent as SubscribableEvent>::Subscriber,
-    #[cfg(feature = "_ble")]
     battery: <BatteryStatusEvent as SubscribableEvent>::Subscriber,
 }
 
@@ -33,7 +30,6 @@ impl TopicSubscribers {
             conn: ConnectionStatusChangeEvent::subscriber(),
             sleep: SleepStateEvent::subscriber(),
             led: LedIndicatorEvent::subscriber(),
-            #[cfg(feature = "_ble")]
             battery: BatteryStatusEvent::subscriber(),
         }
     }
@@ -48,7 +44,7 @@ impl TopicSubscribers {
             e = self.conn.next_event().fuse() => TopicEvent::ConnectionChange(*e),
             e = self.sleep.next_event().fuse() => TopicEvent::SleepState(*e),
             e = self.led.next_event().fuse() => TopicEvent::LedIndicatorChange(*e),
-            with_feature("_ble"): e = self.battery.next_event().fuse() => TopicEvent::BatteryStatusChange(*e),
+            e = self.battery.next_event().fuse() => TopicEvent::BatteryStatusChange(*e),
         }
     }
 }

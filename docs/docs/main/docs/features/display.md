@@ -141,7 +141,7 @@ let mut oled = DisplayProcessor::new(display)
 
 ## Custom Renderers
 
-Implement `DisplayRenderer<C>` for your color type (`BinaryColor` for monochrome OLEDs):
+Implement `DisplayRenderer<C>` for your color type (`BinaryColor` for monochrome OLEDs).
 
 ```rust
 use core::fmt::Write as _;
@@ -157,7 +157,7 @@ use rmk::display::{DisplayRenderer, RenderContext};
 pub struct MyRenderer;
 
 impl DisplayRenderer<BinaryColor> for MyRenderer {
-    fn render<D: DrawTarget<Color = BinaryColor>>(&mut self, ctx: &RenderContext, display: &mut D) {
+    async fn render<D: DrawTarget<Color = BinaryColor>>(&mut self, ctx: &RenderContext, display: &mut D) {
         display.clear(BinaryColor::Off).ok();
 
         let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
@@ -205,7 +205,7 @@ Feature-gated fields (require the corresponding RMK feature to be enabled):
 | `ble_status`            | `_ble`           | Active BLE profile, connection state, and bond presence |
 | `central_connected`     | `split`          | Whether the central is connected (peripheral side)      |
 | `peripherals_connected` | `split`          | Per-peripheral connection state array                   |
-| `peripheral_batteries`  | `split` + `_ble` | Per-peripheral battery state array                      |
+| `peripheral_batteries`  | `split`         | Per-peripheral battery state array                      |
 | `dongle_state`          | `dongle`         | The dongle's link to its keyboard (`DongleState`)       |
 
 ::: tip `key_press_latch` vs `key_pressed`
