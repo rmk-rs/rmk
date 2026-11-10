@@ -54,6 +54,8 @@ pub(crate) mod adv;
 pub(crate) mod battery_service;
 pub(crate) mod ble_server;
 pub(crate) mod device_info;
+#[cfg(test)]
+mod fake_hci;
 #[cfg(feature = "host")]
 pub(crate) mod host;
 pub(crate) mod led;
@@ -1243,6 +1245,7 @@ mod tests {
     use embassy_time::{Duration, MockDriver};
     use rmk_types::ble::{BleState, BleStatus};
 
+    use super::fake_hci::FakeController;
     use crate::event::{Axis, AxisEvent, AxisValType, KeyboardEvent, PointingEvent, publish_event};
     use crate::state::current_ble_status;
     use crate::test_support::test_block_on as block_on;
@@ -1279,30 +1282,17 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    /// Keep HCI setup pending to exercise the keyboard's outer deadline.
     fn with_stalled_keyboard(bonds: &[super::ProfileInfo], test: impl core::future::Future<Output = ()>) {
-        use bt_hci::controller::ExternalController;
-        use bt_hci::transport::{PacketToController, PacketToHost, Transport};
+        with_keyboard(FakeController::stalled(), bonds, test);
+    }
 
+    fn with_keyboard(hci: FakeController, bonds: &[super::ProfileInfo], test: impl core::future::Future<Output = ()>) {
         use super::{BOND_SLOTS, CONNECTIONS_MAX, DefaultPacketPool, HostResources, L2CAP_CHANNELS_MAX};
         use crate::config::{BleBatteryConfig, DeviceConfig};
         use crate::core_traits::Runnable;
         use crate::storage::{Storage, StorageKey, StorageValue, async_flash_wrapper};
         use crate::test_support::InMemoryFlash;
-
-        // Keep HCI setup pending to exercise the keyboard's outer deadline.
-        struct StalledTransport;
-        impl embedded_io_async::ErrorType for StalledTransport {
-            type Error = bt_hci::ReadHciError<core::convert::Infallible>;
-        }
-        impl Transport for StalledTransport {
-            async fn read<'a, P: PacketToHost<'a>>(&self, _: &'a mut [u8]) -> Result<P, Self::Error> {
-                core::future::pending().await
-            }
-
-            async fn write<P: PacketToController>(&self, _: &P) -> Result<(), Self::Error> {
-                core::future::pending().await
-            }
-        }
 
         let _guard = ble_status_test_lock().lock().unwrap();
         crate::ble::rng::seed([7; 32]);
@@ -1311,7 +1301,7 @@ mod tests {
         crate::channel::BLE_PROFILE_CHANNEL.clear();
         let mut resources =
             HostResources::<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS>::new();
-        let stack = trouble_host::new(ExternalController::<_, 1>::new(StalledTransport), &mut resources).build();
+        let stack = trouble_host::new(hci, &mut resources).build();
         block_on(select3(
             super::run_ble_keyboard(
                 &stack,
@@ -1564,6 +1554,137 @@ mod tests {
             )
             .await
             .expect("restarting advertising must not extend its window");
+        });
+    }
+
+    const HOST_A: [u8; 6] = [0xA1, 0, 0, 0, 0, 0xC1];
+    const HOST_B: [u8; 6] = [0xB2, 0, 0, 0, 0, 0xC2];
+
+    /// A stored bond with the host at random address `peer`.
+    fn bond(slot: u8, peer: [u8; 6]) -> super::ProfileInfo {
+        let mut bond = super::ProfileInfo {
+            slot_num: slot,
+            ..Default::default()
+        };
+        bond.info.identity.addr = trouble_host::prelude::Address::random(peer);
+        bond.info.security_level = trouble_host::prelude::SecurityLevel::Encrypted;
+        bond
+    }
+
+    /// Wait until the connection status satisfies `done`.
+    async fn until(done: impl Fn(&rmk_types::connection::ConnectionStatus) -> bool) {
+        while !done(&crate::state::current_connection_status()) {
+            embassy_time::Timer::after_millis(1).await;
+        }
+    }
+
+    /// Wait until advertising has started more than `starts` times.
+    async fn advertising(hci: &FakeController, starts: usize) {
+        while hci.advertising_starts() <= starts {
+            embassy_time::Timer::after_millis(1).await;
+        }
+    }
+
+    /// Wait until the keyboard serves a link; serving starts with a PHY update.
+    async fn served(hci: &FakeController) {
+        while hci.sent::<bt_hci::cmd::le::LeSetPhy>().is_empty() {
+            embassy_time::Timer::after_millis(1).await;
+        }
+    }
+
+    /// Connect the bonded `peer` on `handle` and wait until it carries input.
+    async fn reconnect(hci: &FakeController, handle: u16, peer: [u8; 6]) {
+        advertising(hci, 0).await;
+        hci.connect(handle, peer);
+        hci.encrypt(handle);
+        until(|s| s.selected_ble().state == BleState::Connected).await;
+    }
+
+    #[test]
+    fn a_bonded_host_reconnects_with_its_stored_bond() {
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[bond(0, HOST_A)], reconnect(&hci, 1, HOST_A));
+    }
+
+    #[test]
+    fn switching_away_keeps_an_encrypted_link_only_with_a_link_per_profile() {
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[bond(0, HOST_A), bond(1, HOST_B)], async {
+            reconnect(&hci, 1, HOST_A).await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await;
+            until(|s| s.selected == 1).await;
+            let kept = crate::NUM_HOST_LINKS > 1;
+            let status = crate::state::current_connection_status();
+            assert_eq!(status.ble[0].state == BleState::Connected, kept);
+            assert_eq!(hci.sent::<bt_hci::cmd::link_control::Disconnect>().is_empty(), kept);
+        });
+    }
+
+    #[test]
+    fn disconnecting_a_live_link_keeps_its_profile_silent() {
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
+            reconnect(&hci, 1, HOST_A).await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Disconnect(0)).await;
+            until(|s| s.selected_ble().state == BleState::Inactive).await;
+            assert_eq!(hci.sent::<bt_hci::cmd::link_control::Disconnect>().len(), 1);
+            embassy_time::Timer::after_millis(50).await;
+            assert_eq!(hci.advertising_starts(), 1);
+            assert!(current_ble_status().bonded);
+        });
+    }
+
+    #[test]
+    fn a_new_host_can_connect_to_a_bonded_profile_while_its_host_is_away() {
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
+            advertising(&hci, 0).await;
+            hci.connect(1, HOST_B);
+            served(&hci).await;
+            assert!(hci.sent::<bt_hci::cmd::link_control::Disconnect>().is_empty());
+            // The old bond stays until the new host pairs.
+            assert!(current_ble_status().bonded);
+        });
+    }
+
+    #[test]
+    fn losing_an_encrypted_link_opens_a_new_advertising_period() {
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
+            reconnect(&hci, 1, HOST_A).await;
+            MockDriver::get().advance(Duration::from_secs(200));
+            hci.drop_link(1);
+            advertising(&hci, 1).await;
+            // Past the end of the first period, the new one still advertises.
+            MockDriver::get().advance(Duration::from_secs(150));
+            embassy_time::Timer::after_millis(1).await;
+            assert_eq!(current_ble_status().state, BleState::Advertising);
+        });
+    }
+
+    #[test]
+    fn a_link_that_never_encrypts_keeps_the_advertising_period() {
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[], async {
+            advertising(&hci, 0).await;
+            hci.connect(1, HOST_A);
+            served(&hci).await;
+            MockDriver::get().advance(Duration::from_secs(200));
+            hci.drop_link(1);
+            advertising(&hci, 1).await;
+            MockDriver::get().advance(Duration::from_secs(110));
+            embassy_time::with_timeout(
+                Duration::from_millis(10),
+                until(|s| s.selected_ble().state == BleState::Inactive),
+            )
+            .await
+            .expect("an unencrypted link must not extend advertising");
         });
     }
 }
