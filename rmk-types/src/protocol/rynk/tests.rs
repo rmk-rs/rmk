@@ -1255,13 +1255,13 @@ mod protocol_reference {
              `DeviceCapabilities` also advertises `bulk_transfer_supported` and the paging strides `max_bulk_keys` (worst-case keys per `GetKeymapBulk` page) and `max_bulk_items` (worst-case entries per `GetComboBulk`/`GetMorseBulk` page). A bulk read names a start — for the keymap `(layer, row, col)`, read forward through the flat row-major, layer-major keymap; for combos and morses a slot index — and returns as many consecutive entries as fit in one payload, or fewer at the end. A host pages by advancing its start by the stride; a short page ends the read. A bulk write carries a start plus a list of entries and is packed by encoded size up to `max_payload_size`. A reply that does not fit beside other pipelined requests answers `Busy`; retry once they complete.\n\n\
              `GetLayout` serves the compressed layout blob {ble_chunk} bytes per call: the request is a byte offset and `LayoutChunk` carries `total_len` plus that page's bytes. `GetMacro`/`SetMacro` move one whole macro per call, a `MacroOp` list indexed below `max_macros`; every macro shares one buffer of `macro_space_size` bytes, in the list's postcard encoding plus a length prefix per slot, so a write that no longer fits answers `Invalid`; `macros_writable` is false on a firmware without storage, whose `SetMacro` answers `Unimplemented`.\n\n\
              ## Connections\n\n\
-             A BLE keyboard has `num_ble_profiles` host profiles, indexed from 0, plus a dongle profile at index `dongle_profile` when that is set. Every command in this section that takes a profile index accepts any of them and answers `Invalid` for any other index.\n\n\
-             `GetBleStatus(profile)` reads one profile's `state` and `bonded` flag. Only `Connected` means an encrypted link that can carry input. `bonded` is false while the profile re-pairs. The command answers `NotReady` until the keyboard has loaded its bonds after boot.\n\n\
-             `GetConnectionStatus` reports only the selected profile, in `ble`. To find which transport carries input, call `ConnectionStatus::decide_active()` on the result: USB can carry input while BLE stays connected. `GetConnectionType` returns the preferred transport, not the active one.\n\n\
+             `DeviceCapabilities` lists the BLE profiles a host can address: host profiles `0..num_ble_profiles`, plus the dongle profile at index `dongle_profile` when it is set. The profile commands below answer `Invalid` for any other index.\n\n\
+             To show every profile, call `GetBleStatus` once per index. `state` is `Connected` only when the profile has an encrypted link that can carry input. `bonded` reports whether the profile has a paired host, and is false while the profile waits to pair a new one. Right after boot, before the keyboard has loaded its bonds, `GetBleStatus` answers `NotReady`; retry.\n\n\
+             To keep that list current, re-read every profile after each `ConnectionChange` push. A change on any profile triggers a push, but the payload describes only the selected profile, and several changes can arrive as one push.\n\n\
+             To show which transport carries input, read `GetConnectionStatus`. USB is ready when `usb` is `Configured` or `Suspended`, BLE is ready when `ble.state` is `Connected`, and `preferred` decides when both are ready; `ConnectionStatus::decide_active()` (`decide_active_connection` in `rynk-wasm`) applies this rule. `GetConnectionType` returns only `preferred`.\n\n\
              {profile_actions}\n\
-             These three commands queue the action and reply once it is queued, before the link closes or the bond change reaches flash. A full queue answers `NotReady`. If the action closes the link that sent the request, the reply may never arrive, but the action still runs.\n\n\
-             A disconnected or forgotten profile stays offline until it is selected or paired again, or the keyboard restarts. Key presses and pointer motion don't wake it, but `SwitchBleProfile` on the same index does. Other profiles keep their connections.\n\n\
-             `ConnectionChange` also fires, with an unchanged payload, when a background profile connects, disconnects, or changes its bond. Pushes can be coalesced, so re-read every profile with `GetBleStatus` after each one.\n\n\
+             These commands answer `Ok` once the keyboard accepts the action, before it takes effect; watch `ConnectionChange` for the result. `NotReady` means earlier profile actions are still pending; retry. If the action closes the link the request arrived on, the link can drop before the reply arrives, but the action still runs.\n\n\
+             A disconnected or cleared profile stays offline until it is selected again, by `SwitchBleProfile` (even on the already selected index) or the user's profile keys. Typing doesn't reconnect it, and other profiles keep their connections. After a restart, the keyboard advertises on the selected profile as usual.\n\n\
              ## Errors\n\n\
              A request's response is postcard `Result<T, RynkError>`; the `Err` side is one of these variants.\n\n\
              {errors}\n\
@@ -1315,15 +1315,20 @@ mod protocol_reference {
                 &[
                     [
                         "`SwitchBleProfile`",
-                        "Selects the profile and advertises if it has no link.",
+                        "Selects the profile and advertises if it has no connection.",
                         "Kept",
                         "No"
                     ],
-                    ["`DisconnectBleProfile`", "Closes the profile's link.", "Kept", "No"],
+                    [
+                        "`DisconnectBleProfile`",
+                        "Closes the profile's connection.",
+                        "Kept",
+                        "No"
+                    ],
                     [
                         "`ClearBleProfile`",
-                        "Closes the profile's link.",
-                        "Forgotten, even if offline",
+                        "Closes the profile's connection.",
+                        "Deleted, even if offline",
                         "Yes"
                     ],
                 ]
