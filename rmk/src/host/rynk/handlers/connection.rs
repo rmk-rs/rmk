@@ -47,13 +47,13 @@ impl Handle<SwitchBleProfile> for RynkService<'_> {
 }
 
 /// `Cmd::ClearBleProfile` — wipes the bond at the given slot without
-/// requiring a prior switch (uses [`BleProfileAction::ClearSlot`]).
+/// requiring a prior switch (uses [`BleProfileAction::ClearBond`]).
 #[cfg(feature = "_ble")]
 impl Handle<ClearBleProfile> for RynkService<'_> {
     async fn handle(&self, slot: u8) -> Result<(), RynkError> {
         Self::check_ble_profile_slot(slot)?;
         crate::channel::BLE_PROFILE_CHANNEL
-            .try_send(crate::ble::profile::BleProfileAction::ClearSlot(slot))
+            .try_send(crate::ble::profile::BleProfileAction::ClearBond(slot))
             .map_err(|_| RynkError::NotReady)
     }
 }

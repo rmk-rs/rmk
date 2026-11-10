@@ -91,11 +91,8 @@ pub(crate) enum BleProfileAction {
     Switch(u8),
     Previous,
     Next,
-    ClearBond,
-    /// Clear the bond for an explicit slot, regardless of which slot is
-    /// currently active. Rynk's `Cmd::ClearBleProfile` issues this so a host
-    /// tool can wipe any bond without first switching to it.
-    ClearSlot(u8),
+    /// Clear the bond for the specified profile.
+    ClearBond(u8),
 }
 
 /// Manage BLE profiles and bonding information

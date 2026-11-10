@@ -16,6 +16,7 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer};
+use heapless::LinearMap;
 use rmk_types::ble::BleState;
 use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
@@ -445,9 +446,8 @@ async fn run_ble_keyboard<
     }));
 
     let connection_loop = async {
-        // Keep each host or dongle handle indexed by profile until its GATT worker finishes.
-        let mut host_connections: [Option<Connection<'_, DefaultPacketPool>>; BOND_SLOTS] =
-            core::array::from_fn(|_| None);
+        // Keep host and dongle handles until their GATT workers finish.
+        let mut host_connections = LinearMap::<u8, Connection<'_, DefaultPacketPool>, NUM_HOST_LINKS>::new();
         const ADV_TIMEOUT: Duration = Duration::from_secs(300);
         let mut adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
         // Let USB detection run before the first advertisement.
@@ -459,9 +459,7 @@ async fn run_ble_keyboard<
                 .then(|| BdAddr::new(crate::ble::profile::profile_address(address, profile_id)));
 
             let advertise_and_connect = async {
-                if host_connections[profile_id as usize].is_some()
-                    || (NUM_HOST_LINKS == 1 && host_connections.iter().any(Option::is_some))
-                {
+                if host_connections.contains_key(&profile_id) {
                     return core::future::pending().await;
                 }
 
@@ -518,43 +516,31 @@ async fn run_ble_keyboard<
                     continue;
                 }
                 Either3::Second(action) => {
-                    use crate::ble::profile::BleProfileAction::{ClearBond, ClearSlot, Next, Previous, Switch};
+                    use crate::ble::profile::BleProfileAction::{ClearBond, Next, Previous, Switch};
 
                     let last_host = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
                     let slot = match action {
-                        Switch(slot) | ClearSlot(slot) => slot,
-                        ClearBond => profile_id,
+                        Switch(slot) | ClearBond(slot) => slot,
                         Next if profile_id < last_host => profile_id + 1,
                         Next => 0,
                         Previous => profile_id.checked_sub(1).unwrap_or(last_host),
                     };
-                    let clear_bond = matches!(action, ClearBond | ClearSlot(_));
+                    let clear_bond = matches!(action, ClearBond(_));
                     if !clear_bond && slot == profile_id {
                         continue;
                     }
                     report_activity();
                     adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
                     if clear_bond {
-                        if let Some(conn) = &host_connections[slot as usize] {
-                            conn.disconnect();
-                        }
-                        while host_connections[slot as usize].is_some() {
-                            let ended = completed.receive().await;
-                            host_connections[ended as usize].take();
-                            if ended == profile_id {
-                                set_ble_state(BleState::Inactive);
-                            }
-                        }
+                        disconnect_profile(slot, &mut host_connections, &completed).await;
                         profile_manager.clear_bond(slot);
                         continue;
                     }
-
-                    if NUM_HOST_LINKS == 1
-                        && let Some(conn) = &host_connections[profile_id as usize]
-                    {
-                        conn.disconnect();
+                    if !host_connections.contains_key(&slot) && host_connections.is_full() {
+                        set_ble_state(BleState::Inactive);
+                        disconnect_profile(profile_id, &mut host_connections, &completed).await;
                     }
-                    let state = match &host_connections[slot as usize] {
+                    let state = match host_connections.get(&slot) {
                         Some(conn) if conn.security_level().is_ok_and(|level| level.encrypted()) => BleState::Connected,
                         _ => BleState::Inactive,
                     };
@@ -563,7 +549,7 @@ async fn run_ble_keyboard<
                     continue;
                 }
                 Either3::Third(ended) => {
-                    host_connections[ended as usize].take();
+                    host_connections.remove(&ended);
                     if ended == profile_id {
                         if crate::state::current_ble_status().state == BleState::Connected {
                             adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
@@ -598,7 +584,7 @@ async fn run_ble_keyboard<
                             Err(e) => warn!("Invalid stored CCCD table: {:?}", e),
                         }
                     }
-                    host_connections[profile_id as usize] = Some(conn.clone());
+                    assert!(host_connections.insert(profile_id, conn.clone()).is_ok());
                     accepted_connections.send((gatt_conn, profile_id)).await;
                     continue;
                 }
@@ -625,6 +611,27 @@ async fn run_ble_keyboard<
     )
     .await;
     unreachable!("BleTransport sub-tasks must run forever")
+}
+
+async fn disconnect_profile(
+    slot: u8,
+    connections: &mut LinearMap<u8, Connection<'_, DefaultPacketPool>, NUM_HOST_LINKS>,
+    completed: &Channel<NoopRawMutex, u8, NUM_HOST_LINKS>,
+) {
+    let Some(conn) = connections.get(&slot) else {
+        return;
+    };
+    conn.disconnect();
+    loop {
+        let ended = completed.receive().await;
+        connections.remove(&ended);
+        if ended == crate::state::current_profile() {
+            set_ble_state(BleState::Inactive);
+        }
+        if ended == slot {
+            return;
+        }
+    }
 }
 
 /// NoopHandler is used on the device which never scans,
@@ -1337,7 +1344,7 @@ mod tests {
 
     #[test]
     fn cycling_uses_available_host_profiles() {
-        use crate::ble::profile::BleProfileAction::{ClearSlot, Next, Previous};
+        use crate::ble::profile::BleProfileAction::{ClearBond, Next, Previous};
         use crate::channel::BLE_PROFILE_CHANNEL;
         use crate::state::{CONNECTION_STATUS, current_profile};
 
@@ -1347,7 +1354,7 @@ mod tests {
             for (action, expected) in [(Previous, crate::NUM_BLE_PROFILE.saturating_sub(1) as u8), (Next, 0)] {
                 BLE_PROFILE_CHANNEL.send(action).await;
                 // The one-slot queue makes this wait until the preceding action was consumed.
-                BLE_PROFILE_CHANNEL.send(ClearSlot(0)).await;
+                BLE_PROFILE_CHANNEL.send(ClearBond(0)).await;
                 assert_eq!(current_profile(), expected);
             }
         });
@@ -1389,7 +1396,7 @@ mod tests {
                         ],
                     }),
                     _ if BOND_SLOTS > 1 => BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await,
-                    _ => BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearSlot(0)).await,
+                    _ => BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(0)).await,
                 }
                 let resumed = status.get_and(|s| s.ble.state == BleState::Advertising).await;
                 assert_eq!(resumed.ble.profile, u8::from(wake == 2 && BOND_SLOTS > 1));
