@@ -7,9 +7,8 @@
 //! `Action`'s `#[cfg(feature = "steno")]` variant would shift every postcard
 //! discriminant after it.
 //!
-//! Endpoint coverage lives in `tests/scenarios/rynk_*.toml`. What stays below is
-//! the case a scenario has no vocabulary for: two keyboards built over one
-//! flash, which is a lifetime a timeline cannot describe.
+//! Endpoint coverage lives in `tests/scenarios/rynk_*.toml`; this file keeps the
+//! cases TOML cannot express.
 
 use rmk::event::{LedIndicatorEvent, SleepStateEvent, WpmUpdateEvent, publish_event_async};
 use rmk::k;
@@ -89,6 +88,101 @@ fn frame<T: serde::Serialize>(cmd: Cmd, seq: u8, payload: &T) -> Vec<u8> {
 /// spells it, while postcard still sees the typed value.
 fn payload<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> T {
     serde_json::from_str(json).unwrap_or_else(|e| panic!("rynk {what} payload `{json}`: {e}"))
+}
+
+// Connection capacity depends on the feature set, which TOML cannot spell.
+// Pinned because every host sizes its transfers from these values.
+#[cfg(all(feature = "storage", feature = "_ble", feature = "split"))]
+#[test]
+fn capabilities_report_the_live_board() {
+    let capabilities = rmk_types::protocol::rynk::DeviceCapabilities {
+        num_layers: 1,
+        num_rows: 1,
+        num_cols: 2,
+        num_encoders: 0,
+        max_combos: 8,
+        max_combo_keys: 4,
+        max_macros: 32,
+        macro_space_size: 256,
+        macros_writable: true,
+        max_morse: 8,
+        max_patterns_per_key: 8,
+        max_forks: 8,
+        storage_enabled: true,
+        lighting_enabled: false,
+        is_split: true,
+        num_split_peripherals: 1,
+        ble_enabled: true,
+        num_ble_profiles: 3,
+        max_connections: if cfg!(feature = "ext_adv") {
+            3 + u8::from(cfg!(feature = "dongle"))
+        } else {
+            1
+        },
+        max_payload_size: 482,
+        max_bulk_keys: 47,
+        max_bulk_items: 7,
+        bulk_transfer_supported: true,
+    };
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[k!(A), k!(No)]]]).build().await;
+        keyboard
+            .host_exchange(
+                frame(Cmd::GetCapabilities, 1, &()),
+                frame(Cmd::GetCapabilities, 1, &Ok::<_, RynkError>(capabilities)),
+            )
+            .run()
+            .await;
+    });
+}
+
+// Topics stay muted until `GetCapabilities` is served; these cases skip its reply.
+#[test]
+fn layer_changes_are_pushed_after_the_handshake() {
+    use rmk_types::action::{Action, KeyAction};
+
+    test_block_on(async {
+        let momentary = KeyAction::Single(Action::LayerOn(1));
+        let mut keyboard = SimKeyboard::builder([[[k!(A), momentary]], [[k!(B), k!(No)]]])
+            .build()
+            .await;
+        keyboard
+            .host_send(frame(Cmd::GetCapabilities, 1, &()))
+            .skip_host_frame()
+            .press(0, 1)
+            .rynk_topic(Cmd::LayerChange, "1")
+            .release(0, 1)
+            .rynk_topic(Cmd::LayerChange, "0")
+            .run()
+            .await;
+    });
+}
+
+#[cfg(feature = "_ble")]
+#[test]
+fn state_changes_are_pushed_after_the_handshake() {
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[k!(A), k!(No)]]]).build().await;
+        keyboard
+            .host_send(frame(Cmd::GetCapabilities, 1, &()))
+            .skip_host_frame();
+        for (topic, payload) in [
+            (Cmd::WpmUpdate, "42"),
+            (Cmd::SleepState, "true"),
+            (Cmd::LedIndicatorChange, r#"{"caps_lock":true}"#),
+            (
+                Cmd::ConnectionChange,
+                r#"{"usb":"Suspended","ble":{"profile":1,"state":"Advertising","bonded":true},"preferred":"Ble"}"#,
+            ),
+            (
+                Cmd::BatteryStatusChange,
+                r#"{"Available":{"charge_state":"Discharging","level":85}}"#,
+            ),
+        ] {
+            keyboard.rynk_publish(topic, payload).rynk_topic(topic, payload);
+        }
+        keyboard.run().await;
+    });
 }
 
 /// A macro write lands in flash and outlives the keyboard; a write the flash
