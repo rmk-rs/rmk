@@ -122,29 +122,21 @@ impl BatteryProcessor {
         let Some(battery_percent) = self.get_battery_percent(val) else {
             return;
         };
-        match self.battery_status {
-            // Skip ADC updates while charging
-            BatteryStatus::Available {
-                charge_state: ChargeState::Charging,
-                ..
-            } => {}
-            // Not charging: publish if the percentage changed.
-            BatteryStatus::Available { charge_state, level } => {
-                if level != Some(battery_percent) {
-                    self.commit(BatteryStatus::Available {
-                        charge_state,
-                        level: Some(battery_percent),
-                    });
-                }
+        // Skip unchanged percentages and ADC updates while charging.
+        let charge_state = match self.battery_status {
+            BatteryStatus::Available { charge_state, level }
+                if charge_state != ChargeState::Charging && level != Some(battery_percent) =>
+            {
+                charge_state
             }
             // First ADC reading: transition from Unavailable.
-            BatteryStatus::Unavailable => {
-                self.commit(BatteryStatus::Available {
-                    charge_state: ChargeState::Unknown,
-                    level: Some(battery_percent),
-                });
-            }
-        }
+            BatteryStatus::Unavailable => ChargeState::Unknown,
+            _ => return,
+        };
+        self.commit(BatteryStatus::Available {
+            charge_state,
+            level: Some(battery_percent),
+        });
     }
 
     async fn on_charging_state_event(&mut self, event: ChargingStateEvent) {
