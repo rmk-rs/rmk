@@ -17,7 +17,7 @@ fn held_profile_key_clears_its_bond_after_5s() {
         keyboard.press(0, 0).delay(5100).release(0, 0).run().await;
         assert_eq!(
             keyboard.ble_profile_actions(),
-            ["ClearSlot(0)", "Switch(0)", "Switch(0)"]
+            ["ClearBond(0)", "Switch(0)", "Switch(0)"]
         );
     });
 }
