@@ -78,9 +78,8 @@ pub(crate) fn expand_iqs5xx_device(
             _ => unreachable!(),
         };
 
-        let device_init = match chip.series {
+        let i2c_init = match chip.series {
             ChipSeries::Nrf52 => quote! {
-                #rdy_init
                 static #i2c_buf_cell_ident: ::static_cell::StaticCell<[u8; 16]> = ::static_cell::StaticCell::new();
                 let #i2c_buf_ident = #i2c_buf_cell_ident.init([0u8; 16]);
                 let #i2c_ident = ::embassy_nrf::twim::Twim::new(
@@ -91,14 +90,8 @@ pub(crate) fn expand_iqs5xx_device(
                     ::embassy_nrf::twim::Config::default(),
                     #i2c_buf_ident,
                 );
-                let mut #device_ident = ::rmk::input_device::iqs5xx::Iqs5xx::new(
-                    #sensor_id,
-                    #i2c_ident,
-                    #rdy_ident,
-                );
             },
             ChipSeries::Rp2040 => quote! {
-                #rdy_init
                 let #i2c_ident = ::embassy_rp::i2c::I2c::new_async(
                     p.#instance_ident,
                     p.#scl_ident,
@@ -106,17 +99,20 @@ pub(crate) fn expand_iqs5xx_device(
                     Irqs,
                     ::embassy_rp::i2c::Config::default(),
                 );
+            },
+            _ => unreachable!(),
+        };
+
+        device_initializers.push(Initializer {
+            initializer: quote! {
+                #rdy_init
+                #i2c_init
                 let mut #device_ident = ::rmk::input_device::iqs5xx::Iqs5xx::new(
                     #sensor_id,
                     #i2c_ident,
                     #rdy_ident,
                 );
             },
-            _ => unreachable!(),
-        };
-
-        device_initializers.push(Initializer {
-            initializer: device_init,
             var_name: device_ident,
         });
 

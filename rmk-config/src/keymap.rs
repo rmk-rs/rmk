@@ -516,12 +516,12 @@ mod tests {
         let aliases = HashMap::new();
         let layer_names = HashMap::new();
 
-        let keymap = "A , SHIFTED(,) B";
+        let keymap = "A , SHIFTED(,) SHIFTED(Comma) B";
         let result = KeyboardTomlConfig::keymap_parser(keymap, &aliases, &layer_names, 8);
 
         assert!(result.is_ok());
         let actions = result.unwrap();
-        assert_eq!(actions, vec!["A", ",", "SHIFTED(,)", "B"]);
+        assert_eq!(actions, vec!["A", ",", "SHIFTED(,)", "SHIFTED(Comma)", "B"]);
     }
 
     #[test]
@@ -556,16 +556,6 @@ mod tests {
         let layer_names = HashMap::new();
         let result = KeyboardTomlConfig::keymap_parser("TH(A, ,)", &aliases, &layer_names, 8);
         assert!(result.is_err(), "unparseable keymap must be Err, not a panic");
-    }
-
-    #[test]
-    fn test_single_key_arg_actions_accept_symbol_comma() {
-        let valid_cases = ["SHIFTED(,)", "SHIFTED(Comma)", ","];
-
-        for input in valid_cases {
-            let result = ConfigParser::parse(Rule::key_map, input);
-            assert!(result.is_ok(), "Input should be accepted: {}", input);
-        }
     }
 
     #[test]

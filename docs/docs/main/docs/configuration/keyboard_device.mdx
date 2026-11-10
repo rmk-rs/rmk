@@ -125,8 +125,8 @@ Omit `serial_number` to derive a six-digit hex ID from hardware where available.
 
 | Chip | Hardware UID | With the Rust API |
 | --- | --- | --- |
-| ESP32, BLE builds | Last 3 bytes of the factory MAC address | Automatic |
-| nRF, BLE builds | Top 24 bits of the FICR device ID, or of the device address on nRF54 | Automatic |
+| ESP32 | Last 3 bytes of the factory MAC address | Automatic |
+| nRF | Top 24 bits of the FICR device ID on nRF52, FICR device address on nRF54 | Automatic |
 | RP2040 | Hash of the external flash's unique ID | Call `rp2040_serial_number` |
 | STM32 | Hash of the 96-bit unique ID | Call `build_serial_number(&uid)` |
 

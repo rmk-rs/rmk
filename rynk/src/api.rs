@@ -331,9 +331,8 @@ impl Client {
         self.request::<command::GetMatrixState>(&()).await
     }
 
-    /// Read battery status. Requires [`DeviceCapabilities::ble_enabled`]; nothing is sent otherwise.
+    /// Read battery status independently of the keyboard's transport.
     pub async fn get_battery_status(&self) -> Result<BatteryStatus, RynkHostError> {
-        self.require_ble(Cmd::GetBatteryStatus)?;
         self.request::<command::GetBatteryStatus>(&()).await
     }
 

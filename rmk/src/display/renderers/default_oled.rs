@@ -3,20 +3,15 @@ use core::fmt::Write as _;
 use embedded_graphics::image::{Image, ImageRaw};
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::mono_font::ascii::FONT_5X8;
-#[cfg(feature = "_ble")]
 use embedded_graphics::mono_font::iso_8859_1::FONT_6X9;
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
-#[cfg(feature = "_ble")]
-use embedded_graphics::primitives::Rectangle;
-use embedded_graphics::primitives::{Circle, Line, PrimitiveStyle};
+use embedded_graphics::primitives::{Circle, Line, PrimitiveStyle, Rectangle};
 use embedded_graphics::text::Text;
-#[cfg(feature = "_ble")]
 use rmk_types::battery::{BatteryStatus, ChargeState};
 
 use super::icons;
 use crate::display::{DisplayRenderer, RenderContext};
-#[cfg(feature = "_ble")]
 use crate::event::BatteryStatusEvent;
 
 const FONT_STYLE: MonoTextStyle<'_, BinaryColor> = MonoTextStyle::new(&FONT_5X8, BinaryColor::On);
@@ -99,7 +94,7 @@ impl Layout {
 pub struct OledRenderer;
 
 impl DisplayRenderer<BinaryColor> for OledRenderer {
-    fn render<D: DrawTarget<Color = BinaryColor>>(&mut self, ctx: &RenderContext, display: &mut D) {
+    async fn render<D: DrawTarget<Color = BinaryColor>>(&mut self, ctx: &RenderContext, display: &mut D) {
         display.clear(BinaryColor::Off).ok();
         if ctx.sleeping {
             return;
@@ -203,8 +198,7 @@ fn draw_status_zone<D: DrawTarget<Color = BinaryColor>>(ctx: &RenderContext, dis
     let lock_y = layout.zone_top(status_zone) + layout.zone_height(status_zone) - lock_h;
     draw_lock_dots(ctx, display, 2, lock_y);
 
-    // Battery (right side, only for BLE)
-    #[cfg(feature = "_ble")]
+    // Battery (right side)
     draw_battery_icon(ctx.battery, display, layout);
 }
 
@@ -223,7 +217,6 @@ fn draw_lock_dots<D: DrawTarget<Color = BinaryColor>>(ctx: &RenderContext, displ
     }
 }
 
-#[cfg(feature = "_ble")]
 fn draw_battery_icon<D: DrawTarget<Color = BinaryColor>>(
     battery: BatteryStatusEvent,
     display: &mut D,

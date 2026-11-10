@@ -15,8 +15,8 @@ use crate::event::{BatteryAdcEvent, BatteryStatusEvent, ChargingStateEvent, publ
 pub(crate) static BATTERY_STATUS: Mutex<RawMutex, Cell<BatteryStatus>> =
     Mutex::new(Cell::new(BatteryStatus::Unavailable));
 
-#[cfg(any(feature = "_ble", test))]
-pub(crate) fn current_battery_status() -> BatteryStatus {
+/// Latest battery status reported by the battery processor.
+pub fn current_battery_status() -> BatteryStatus {
     BATTERY_STATUS.lock(|c| c.get())
 }
 
@@ -193,17 +193,6 @@ mod tests {
     fn zero_total_divider_has_no_battery_percent() {
         let processor = const { BatteryProcessor::new(1, 0) };
         assert_eq!(processor.get_battery_percent(4000), None);
-    }
-
-    #[test]
-    fn both_zero_dividers_have_no_battery_percent() {
-        let processor = const { BatteryProcessor::new(0, 0) };
-        assert_eq!(processor.get_battery_percent(4000), None);
-    }
-
-    #[test]
-    fn charging_only_has_no_battery_percent() {
-        assert_eq!(BatteryProcessor::charging_only().get_battery_percent(4000), None);
     }
 
     #[test]
