@@ -72,7 +72,7 @@ steps = [
   { release = [1, 1] },  # Release B
   { release = [1, 7] },  # Release C
 ]
-expect = [["B"], [], ["C"], []]
+expect = [["B"], ["B", "C"], ["C"], []]
 
 [[test]]
 name = "three_key_in_window"
@@ -104,7 +104,7 @@ steps = [
   { release = [1, 8] },  # Release D
   { release = [1, 7] },  # Release C
 ]
-expect = [["B"], [], ["D"], [], ["C"], []]
+expect = [["B"], ["B", "D"], ["B", "D", "C"], ["D", "C"], ["C"], []]
 
 [[test]]
 name = "three_key_misses_window_rolled_release"
@@ -120,7 +120,7 @@ steps = [
   { release = [1, 7] },  # Release C -> unilateral tap of LT(1, D) fires before B resolves
   { release = [1, 8] },  # Release D
 ]
-expect = [["B"], [], ["D"], ["D", "C"], ["D"], []]
+expect = [["B"], ["B", "D"], ["B", "D", "C"], ["D", "C"], ["D"], []]
 
 [[test]]
 name = "three_key_misses_window_after_first_key_held"
@@ -136,4 +136,4 @@ steps = [
   { release = [1, 7] },  # Release C -> unilateral tap of LT(1, D) fires before B resolves
   { release = [1, 8] },  # Release D
 ]
-expect = [["LShift"], [], ["D"], ["D", "C"], ["D"], []]
+expect = [["LShift"], ["LShift", "D"], ["LShift", "D", "C"], ["D", "C"], ["D"], []]

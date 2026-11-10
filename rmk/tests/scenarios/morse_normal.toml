@@ -8,6 +8,34 @@
 keyboard = "boards/split.toml"
 
 [[test]]
+name = "ordered_roll_emits_mod_tap_before_following_plain_tap"
+behavior.morse = { hold_timeout = "200ms", unilateral_tap = false, enable_flow_tap = false, quick_tap_timeout = "0ms" }
+steps = [
+  { press = [1, 1] },
+  { delay = 50 },
+  { press = [1, 0] },
+  { delay = 30 },
+  { release = [1, 0] },
+  { delay = 20 },
+  { release = [1, 1] },
+]
+expect = [["B"], ["B", "A"], ["B"], []]
+
+[[test]]
+name = "ordered_early_layer_chord_uses_the_resolved_layer"
+behavior.morse = { hold_timeout = "200ms", unilateral_tap = false, enable_flow_tap = false, quick_tap_timeout = "0ms" }
+steps = [
+  { press = [1, 8] },
+  { delay = 89 },
+  { press = [1, 0] },
+  { delay = 78 },
+  { release = [1, 0] },
+  { delay = 118 },
+  { release = [1, 8] },
+]
+expect = [["Kp1"], []]
+
+[[test]]
 name = "tap"
 steps = [
   { tap = { pos = [1, 1], duration = 100 } },
@@ -28,7 +56,7 @@ steps = [
   { tap = { pos = [1, 0], duration = 10 } },
   { release = [1, 1] },
 ]
-expect = [["A"], [], ["B"], []]
+expect = [["B"], ["B", "A"], ["B"], []]
 
 [[test]]
 name = "mt_2"
@@ -38,7 +66,7 @@ steps = [
   { release = [1, 1] },  # Release MT first -> tap
   { release = [1, 0] },
 ]
-expect = [["A"], ["A", "B"], ["A"], []]
+expect = [["B"], ["B", "A"], ["A"], []]
 
 [[test]]
 name = "mt_timeout_1"
@@ -47,12 +75,7 @@ steps = [
   { tap = { pos = [1, 0], duration = 260 } },
   { release = [1, 1] },
 ]
-expect = [
-  ["A"],
-  ["LShift", "A"],  # Timeout
-  ["LShift"],
-  [],
-]
+expect = [["LShift"], ["LShift", "A"], ["LShift"], []]
 
 [[test]]
 name = "mt_timeout_2"
@@ -63,7 +86,7 @@ steps = [
   { release = [1, 1] },  # Release MT after timeout
   { release = [1, 0] },
 ]
-expect = [["A"], ["LShift", "A"], ["A"], []]
+expect = [["LShift"], ["LShift", "A"], ["A"], []]
 
 [[test]]
 name = "mt_timeout_8"
@@ -73,12 +96,7 @@ steps = [
   { delay = 260 },
   { release = [1, 1] },
 ]
-expect = [
-  ["A"],
-  [],
-  ["LShift"],  # Timeout
-  [],
-]
+expect = [["LShift"], ["LShift", "A"], ["LShift"], []]
 
 [[test]]
 name = "mt_timeout_9"
@@ -103,7 +121,7 @@ steps = [
   { release = [1, 8] },  # Release LT first -> tap
   { release = [1, 0] },
 ]
-expect = [["A"], ["A", "D"], ["A"], []]
+expect = [["D"], ["D", "A"], ["A"], []]
 
 [[test]]
 name = "lt_timeout_1"
@@ -112,7 +130,7 @@ steps = [
   { tap = { pos = [1, 0], duration = 260 } },
   { release = [1, 8] },
 ]
-expect = [["A"], []]
+expect = [["Kp1"], []]
 
 [[test]]
 name = "lt_timeout_6"
@@ -175,7 +193,7 @@ steps = [
 ]
 expect = [["B"], [], ["LShift"], []]
 
-# For normal mode, each morse key is resolved independently
+# Normal-mode tap-holds resolve in press order, using each original edge time.
 [[test]]
 name = "rolling"
 steps = [
@@ -193,7 +211,7 @@ steps = [
   { delay = 150 },
   { release = [1, 7] },  # Release C (timeout)
 ]
-expect = [["A"], [], ["D"], [], ["B"], [], ["LGui"], []]
+expect = [["A"], [], ["B"], ["B", "D"], ["B"], [], ["LGui"], []]
 [[test]]
 name = "abc_c"
 steps = [
@@ -245,23 +263,22 @@ steps = [
 ]
 expect = [["R"], [], ["M"], [], ["K"], []]
 
-# Two morse keys with different hold timeouts held together: a plain key
-# pressed after them re-sorts the held buffer by press time, and the shorter
-# timeout must still fire on time, not when the longer one does.
+# A shorter following timeout cannot bypass an unresolved layer owner. The
+# deferred mod-tap becomes No on layer 1; A becomes Kp1 and U becomes No.
 [[test]]
-name = "shorter_hold_timeout_fires_before_longer_one"
+name = "shorter_hold_timeout_waits_for_preceding_layer_owner"
 behavior.morse = { unilateral_tap = false, profiles = { p0 = { hold_timeout = "100ms" } } }
 steps = [
   { press = [1, 8] },                          # LT(1, D): hold due at +250
   { press = [3, 6] },                          # MT(B, LShift, p0): hold due at +100
-  { tap = { pos = [1, 0], duration = 10 } },   # A: re-sorts the held buffer by press time
-  { delay = 150 },                             # MT hold is 70ms overdue, LT still pending
-  { tap = { pos = [1, 11], duration = 10 } },  # U: must be shifted
+  { tap = { pos = [1, 0], duration = 10 } },   # A: deferred until the layer resolves
+  { delay = 150 },                             # MT term passed, LT still pending
+  { tap = { pos = [1, 11], duration = 10 } },  # U: also deferred
   { delay = 100 },                             # LT hold fires (layer 1, no report)
   { release = [3, 6] },
   { release = [1, 8] },
 ]
-expect = [["A"], [], ["LShift"], ["LShift", "U"], ["LShift"], []]
+expect = [["Kp1"], []]
 
 # MT(B, LShift)@(1,1) and MT(B, LShift, p0)@(3,6) share tap/hold actions.
 # Releasing either used to resolve both as taps, so the held key never shifted.
@@ -285,4 +302,4 @@ steps = [
   { delay = 300 },
   { release = [1, 1] },
 ]
-expect = [["B"], [], ["LShift"], []]
+expect = [["LShift"], ["LShift", "B"], ["LShift"], []]
