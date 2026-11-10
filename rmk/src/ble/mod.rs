@@ -575,11 +575,6 @@ async fn run_ble_keyboard<
                         };
                         profile_manager.switch_profile(slot, state);
                         BLE_REPORT_CHANNEL.clear();
-                        for (&profile, conn) in host_connections.iter() {
-                            if let Err(e) = conn.set_bondable(profile == slot) {
-                                error!("Set bondable error: {:?}", e);
-                            }
-                        }
                     }
                     if let Some(ltk) = pair {
                         repairing = Some(ltk);
