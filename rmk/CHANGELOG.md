@@ -16,9 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: Rename `KeyboardEventPos` to `KeyboardEventSource` and `KeyboardEvent::pos` to `source`.
 - **BREAKING**: Use bare `#[register_processor]` to run the type's `Runnable`. See [processor migration](https://rmk.rs/docs/migration/v09_v10#processors).
 - **BREAKING**: Keyboard macros are reworked around `MacroOp` lists.
-- **BREAKING**: Bump Rynk protocol version to 0.2: now `GetMacro`/`SetMacro` read and write a whole macro by index, `BleStatus` gained a `bonded` field, changing its wire format and that of `ConnectionStatus`, and `Fork` gained a `layers` field.
-- **BREAKING**: `ConnectionStatus.ble` lists every BLE profile, indexed by profile number, and the new `ConnectionStatus.selected` names the selected one; `ConnectionStatus` is no longer `Copy`, and `BleStatus` drops its `profile` field. Rynk's `GetBleStatus` is removed, since `GetConnectionStatus` returns every profile, and the display's `RenderContext.ble_status` becomes `connection`.
+- **BREAKING**: Bump Rynk protocol version to 0.3: `GetMacro`/`SetMacro` read and write a whole macro by index, `Fork` gained a `layers` field, and `ConnectionStatus` lists every BLE profile in `ble`, with the selected one in `selected`, replacing `GetBleStatus`. `ConnectionStatus` is no longer `Copy`, `BleStatus` drops `profile`, and the display's `RenderContext.ble_status` becomes `connection`.
+- **BREAKING**: `[event.connection_status_change]` takes only `subs`, since the event keeps only the latest status.
 - **BREAKING**: Serial numbers no longer contain the RMK version, so they stay the same across upgrades. USB, BLE, and Rynk report a protocol marker followed by a configured device serial ID or one derived from the hardware UID. `DeviceConfig.serial_number` now owns the complete string built by `build_serial_number`; `DeviceConfig` is `Clone` rather than `Copy`. `RMK_BUILD_INFO` is removed. See [serial number migration](https://rmk.rs/docs/migration/v09_v10#serial-numbers).
+- A new host can pair with the selected BLE profile while its bonded host is away, replacing the old bond. Bonded profiles advertise at 50 ms for the first 30 s, then at 200 ms.
 
 ### Added
 
@@ -35,7 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Give dongles a USB DFU runtime interface: a DETACH in the 30 s after plug-in reboots into the bootloader (`jump_to_bootloader`), so a dongle can be updated with `dfu-util` or rmk-gui although its host protocol is relayed to the keyboard.
 - Publish the dongle's state.
 - Add `dfu_ext` feature for DFU writes to external SPI flash (e.g. W25Q64), so boards with limited internal flash can store the new firmware image externally.
-- Expose whether the active BLE profile is bonded via `BleStatus::bonded`, so LEDs and displays can tell a paired-but-disconnected profile from an empty slot.
+- Opt-in `ext_adv` feature for extended advertising, scanning and connecting. Each BLE profile then keeps its own connection and address, so switching back to a connected host is instant.
+- Hold a BLE profile key for 5 seconds to pair a new host; the old bond stays until the new host pairs. Rynk adds `DisconnectBleProfile`, and `DeviceCapabilities` reports `max_connections` and `dongle_profile`.
+- Expose whether each BLE profile is bonded via `BleStatus::bonded`, so LEDs and displays can tell a paired-but-disconnected profile from an empty slot.
 - Make `rmk::state::current_ble_status()` and `current_connection_status()` public, so user code can read the current status without subscribing to `ConnectionStatusChangeEvent`.
 - Forks accept a `layers` filter, so they only fire for keys from those layers.
 - Forks accept a list of triggers, and their outputs are optional: an omitted `positive_output` is the trigger, and an omitted `negative_output` leaves the key alone.
