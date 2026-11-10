@@ -3,13 +3,11 @@
 use embassy_futures::select::{Either, select, select_array};
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::Watch;
-use rmk_types::ble::{BleState, BleStatus};
 use trouble_host::prelude::*;
 use trouble_host::{BondInformation, LongTermKey};
 
 use super::ble_server::CCCD_TABLE_SIZE;
-use crate::NUM_BLE_PROFILE;
-use crate::state::{current_profile, set_ble_status};
+use crate::state::{current_profile, select_ble_profile, set_ble_bonded};
 #[cfg(feature = "storage")]
 use crate::storage::{StorageItem, StorageKey, StorageValue, read, store};
 
@@ -17,11 +15,7 @@ use crate::storage::{StorageItem, StorageKey, StorageValue, read, store};
 /// so pairing a dongle never touches a host bond. Selected only via the
 /// `SwitchToDongle` key, never by profile cycling.
 #[cfg(feature = "dongle")]
-pub(crate) const DONGLE_PROFILE: u8 = NUM_BLE_PROFILE as u8;
-
-/// Bond slots kept by the profile manager: the host profiles, plus the
-/// dedicated dongle slot on `dongle` builds.
-pub(crate) const BOND_SLOTS: usize = NUM_BLE_PROFILE + cfg!(feature = "dongle") as usize;
+pub(crate) const DONGLE_PROFILE: u8 = crate::NUM_BLE_PROFILE as u8;
 
 /// A fixed profile address that preserves the base address's random-address type bits.
 pub(crate) fn profile_address(base: [u8; 6], profile: u8) -> [u8; 6] {
@@ -114,7 +108,7 @@ pub(crate) enum BleProfileAction {
 
 /// Stored bonds for host or dongle profiles.
 ///
-/// `SLOTS` sizes the cache to the role: [`BOND_SLOTS`] for a keyboard, a single
+/// `SLOTS` sizes the cache to the role: [`BOND_SLOTS`](crate::BOND_SLOTS) for a keyboard, a single
 /// slot for a dongle.
 pub(crate) struct ProfileManager<const SLOTS: usize> {
     profiles: [Watch<crate::RawMutex, ProfileInfo, 1>; SLOTS],
@@ -148,11 +142,10 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
                 debug!("Loaded default active profile",);
                 0
             };
-        set_ble_status(BleStatus {
-            profile,
-            state: BleState::Inactive,
-            bonded: self.bond_info(profile).is_some(),
-        });
+        for slot in 0..SLOTS as u8 {
+            set_ble_bonded(slot, self.bond_info(slot).is_some());
+        }
+        select_ble_profile(profile);
     }
 
     /// Read the live bond stored in `profile`.
@@ -178,7 +171,7 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
         if state.try_get().as_ref() == Some(&info) {
             return;
         }
-        crate::state::update_ble_profile_status(info.slot_num, |status| status.bonded = !info.removed);
+        set_ble_bonded(info.slot_num, !info.removed);
         state.sender().send(info);
     }
 
@@ -233,17 +226,13 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
                 removed: true,
                 ..Default::default()
             });
-            crate::state::update_ble_profile_status(slot, |status| status.bonded = false);
+            set_ble_bonded(slot, false);
         }
     }
 
     /// Apply a selected profile outside the cancellable action wait.
-    pub(crate) fn switch_profile(&self, profile: u8, state: BleState) {
-        set_ble_status(BleStatus {
-            profile,
-            state,
-            bonded: self.bond_info(profile).is_some(),
-        });
+    pub(crate) fn switch_profile(&self, profile: u8) {
+        select_ble_profile(profile);
         self.updated_active_profile.signal(());
         info!("Switched to BLE profile: {}", profile);
     }
@@ -357,8 +346,6 @@ mod tests {
 
     #[test]
     fn profile_switches_update_selection_and_stack_bonds() {
-        use rmk_types::ble::BleState;
-
         use crate::state::{current_ble_status, current_profile};
 
         let manager = ProfileManager::<2>::new();
@@ -375,7 +362,7 @@ mod tests {
         }
         test_block_on(async {
             for selected in [1, 0, 1] {
-                manager.switch_profile(selected, BleState::Inactive);
+                manager.switch_profile(selected);
                 load_stack_bond(&stack, manager.bond_info(selected).map(|bond| bond.info));
                 assert_eq!(current_profile(), selected);
                 assert!(current_ble_status().bonded);
@@ -415,7 +402,7 @@ mod tests {
         manager.set_bond(host.clone());
         manager.clear_bond(0);
         test_block_on(async {
-            manager.switch_profile(1, rmk_types::ble::BleState::Inactive);
+            manager.switch_profile(1);
             let flash = InMemoryFlash::<16_384, 4_096, 1>::new();
             let reboot = flash.clone();
             let mut storage = Box::pin(Storage::new(async_flash_wrapper(flash), &StorageConfig::default())).await;

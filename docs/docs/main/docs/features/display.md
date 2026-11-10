@@ -202,7 +202,7 @@ Feature-gated fields (require the corresponding RMK feature to be enabled):
 
 | Field                   | Feature          | Description                                             |
 | ----------------------- | ---------------- | ------------------------------------------------------- |
-| `ble_status`            | `_ble`           | Active BLE profile, connection state, and bond presence |
+| `connection`            | `_ble`           | USB state, every BLE profile, and the selected profile  |
 | `central_connected`     | `split`          | Whether the central is connected (peripheral side)      |
 | `peripherals_connected` | `split`          | Per-peripheral connection state array                   |
 | `peripheral_batteries`  | `split`         | Per-peripheral battery state array                      |

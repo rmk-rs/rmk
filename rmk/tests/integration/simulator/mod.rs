@@ -64,12 +64,10 @@ fn reset() {
         .clear();
 
     rmk::test_support::set_connection_status(Default::default());
-    #[cfg(all(feature = "rynk", feature = "_ble"))]
-    rmk::test_support::reset_ble_profile_statuses();
     #[cfg(not(feature = "_no_usb"))]
     rmk::state::set_usb_state(rmk_types::connection::UsbState::Configured);
     #[cfg(feature = "_no_usb")]
-    rmk::test_support::set_ble_state(rmk_types::ble::BleState::Connected);
+    rmk::test_support::set_ble_state(0, rmk_types::ble::BleState::Connected);
 
     #[cfg(not(feature = "_no_usb"))]
     rmk::channel::USB_REPORT_CHANNEL.clear();

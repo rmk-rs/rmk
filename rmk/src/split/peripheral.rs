@@ -123,7 +123,7 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                     Ok(split_message) => match split_message {
                         SplitMessage::ConnectionStatus(status) => {
                             trace!("Received central connection status: {:?}", status);
-                            update_status(|c| *c = status);
+                            update_status(|c| *c = status.clone());
                             // Report cached battery status when the central synchronizes its state.
                             self.split_driver
                                 .write(&SplitMessage::BatteryStatus(

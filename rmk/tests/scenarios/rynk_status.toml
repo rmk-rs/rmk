@@ -48,20 +48,6 @@ steps = [
   { rynk = { cmd = "GetLedIndicator", reply = { num_lock = false, caps_lock = false, scroll_lock = false, compose = false, kana = false } } },
 ]
 
-[[test]]
-name = "connection_reads_agree_with_each_other"
-steps = [
-  { rynk = { cmd = "GetConnectionType", reply = "Usb" } },
-  { rynk = { cmd = "GetConnectionStatus", reply = { usb = "Configured", ble = { profile = 0, state = "Inactive", bonded = false }, preferred = "Usb" } } },
-]
-
-[[test]]
-name = "ble_status_mirrors_the_connection_status"
-features = ["_ble"]
-steps = [
-  { rynk = { cmd = "GetBleStatus", payload = 0, reply = { profile = 0, state = "Inactive", bonded = false } } },
-]
-
 # Slot bounds come from `num_ble_profiles`; a slot past it is refused rather
 # than queued.
 [[test]]

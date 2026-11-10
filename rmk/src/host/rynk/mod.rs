@@ -124,8 +124,6 @@ impl<'a> RynkService<'a> {
             Cmd::GetConnectionType => serve::<command::GetConnectionType, _>(self, msg).await,
             Cmd::GetConnectionStatus => serve::<command::GetConnectionStatus, _>(self, msg).await,
             #[cfg(feature = "_ble")]
-            Cmd::GetBleStatus => serve::<command::GetBleStatus, _>(self, msg).await,
-            #[cfg(feature = "_ble")]
             Cmd::SwitchBleProfile => serve::<command::SwitchBleProfile, _>(self, msg).await,
             #[cfg(feature = "_ble")]
             Cmd::ClearBleProfile => serve::<command::ClearBleProfile, _>(self, msg).await,

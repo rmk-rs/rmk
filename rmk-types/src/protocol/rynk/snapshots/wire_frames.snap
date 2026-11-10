@@ -12,20 +12,18 @@ BootloaderJump reply Ok(())                                                     
 BootloaderJump request ()                                                       02 04 02 01 00
 ClearBleProfile reply Ok(())                                                    04 05 07 01 01 00
 ClearBleProfile request 1                                                       05 05 07 01 01 00
-ConnectionChange topic ConnectionStatus{Configured,{1,Adv,bonded},Ble}          03 03 80 03 02 01 03 01 01 00
+ConnectionChange topic ConnectionStatus{Configured,[Conn,Adv],s=1,Ble}          03 03 80 05 02 02 01 01 04 01 01 01 00
 DisconnectBleProfile reply Ok(())                                               04 06 07 01 01 00
 DisconnectBleProfile request 1                                                  05 06 07 01 01 00
 GetBatteryStatus reply Ok(Available{Discharging,85})                            04 03 08 01 05 01 01 01 55 00
 GetBatteryStatus request ()                                                     04 03 08 01 00
 GetBehaviorConfig reply Ok(BehaviorConfig{50..120})                             04 01 06 01 0d 32 3c 46 50 da 80 a6 86 e8 8d 08 78 00
 GetBehaviorConfig request ()                                                    04 01 06 01 00
-GetBleStatus reply Ok(BleStatus{1,Advertising,bonded})                          04 03 07 01 02 01 02 01 00
-GetBleStatus request 1                                                          05 03 07 01 01 00
 GetCapabilities reply Ok(DeviceCapabilities{1..17})                             02 02 02 01 0e 01 02 03 04 05 06 07 08 01 09 0a 0b 01 03 01 0c 09 0d 0e 01 03 0f 10 11 01 00
 GetCapabilities request ()                                                      02 02 02 01 00
 GetCombo reply Ok(Combo{[Single(A)],Morse(1),L2})                               04 01 03 01 04 01 02 01 06 04 05 01 01 02 00
 GetCombo request 3                                                              05 01 03 01 03 00
-GetConnectionStatus reply Ok(ConnectionStatus{Configured,{1,Adv,bonded},Ble})   04 02 07 01 03 02 01 03 01 01 00
+GetConnectionStatus reply Ok(ConnectionStatus{Configured,[Conn,Adv],s=1,Ble})   04 02 07 01 05 02 02 01 01 04 01 01 01 00
 GetConnectionStatus request ()                                                  04 02 07 01 00
 GetConnectionType reply Ok(Ble)                                                 04 01 07 01 02 01 00
 GetConnectionType request ()                                                    04 01 07 01 00
