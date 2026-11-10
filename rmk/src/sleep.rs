@@ -164,19 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn activity_restarts_the_idle_timeout() {
-        with_sleep_manager(async {
-            // Each report lands inside the timeout, so 1.8s of steady typing
-            // must never reach it.
-            for _ in 0..3 {
-                Timer::after_millis(600).await;
-                assert!(!sleeping(), "activity must restart the idle timeout");
-                report_activity();
-            }
-        });
-    }
-
-    #[test]
     fn keyboard_activity_restarts_timeout_and_wakes_from_sleep() {
         use embassy_futures::select::select3;
         use rmk_types::action::KeyAction;
