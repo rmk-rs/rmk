@@ -36,7 +36,7 @@ use crate::ble::led::BleLedReader;
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
 #[cfg(feature = "dongle")]
 use crate::ble::profile::DONGLE_PROFILE;
-use crate::ble::profile::{BOND_SLOTS, ProfileInfo, ProfileManager};
+use crate::ble::profile::{BOND_SLOTS, ProfileInfo, ProfileManager, load_stack_bond};
 use crate::channel::{BLE_PROFILE_CHANNEL, BLE_REPORT_CHANNEL, LED_SIGNAL};
 use crate::config::{BleBatteryConfig, DeviceConfig, RmkConfig};
 use crate::core_traits::Runnable;
@@ -47,7 +47,7 @@ use crate::sleep::{report_activity, request_sleep};
 use crate::split::PeripheralMatrixConfig;
 #[cfg(feature = "split")]
 use crate::split::ble::central::{run_peripheral_session, scan_and_connect_peripherals};
-use crate::state::{CONNECTION_STATUS, set_ble_state};
+use crate::state::{CONNECTION_STATUS, set_ble_bonded, set_ble_state};
 
 pub(crate) mod adv;
 pub(crate) mod battery_service;
@@ -414,10 +414,9 @@ async fn run_ble_keyboard<
     if crate::ble::passkey::passkey_entry_enabled() {
         stack.set_io_capabilities(IoCapabilities::KeyboardOnly);
     }
-    let mut profile_manager: ProfileManager<_, _, BOND_SLOTS> = ProfileManager::new(stack);
+    let mut profile_manager: ProfileManager<BOND_SLOTS> = ProfileManager::new();
     // Load the bonded devices from storage
     profile_manager.load_bonded_devices().await;
-    profile_manager.update_stack_bonds();
 
     let mut peripheral = stack.peripheral();
     let runner = stack.runner();
@@ -449,6 +448,8 @@ async fn run_ble_keyboard<
         let mut host_connections = LinearMap::<u8, Connection<'_, DefaultPacketPool>, NUM_HOST_LINKS>::new();
         const ADV_TIMEOUT: Duration = Duration::from_secs(300);
         let mut adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
+        // While re-pairing, the current profile hides this stored key until a new pairing replaces it.
+        let mut repairing: Option<trouble_host::LongTermKey> = None;
         // Let USB detection run before the first advertisement.
         Timer::after_millis(10).await;
 
@@ -456,6 +457,9 @@ async fn run_ble_keyboard<
             let profile_id = crate::state::current_profile();
             let local_address = cfg!(feature = "ext_adv")
                 .then(|| BdAddr::new(crate::ble::profile::profile_address(address, profile_id)));
+            let bond = profile_manager
+                .bond_info(profile_id)
+                .filter(|bond| repairing != Some(bond.info.ltk));
 
             let advertise_and_connect = async {
                 if host_connections.contains_key(&profile_id) {
@@ -473,14 +477,17 @@ async fn run_ble_keyboard<
                     }
                 };
 
-                let adv = match profile_manager.bond_info(profile_id) {
+                let adv = match &bond {
                     #[cfg(feature = "dongle")]
                     Some(bond) if profile_id == DONGLE_PROFILE => Adv::Directed(bond.info.identity.addr),
                     #[cfg(feature = "dongle")]
                     None if profile_id == DONGLE_PROFILE => Adv::DongleSeeking,
-                    Some(_) => Adv::HostReconnect,
-                    None => Adv::Host { name: product_name },
+                    bond => Adv::Host {
+                        name: product_name,
+                        bonded: bond.is_some(),
+                    },
                 };
+                load_stack_bond(stack, bond.as_ref().map(|bond| bond.info.clone()));
                 set_ble_state(BleState::Advertising);
                 advertise(
                     &mut peripheral,
@@ -502,6 +509,8 @@ async fn run_ble_keyboard<
             {
                 Either3::First(Ok(gatt_conn)) => gatt_conn,
                 Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
+                    repairing = None;
+                    set_ble_bonded(profile_manager.bond_info(profile_id).is_some());
                     adv_deadline = None;
                     set_ble_state(BleState::Inactive);
                     request_sleep();
@@ -515,36 +524,66 @@ async fn run_ble_keyboard<
                     continue;
                 }
                 Either3::Second(action) => {
-                    use crate::ble::profile::BleProfileAction::{ClearBond, Next, Previous, Switch};
+                    use crate::ble::profile::BleProfileAction::{ClearBond, Next, Pair, Previous, Switch};
 
                     let last_host = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
                     let slot = match action {
-                        Switch(slot) | ClearBond(slot) => slot,
+                        Switch(slot) | Pair(slot) | ClearBond(slot) => slot,
                         Next if profile_id < last_host => profile_id + 1,
                         Next => 0,
                         Previous => profile_id.checked_sub(1).unwrap_or(last_host),
                     };
                     let clear_bond = matches!(action, ClearBond(_));
-                    if !clear_bond && slot == profile_id {
+                    let pair = match action {
+                        Pair(_) => profile_manager
+                            .bond_info(slot)
+                            .map(|bond| bond.info.ltk)
+                            .filter(|&ltk| repairing != Some(ltk)),
+                        _ => None,
+                    };
+                    if !clear_bond && pair.is_none() && slot == profile_id {
                         continue;
                     }
+                    repairing = None;
                     report_activity();
                     adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
-                    if clear_bond {
+                    // Close the target first, so pairing never switches to a link about to drop.
+                    if clear_bond || pair.is_some() {
                         disconnect_profile(slot, &mut host_connections, &completed).await;
+                    }
+                    if clear_bond {
                         profile_manager.clear_bond(slot);
-                        continue;
+                    } else if slot != profile_id {
+                        // Keep a paired link unless the target needs its place.
+                        let keep_connected = (host_connections.contains_key(&slot) || !host_connections.is_full())
+                            && host_connections.get(&profile_id).is_some_and(|conn| {
+                                conn.security_level().is_ok_and(|level| level.encrypted())
+                                    && profile_manager
+                                        .bond_info(profile_id)
+                                        .is_some_and(|bond| bond.info.identity.match_identity(&conn.peer_identity()))
+                            });
+                        if !keep_connected {
+                            set_ble_state(BleState::Inactive);
+                            disconnect_profile(profile_id, &mut host_connections, &completed).await;
+                        }
+                        let state = match host_connections.get(&slot) {
+                            Some(conn) if conn.security_level().is_ok_and(|level| level.encrypted()) => {
+                                BleState::Connected
+                            }
+                            _ => BleState::Inactive,
+                        };
+                        profile_manager.switch_profile(slot, state);
+                        BLE_REPORT_CHANNEL.clear();
+                        for (&profile, conn) in host_connections.iter() {
+                            if let Err(e) = conn.set_bondable(profile == slot) {
+                                error!("Set bondable error: {:?}", e);
+                            }
+                        }
                     }
-                    if !host_connections.contains_key(&slot) && host_connections.is_full() {
-                        set_ble_state(BleState::Inactive);
-                        disconnect_profile(profile_id, &mut host_connections, &completed).await;
+                    if let Some(ltk) = pair {
+                        repairing = Some(ltk);
+                        set_ble_bonded(false);
                     }
-                    let state = match host_connections.get(&slot) {
-                        Some(conn) if conn.security_level().is_ok_and(|level| level.encrypted()) => BleState::Connected,
-                        _ => BleState::Inactive,
-                    };
-                    profile_manager.switch_profile(slot, state);
-                    BLE_REPORT_CHANNEL.clear();
                     continue;
                 }
                 Either3::Third(ended) => {
@@ -561,34 +600,40 @@ async fn run_ble_keyboard<
 
             let conn = gatt_conn.raw();
             let peer = conn.peer_identity();
-            match profile_manager.bond_info(profile_id) {
-                // A replaced advertisement can still deliver a late connection.
-                #[cfg(feature = "ext_adv")]
-                _ if conn.local_address() != local_address => warn!("[ble] late connection belongs to another profile"),
-                Some(bond) if !bond.info.identity.match_identity(&peer) => {
-                    warn!("[ble] peer does not match its profile")
-                }
-                #[cfg(feature = "dongle")]
-                _ if profile_id != DONGLE_PROFILE && profile_manager.is_bonded_dongle(&peer) => {
-                    warn!("[ble] dongle connected on a host profile");
-                }
-                bond_info => {
-                    if let Err(e) = conn.set_bondable(true) {
-                        error!("Set bondable error: {:?}", e);
+            // A replaced advertisement can still deliver a late connection.
+            #[cfg(feature = "ext_adv")]
+            if conn.local_address() != local_address {
+                warn!("[ble] late connection belongs to another profile");
+                disconnect(&gatt_conn).await;
+                continue;
+            }
+            #[cfg(feature = "dongle")]
+            if (profile_id == DONGLE_PROFILE
+                && bond
+                    .as_ref()
+                    .is_some_and(|bond| !bond.info.identity.match_identity(&peer)))
+                || (profile_id != DONGLE_PROFILE && profile_manager.is_bonded_dongle(&peer))
+            {
+                warn!("[ble] peer does not match its dongle profile");
+                disconnect(&gatt_conn).await;
+                continue;
+            }
+            if let Err(e) = conn.set_bondable(true) {
+                error!("Set bondable error: {:?}", e);
+                continue;
+            }
+            if let Some(bond) = bond {
+                if bond.info.identity.match_identity(&peer) {
+                    match ClientAttTableView::try_from_raw(&bond.cccd_table) {
+                        Ok(view) => server.set_client_att_table(conn, &view),
+                        Err(e) => warn!("Invalid stored CCCD table: {:?}", e),
                     }
-                    if let Some(bond) = bond_info {
-                        info!("Loading CCCD table: {:?}", bond.cccd_table);
-                        match ClientAttTableView::try_from_raw(&bond.cccd_table) {
-                            Ok(view) => server.set_client_att_table(conn, &view),
-                            Err(e) => warn!("Invalid stored CCCD table: {:?}", e),
-                        }
-                    }
-                    assert!(host_connections.insert(profile_id, conn.clone()).is_ok());
-                    accepted_connections.send((gatt_conn, profile_id)).await;
-                    continue;
+                } else if let Err(e) = stack.remove_bond_information(bond.info.identity) {
+                    warn!("Remove previous peer from BLE stack: {:?}", e);
                 }
             }
-            disconnect(&gatt_conn).await;
+            assert!(host_connections.insert(profile_id, conn.clone()).is_ok());
+            accepted_connections.send((gatt_conn, profile_id)).await;
         }
     };
 
@@ -663,11 +708,11 @@ pub(crate) async fn ble_task<C: Controller, P: PacketPool, E: EventHandler>(mut 
 ///
 /// This function will handle the GATT events and process them.
 /// This is how we interact with read and write requests.
-async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
+async fn gatt_events_task(
     server: &Server<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     profile_id: u8,
-    profile_manager: &ProfileManager<'_, '_, C, DefaultPacketPool, BOND_SLOTS>,
+    profile_manager: &ProfileManager<BOND_SLOTS>,
     #[cfg(feature = "host")] host: Option<&HostConnection<'_>>,
 ) {
     let level = &server.battery_service.level;
@@ -698,6 +743,13 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
                 info!("[gatt] disconnected: {:?}", reason);
                 break;
             }
+            GattConnectionEvent::PairingComplete { bond: Some(_), .. }
+            | GattConnectionEvent::PassKeyInput
+            | GattConnectionEvent::BondLost
+                if profile_id != crate::state::current_profile() =>
+            {
+                conn.raw().disconnect();
+            }
             GattConnectionEvent::PairingComplete { security_level, bond } => {
                 #[cfg(feature = "passkey_entry")]
                 passkey_state.clear();
@@ -719,6 +771,7 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
                 #[cfg(feature = "passkey_entry")]
                 passkey_state.clear();
                 error!("[gatt] pairing error: {:?}", err);
+                conn.raw().disconnect();
             }
             GattConnectionEvent::Encrypted { security_level, .. } => {
                 info!("[gatt] encrypted: {:?}", security_level);
@@ -869,7 +922,7 @@ async fn gatt_events_task<C: Controller + ControllerCmdAsync<LeSetPhy>>(
                     if let Some(table) = server.get_client_att_table(conn.raw())
                         && let Ok(bytes) = heapless::Vec::from_slice(table.raw())
                     {
-                        profile_manager.update_profile_cccd_table(profile_id, bytes);
+                        profile_manager.update_profile_cccd_table(profile_id, &conn.raw().peer_identity(), bytes);
                     }
                 }
                 match result {
@@ -1032,7 +1085,7 @@ async fn serve_keyboard_connection<
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     stack: &Stack<'_, C, DefaultPacketPool>,
     profile_id: u8,
-    profile_manager: &ProfileManager<'_, '_, C, DefaultPacketPool, BOND_SLOTS>,
+    profile_manager: &ProfileManager<BOND_SLOTS>,
     config: &BleBatteryConfig,
     #[cfg(feature = "host")] host_service: Option<&crate::host::HostService<'_>>,
 ) {
@@ -1294,12 +1347,15 @@ mod tests {
         );
     }
 
-    fn with_stalled_keyboard(test: impl core::future::Future<Output = ()>) {
+    fn with_stalled_keyboard(bonds: &[super::ProfileInfo], test: impl core::future::Future<Output = ()>) {
         use bt_hci::controller::ExternalController;
         use bt_hci::transport::{PacketToController, PacketToHost, Transport};
 
         use super::{BOND_SLOTS, CONNECTIONS_MAX, DefaultPacketPool, HostResources, L2CAP_CHANNELS_MAX};
         use crate::config::{BleBatteryConfig, DeviceConfig};
+        use crate::core_traits::Runnable;
+        use crate::storage::{Storage, StorageKey, StorageValue, async_flash_wrapper};
+        use crate::test_support::InMemoryFlash;
 
         // Keep HCI setup pending to exercise the keyboard's outer deadline.
         struct StalledTransport;
@@ -1333,9 +1389,63 @@ mod tests {
                 #[cfg(feature = "host")]
                 None,
             ),
-            crate::test_support::drain_flash_channel(),
+            async {
+                let flash = InMemoryFlash::<16_384, 4_096, 1>::new();
+                let mut storage = Storage::new(async_flash_wrapper(flash), &Default::default()).await;
+                for bond in bonds {
+                    storage
+                        .flash
+                        .store_item(
+                            &mut storage.buffer,
+                            &StorageKey::BondInfo(bond.slot_num),
+                            &StorageValue::BondInfo(bond.clone()),
+                        )
+                        .await
+                        .unwrap();
+                }
+                storage.run().await;
+            },
             test,
         ));
+    }
+
+    #[test]
+    fn pairing_current_profile_survives_key_release_and_restores_bond_on_timeout() {
+        use crate::ble::profile::{BleProfileAction, ProfileInfo};
+        use crate::channel::BLE_PROFILE_CHANNEL;
+        use crate::state::CONNECTION_STATUS;
+        use crate::storage::{StorageKey, StorageValue, read};
+
+        let bond = ProfileInfo {
+            cccd_table: heapless::Vec::from_slice(&[1, 2]).unwrap(),
+            ..Default::default()
+        };
+        with_stalled_keyboard(core::slice::from_ref(&bond), async {
+            let mut status = CONNECTION_STATUS.receiver().unwrap();
+            status.get_and(|s| s.ble.state == BleState::Advertising).await;
+            assert!(current_ble_status().bonded);
+
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Pair(0)).await;
+            embassy_time::with_timeout(
+                Duration::from_millis(20),
+                status.get_and(|s| s.ble.profile == 0 && !s.ble.bonded),
+            )
+            .await
+            .expect("holding the current profile key must start re-pairing");
+
+            // Releasing the profile key sends a switch to the same slot.
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(0)).await;
+            embassy_time::Timer::after_millis(1).await;
+            assert!(!current_ble_status().bonded);
+
+            MockDriver::get().advance(Duration::from_secs(300));
+            let expired = status.get_and(|s| s.ble.state == BleState::Inactive).await;
+            assert!(expired.ble.bonded);
+            let Some(StorageValue::BondInfo(saved)) = read(StorageKey::BondInfo(0)).await.unwrap() else {
+                panic!("re-pairing must preserve the stored bond");
+            };
+            assert_eq!(saved, bond);
+        });
     }
 
     #[test]
@@ -1344,7 +1454,7 @@ mod tests {
         use crate::channel::BLE_PROFILE_CHANNEL;
         use crate::state::{CONNECTION_STATUS, current_profile};
 
-        with_stalled_keyboard(async {
+        with_stalled_keyboard(&[], async {
             let mut status = CONNECTION_STATUS.receiver().unwrap();
             status.get_and(|s| s.ble.state == BleState::Advertising).await;
             for (action, expected) in [(Previous, crate::NUM_BLE_PROFILE.saturating_sub(1) as u8), (Next, 0)] {
@@ -1363,7 +1473,7 @@ mod tests {
         use crate::channel::BLE_PROFILE_CHANNEL;
         use crate::state::CONNECTION_STATUS;
 
-        with_stalled_keyboard(async {
+        with_stalled_keyboard(&[], async {
             let mut status = CONNECTION_STATUS.receiver().unwrap();
             status.get_and(|s| s.ble.state == BleState::Advertising).await;
             for wake in 0..3 {
@@ -1406,7 +1516,7 @@ mod tests {
         use crate::channel::BLE_PROFILE_CHANNEL;
         use crate::state::{CONNECTION_STATUS, current_profile};
 
-        with_stalled_keyboard(async {
+        with_stalled_keyboard(&[], async {
             let mut status = CONNECTION_STATUS.receiver().unwrap();
             status.get_and(|s| s.ble.state == BleState::Advertising).await;
             MockDriver::get().advance(Duration::from_secs(300));
@@ -1430,7 +1540,7 @@ mod tests {
         use crate::channel::BLE_PROFILE_CHANNEL;
         use crate::state::{CONNECTION_STATUS, current_profile};
 
-        with_stalled_keyboard(async {
+        with_stalled_keyboard(&[], async {
             let mut status = CONNECTION_STATUS.receiver().unwrap();
             status.get_and(|s| s.ble.state == BleState::Advertising).await;
             MockDriver::get().advance(Duration::from_secs(150));
