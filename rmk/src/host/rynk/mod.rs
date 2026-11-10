@@ -129,6 +129,8 @@ impl<'a> RynkService<'a> {
             Cmd::SwitchBleProfile => serve::<command::SwitchBleProfile, _>(self, msg).await,
             #[cfg(feature = "_ble")]
             Cmd::ClearBleProfile => serve::<command::ClearBleProfile, _>(self, msg).await,
+            #[cfg(feature = "_ble")]
+            Cmd::DisconnectBleProfile => serve::<command::DisconnectBleProfile, _>(self, msg).await,
 
             Cmd::GetCurrentLayer => serve::<command::GetCurrentLayer, _>(self, msg).await,
             Cmd::GetMatrixState => serve::<command::GetMatrixState, _>(self, msg).await,
@@ -391,7 +393,7 @@ mod tests {
         };
         let service = RynkService::new(&keymap, &config);
 
-        for cmd in [Cmd::SwitchBleProfile, Cmd::ClearBleProfile] {
+        for cmd in [Cmd::SwitchBleProfile, Cmd::ClearBleProfile, Cmd::DisconnectBleProfile] {
             let request = req_with(cmd.raw(), 1, &0u8);
             block_on(service.run(&mut request.as_slice(), &mut [].as_mut_slice()));
 
@@ -402,6 +404,7 @@ mod tests {
                 (cmd, BLE_PROFILE_CHANNEL.try_receive()),
                 (Cmd::SwitchBleProfile, Ok(BleProfileAction::Switch(0)))
                     | (Cmd::ClearBleProfile, Ok(BleProfileAction::ClearBond(0)))
+                    | (Cmd::DisconnectBleProfile, Ok(BleProfileAction::Disconnect(0)))
             ));
         }
     }

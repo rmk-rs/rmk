@@ -26,9 +26,9 @@ Through Rynk, a host tool can read and change:
 
 It can also watch live status — the current layer, a key tester (matrix state),
 typing speed (WPM), the caps-lock/num-lock indicators, sleep state, battery
-level, and, on wireless boards, the connection and BLE profile status (the active
-profile, its connection state, and whether that profile has bond information) and
-split peripheral status; it can also switch or clear a profile. It can read the
+level, and, on wireless boards, the connection status, each BLE profile's
+connection state and bond (including the dongle's), and split peripheral status.
+It can also switch to, disconnect, or forget a BLE profile. It can read the
 device info (RMK version, USB IDs, names) and the physical layout, so a tool can
 draw your keyboard. Finally it can reboot the keyboard, enter the bootloader,
 and reset stored settings.
@@ -112,8 +112,8 @@ locked operation you prove you're physically present by holding a key combo.
 There are three tiers:
 
 - **Open** — everything you normally reach for: read the keymap, change keys,
-  layers, combos, macros, switch BLE profiles, reboot. These stay available so
-  on-the-fly configuration is friction-free.
+  layers, combos, macros, switch or disconnect BLE profiles, reboot. These stay
+  available so on-the-fly configuration is friction-free.
 - **Locked** — the dangerous ones, always gated: entering the bootloader,
   resetting stored settings and bonds, reading the live key matrix (a keylogger
   if left open), and clearing a BLE bond. A host tool gets a "locked" error
