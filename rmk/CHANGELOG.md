@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Give dongles a USB DFU runtime interface: a DETACH in the 30 s after plug-in reboots into the bootloader (`jump_to_bootloader`), so a dongle can be updated with `dfu-util` or rmk-gui although its host protocol is relayed to the keyboard.
 - Publish the dongle's state.
 - Add `dfu_ext` feature for DFU writes to external SPI flash (e.g. W25Q64), so boards with limited internal flash can store the new firmware image externally.
-- Opt-in `ext_adv` feature for extended advertising, scanning and connecting. Each BLE profile then keeps its own connection and address, so switching back to a connected host is instant.
+- Opt-in `ext_adv` feature for extended advertising, scanning and connecting. Each BLE profile then advertises with its own address, and `[ble] max_connections` above 1 keeps that many hosts connected, so switching back to a connected host is instant.
 - Rynk adds `DisconnectBleProfile`; on the selected profile it waits for a new host, the same as holding the profile key. `DeviceCapabilities` reports `max_connections` and `dongle_profile`.
 - Expose whether each BLE profile is bonded via `BleStatus::bonded`, so LEDs and displays can tell a paired-but-disconnected profile from an empty slot.
 - Make `rmk::state::current_ble_status()` and `current_connection_status()` public, so user code can read the current status without subscribing to `ConnectionStatusChangeEvent`.
