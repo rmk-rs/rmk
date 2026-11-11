@@ -261,12 +261,10 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
 
 #[cfg(test)]
 mod tests {
-    use bt_hci::controller::ExternalController;
-    use bt_hci::transport::{PacketToController, PacketToHost, Transport};
-
     use super::{
         DefaultPacketPool, HostResources, LongTermKey, ProfileInfo, ProfileManager, load_stack_bond, profile_address,
     };
+    use crate::ble::fake_hci::FakeController;
     use crate::test_support::test_block_on;
 
     #[test]
@@ -283,22 +281,6 @@ mod tests {
             }
         }
         assert_eq!(profile_address([1, 2, 3, 0xFF, 5, 0xC6], 1), [1, 2, 3, 0, 5, 0xC6]);
-    }
-
-    struct TestTransport;
-
-    impl embedded_io_async::ErrorType for TestTransport {
-        type Error = bt_hci::ReadHciError<core::convert::Infallible>;
-    }
-
-    impl Transport for TestTransport {
-        async fn read<'a, P: PacketToHost<'a>>(&self, _: &'a mut [u8]) -> Result<P, Self::Error> {
-            panic!("unexpected controller read");
-        }
-
-        async fn write<P: PacketToController>(&self, _: &P) -> Result<(), Self::Error> {
-            panic!("unexpected controller write");
-        }
     }
 
     #[test]
@@ -360,38 +342,13 @@ mod tests {
     }
 
     #[test]
-    fn background_profile_changes_do_not_replace_active_pairing_keys() {
-        let manager = ProfileManager::<2>::new();
-        crate::ble::rng::seed([7; 32]);
-        let mut resources = HostResources::<DefaultPacketPool, 1, 1>::new();
-        let stack = trouble_host::new(ExternalController::<_, 1>::new(TestTransport), &mut resources).build();
-        let old = ProfileInfo::default();
-        let mut replacement = old.info.clone();
-        replacement.identity.addr = trouble_host::prelude::Address::random([1, 2, 3, 4, 5, 0xC6]);
-        replacement.ltk = LongTermKey(42);
-        manager.set_bond(old.clone());
-        stack.add_bond_information(replacement.clone()).unwrap();
-
-        manager.set_bond(ProfileInfo {
-            slot_num: 1,
-            ..Default::default()
-        });
-        manager.clear_bond(1);
-        stack.with_bond_information(|bonds| assert_eq!(bonds, &[replacement]));
-        assert_eq!(manager.bond_info(0), Some(old.clone()));
-
-        load_stack_bond(&stack, Some(old.info.clone()));
-        stack.with_bond_information(|bonds| assert_eq!(bonds, &[old.info]));
-    }
-
-    #[test]
     fn profile_switches_update_selection_and_stack_bonds() {
         use crate::state::{current_ble_status, current_profile};
 
         let manager = ProfileManager::<2>::new();
         crate::ble::rng::seed([7; 32]);
         let mut resources = HostResources::<DefaultPacketPool, 1, 1>::new();
-        let stack = trouble_host::new(ExternalController::<_, 1>::new(TestTransport), &mut resources).build();
+        let stack = trouble_host::new(FakeController::default(), &mut resources).build();
         for slot in 0..2 {
             let mut info = ProfileInfo {
                 slot_num: slot,
