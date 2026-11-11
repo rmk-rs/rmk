@@ -200,6 +200,9 @@ pub struct Keyboard<'a> {
     /// Oneshot Modifier state
     osm_state: OneShotState<ModifierCombination>,
 
+    /// Per-bit counts of held OSM keys while the state is `Initial` or `Held`.
+    osm_modifier_counts: [u8; 8],
+
     /// Expiry deadline while the oneshot modifiers are armed (`Single`)
     osm_deadline: Option<Instant>,
 
@@ -251,6 +254,7 @@ impl<'a> Keyboard<'a> {
             osl_state: OneShotState::default(),
             osl_deadline: None,
             osm_state: OneShotState::default(),
+            osm_modifier_counts: [0; 8],
             osm_deadline: None,
             #[cfg(feature = "_ble")]
             user_hold: None,

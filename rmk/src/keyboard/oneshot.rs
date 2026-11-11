@@ -34,6 +34,15 @@ impl<'a> Keyboard<'a> {
 
         // Update one shot state
         if event.pressed {
+            if !matches!(self.osm_state, OneShotState::Single(_)) {
+                let modifier_bits = new_modifiers.into_bits();
+                for (bit, count) in self.osm_modifier_counts.iter_mut().enumerate() {
+                    if modifier_bits & (1 << bit) != 0 {
+                        *count = count.saturating_add(1);
+                    }
+                }
+            }
+
             // Any pending expiry deadline belongs to a previous `Single` state; the
             // matching release re-arms a fresh one if the state stays `Single`.
             self.osm_deadline = None;
@@ -70,10 +79,15 @@ impl<'a> Keyboard<'a> {
             }
         } else {
             match self.osm_state {
-                OneShotState::Initial(cur_modifiers) | OneShotState::Single(cur_modifiers) => {
+                OneShotState::Initial(cur_modifiers) => {
+                    self.osm_modifier_counts = [0; 8];
                     // Released before any other key: keep the modifiers armed for the
                     // next keypress. Expiry is deadline-driven from `run()`, so the
                     // keyboard task keeps serving other events in the meantime.
+                    self.osm_state = OneShotState::Single(cur_modifiers);
+                    self.osm_deadline = Some(Instant::now() + self.keymap.one_shot_timeout());
+                }
+                OneShotState::Single(cur_modifiers) => {
                     self.osm_state = OneShotState::Single(cur_modifiers);
                     self.osm_deadline = Some(Instant::now() + self.keymap.one_shot_timeout());
                 }
@@ -84,9 +98,22 @@ impl<'a> Keyboard<'a> {
                         return;
                     }
 
+                    let modifier_bits = new_modifiers.into_bits();
+                    for (bit, count) in self.osm_modifier_counts.iter_mut().enumerate() {
+                        if modifier_bits & (1 << bit) != 0 {
+                            *count = count.saturating_sub(1);
+                        }
+                    }
+
                     // Release modifier
                     self.update_osl(event);
-                    let remaining = cur_modifiers & !new_modifiers;
+                    let mut held_modifier_bits = 0;
+                    for (bit, count) in self.osm_modifier_counts.iter().enumerate() {
+                        if *count > 0 {
+                            held_modifier_bits |= 1 << bit;
+                        }
+                    }
+                    let remaining = cur_modifiers & ModifierCombination::from_bits(held_modifier_bits);
                     self.osm_state = if remaining.into_bits() == 0 {
                         OneShotState::None
                     } else {
