@@ -256,9 +256,13 @@ fn expand_test(
         quote! { build() }
     };
     let fn_name = format_ident!("{}", test.name);
+    let gates = features.iter().map(|f| match f.strip_prefix('!') {
+        Some(f) => quote! { not(feature = #f) },
+        None => quote! { feature = #f },
+    });
 
     Ok(quote! {
-        #[cfg(all(#(feature = #features),*))]
+        #[cfg(all(#(#gates),*))]
         #[test]
         fn #fn_name() {
             ::rmk::test_support::test_block_on(async {

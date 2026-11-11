@@ -175,9 +175,6 @@ enum SimStep {
     HostSend(Vec<u8>),
     ExpectHostFrame(Vec<u8>),
     ExpectNoHostReply(Duration),
-    /// Drop the device's next Rynk frame, read up to its `0x00` delimiter.
-    #[cfg(feature = "rynk")]
-    SkipHostFrame,
     /// The internal event behind a topic push, already built as its publish
     /// future — so the harness needs no vocabulary of its own for event types.
     #[cfg(feature = "rynk")]
@@ -317,13 +314,6 @@ impl SimKeyboard {
     #[cfg(feature = "rynk")]
     pub(crate) fn publish(&mut self, event: impl Future<Output = ()> + 'static) -> &mut Self {
         self.steps.push(SimStep::Publish(Box::pin(event)));
-        self
-    }
-
-    /// Read past the device's next Rynk frame, one byte at a time, unchecked.
-    #[cfg(feature = "rynk")]
-    pub(crate) fn skip_host_frame(&mut self) -> &mut Self {
-        self.steps.push(SimStep::SkipHostFrame);
         self
     }
 
@@ -511,14 +501,6 @@ async fn run_steps(steps: Vec<SimStep>, to_device: &Link, from_device: &Link) {
                 let read = from_device.read(&mut reply);
                 if let Either::Second(n) = select(Timer::after(duration), read).await {
                     panic!("{at}: expected no host reply, got {n} byte(s): {}", hex(&reply[..n]));
-                }
-            }
-            #[cfg(feature = "rynk")]
-            SimStep::SkipHostFrame => {
-                replies += 1;
-                let mut byte = [0xff];
-                while byte[0] != 0 {
-                    with_timeout(from_device.read(&mut byte), "no Rynk frame to skip").await;
                 }
             }
             #[cfg(feature = "rynk")]

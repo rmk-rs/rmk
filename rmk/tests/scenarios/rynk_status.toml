@@ -48,6 +48,15 @@ steps = [
   { rynk = { cmd = "GetLedIndicator", reply = { num_lock = false, caps_lock = false, scroll_lock = false, compose = false, kana = false } } },
 ]
 
+# `ble` lists every profile, and a dongle adds one.
+[[test]]
+name = "connection_reads_agree_with_each_other"
+features = ["!dongle"]
+steps = [
+  { rynk = { cmd = "GetConnectionType", reply = "Usb" } },
+  { rynk = { cmd = "GetConnectionStatus", reply = { usb = "Configured", ble = [{ state = "Inactive", bonded = false }, { state = "Inactive", bonded = false }, { state = "Inactive", bonded = false }], selected = 0, preferred = "Usb" } } },
+]
+
 # Slot bounds come from `num_ble_profiles`; a slot past it is refused rather
 # than queued.
 [[test]]
