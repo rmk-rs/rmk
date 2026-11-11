@@ -409,9 +409,10 @@ where
                         );
                     }
 
-                    // If there's key still pressed, always refresh the self.scan_start
+                    // Keep scanning while a key is pressed or still debouncing
                     #[cfg(feature = "async_matrix")]
-                    if self.key_states[col_idx][row_idx].pressed {
+                    if self.key_states[col_idx][row_idx].pressed || matches!(debounce_state, DebounceState::InProgress)
+                    {
                         self.rescan_needed = true;
                     }
                 }
@@ -522,4 +523,98 @@ impl<const ROW: usize, const COL: usize> TestMatrix<ROW, COL> {
 impl<const ROW: usize, const COL: usize> MatrixTrait<ROW, COL> for TestMatrix<ROW, COL> {
     #[cfg(feature = "async_matrix")]
     async fn wait_for_key(&mut self) {}
+}
+
+#[cfg(all(test, feature = "async_matrix"))]
+mod tests {
+    use core::convert::Infallible;
+    use core::future::poll_fn;
+    use core::task::Poll;
+
+    use embassy_time::{Duration, Instant};
+    use embedded_hal::digital::ErrorType;
+
+    use super::*;
+    use crate::DEBOUNCE_THRESHOLD;
+    use crate::debounce::default_debouncer::DefaultDebouncer;
+    use crate::test_support::test_block_on;
+
+    /// Input pin that reads high only during the given `[start, end)` windows, in µs.
+    struct ScriptedPin(&'static [(u64, u64)]);
+
+    impl ScriptedPin {
+        fn high(&self) -> bool {
+            let now = Instant::now().as_micros();
+            self.0.iter().any(|&(start, end)| (start..end).contains(&now))
+        }
+    }
+
+    impl ErrorType for ScriptedPin {
+        type Error = Infallible;
+    }
+
+    impl InputPin for ScriptedPin {
+        fn is_high(&mut self) -> Result<bool, Infallible> {
+            Ok(self.high())
+        }
+        fn is_low(&mut self) -> Result<bool, Infallible> {
+            Ok(!self.high())
+        }
+    }
+
+    impl Wait for ScriptedPin {
+        async fn wait_for_high(&mut self) -> Result<(), Infallible> {
+            poll_fn(|_| {
+                if self.high() {
+                    Poll::Ready(Ok(()))
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await
+        }
+        async fn wait_for_low(&mut self) -> Result<(), Infallible> {
+            unimplemented!()
+        }
+        async fn wait_for_rising_edge(&mut self) -> Result<(), Infallible> {
+            unimplemented!()
+        }
+        async fn wait_for_falling_edge(&mut self) -> Result<(), Infallible> {
+            unimplemented!()
+        }
+        async fn wait_for_any_edge(&mut self) -> Result<(), Infallible> {
+            unimplemented!()
+        }
+    }
+
+    struct NoopPin;
+
+    impl ErrorType for NoopPin {
+        type Error = Infallible;
+    }
+
+    impl OutputPin for NoopPin {
+        fn set_low(&mut self) -> Result<(), Infallible> {
+            Ok(())
+        }
+        fn set_high(&mut self) -> Result<(), Infallible> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn isolated_noise_spikes_are_not_debounced_into_a_press() {
+        // Two 150 µs spikes, each over before the scan that saw it finishes, then a real 100 ms press at 1 s.
+        static SIGNAL: [(u64, u64); 3] = [(10_000, 10_150), (500_000, 500_150), (1_000_000, 1_100_000)];
+        let mut matrix: Matrix<ScriptedPin, NoopPin, DefaultDebouncer<1, 2>, 1, 2, true> =
+            Matrix::new([ScriptedPin(&SIGNAL)], [NoopPin, NoopPin], DefaultDebouncer::new());
+
+        let (event, at) = test_block_on(async { (matrix.read_event().await, Instant::now()) });
+
+        assert!(event.pressed);
+        assert!(
+            at >= Instant::from_secs(1) + Duration::from_millis(DEBOUNCE_THRESHOLD.into()),
+            "press reported at {at:?}, before the real press could have been debounced"
+        );
+    }
 }
