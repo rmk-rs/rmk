@@ -122,10 +122,12 @@ paired with a host. For any profile, the tool can:
 - **Forget** — drop the connection and delete the pairing, so the host must pair
   again. You must [unlock](#locking-dangerous-operations) the keyboard first.
 
-A profile you disconnect or forget stays offline until you switch to it again,
-from the host tool or with its profile key. Typing doesn't reconnect it, and
-your other profiles stay connected. Disconnecting the profile you type on
-doesn't move typing to another profile; switch to the one you want.
+If you disconnect or forget the profile you type on, the keyboard advertises so
+a new host can pair with it, the same as holding its profile key. A disconnected
+host can't reconnect meanwhile, and its pairing comes back if no new host pairs
+before advertising stops or you switch profiles. Typing doesn't move to another
+profile; switch to the one you want. A profile you aren't typing on stays offline
+until you switch to it, and your other profiles stay connected.
 
 If the host tool reaches the keyboard over the profile you disconnect or forget,
 the tool loses its connection and may report that the request failed. The

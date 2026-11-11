@@ -15,7 +15,10 @@ fn held_profile_key_requests_pairing_after_5s() {
     test_block_on(async {
         let mut keyboard = SimKeyboard::builder([[[USER0]]]).build().await;
         keyboard.press(0, 0).delay(5100).release(0, 0).run().await;
-        assert_eq!(keyboard.ble_profile_actions(), ["Pair(0)", "Switch(0)"]);
+        assert_eq!(
+            keyboard.ble_profile_actions(),
+            ["Switch(0)", "Disconnect(0)", "Switch(0)"]
+        );
     });
 }
 

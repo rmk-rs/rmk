@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: `[event.connection_status_change]` takes only `subs`, since the event keeps only the latest status.
 - **BREAKING**: Serial numbers no longer contain the RMK version, so they stay the same across upgrades. USB, BLE, and Rynk report a protocol marker followed by a configured device serial ID or one derived from the hardware UID. `DeviceConfig.serial_number` now owns the complete string built by `build_serial_number`; `DeviceConfig` is `Clone` rather than `Copy`. `RMK_BUILD_INFO` is removed. See [serial number migration](https://rmk.rs/docs/migration/v09_v10#serial-numbers).
 - A new host can pair with the selected BLE profile while its bonded host is away, replacing the old bond. Bonded profiles advertise at 50 ms for the first 30 s, then at 200 ms.
+- Holding a BLE profile key or the dongle key for 5 seconds keeps the old bond until a new host or dongle pairs, instead of erasing it at once.
 
 ### Added
 
@@ -37,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Publish the dongle's state.
 - Add `dfu_ext` feature for DFU writes to external SPI flash (e.g. W25Q64), so boards with limited internal flash can store the new firmware image externally.
 - Opt-in `ext_adv` feature for extended advertising, scanning and connecting. Each BLE profile then keeps its own connection and address, so switching back to a connected host is instant.
-- Hold a BLE profile key for 5 seconds to pair a new host; the old bond stays until the new host pairs. Rynk adds `DisconnectBleProfile`, and `DeviceCapabilities` reports `max_connections` and `dongle_profile`.
+- Rynk adds `DisconnectBleProfile`; on the selected profile it waits for a new host, the same as holding the profile key. `DeviceCapabilities` reports `max_connections` and `dongle_profile`.
 - Expose whether each BLE profile is bonded via `BleStatus::bonded`, so LEDs and displays can tell a paired-but-disconnected profile from an empty slot.
 - Make `rmk::state::current_ble_status()` and `current_connection_status()` public, so user code can read the current status without subscribing to `ConnectionStatusChangeEvent`.
 - Forks accept a `layers` filter, so they only fire for keys from those layers.

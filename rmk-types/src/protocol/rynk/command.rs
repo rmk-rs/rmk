@@ -322,7 +322,7 @@ endpoints! {
     /// Disconnect a profile and forget its bond.
     #[cfg(feature = "_ble")]
     ClearBleProfile = 0x0705: u8 => ();
-    /// Disconnect a profile and keep its bond.
+    /// Disconnect a profile and keep its bond until a new host pairs with it.
     #[cfg(feature = "_ble")]
     DisconnectBleProfile = 0x0706: u8 => ();
 

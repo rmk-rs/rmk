@@ -54,15 +54,15 @@ Each peer holds one frame in a buffer of `rynk_buffer_size` bytes (a `[rmk]` opt
 
 The transport that carries input follows one rule: USB is ready when `usb` is `Configured` or `Suspended`, BLE is ready when `ble[selected].state` is `Connected`, and `preferred` decides when both are ready; `ConnectionStatus::decide_active()` (`decide_active_connection` in `rynk-wasm`) applies this rule. `GetConnectionType` returns only `preferred`.
 
-| Command                | Effect                                                      | Bond                     | Needs unlock |
-| ---------------------- | ----------------------------------------------------------- | ------------------------ | ------------ |
-| `SwitchBleProfile`     | Selects the profile and advertises if it has no connection. | Kept                     | No           |
-| `DisconnectBleProfile` | Closes the profile's connection.                            | Kept                     | No           |
-| `ClearBleProfile`      | Closes the profile's connection.                            | Deleted, even if offline | Yes          |
+| Command                | Effect                                                                           | Bond                        | Needs unlock |
+| ---------------------- | -------------------------------------------------------------------------------- | --------------------------- | ------------ |
+| `SwitchBleProfile`     | Selects the profile and advertises if it has no connection.                      | Kept                        | No           |
+| `DisconnectBleProfile` | Closes the profile's connection; the selected profile then waits for a new host. | Kept until a new host pairs | No           |
+| `ClearBleProfile`      | Closes the profile's connection; the selected profile then waits for a new host. | Deleted, even if offline    | Yes          |
 
 These commands answer `Ok` once the keyboard accepts the action, before it takes effect; watch `ConnectionChange` for the result. `NotReady` means earlier profile actions are still pending; retry. If the action closes the link the request arrived on, the link can drop before the reply arrives, but the action still runs.
 
-A disconnected or cleared profile stays offline until it is selected again, by `SwitchBleProfile` (even on the already selected index) or the user's profile keys. Typing doesn't reconnect it, and other profiles keep their connections. After a restart, the keyboard advertises on the selected profile as usual.
+Disconnecting or clearing the selected profile starts a new advertising period for a new host, the same as holding its profile key; `bonded` is false meanwhile. A disconnected profile keeps its bond as a fallback: the old host can't reconnect while the profile waits, and the bond comes back if no new host pairs before advertising ends or another profile is selected. A profile that isn't selected stays offline until it is, and other profiles keep their connections.
 
 ## Errors
 
@@ -126,7 +126,7 @@ The lock belongs to the connection and starts locked; `Lock` or disconnection re
 | `0x0702` | `GetConnectionStatus`  | `()`                   | `ConnectionStatus`      |         | Full `ConnectionStatus` snapshot, every BLE profile included.                |
 | `0x0704` | `SwitchBleProfile`     | `u8`                   | `()`                    | `_ble`  | Select a profile.                                                            |
 | `0x0705` | `ClearBleProfile`      | `u8`                   | `()`                    | `_ble`  | Disconnect a profile and forget its bond.                                    |
-| `0x0706` | `DisconnectBleProfile` | `u8`                   | `()`                    | `_ble`  | Disconnect a profile and keep its bond.                                      |
+| `0x0706` | `DisconnectBleProfile` | `u8`                   | `()`                    | `_ble`  | Disconnect a profile and keep its bond until a new host pairs with it.       |
 | `0x0801` | `GetCurrentLayer`      | `()`                   | `u8`                    |         |                                                                              |
 | `0x0802` | `GetMatrixState`       | `()`                   | `MatrixState`           |         |                                                                              |
 | `0x0803` | `GetBatteryStatus`     | `()`                   | `BatteryStatus`         |         |                                                                              |

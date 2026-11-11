@@ -1712,7 +1712,8 @@ impl<'a> Keyboard<'a> {
         // Keep the old bond until a replacement pairing succeeds.
         if id < NUM_BLE_PROFILE as u8 {
             info!("Profile key held: re-pairing profile {}", id);
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::Pair(id)).await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Disconnect(id)).await;
         }
         #[cfg(feature = "split")]
         if id == NUM_BLE_PROFILE as u8 + 4 {
@@ -1723,7 +1724,10 @@ impl<'a> Keyboard<'a> {
         if id == NUM_BLE_PROFILE as u8 + 5 {
             use crate::ble::profile::DONGLE_PROFILE;
             info!("Dongle key held: re-pairing dongle profile");
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::Pair(DONGLE_PROFILE)).await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(DONGLE_PROFILE)).await;
+            BLE_PROFILE_CHANNEL
+                .send(BleProfileAction::Disconnect(DONGLE_PROFILE))
+                .await;
         }
     }
 

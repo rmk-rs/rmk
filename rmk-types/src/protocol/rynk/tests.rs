@@ -1261,7 +1261,7 @@ mod protocol_reference {
              The transport that carries input follows one rule: USB is ready when `usb` is `Configured` or `Suspended`, BLE is ready when `ble[selected].state` is `Connected`, and `preferred` decides when both are ready; `ConnectionStatus::decide_active()` (`decide_active_connection` in `rynk-wasm`) applies this rule. `GetConnectionType` returns only `preferred`.\n\n\
              {profile_actions}\n\
              These commands answer `Ok` once the keyboard accepts the action, before it takes effect; watch `ConnectionChange` for the result. `NotReady` means earlier profile actions are still pending; retry. If the action closes the link the request arrived on, the link can drop before the reply arrives, but the action still runs.\n\n\
-             A disconnected or cleared profile stays offline until it is selected again, by `SwitchBleProfile` (even on the already selected index) or the user's profile keys. Typing doesn't reconnect it, and other profiles keep their connections. After a restart, the keyboard advertises on the selected profile as usual.\n\n\
+             Disconnecting or clearing the selected profile starts a new advertising period for a new host, the same as holding its profile key; `bonded` is false meanwhile. A disconnected profile keeps its bond as a fallback: the old host can't reconnect while the profile waits, and the bond comes back if no new host pairs before advertising ends or another profile is selected. A profile that isn't selected stays offline until it is, and other profiles keep their connections.\n\n\
              ## Errors\n\n\
              A request's response is postcard `Result<T, RynkError>`; the `Err` side is one of these variants.\n\n\
              {errors}\n\
@@ -1321,13 +1321,13 @@ mod protocol_reference {
                     ],
                     [
                         "`DisconnectBleProfile`",
-                        "Closes the profile's connection.",
-                        "Kept",
+                        "Closes the profile's connection; the selected profile then waits for a new host.",
+                        "Kept until a new host pairs",
                         "No"
                     ],
                     [
                         "`ClearBleProfile`",
-                        "Closes the profile's connection.",
+                        "Closes the profile's connection; the selected profile then waits for a new host.",
                         "Deleted, even if offline",
                         "Yes"
                     ],

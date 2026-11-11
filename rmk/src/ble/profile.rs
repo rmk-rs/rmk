@@ -100,11 +100,11 @@ impl Default for ProfileInfo {
 #[derive(Debug)]
 pub(crate) enum BleProfileAction {
     Switch(u8),
-    Pair(u8),
+    /// Drop a slot's link; the selected slot then waits for a new host and keeps its bond until one pairs.
     Disconnect(u8),
     Previous,
     Next,
-    /// Clear a slot's bond without selecting or reconnecting it.
+    /// Clear a slot's bond without selecting it.
     ClearBond(u8),
 }
 

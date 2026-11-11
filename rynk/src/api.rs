@@ -383,14 +383,16 @@ impl Client {
 
     /// Queue disconnecting `slot` and forgetting its bond; requires an unlocked connection.
     /// The reply confirms the queue, not the flash write, and may never reach a host on that slot.
-    /// The slot stays offline until it is selected again. Requires [`DeviceCapabilities::ble_enabled`].
+    /// A selected slot then advertises for a new host; any other slot stays offline until selected.
+    /// Requires [`DeviceCapabilities::ble_enabled`].
     pub async fn clear_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
         self.require_ble(Cmd::ClearBleProfile)?;
         self.request::<command::ClearBleProfile>(&slot).await
     }
 
     /// Queue disconnecting `slot` and keep its bond. The reply may never reach a host on that slot.
-    /// The slot stays offline until it is selected again. Requires [`DeviceCapabilities::ble_enabled`].
+    /// A selected slot then advertises for a new host, which replaces the bond if it pairs; any other
+    /// slot stays offline until selected. Requires [`DeviceCapabilities::ble_enabled`].
     pub async fn disconnect_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
         self.require_ble(Cmd::DisconnectBleProfile)?;
         self.request::<command::DisconnectBleProfile>(&slot).await

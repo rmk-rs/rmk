@@ -49,7 +49,8 @@ impl Handle<ClearBleProfile> for RynkService<'_> {
     }
 }
 
-/// `Cmd::DisconnectBleProfile` — disconnects the given slot and keeps its bond.
+/// `Cmd::DisconnectBleProfile` — disconnects the given slot and keeps its bond;
+/// the selected slot then waits for a new host.
 #[cfg(feature = "_ble")]
 impl Handle<DisconnectBleProfile> for RynkService<'_> {
     async fn handle(&self, slot: u8) -> Result<(), RynkError> {
