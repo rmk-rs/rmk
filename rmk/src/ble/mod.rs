@@ -121,7 +121,7 @@ pub trait CentralCmds: ControllerCmdSync<LeSetScanParams> {}
 #[cfg(not(feature = "ext_adv"))]
 impl<T: ControllerCmdSync<LeSetScanParams>> CentralCmds for T {}
 
-/// Host and dongle connections: one per profile on extended-HCI controllers.
+/// Simultaneous host and dongle connections, set by `[ble] max_connections`.
 #[doc(hidden)]
 pub const NUM_HOST_LINKS: usize = crate::NUM_HOST_LINKS;
 
@@ -564,8 +564,9 @@ async fn run_ble_keyboard<
                     profile_manager.set_pairing(None);
                     report_activity();
                     adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
-                    // Keep a paired link when every profile has a link of its own.
-                    let keep_connected = NUM_HOST_LINKS > 1
+                    // Keep a paired link unless the target profile needs its slot.
+                    let keep_connected = (host_connections.contains_key(&slot)
+                        || host_connections.len() < NUM_HOST_LINKS)
                         && host_connections.get(&profile_id).is_some_and(|conn| {
                             conn.security_level().is_ok_and(|level| level.encrypted())
                                 && profile_manager
@@ -1546,7 +1547,7 @@ mod tests {
     }
 
     #[test]
-    fn switching_away_keeps_an_encrypted_link_only_with_a_link_per_profile() {
+    fn switching_away_keeps_an_encrypted_link_only_with_a_spare_link() {
         use crate::ble::profile::BleProfileAction;
         use crate::channel::BLE_PROFILE_CHANNEL;
 
@@ -1560,6 +1561,44 @@ mod tests {
             let status = crate::state::current_connection_status();
             assert_eq!(status.ble[0].state == BleState::Connected, kept);
             assert_eq!(hci.sent::<bt_hci::cmd::link_control::Disconnect>().is_empty(), kept);
+        });
+    }
+
+    #[test]
+    fn a_switch_drops_the_link_it_leaves_when_every_link_is_taken() {
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+
+        const LINKS: usize = crate::NUM_HOST_LINKS;
+        // Needs a profile without a link once every link is taken.
+        if LINKS < 2 || super::BOND_SLOTS <= LINKS {
+            return;
+        }
+        let peer = |slot: u8| [0xA0 + slot, 0, 0, 0, 0, 0xC0];
+        let bonds: Vec<_> = (0..LINKS as u8).map(|slot| bond(slot, peer(slot))).collect();
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &bonds, async {
+            for slot in 0..LINKS as u8 {
+                if slot > 0 {
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(slot)).await;
+                }
+                advertising(&hci, slot.into()).await;
+                hci.connect(u16::from(slot) + 1, peer(slot));
+                hci.encrypt(u16::from(slot) + 1);
+                until(|s| s.ble[usize::from(slot)].state == BleState::Connected).await;
+            }
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(LINKS as u8)).await;
+            embassy_time::with_timeout(Duration::from_millis(100), advertising(&hci, LINKS))
+                .await
+                .expect("the new profile must get the slot of the link it replaces");
+            assert_eq!(hci.sent::<bt_hci::cmd::link_control::Disconnect>().len(), 1);
+            let status = crate::state::current_connection_status();
+            assert_eq!(status.ble[LINKS - 1].state, BleState::Inactive);
+            assert!(
+                status.ble[..LINKS - 1]
+                    .iter()
+                    .all(|ble| ble.state == BleState::Connected)
+            );
         });
     }
 

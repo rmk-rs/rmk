@@ -132,15 +132,24 @@ impl crate::KeyboardTomlConfig {
             }
         }
         let bond_slots = rmk.ble_profiles_num + usize::from(active_features.contains(&"dongle"));
-        // Extended advertising gives every profile its own link.
-        let num_host_links = match (active_features.contains(&"_ble"), active_features.contains(&"_ext_adv")) {
-            (false, _) => 0,
-            (true, false) => 1,
-            (true, true) => bond_slots,
-        };
         if bond_slots == 0 && active_features.contains(&"_ble") {
             return Err("BLE requires at least one bond slot; set ble_profiles_num > 0 or enable dongle".to_string());
         }
+        let num_host_links = if active_features.contains(&"_ble") {
+            let links = self.ble.as_ref().and_then(|ble| ble.max_connections).unwrap_or(1);
+            if links == 0 || links > bond_slots {
+                return Err(format!(
+                    "keyboard.toml: [ble.max_connections] must be between 1 and the {bond_slots} BLE profiles, got {links}"
+                ));
+            }
+            // Only extended advertising gives each profile an address, and so a link, of its own.
+            if links > 1 && !active_features.contains(&"_ext_adv") {
+                return Err("keyboard.toml: [ble.max_connections] above 1 requires the `ext_adv` feature".to_string());
+            }
+            links
+        } else {
+            0
+        };
 
         let mut event_config = self.event.clone();
         event_config.connection_status_change.subs += num_host_links;
@@ -497,15 +506,19 @@ mod tests {
         });
         config.auto_calculate_parameters();
 
-        let cases: &[(&[&str], usize, usize)] = &[
-            (&[], 3, 3),
-            (&["_ble"], 4, 3),
-            (&["_ble", "_ext_adv"], 8, 3),
-            (&["split", "_ble"], 5, 4),
-            (&["split", "_ble", "_ext_adv"], 9, 8),
-            (&["split", "_ble", "_ext_adv", "dongle"], 11, 9),
+        let cases: &[(&[&str], Option<usize>, usize, usize)] = &[
+            (&[], None, 3, 3),
+            (&["_ble"], None, 4, 3),
+            (&["_ble", "_ext_adv"], Some(5), 8, 3),
+            (&["split", "_ble"], None, 5, 4),
+            (&["split", "_ble", "_ext_adv"], Some(5), 9, 8),
+            (&["split", "_ble", "_ext_adv", "dongle"], Some(6), 11, 9),
         ];
-        for &(features, battery_status_subs, peripheral_battery_subs) in cases {
+        for &(features, max_connections, battery_status_subs, peripheral_battery_subs) in cases {
+            config.ble = Some(BleConfig {
+                max_connections,
+                ..Default::default()
+            });
             let constants = config.build_constants(features).unwrap();
             for (name, expected) in [
                 ("battery_status", battery_status_subs),
@@ -514,6 +527,30 @@ mod tests {
                 let event = constants.events.iter().find(|event| event.name == name).unwrap();
                 assert_eq!(event.subs, expected, "{features:?}: {name}");
             }
+        }
+    }
+
+    #[test]
+    fn max_connections_fit_the_profiles_and_need_extended_advertising() {
+        let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
+        config.rmk.ble_profiles_num = 2;
+        assert_eq!(config.build_constants(&["_ble", "_ext_adv"]).unwrap().num_host_links, 1);
+        for (max_connections, features, links) in [
+            (0, &["_ble", "_ext_adv"][..], None),
+            (2, &["_ble"], None),
+            (2, &["_ble", "_ext_adv"], Some(2)),
+            (3, &["_ble", "_ext_adv"], None),
+            (3, &["_ble", "_ext_adv", "dongle"], Some(3)),
+        ] {
+            config.ble = Some(BleConfig {
+                max_connections: Some(max_connections),
+                ..Default::default()
+            });
+            let resolved = config
+                .build_constants(features)
+                .ok()
+                .map(|constants| constants.num_host_links);
+            assert_eq!(resolved, links, "{max_connections} links with {features:?}");
         }
     }
 

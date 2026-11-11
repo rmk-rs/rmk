@@ -770,6 +770,8 @@ pub struct BleConfig {
     pub enabled: bool,
     pub default_tx_power: Option<i8>,
     pub use_2m_phy: Option<bool>,
+    /// Simultaneous BLE host and dongle connections; 1 by default.
+    pub max_connections: Option<usize>,
     pub passkey_entry: Option<bool>,
     pub passkey_entry_timeout: Option<u32>,
 }

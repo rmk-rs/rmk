@@ -37,3 +37,8 @@ for feats in "${RMK_TEST_FEATURESETS[@]}"; do
     log_section "Tests: rmk, default features disabled, features: ${feats:-none}"
     cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml "${args[@]}"
 done
+for feats in "${RMK_MULTI_HOST_TEST_FEATURESETS[@]}"; do
+    log_section "Tests: rmk, several BLE host links, features: $feats"
+    KEYBOARD_TOML_PATH="$RMK_MULTI_HOST_TOML" \
+        cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features --features "$feats"
+done
