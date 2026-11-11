@@ -87,36 +87,31 @@ impl Phase for E8H7Phase {
 
 /// Phase implementation based on configurable resolution
 pub struct ResolutionPhase {
-    resolution: u8,
+    resolution: i16,
     lut: [i8; 16],
-    current_pulses: i8,
+    current_pulses: i16,
 }
 
 impl ResolutionPhase {
     pub fn new(resolution: u8, reverse: bool) -> Self {
+        assert!(resolution > 0, "ResolutionPhase: resolution must be nonzero");
         // Each entry corresponds to a state transition and provides +1, -1, or 0 pulse
         let mut lut = [0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0];
         if reverse {
             lut = lut.map(|x| -x);
         }
         Self {
-            resolution,
+            resolution: i16::from(resolution),
             lut,
             current_pulses: 0,
         }
     }
 
     pub fn new_with_detent_and_pulse(detent: u8, pulse: u8, reverse: bool) -> Self {
-        // Each entry corresponds to a state transition and provides +1, -1, or 0 pulse
-        let mut lut = [0, -1, 1, 0, 1, 0, 0, -1, -1, 0, 0, 1, 0, 1, -1, 0];
-        if reverse {
-            lut = lut.map(|x| -x);
-        }
-        Self {
-            resolution: pulse * 4 / detent,
-            lut,
-            current_pulses: 0,
-        }
+        assert!(detent > 0, "ResolutionPhase: detent must be nonzero");
+        let resolution = u8::try_from(u16::from(pulse) * 4 / u16::from(detent))
+            .expect("ResolutionPhase: pulse * 4 / detent must fit in u8");
+        Self::new(resolution, reverse)
     }
 }
 
@@ -125,13 +120,13 @@ impl Phase for ResolutionPhase {
         // Only proceed if there was a state change
         if (s & 0xC) != (s & 0x3) {
             // Add pulse value from the lookup table
-            self.current_pulses += self.lut[s as usize & 0xF];
+            self.current_pulses += i16::from(self.lut[s as usize & 0xF]);
             // Check if we've reached the resolution threshold
-            if self.current_pulses >= self.resolution as i8 {
-                self.current_pulses %= self.resolution as i8;
+            if self.current_pulses >= self.resolution {
+                self.current_pulses %= self.resolution;
                 return Direction::CounterClockwise;
-            } else if self.current_pulses <= -(self.resolution as i8) {
-                self.current_pulses %= self.resolution as i8;
+            } else if self.current_pulses <= -self.resolution {
+                self.current_pulses %= self.resolution;
                 return Direction::Clockwise;
             }
         }
@@ -356,5 +351,25 @@ mod test {
             info!("Item: {:b}, {:?} {:?}", item, d, d2);
             assert_eq!(d, d2);
         }
+    }
+
+    #[test]
+    fn resolution_above_i8_max_counts_full_steps() {
+        let mut phase = ResolutionPhase::new(200, false);
+        for pulse in 1..=200 {
+            let d = phase.direction([0b1000, 0b1110, 0b0111, 0b0001][(pulse - 1) % 4]);
+            let expected = if pulse == 200 {
+                Direction::Clockwise
+            } else {
+                Direction::None
+            };
+            assert_eq!(d, expected, "pulse {pulse}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "resolution must be nonzero")]
+    fn zero_resolution_is_rejected() {
+        ResolutionPhase::new(0, false);
     }
 }
