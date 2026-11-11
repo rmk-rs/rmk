@@ -8,7 +8,8 @@
 # static memory when a feature is disabled.
 #
 # Format per event: { name = "event_name", count = N }
-# `count` defaults to 1 if omitted.
+# `count` defaults to 1 if omitted. An entry with `per_host_link = true`
+# bumps once per BLE host link, set by `[ble] max_connections`.
 
 # --- Display-gated internal subscribers ---
 
@@ -51,8 +52,6 @@ events = [{ name = "battery_status" }]
 [[subscriber]]
 features = ["_ble"]
 events = [
-    # ble/battery_service.rs: BatteryStatusEvent::subscriber()
-    { name = "battery_status" },
     # ble/mod.rs: KeyboardEvent/PointingEvent wake subscribers, created when
     # advertising times out. Without a reserved slot they panic on boards whose
     # permanent subscribers already fill the base count.
@@ -60,11 +59,33 @@ events = [
     { name = "pointing" },
 ]
 
-# The USB Rynk connection subscribes to these topics. BLE counts are sized
-# from the configured host-link capacity in build_constants.
+# ble/mod.rs: the worker serving each host link.
+[[subscriber]]
+features = ["_ble"]
+per_host_link = true
+events = [
+    # The HID writer waits for its profile to be selected.
+    { name = "connection_status_change" },
+    # ble/battery_service.rs: BatteryStatusEvent::subscriber()
+    { name = "battery_status" },
+]
 
+# host/rynk/topics.rs: each Rynk connection subscribes to these topics,
+# once over USB and once per BLE host link.
 [[subscriber]]
 features = ["rynk"]
+events = [
+    { name = "battery_status" },
+    { name = "layer_change" },
+    { name = "wpm_update" },
+    { name = "connection_status_change" },
+    { name = "sleep_state" },
+    { name = "led_indicator" },
+]
+
+[[subscriber]]
+features = ["rynk", "_ble"]
+per_host_link = true
 events = [
     { name = "battery_status" },
     { name = "layer_change" },

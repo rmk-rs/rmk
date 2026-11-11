@@ -14,6 +14,9 @@ struct SubscriberConfig {
 #[derive(Deserialize)]
 struct SubscriberEntry {
     features: Vec<String>,
+    /// Bump once per BLE host link instead of once.
+    #[serde(default)]
+    per_host_link: bool,
     events: Vec<SubscriberEventEntry>,
 }
 
@@ -152,21 +155,7 @@ impl crate::KeyboardTomlConfig {
         };
 
         let mut event_config = self.event.clone();
-        event_config.connection_status_change.subs += num_host_links;
-        if active_features.contains(&"rynk") {
-            // Each BLE connection forwards topics independently.
-            for event in [
-                &mut event_config.layer_change,
-                &mut event_config.wpm_update,
-                &mut event_config.connection_status_change,
-                &mut event_config.sleep_state,
-                &mut event_config.led_indicator,
-                &mut event_config.battery_status,
-            ] {
-                event.subs += num_host_links;
-            }
-        }
-        event_config.battery_status.subs += num_host_links.saturating_sub(1);
+        // Each host link serves the peripheral batteries it has.
         if !split_battery_peripheral_ids.is_empty() {
             event_config.peripheral_battery.subs += num_host_links;
         }
@@ -229,7 +218,7 @@ impl crate::KeyboardTomlConfig {
 
         // Auto-bump subscriber counts based on enabled feature flags.
         // Declarations live in subscriber_default.toml.
-        apply_feature_subscriber_bumps(&mut events, active_features);
+        apply_feature_subscriber_bumps(&mut events, active_features, num_host_links);
 
         // Only validate passkey settings when the build will emit passkey constants.
         let passkey = if active_features.contains(&"passkey_entry") {
@@ -346,16 +335,17 @@ fn validate_u16_capability(name: &str, value: usize) -> Result<(), String> {
 /// Bump event subscriber counts based on feature flags declared in `subscriber_default.toml`.
 ///
 /// `active_features` contains lowercase feature names (e.g. `"split"`, `"_ble"`).
-fn apply_feature_subscriber_bumps(events: &mut [EventChannel], active_features: &[&str]) {
+fn apply_feature_subscriber_bumps(events: &mut [EventChannel], active_features: &[&str], num_host_links: usize) {
     let sub_config: SubscriberConfig =
         toml::from_str(SUBSCRIBER_DEFAULT_CONFIG).expect("Failed to parse subscriber_default.toml");
 
     for entry in &sub_config.subscriber {
         let all_enabled = entry.features.iter().all(|f| active_features.contains(&f.as_str()));
         if all_enabled {
+            let links = if entry.per_host_link { num_host_links } else { 1 };
             for sub_event in &entry.events {
                 if let Some(event) = events.iter_mut().find(|e| e.name == sub_event.name) {
-                    event.subs += sub_event.count;
+                    event.subs += sub_event.count * links;
                 } else {
                     println!(
                         "cargo:warning=subscriber_default.toml: unknown event \"{}\"",
