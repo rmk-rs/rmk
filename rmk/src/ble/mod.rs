@@ -1570,7 +1570,8 @@ mod tests {
         use crate::channel::BLE_PROFILE_CHANNEL;
 
         const LINKS: usize = crate::NUM_HOST_LINKS;
-        // Needs a profile without a link once every link is taken.
+        // Needs a profile without a link once every link is taken: build with an `ext_adv` feature set
+        // and a KEYBOARD_TOML_PATH whose `[ble] max_connections` is at least 2 and below the profile count.
         if LINKS < 2 || super::BOND_SLOTS <= LINKS {
             return;
         }

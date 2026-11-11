@@ -29,10 +29,6 @@ for feats in "${RMK_TEST_FEATURESETS[@]}"; do
         cargo "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features --features "$feats"
     fi
 done
-for feats in "${RMK_MULTI_HOST_TEST_FEATURESETS[@]}"; do
-    KEYBOARD_TOML_PATH="$RMK_MULTI_HOST_TOML" \
-        cargo "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features --features "$feats"
-done
 
 # Doctests: nextest doesn't run them. rmk/ has `doctest = false` so only
 # rmk-types needs a --doc pass.

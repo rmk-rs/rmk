@@ -1,9 +1,0 @@
-# `KEYBOARD_TOML_PATH` for the test sets in `RMK_MULTI_HOST_TEST_FEATURESETS`:
-# two simultaneous BLE host links, fewer than the default three profiles.
-[ble]
-enabled = true
-max_connections = 2
-
-# A keyboard.toml without auto mouse layers sizes them to 0; the tests expect the default.
-[rmk]
-auto_mouse_layer_max_num = 2

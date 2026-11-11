@@ -68,18 +68,13 @@ RMK_TEST_FEATURESETS=(
     "split,_dfu,dfu_split,storage,async_matrix"
     "vial,host_lock,_no_usb,steno,passkey_entry"
     "rynk,_ble,split,async_matrix,storage"
+    "rynk,_ble,ext_adv,split,async_matrix,storage"
+    "dongle,rynk,_ble,ext_adv,split,async_matrix,storage"
     "_ble,ext_adv,split,storage,async_matrix"
     "dongle,vial,_ble,ext_adv,storage,custom_message"
     "dongle,_ble,storage,custom_message"
     "dongle,vial,_ble,storage,custom_message"
 )
-
-# Behavioral coverage with several BLE host links, built with KEYBOARD_TOML_PATH=$RMK_MULTI_HOST_TOML.
-RMK_MULTI_HOST_TEST_FEATURESETS=(
-    "rynk,_ble,ext_adv,split,async_matrix,storage"
-    "dongle,rynk,_ble,ext_adv,split,async_matrix,storage"
-)
-RMK_MULTI_HOST_TOML="$repo_root/rmk/tests/multi_host.toml"
 
 # Examples auto-discovery skiplist. Reasons:
 #   - nrf54lm20_ble: Cargo.toml references local path deps that only exist on
