@@ -428,7 +428,7 @@ mod tests {
         use crate::config::StorageConfig;
         use crate::core_traits::Runnable;
         use crate::storage::{Storage, StorageKey, StorageValue, async_flash_wrapper, read};
-        use crate::test_support::{InMemoryFlash, clear_flash_channel, set_connection_status};
+        use crate::test_support::{InMemoryFlash, clear_flash_channel, reset_connection_status};
 
         let manager = ProfileManager::<2>::new();
         clear_flash_channel();
@@ -472,7 +472,7 @@ mod tests {
             drop(storage);
 
             clear_flash_channel();
-            set_connection_status(Default::default());
+            reset_connection_status();
             let mut restored = ProfileManager::<2>::new();
             let mut storage = Box::pin(Storage::new(async_flash_wrapper(reboot), &StorageConfig::default())).await;
             select(restored.load_bonded_devices(), storage.run()).await;
@@ -490,10 +490,10 @@ mod tests {
         use crate::config::StorageConfig;
         use crate::core_traits::Runnable;
         use crate::storage::{Storage, StorageItem, async_flash_wrapper, store};
-        use crate::test_support::{InMemoryFlash, clear_flash_channel, set_connection_status};
+        use crate::test_support::{InMemoryFlash, clear_flash_channel, reset_connection_status};
 
         clear_flash_channel();
-        set_connection_status(Default::default());
+        reset_connection_status();
         test_block_on(async {
             let flash = async_flash_wrapper(InMemoryFlash::<16_384, 4_096, 1>::new());
             let mut storage = Box::pin(Storage::new(flash, &StorageConfig::default())).await;

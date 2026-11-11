@@ -504,34 +504,25 @@ impl Default for EventChannelConfig {
     }
 }
 
-/// Configuration for an event that keeps only its latest value, so it has no queue or publisher limit.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct EventSubsConfig {
-    /// Number of subscribers
-    pub subs: usize,
-}
-
 /// Macro to define EventConfig and related code without repetition
 macro_rules! define_event_config {
-    (latest: $($latest:ident),+; $($field:ident),* $(,)?) => {
+    ($($field:ident),* $(,)?) => {
         /// Event configuration for all controller events
         /// Default values are loaded from event_default.toml
         #[derive(Clone, Debug, Deserialize)]
         #[serde(deny_unknown_fields, default)]
         pub(crate) struct EventConfig {
-            $(pub $latest: EventSubsConfig,)+
             $(pub $field: EventChannelConfig,)*
         }
 
         /// Cached default EventConfig parsed from event_default.toml
         static EVENT_CONFIG_DEFAULTS: std::sync::LazyLock<EventConfig> = std::sync::LazyLock::new(|| {
             #[derive(Deserialize)]
-            struct Inner { $($latest: EventSubsConfig,)+ $($field: EventChannelConfig,)* }
+            struct Inner { $($field: EventChannelConfig,)* }
             #[derive(Deserialize)]
             struct Wrapper { event: Inner }
             let w: Wrapper = toml::from_str(EVENT_DEFAULT_CONFIG).expect("Failed to parse event_default.toml");
-            EventConfig { $($latest: w.event.$latest,)+ $($field: w.event.$field,)* }
+            EventConfig { $($field: w.event.$field,)* }
         });
 
         impl Default for EventConfig {
@@ -543,8 +534,8 @@ macro_rules! define_event_config {
 }
 
 define_event_config!(
-    // Connection status keeps only its latest value
-    latest: connection_status_change;
+    // Connection events
+    connection_status_change,
     // Input events
     modifier,
     keyboard,
@@ -1655,21 +1646,6 @@ channel_size = 32
         assert_eq!(config.event.modifier.channel_size, 8);
         assert_eq!(config.event.modifier.subs, 2);
         assert_eq!(config.event.layer_change.subs, 1);
-    }
-
-    #[test]
-    fn connection_status_change_takes_only_subs() {
-        let parse = |user_toml: &str| {
-            Config::builder()
-                .add_source(File::from_str(EVENT_DEFAULT_CONFIG, FileFormat::Toml))
-                .add_source(File::from_str(user_toml, FileFormat::Toml))
-                .build()
-                .unwrap()
-                .try_deserialize::<KeyboardTomlConfig>()
-        };
-        let config = parse("[event.connection_status_change]\nsubs = 5").unwrap();
-        assert_eq!(config.event.connection_status_change.subs, 5);
-        assert!(parse("[event.connection_status_change]\nchannel_size = 4").is_err());
     }
 
     #[test]

@@ -1,8 +1,10 @@
 # Event channel default configurations
 # Users can override any of these in their keyboard.toml under [event.xxx]
 
-# Connection events: only the latest status is kept, so only `subs` applies
+# Connection events
 [event.connection_status_change]
+channel_size = 2
+pubs = 2
 subs = 1
 
 # Input events

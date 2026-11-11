@@ -1,21 +1,19 @@
-use core::cell::Cell;
+use core::cell::RefCell;
 
-use embassy_sync::watch::Watch;
+use embassy_sync::blocking_mutex::Mutex;
 use rmk_types::ble::BleState;
 #[cfg(feature = "_ble")]
 use rmk_types::ble::BleStatus;
 use rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
 
 use crate::RawMutex;
-#[cfg(feature = "_ble")]
-use crate::event::publish_event;
+use crate::event::{ConnectionStatusChangeEvent, publish_event};
 
-/// Authoritative transport state; mutations below also update output routing and LEDs.
-pub(crate) static CONNECTION_STATUS: Watch<
-    RawMutex,
-    ConnectionStatus,
-    { crate::CONNECTION_STATUS_CHANGE_EVENT_SUB_SIZE },
-> = Watch::new_with(ConnectionStatus::new());
+/// Single source of truth for transport state and routing. All writes go
+/// through the mutator helpers below so the active-output cascade runs and
+/// change events fire on every transition.
+static CONNECTION_STATUS: Mutex<RawMutex, RefCell<ConnectionStatus>> =
+    Mutex::new(RefCell::new(ConnectionStatus::new()));
 
 pub(crate) fn active_transport() -> Option<ConnectionType> {
     current_connection_status().decide_active()
@@ -23,10 +21,10 @@ pub(crate) fn active_transport() -> Option<ConnectionType> {
 
 /// Snapshot of the current connection status.
 ///
-/// For change notifications, subscribe before reading this snapshot.
-/// A newly created subscriber does not replay earlier notifications.
+/// Nothing is retained on [`ConnectionStatusChangeEvent`]: subscribe before reading
+/// this, or a transition landing in between is lost.
 pub fn current_connection_status() -> ConnectionStatus {
-    CONNECTION_STATUS.try_get().unwrap_or_default()
+    CONNECTION_STATUS.lock(|c| c.borrow().clone())
 }
 
 pub(crate) fn current_usb_state() -> UsbState {
@@ -44,20 +42,30 @@ pub fn current_ble_status() -> BleStatus {
     current_connection_status().selected_ble()
 }
 
-/// Read-modify-write the connection status atomically.
-pub(crate) fn update_status(f: impl Fn(&mut ConnectionStatus)) {
-    let change = Cell::new(None);
-    CONNECTION_STATUS.sender().send_if_modified(|c| {
-        let c = c.get_or_insert(ConnectionStatus::new());
-        let prev = c.clone();
-        f(c);
-        if prev == *c {
-            return false;
+/// Waits until `f` holds for the connection status, then returns that status.
+#[cfg(feature = "_ble")]
+pub(crate) async fn wait_for_connection_status(f: impl Fn(&ConnectionStatus) -> bool) -> ConnectionStatus {
+    use crate::event::{EventSubscriber, SubscribableEvent};
+
+    // Subscribe first, so a change made after the check below still wakes us.
+    let mut changes = ConnectionStatusChangeEvent::subscriber();
+    loop {
+        let status = current_connection_status();
+        if f(&status) {
+            return status;
         }
-        change.set(Some((prev, c.clone())));
-        true
-    });
-    let Some((prev, new)) = change.take() else {
+        changes.next_event().await;
+    }
+}
+
+/// Read-modify-write the connection status atomically.
+pub(crate) fn update_status(f: impl FnOnce(&mut ConnectionStatus)) {
+    let Some((prev, new)) = CONNECTION_STATUS.lock(|c| {
+        let mut c = c.borrow_mut();
+        let prev = c.clone();
+        f(&mut c);
+        (prev != *c).then(|| (prev, c.clone()))
+    }) else {
         return;
     };
 
@@ -83,6 +91,8 @@ pub(crate) fn update_status(f: impl Fn(&mut ConnectionStatus)) {
             publish_event(crate::event::LedIndicatorEvent::new(Default::default()));
         }
     }
+
+    publish_event(ConnectionStatusChangeEvent(new));
 }
 
 pub fn set_usb_state(s: UsbState) {
@@ -128,15 +138,14 @@ pub(crate) async fn load_preferred_connection() -> ConnectionType {
 
 #[cfg(all(feature = "_ble", not(feature = "_no_usb")))]
 pub(crate) async fn toggle_preferred() {
-    let new = Cell::new(ConnectionType::Usb);
+    let mut new = ConnectionType::Usb;
     update_status(|c| {
         c.preferred = match c.preferred {
             ConnectionType::Usb => ConnectionType::Ble,
             ConnectionType::Ble => ConnectionType::Usb,
         };
-        new.set(c.preferred);
+        new = c.preferred;
     });
-    let new = new.get();
     info!("Switching preferred transport to: {:?}", new);
     #[cfg(feature = "storage")]
     crate::storage::store_unchecked(crate::storage::StorageItem::ConnectionType(new)).await;
@@ -157,7 +166,7 @@ mod tests {
     #[cfg(feature = "_ble")]
     use rmk_types::ble::{BleState, BleStatus};
 
-    use super::{ConnectionStatus, ConnectionType, UsbState, set_preferred_connection, set_usb_state};
+    use super::{ConnectionType, UsbState, set_preferred_connection, set_usb_state};
     #[cfg(feature = "_ble")]
     use super::{select_ble_profile, set_ble_bonded, set_ble_state};
     use crate::event::{ConnectionStatusChangeEvent, EventSubscriber, SubscribableEvent};
@@ -172,7 +181,7 @@ mod tests {
     }
 
     fn reset_state() {
-        crate::test_support::set_connection_status(ConnectionStatus::default());
+        crate::test_support::reset_connection_status();
         #[cfg(not(feature = "_no_usb"))]
         crate::channel::USB_REPORT_CHANNEL.clear();
         #[cfg(feature = "_ble")]
@@ -226,23 +235,6 @@ mod tests {
     }
 
     #[test]
-    fn status_update_initializes_an_empty_watch() {
-        let _guard = state_test_lock().lock().expect("state test lock");
-        reset_state();
-        super::CONNECTION_STATUS.sender().clear();
-        let mut sub = ConnectionStatusChangeEvent::subscriber();
-
-        set_usb_state(UsbState::Configured);
-
-        let expected = ConnectionStatus {
-            usb: UsbState::Configured,
-            ..ConnectionStatus::new()
-        };
-        assert_eq!(super::current_connection_status(), expected);
-        assert_eq!(block_on(sub.next_event()).0, expected);
-    }
-
-    #[test]
     fn unchanged_status_does_not_publish_event() {
         let _guard = state_test_lock().lock().unwrap();
         reset_state();
@@ -260,18 +252,17 @@ mod tests {
 
     #[cfg(feature = "_ble")]
     #[test]
-    fn profile_updates_are_coalesced_for_each_subscriber() {
+    fn each_profile_update_publishes_a_status_event() {
         let _guard = state_test_lock().lock().unwrap();
         reset_state();
-        let mut first = ConnectionStatusChangeEvent::subscriber();
-        let mut second = ConnectionStatusChangeEvent::subscriber();
+        let mut sub = ConnectionStatusChangeEvent::subscriber();
 
         for profile in [1, 2] {
             select_ble_profile(profile);
         }
 
-        for subscriber in [&mut first, &mut second] {
-            assert_eq!(block_on(subscriber.next_event()).0, super::current_connection_status());
+        for profile in [1, 2] {
+            assert_eq!(block_on(sub.next_event()).0.selected, profile);
         }
     }
 
@@ -285,12 +276,11 @@ mod tests {
         crate::channel::BLE_REPORT_CHANNEL
             .try_send(pressed_keyboard_report())
             .unwrap();
-        let mut sub = ConnectionStatusChangeEvent::subscriber();
 
         set_ble_state(1, BleState::Connected);
         set_ble_bonded(1, true);
 
-        let status = block_on(sub.next_event()).0;
+        let status = super::current_connection_status();
         assert_eq!(
             status.ble[1],
             BleStatus {

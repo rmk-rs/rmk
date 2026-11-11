@@ -63,7 +63,7 @@ fn reset() {
         .expect("free publisher slot at reset")
         .clear();
 
-    rmk::test_support::set_connection_status(Default::default());
+    rmk::test_support::reset_connection_status();
     #[cfg(not(feature = "_no_usb"))]
     rmk::state::set_usb_state(rmk_types::connection::UsbState::Configured);
     #[cfg(feature = "_no_usb")]

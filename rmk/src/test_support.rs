@@ -22,8 +22,8 @@ pub fn set_ble_state(profile: u8, state: rmk_types::ble::BleState) {
     crate::state::set_ble_state(profile, state);
 }
 
-pub fn set_connection_status(status: rmk_types::connection::ConnectionStatus) {
-    crate::state::update_status(|current| *current = status.clone());
+pub fn reset_connection_status() {
+    crate::state::update_status(|c| *c = Default::default());
 }
 
 #[cfg(feature = "storage")]
