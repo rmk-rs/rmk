@@ -1674,8 +1674,10 @@ impl<'a> Keyboard<'a> {
                     // Previous profile
                     BLE_PROFILE_CHANNEL.send(BleProfileAction::Previous).await;
                 } else if id == NUM_BLE_PROFILE as u8 + 2 {
-                    // Clear bond on the profile selected when the BLE task applies it
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(None)).await;
+                    // Clear bond on current profile
+                    BLE_PROFILE_CHANNEL
+                        .send(BleProfileAction::ClearBond(crate::state::current_profile()))
+                        .await;
                 } else if id == NUM_BLE_PROFILE as u8 + 3 {
                     // Toggle preferred transport (USB <-> BLE);
                     // only meaningful when both transports exist in this build.

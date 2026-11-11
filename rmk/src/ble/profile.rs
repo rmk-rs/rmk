@@ -109,8 +109,8 @@ pub(crate) enum BleProfileAction {
     Disconnect(u8),
     Previous,
     Next,
-    /// Clear a slot's bond without selecting it; `None` is the slot selected when the action is applied.
-    ClearBond(Option<u8>),
+    /// Clear a slot's bond without selecting it.
+    ClearBond(u8),
 }
 
 /// Stored bonds for host or dongle profiles.

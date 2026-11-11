@@ -118,7 +118,7 @@ fn profile_commands_accept_every_host_and_dongle_slot() {
             actions.extend([
                 format!("Switch({slot})"),
                 format!("Disconnect({slot})"),
-                format!("ClearBond(Some({slot}))"),
+                format!("ClearBond({slot})"),
             ]);
         }
         if let Ok(invalid) = u8::try_from(slots) {
