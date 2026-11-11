@@ -454,7 +454,8 @@ async fn run_ble_keyboard<
             let bond = profile_manager.bond_info(profile_id);
 
             let advertise_and_connect = async {
-                if host_connections.contains_key(&profile_id) {
+                // Advertise only while this profile has no link and a worker is free.
+                if host_connections.contains_key(&profile_id) || host_connections.len() == NUM_HOST_LINKS {
                     return core::future::pending().await;
                 }
 
@@ -545,7 +546,9 @@ async fn run_ble_keyboard<
                             report_activity();
                             adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
                         }
-                        disconnect_profile(slot, &mut host_connections, &completed).await;
+                        if let Some(conn) = host_connections.get(&slot) {
+                            conn.disconnect();
+                        }
                         if matches!(action, ClearBond(_)) {
                             profile_manager.clear_bond(slot);
                         }
@@ -568,7 +571,9 @@ async fn run_ble_keyboard<
                         });
                     if !keep_connected {
                         set_ble_state(profile_id, BleState::Inactive);
-                        disconnect_profile(profile_id, &mut host_connections, &completed).await;
+                        if let Some(conn) = host_connections.get(&profile_id) {
+                            conn.disconnect();
+                        }
                     }
                     profile_manager.switch_profile(slot);
                     continue;
@@ -637,25 +642,6 @@ async fn run_ble_keyboard<
     )
     .await;
     unreachable!("BleTransport sub-tasks must run forever")
-}
-
-async fn disconnect_profile(
-    slot: u8,
-    connections: &mut LinearMap<u8, Connection<'_, DefaultPacketPool>, NUM_HOST_LINKS>,
-    completed: &Channel<NoopRawMutex, u8, NUM_HOST_LINKS>,
-) {
-    let Some(conn) = connections.get(&slot) else {
-        return;
-    };
-    conn.disconnect();
-    loop {
-        let ended = completed.receive().await;
-        connections.remove(&ended);
-        set_ble_state(ended, BleState::Inactive);
-        if ended == slot {
-            return;
-        }
-    }
 }
 
 /// NoopHandler is used on the device which never scans,
@@ -1560,7 +1546,8 @@ mod tests {
         with_keyboard(hci.clone(), &[bond(0, HOST_A), bond(1, HOST_B)], async {
             reconnect(&hci, 1, HOST_A).await;
             BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await;
-            until(|s| s.selected == 1).await;
+            // Profile 1 advertises once profile 0's link is kept or gone.
+            advertising(&hci, 1).await;
             let kept = crate::NUM_HOST_LINKS > 1;
             let status = crate::state::current_connection_status();
             assert_eq!(status.ble[0].state == BleState::Connected, kept);
