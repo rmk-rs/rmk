@@ -1,15 +1,20 @@
 //! Manage BLE profiles and bonding information
 
 use core::cell::Cell;
+use core::sync::atomic::Ordering;
 
 use embassy_futures::select::{Either, select, select_array};
 use embassy_sync::signal::Signal;
 use embassy_sync::watch::Watch;
+use rmk_types::connection::ConnectionType;
 use trouble_host::prelude::*;
 use trouble_host::{BondInformation, LongTermKey};
 
 use super::ble_server::CCCD_TABLE_SIZE;
-use crate::state::{current_profile, select_ble_profile, set_ble_bonded};
+use crate::channel::{BLE_REPORT_CHANNEL, LED_SIGNAL};
+use crate::event::{LedIndicatorEvent, publish_event};
+use crate::keyboard::LOCK_LED_STATES;
+use crate::state::{active_transport, current_profile, select_ble_profile, set_ble_bonded};
 #[cfg(feature = "storage")]
 use crate::storage::{StorageItem, StorageKey, StorageValue, read, store};
 
@@ -253,7 +258,15 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
 
     /// Apply a selected profile outside the cancellable action wait.
     pub(crate) fn switch_profile(&self, profile: u8) {
+        let usb_was_active = active_transport() == Some(ConnectionType::Usb);
         select_ble_profile(profile);
+        // Reports and lock LEDs of the previous host must not reach the new one.
+        BLE_REPORT_CHANNEL.clear();
+        LED_SIGNAL.reset();
+        if !usb_was_active || active_transport() != Some(ConnectionType::Usb) {
+            LOCK_LED_STATES.store(0, Ordering::Relaxed);
+            publish_event(LedIndicatorEvent::new(Default::default()));
+        }
         self.updated_active_profile.signal(());
         info!("Switched to BLE profile: {}", profile);
     }
@@ -343,6 +356,7 @@ mod tests {
 
     #[test]
     fn profile_switches_update_selection_and_stack_bonds() {
+        use crate::channel::BLE_REPORT_CHANNEL;
         use crate::state::{current_ble_status, current_profile};
 
         let manager = ProfileManager::<2>::new();
@@ -359,7 +373,12 @@ mod tests {
         }
         test_block_on(async {
             for selected in [1, 0, 1] {
+                // Reports queued for the previous host must not reach the new one.
+                BLE_REPORT_CHANNEL
+                    .try_send(crate::hid::Report::KeyboardReport(Default::default()))
+                    .unwrap();
                 manager.switch_profile(selected);
+                assert!(BLE_REPORT_CHANNEL.is_empty());
                 load_stack_bond(&stack, manager.bond_info(selected).map(|bond| bond.info));
                 assert_eq!(current_profile(), selected);
                 assert!(current_ble_status().bonded);

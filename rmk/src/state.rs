@@ -81,17 +81,6 @@ pub(crate) fn update_status(f: impl FnOnce(&mut ConnectionStatus)) {
         crate::channel::clear_and_release_report_channel(prev_active);
     }
 
-    #[cfg(feature = "_ble")]
-    if prev.selected != new.selected {
-        // Reports queued for the previous host must not reach the new one.
-        crate::channel::BLE_REPORT_CHANNEL.clear();
-        crate::channel::LED_SIGNAL.reset();
-        if prev_active != Some(ConnectionType::Usb) || new_active != Some(ConnectionType::Usb) {
-            crate::keyboard::LOCK_LED_STATES.store(0, core::sync::atomic::Ordering::Relaxed);
-            publish_event(crate::event::LedIndicatorEvent::new(Default::default()));
-        }
-    }
-
     publish_event(ConnectionStatusChangeEvent(new));
 }
 
@@ -352,18 +341,6 @@ mod tests {
         ));
 
         assert_all_released(&USB_REPORT_CHANNEL);
-    }
-
-    #[cfg(feature = "_ble")]
-    #[test]
-    fn profile_switch_drops_reports_queued_for_the_previous_host() {
-        use crate::channel::BLE_REPORT_CHANNEL;
-
-        let _guard = state_test_lock().lock().unwrap();
-        reset_state();
-        BLE_REPORT_CHANNEL.try_send(pressed_keyboard_report()).unwrap();
-        select_ble_profile(1);
-        assert!(BLE_REPORT_CHANNEL.is_empty());
     }
 
     #[cfg(all(not(feature = "_no_usb"), feature = "_ble"))]
