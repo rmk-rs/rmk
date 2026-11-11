@@ -76,6 +76,11 @@ impl<'a, const N: usize> JoystickProcessor<'a, N> {
             pan: 0,
         };
 
+        // Centered ADC samples keep arriving; only cursor motion is activity.
+        if mouse_report.x != 0 || mouse_report.y != 0 {
+            crate::sleep::report_activity();
+        }
+
         // Send mouse report directly
         send_hid_report(Report::MouseReport(mouse_report)).await;
     }

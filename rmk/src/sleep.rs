@@ -258,6 +258,56 @@ mod tests {
     }
 
     #[test]
+    fn joystick_motion_keeps_awake_but_centered_samples_allow_sleep() {
+        use embassy_futures::select::select3;
+        use rmk_types::action::KeyAction;
+
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::core_traits::Runnable;
+        use crate::event::{Axis, AxisEvent, AxisValType, PointingEvent};
+        use crate::input_device::joystick::JoystickProcessor;
+        use crate::keymap::{KeyMap, KeymapData};
+
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 1> = PositionalConfig::default();
+            let mut data: KeymapData<1, 1, 1, 0> = KeymapData::new([[[KeyAction::No]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut processor = JoystickProcessor::new(7, [[1, 0], [0, 1]], [-100, 0], 10, &keymap);
+            let sample = |device_id, x| PointingEvent {
+                device_id,
+                axes: [Axis::X, Axis::Y, Axis::Z].map(|axis| AxisEvent {
+                    typ: AxisValType::Abs,
+                    axis,
+                    value: if matches!(axis, Axis::X) { x } else { 0 },
+                }),
+            };
+            let script = async {
+                for _ in 0..3 {
+                    Timer::after_millis(600).await;
+                    assert!(!sleeping(), "joystick motion must restart the idle timeout");
+                    publish_event(sample(7, 200));
+                    Timer::after_millis(1).await;
+                }
+                for _ in 0..3 {
+                    Timer::after_millis(400).await;
+                    // Bias and resolution turn this sample into zero output.
+                    publish_event(sample(7, 105));
+                    Timer::after_millis(1).await;
+                }
+                assert!(sleeping(), "centered samples must allow idle sleep");
+                publish_event(sample(8, 200));
+                Timer::after_millis(1).await;
+                assert!(sleeping(), "another device must not wake this joystick");
+                publish_event(sample(7, 200));
+                Timer::after_millis(1).await;
+                assert!(!sleeping(), "joystick motion must wake the keyboard");
+            };
+            select3(manage_sleep_state(Duration::from_secs(1)), processor.run(), script).await;
+        });
+    }
+
+    #[test]
     fn sleep_request_skips_the_idle_timeout() {
         with_sleep_manager(async {
             request_sleep();
