@@ -533,7 +533,8 @@ async fn run_ble_keyboard<
 
                     let last_host = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
                     let slot = match action {
-                        Switch(slot) | ClearBond(slot) | Disconnect(slot) => slot,
+                        Switch(slot) | Disconnect(slot) => slot,
+                        ClearBond(slot) => slot.unwrap_or(profile_id),
                         Next if profile_id < last_host => profile_id + 1,
                         Next => 0,
                         Previous => profile_id.checked_sub(1).unwrap_or(last_host),
@@ -1366,7 +1367,7 @@ mod tests {
             for (action, expected) in [(Previous, crate::NUM_BLE_PROFILE.saturating_sub(1) as u8), (Next, 0)] {
                 BLE_PROFILE_CHANNEL.send(action).await;
                 // The one-slot queue makes this wait until the preceding action was consumed.
-                BLE_PROFILE_CHANNEL.send(ClearBond(0)).await;
+                BLE_PROFILE_CHANNEL.send(ClearBond(Some(0))).await;
                 assert_eq!(current_profile(), expected);
             }
         });
@@ -1381,7 +1382,7 @@ mod tests {
         let hci = FakeController::default();
         with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
             advertising(&hci, 0).await;
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(0)).await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(None)).await;
             advertising(&hci, 1).await;
             assert!(!current_ble_status().bonded);
             embassy_time::Timer::after_millis(10).await;
@@ -1431,7 +1432,7 @@ mod tests {
                     }),
                     _ if BOND_SLOTS > 1 => BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await,
                     _ => {
-                        BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(0)).await;
+                        BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(Some(0))).await;
                         BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(0)).await;
                     }
                 }

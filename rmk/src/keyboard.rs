@@ -1674,10 +1674,8 @@ impl<'a> Keyboard<'a> {
                     // Previous profile
                     BLE_PROFILE_CHANNEL.send(BleProfileAction::Previous).await;
                 } else if id == NUM_BLE_PROFILE as u8 + 2 {
-                    // Clear bond on current profile
-                    let slot = crate::state::current_profile();
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(slot)).await;
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(slot)).await;
+                    // Clear bond on the profile selected when the BLE task applies it
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(None)).await;
                 } else if id == NUM_BLE_PROFILE as u8 + 3 {
                     // Toggle preferred transport (USB <-> BLE);
                     // only meaningful when both transports exist in this build.
@@ -2027,31 +2025,6 @@ mod test {
 
     fn create_test_keyboard() -> Keyboard<'static> {
         create_test_keyboard_with_config(BehaviorConfig::default())
-    }
-
-    #[cfg(feature = "_ble")]
-    #[test]
-    fn clear_profile_key_keeps_the_target_selected_when_queued() {
-        use crate::ble::profile::BleProfileAction;
-        use crate::channel::BLE_PROFILE_CHANNEL;
-
-        let mut keyboard = create_test_keyboard();
-        let target = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
-        BLE_PROFILE_CHANNEL.clear();
-        crate::state::update_status(|status| status.selected = target);
-        let (_, actions) = block_on(embassy_futures::join::join(
-            keyboard.process_user(crate::NUM_BLE_PROFILE as u8 + 2, KeyboardEvent::key(0, 0, false)),
-            async {
-                let cleared = BLE_PROFILE_CHANNEL.receive().await;
-                crate::state::update_status(|status| status.selected = 0);
-                (cleared, BLE_PROFILE_CHANNEL.receive().await)
-            },
-        ));
-        assert!(matches!(
-            actions,
-            (BleProfileAction::ClearBond(cleared), BleProfileAction::Switch(selected))
-                if cleared == target && selected == target
-        ));
     }
 
     async fn force_timeout_first_hold(keyboard: &mut Keyboard<'static>) {
