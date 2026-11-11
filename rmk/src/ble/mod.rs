@@ -1,3 +1,5 @@
+use core::cell::Cell;
+
 #[cfg(not(feature = "ext_adv"))]
 use bt_hci::cmd::le::LeSetScanParams;
 #[cfg(feature = "subrating")]
@@ -683,6 +685,7 @@ async fn gatt_events_task(
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     profile_id: u8,
     profile_manager: &ProfileManager<BOND_SLOTS>,
+    led: &Cell<LedIndicator>,
     #[cfg(feature = "host")] host: Option<&HostConnection<'_>>,
 ) {
     let level = &server.battery_service.level;
@@ -790,6 +793,7 @@ async fn gatt_events_task(
                             if data_len == 1 {
                                 let led_indicator = LedIndicator::from_bits(data[0]);
                                 debug!("Got keyboard state: {:?}", led_indicator);
+                                led.set(led_indicator);
                                 if profile_id == crate::state::current_profile() {
                                     LED_SIGNAL.signal(led_indicator);
                                 }
@@ -1086,9 +1090,12 @@ async fn serve_keyboard_connection<
         set_conn_params(stack, conn).await;
     };
 
+    // The host only reports its lock LEDs when they change, so a switch back to this link replays them.
+    let led = Cell::new(LedIndicator::default());
     let writer_task = async {
         loop {
             wait_for_connection_status(|s| s.selected == profile_id).await;
+            LED_SIGNAL.signal(led.get());
             while let Either::Second(report) = select(
                 wait_for_connection_status(|s| s.selected != profile_id),
                 BLE_REPORT_CHANNEL.receive(),
@@ -1117,14 +1124,14 @@ async fn serve_keyboard_connection<
         match host_service {
             Some(service) => {
                 let host = HostConnection::new(server);
-                let events = gatt_events_task(server, conn, profile_id, profile_manager, Some(&host));
+                let events = gatt_events_task(server, conn, profile_id, profile_manager, &led, Some(&host));
                 select(events, host.run(conn, service)).await;
             }
-            None => gatt_events_task(server, conn, profile_id, profile_manager, None).await,
+            None => gatt_events_task(server, conn, profile_id, profile_manager, &led, None).await,
         }
     };
     #[cfg(not(feature = "host"))]
-    let gatt_task = gatt_events_task(server, conn, profile_id, profile_manager);
+    let gatt_task = gatt_events_task(server, conn, profile_id, profile_manager, &led);
 
     // When dongle feature is enabled, send `DongleEvent` to the dongle.
     #[cfg(feature = "dongle")]
