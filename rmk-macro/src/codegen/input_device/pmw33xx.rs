@@ -179,7 +179,7 @@ pub(crate) fn expand_pmw33xx_device(
                     spi_config.frequency = Frequency::M2;
                     spi_config.mode = MODE_3;
 
-                    let spi_bus = Spim::new(spi_inst, Irqs, sck, miso, mosi, spi_config);
+                    let spi_bus = Spim::new(spi_inst, sck, mosi, miso, Irqs, spi_config);
 
                     let config = Pmw33xxConfig {
                         res_cpi: #res_cpi,

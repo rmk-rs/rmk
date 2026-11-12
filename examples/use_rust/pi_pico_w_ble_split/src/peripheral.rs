@@ -10,8 +10,9 @@ use cyw43_pio::PioSpi;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_rp::bind_interrupts;
-use embassy_rp::flash::{Async, Flash};
+use embassy_rp::flash::Flash;
 use embassy_rp::gpio::{Input, Level, Output};
+use embassy_rp::mode::Async;
 use embassy_rp::peripherals::{DMA_CH0, DMA_CH1, DMA_CH2, PIO0};
 use embassy_rp::pio::{self, Pio};
 use embassy_time as _;
@@ -89,7 +90,7 @@ async fn main(spawner: Spawner) {
     let controller: ExternalController<_, 10> = ExternalController::new(bt_device);
 
     // Storage config
-    let flash = Flash::<_, Async, FLASH_SIZE>::new(p.FLASH, p.DMA_CH1, Irqs);
+    let flash = Flash::<Async, FLASH_SIZE>::new(p.FLASH, p.DMA_CH1, Irqs);
     let storage_config = StorageConfig {
         start_addr: 0x100000, // Start from 1M
         num_sectors: 32,

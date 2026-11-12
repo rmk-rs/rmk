@@ -7,6 +7,8 @@ pub struct DeviceConfig<'a> {
     pub vid: u16,
     /// USB product ID.
     pub pid: u16,
+    /// USB device release number (bcdDevice), encoded in binary-coded decimal.
+    pub bcd_version: u16,
     /// Manufacturer name.
     pub manufacturer: &'a str,
     /// Product name.
@@ -94,7 +96,7 @@ pub fn build_serial_number(input: impl SerialNumberInput) -> heapless::String<DE
 pub fn rp2040_serial_number(
     flash: embassy_rp::Peri<'_, embassy_rp::peripherals::FLASH>,
 ) -> heapless::String<DEVICE_INFO_STRING_MAX_LEN> {
-    let mut flash = embassy_rp::flash::Flash::<_, embassy_rp::flash::Blocking, 0>::new_blocking(flash);
+    let mut flash = embassy_rp::flash::Flash::<embassy_rp::mode::Blocking, 0>::new_blocking(flash);
     // Flash chips answer the Winbond UID command with 8 bytes, except Zetta's 16.
     let len = if matches!(flash.blocking_jedec_id(), Ok(0xba6015)) {
         16
@@ -129,6 +131,7 @@ impl Default for DeviceConfig<'_> {
         Self {
             vid: 0x4c4b,
             pid: 0x4643,
+            bcd_version: 0x0010,
             manufacturer: "RMK",
             product_name: "RMK Keyboard",
             serial_number,

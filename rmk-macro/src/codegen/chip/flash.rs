@@ -120,7 +120,7 @@ pub(crate) fn expand_flash_init(hardware: &Hardware, dfu: Option<&DfuConfig>) ->
                 hardware.storage.as_ref().map(|_| {
                     quote! {
                         const FLASH_SIZE: usize = 2 * 1024 * 1024;
-                        let storage_partition = ::embassy_rp::flash::Flash::<_, ::embassy_rp::flash::Async, FLASH_SIZE>::new(
+                        let storage_partition = ::embassy_rp::flash::Flash::<::embassy_rp::mode::Async, FLASH_SIZE>::new(
                             p.FLASH, p.DMA_CH1, Irqs,
                         );
                     }
@@ -180,7 +180,7 @@ fn expand_dfu_partitions(
     let driver = match chip_series {
         ChipSeries::Nrf52 => quote! { ::embassy_nrf::nvmc::Nvmc::new(p.NVMC) },
         ChipSeries::Rp2040 => quote! {
-            ::embassy_rp::flash::Flash::<_, ::embassy_rp::flash::Blocking, {::rmk::dfu::FLASH_SIZE}>::new_blocking(p.FLASH)
+            ::embassy_rp::flash::Flash::<::embassy_rp::mode::Blocking, {::rmk::dfu::FLASH_SIZE}>::new_blocking(p.FLASH)
         },
         _ => panic!("Internal flash DFU is only supported on nRF52 and RP2040"),
     };
@@ -332,7 +332,8 @@ fn expand_spi_init(chip_series: &ChipSeries, spi: &SpiConfig) -> TokenStream2 {
                     p.#rx_dma,
                     Irqs,
                     ::embassy_rp::spi::Config::default(),
-                );
+                )
+                .unwrap();
                 let dfu_cs = ::embassy_rp::gpio::Output::new(
                     p.#cs,
                     ::embassy_rp::gpio::Level::High,
@@ -348,8 +349,8 @@ fn expand_spi_init(chip_series: &ChipSeries, spi: &SpiConfig) -> TokenStream2 {
                 let mut dfu_spi_cfg = ::embassy_nrf::spim::Config::default();
                 dfu_spi_cfg.frequency = ::embassy_nrf::spim::Frequency::M8;
                 let dfu_spi = ::embassy_nrf::spim::Spim::new(
-                    p.#instance, Irqs,
-                    p.#sck, p.#miso, p.#mosi, dfu_spi_cfg,
+                    p.#instance,
+                    p.#sck, p.#mosi, p.#miso, Irqs, dfu_spi_cfg,
                 );
                 let dfu_cs = ::embassy_nrf::gpio::Output::new(
                     p.#cs,

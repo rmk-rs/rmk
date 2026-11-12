@@ -4,13 +4,13 @@ use super::{WatchdogFeed, WatchdogRunner};
 
 /// RP2040 watchdog wrapper that reloads the countdown on each feed.
 /// Hardware max timeout is ~8.3s (RP2040-E1 errata).
-pub struct Rp2040Watchdog {
-    inner: embassy_rp::watchdog::Watchdog,
+pub struct Rp2040Watchdog<'d> {
+    inner: embassy_rp::watchdog::Watchdog<'d>,
     timeout: Duration,
 }
 
-impl Rp2040Watchdog {
-    pub fn new(watchdog: embassy_rp::watchdog::Watchdog, timeout: Duration) -> Self {
+impl<'d> Rp2040Watchdog<'d> {
+    pub fn new(watchdog: embassy_rp::watchdog::Watchdog<'d>, timeout: Duration) -> Self {
         Self {
             inner: watchdog,
             timeout,
@@ -22,14 +22,14 @@ impl Rp2040Watchdog {
         self.inner.start(self.timeout);
     }
 
-    pub fn default_runner(watchdog: embassy_rp::watchdog::Watchdog) -> WatchdogRunner<Self> {
+    pub fn default_runner(watchdog: embassy_rp::watchdog::Watchdog<'d>) -> WatchdogRunner<Self> {
         let mut wdt = Self::new(watchdog, Duration::from_secs(8));
         wdt.start();
         WatchdogRunner::new(wdt, Duration::from_secs(4))
     }
 }
 
-impl WatchdogFeed for Rp2040Watchdog {
+impl WatchdogFeed for Rp2040Watchdog<'_> {
     fn feed(&mut self) {
         self.inner.feed(self.timeout);
     }

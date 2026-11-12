@@ -77,12 +77,21 @@ opt-level = "z"
 overflow-checks = false
 lto = "fat"
 
+# Keep the Embassy patch in sync with rmk/Cargo.toml; patches only apply in the root workspace.
+
 [patch.crates-io]
-embassy-nrf = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
-embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
-embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
-embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
-embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", rev = "e7a576f22393edaf9070f29ee5f4f07f5f4d8782" }
+embassy-boot                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-boot-rp              = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-embedded-hal         = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-futures              = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-hal-internal         = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-nrf                  = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-rp                   = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-sync                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-time                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-time-driver          = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-time-queue-utils     = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-usb                  = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-usb-driver           = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-usb-logger           = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-executor-timer-queue = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }

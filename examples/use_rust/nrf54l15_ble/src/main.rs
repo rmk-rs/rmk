@@ -10,8 +10,9 @@ use defmt::{info, unwrap};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nrf::config::{ClockSpeed, Config as NrfConfig, HfclkSource, LfclkSource};
+use embassy_nrf::crypto::rng::Rng;
 use embassy_nrf::mode::Blocking;
-use embassy_nrf::{bind_interrupts, cracen, pac};
+use embassy_nrf::{bind_interrupts, pac};
 use keymap::{COL, ROW, SIZE};
 use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
@@ -28,7 +29,7 @@ use rmk::{KeymapData, initialize_keymap_and_storage, run_all};
 use static_cell::StaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
-type RandomSource = cracen::Cracen<'static, Blocking>;
+type RandomSource = Rng<'static, Blocking>;
 
 bind_interrupts!(struct Irqs {
     SWI00 => nrf_sdc::mpsl::LowPrioInterruptHandler;
@@ -146,7 +147,7 @@ async fn main(spawner: Spawner) {
         p.PPIB10_CH3,
     );
 
-    let mut rng = cracen::Cracen::new_blocking(p.CRACEN);
+    let mut rng = Rng::new_blocking(p.CRYPTO_RNG);
     let mut sdc_mem = sdc::Mem::<
         {
             rmk::ble::calculate_sdc_memory_size(
