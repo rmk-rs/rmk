@@ -395,6 +395,7 @@ pub enum HidKeyCode {
     AcSave = 0x00EA,
     AcPrint = 0x00EB,
     AcProperties = 0x00EC,
+    AcUndo = 0x00ED,
 }
 
 impl HidKeyCode {
@@ -511,6 +512,7 @@ impl HidKeyCode {
             HidKeyCode::AcSave => Some(ConsumerKey::Save),
             HidKeyCode::AcPrint => Some(ConsumerKey::Print),
             HidKeyCode::AcProperties => Some(ConsumerKey::Properties),
+            HidKeyCode::AcUndo => Some(ConsumerKey::Undo),
             _ => None,
         }
     }

@@ -223,6 +223,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `AcSave`           | `ac_save`                    | Save (consumer page AC Save)                         |
 | `AcPrint`          | `ac_print`                   | Print (consumer page AC Print)                       |
 | `AcProperties`     | `ac_properties`              | Properties (consumer page AC Properties)             |
+| `AcUndo`           | `ac_undo`                    | Undo (consumer page AC Undo)                         |
 
 ## System & keyboard-page keys
 
