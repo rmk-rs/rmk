@@ -247,6 +247,7 @@ impl ConsumerKey {
             ConsumerKey::Exit => Some(HidKeyCode::AcExit),
             ConsumerKey::Save => Some(HidKeyCode::AcSave),
             ConsumerKey::Print => Some(HidKeyCode::AcPrint),
+            ConsumerKey::Properties => Some(HidKeyCode::AcProperties),
             _ => None,
         }
     }
