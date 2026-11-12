@@ -213,6 +213,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `MediaPlay`        | `media_play`                 | Media Play                                           |
 | `MediaPause`       | `media_pause`                | Media Pause                                          |
 | `MediaRandomPlay`  | `media_random_play`          | Media Random Play / Shuffle                          |
+| `MediaRepeat`      | `media_repeat`               | Media Playback Repeat                                |
 
 ## System & keyboard-page keys
 
