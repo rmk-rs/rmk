@@ -35,7 +35,9 @@ opt-level = "s"
 [profile.dev.package.esp-storage]
 opt-level = 3
 
-# Includes unreleased S31 BLE support and the USB HS RX FIFO sizing fix.
+# Includes unreleased S31 BLE support, the USB HS RX FIFO sizing fix, and the
+# Embassy main USB class reorg. Sync the embassy entries with rmk/Cargo.toml.
+
 [patch.crates-io]
 esp-hal = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
 esp-alloc = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
@@ -46,6 +48,21 @@ esp-radio = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d
 esp-rtos = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
 esp-storage = { git = "https://github.com/HaoboGu/esp-hal", rev = "163e6b62b5b3f1d1dc2cae10b6ccc68ed9e92fde" }
 
+embassy-boot                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-boot-rp              = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-embedded-hal         = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-futures              = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-hal-internal         = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-nrf                  = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-rp                   = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-sync                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-time                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-time-driver          = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-time-queue-utils     = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-usb                  = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-usb-driver           = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-usb-logger           = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-executor-timer-queue = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
 [profile.release]
 codegen-units = 1
 debug = 2

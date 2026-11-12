@@ -92,7 +92,7 @@ pub(crate) fn expand_iqs5xx_device(
                 );
             },
             ChipSeries::Rp2040 => quote! {
-                let #i2c_ident = ::embassy_rp::i2c::I2c::new_async(
+                let #i2c_ident = ::embassy_rp::i2c::I2c::new(
                     p.#instance_ident,
                     p.#scl_ident,
                     p.#sda_ident,

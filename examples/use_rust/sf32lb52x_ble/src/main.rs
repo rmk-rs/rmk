@@ -162,6 +162,7 @@ async fn main(_spawner: Spawner) {
     let keyboard_device_config = DeviceConfig {
         vid: 0x4c4b,
         pid: 0x4644,
+        bcd_version: 0x0010,
         manufacturer: "RMK & SiFli-rs",
         product_name: "RMK SF32LB52",
         serial_number: "000002",

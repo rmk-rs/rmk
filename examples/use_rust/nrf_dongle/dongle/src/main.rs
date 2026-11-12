@@ -5,11 +5,12 @@ use defmt::{info, unwrap};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nrf::config::{ClockSpeed, Config as NrfConfig, HfclkSource, LfclkSource};
+use embassy_nrf::crypto::rng::Rng;
 use embassy_nrf::mode::Blocking;
 use embassy_nrf::peripherals::USBHS;
 use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
 use embassy_nrf::usb::{self, Driver};
-use embassy_nrf::{bind_interrupts, cracen, pac};
+use embassy_nrf::{bind_interrupts, pac};
 use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
@@ -22,7 +23,7 @@ use rmk::storage::new_storage_without_keymap;
 use rmk::usb::UsbTransport;
 use static_cell::StaticCell;
 
-type RandomSource = cracen::Cracen<'static, Blocking>;
+type RandomSource = Rng<'static, Blocking>;
 
 bind_interrupts!(struct Irqs {
     USBHS => usb::InterruptHandler<USBHS>;
@@ -142,7 +143,7 @@ async fn main(spawner: Spawner) {
         p.PPIB10_CH3,
     );
 
-    let mut rng = cracen::Cracen::new_blocking(p.CRACEN);
+    let mut rng = Rng::new_blocking(p.CRYPTO_RNG);
     let mut sdc_mem = sdc::Mem::<SDC_MEM_SIZE>::new();
     let sdc = unwrap!(build_sdc(sdc_p, &mut rng, mpsl, &mut sdc_mem));
     info!("SDC built (central only)");

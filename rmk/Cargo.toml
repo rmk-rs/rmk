@@ -366,8 +366,8 @@ embassy-boot = { version = "0.7", optional = true, default-features = false }
 embassy-boot-rp = { version = "0.10.0", optional = true }
 embassy-hal-internal = { version = "0.5.0", optional = true }
 embassy-rp = { version = "0.10", optional = true }
-fixed = { version = "1.28.0", optional = true }
-pio = { version = "0.3.0", optional = true }
+fixed = { version = "1.31.0", optional = true }
+pio = { version = "0.4.0", optional = true }
 
 # ESP32 dependencies
 esp-hal = { version = "1.2.0-rc.0", optional = true }

@@ -15,7 +15,8 @@ use embassy_nrf::peripherals::{SERIAL22, USBHS};
 use embassy_nrf::spim::{self, Spim};
 use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
 use embassy_nrf::usb::{self, Driver};
-use embassy_nrf::{bind_interrupts, cracen, pac};
+use embassy_nrf::crypto::rng::Rng;
+use embassy_nrf::{bind_interrupts, pac};
 use keymap::{COL, ROW, SIZE};
 use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
@@ -34,7 +35,7 @@ use rmk::usb::UsbTransport;
 use rmk::{KeymapData, initialize_keymap_and_storage, run_all};
 use static_cell::StaticCell;
 
-type RandomSource = cracen::Cracen<'static, Blocking>;
+type RandomSource = Rng<'static, Blocking>;
 
 bind_interrupts!(struct Irqs {
     USBHS => usb::InterruptHandler<USBHS>;
@@ -156,7 +157,7 @@ async fn main(spawner: Spawner) {
         p.PPIB10_CH3,
     );
 
-    let mut rng = cracen::Cracen::new_blocking(p.CRACEN);
+    let mut rng = Rng::new_blocking(p.CRYPTO_RNG);
     let mut sdc_mem = sdc::Mem::<
         {
             rmk::ble::calculate_sdc_memory_size(
@@ -249,10 +250,10 @@ async fn main(spawner: Spawner) {
     let trackball_sdio_mosi = unsafe { trackball_sdio.clone_unchecked() };
     let trackball_spi = Spim::new(
         p.SERIAL22,
-        Irqs,
         p.P1_17,
-        trackball_sdio,
         trackball_sdio_mosi,
+        trackball_sdio,
+        Irqs,
         trackball_spi_config,
     );
 
