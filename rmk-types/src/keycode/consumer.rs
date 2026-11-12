@@ -235,6 +235,7 @@ impl ConsumerKey {
             ConsumerKey::AcSoftKeyLeft => Some(HidKeyCode::Launchpad),
             ConsumerKey::Redo => Some(HidKeyCode::AcRedo),
             ConsumerKey::SnapShot => Some(HidKeyCode::SnapShot),
+            ConsumerKey::Play => Some(HidKeyCode::MediaPlay),
             _ => None,
         }
     }

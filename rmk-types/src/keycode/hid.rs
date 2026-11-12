@@ -382,6 +382,7 @@ pub enum HidKeyCode {
     RGui = 0x00E7,
     AcRedo = 0x00C3,
     SnapShot = 0x00C4,
+    MediaPlay = 0x00C5,
 }
 
 impl HidKeyCode {
@@ -485,6 +486,7 @@ impl HidKeyCode {
             HidKeyCode::Launchpad => Some(ConsumerKey::AcSoftKeyLeft),
             HidKeyCode::AcRedo => Some(ConsumerKey::Redo),
             HidKeyCode::SnapShot => Some(ConsumerKey::SnapShot),
+            HidKeyCode::MediaPlay => Some(ConsumerKey::Play),
             _ => None,
         }
     }

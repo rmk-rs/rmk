@@ -212,6 +212,7 @@ pub static KEYCODE_ALIAS: Lazy<HashMap<&str, &str>> = Lazy::new(|| {
     add_alias!("Launchpad" = "lpad");
     add_alias!("AcRedo" = "ac_redo");
     add_alias!("SnapShot" = "snap_shot");
+    add_alias!("MediaPlay" = "media_play");
     add_alias!("MouseUp" = "mousecursorup", "mouse_cursor_up", "ms_up");
     add_alias!("MouseDown" = "mousecursordown", "mouse_cursor_down", "ms_down");
     add_alias!("MouseLeft" = "mousecursorleft", "mouse_cursor_left", "ms_left");
