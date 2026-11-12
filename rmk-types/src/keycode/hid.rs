@@ -392,6 +392,7 @@ pub enum HidKeyCode {
     AcOpen = 0x00CC,
     AcClose = 0x00E8,
     AcExit = 0x00E9,
+    AcSave = 0x00EA,
 }
 
 impl HidKeyCode {
@@ -505,6 +506,7 @@ impl HidKeyCode {
             HidKeyCode::AcOpen => Some(ConsumerKey::Open),
             HidKeyCode::AcClose => Some(ConsumerKey::Close),
             HidKeyCode::AcExit => Some(ConsumerKey::Exit),
+            HidKeyCode::AcSave => Some(ConsumerKey::Save),
             _ => None,
         }
     }

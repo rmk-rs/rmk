@@ -220,6 +220,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `AcOpen`           | `ac_open`                    | Open (consumer page AC Open)                         |
 | `AcClose`          | `ac_close`                   | Close (consumer page AC Close)                       |
 | `AcExit`           | `ac_exit`                    | Exit (consumer page AC Exit)                         |
+| `AcSave`           | `ac_save`                    | Save (consumer page AC Save)                         |
 
 ## System & keyboard-page keys
 
