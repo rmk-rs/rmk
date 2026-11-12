@@ -48,8 +48,7 @@ async fn main(_spawner: Spawner) {
 
     // Flash partition layout comes from the DFU symbols in memory.x.
     let flash_mutex = FlashMutex::new(async_flash_wrapper(Flash::<
-        _,
-        embassy_rp::flash::Blocking,
+        embassy_rp::mode::Blocking,
         { rmk::dfu::FLASH_SIZE },
     >::new_blocking(p.FLASH)));
     let (storage_partition, state_partition, dfu_partition) = partitions_from_linkerscript(&flash_mutex);
@@ -61,6 +60,7 @@ async fn main(_spawner: Spawner) {
         serial_number,
         vid: 0x4c4b,
         pid: 0x4643,
+        bcd_version: 0x0010,
         manufacturer: "Haobo",
         product_name: "RMK Keyboard RP2040 embassy-boot use_rust example",
     };

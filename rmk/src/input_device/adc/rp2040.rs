@@ -1,4 +1,5 @@
-use embassy_rp::adc::{Adc, Async, Channel};
+use embassy_rp::adc::{Adc, Channel};
+use embassy_rp::mode::Async;
 use embassy_time::{Duration, Timer};
 use rmk_macro::input_device;
 
