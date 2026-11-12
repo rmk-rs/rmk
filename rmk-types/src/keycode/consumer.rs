@@ -237,6 +237,7 @@ impl ConsumerKey {
             ConsumerKey::SnapShot => Some(HidKeyCode::SnapShot),
             ConsumerKey::Play => Some(HidKeyCode::MediaPlay),
             ConsumerKey::Pause => Some(HidKeyCode::MediaPause),
+            ConsumerKey::RandomPlay => Some(HidKeyCode::MediaRandomPlay),
             _ => None,
         }
     }

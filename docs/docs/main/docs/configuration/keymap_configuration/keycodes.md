@@ -212,6 +212,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `SnapShot`         | `snap_shot`                  | Snapshot (consumer page)                              |
 | `MediaPlay`        | `media_play`                 | Media Play                                           |
 | `MediaPause`       | `media_pause`                | Media Pause                                          |
+| `MediaRandomPlay`  | `media_random_play`          | Media Random Play / Shuffle                          |
 
 ## System & keyboard-page keys
 

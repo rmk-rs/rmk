@@ -384,6 +384,7 @@ pub enum HidKeyCode {
     SnapShot = 0x00C4,
     MediaPlay = 0x00C5,
     MediaPause = 0x00C6,
+    MediaRandomPlay = 0x00C7,
 }
 
 impl HidKeyCode {
@@ -489,6 +490,7 @@ impl HidKeyCode {
             HidKeyCode::SnapShot => Some(ConsumerKey::SnapShot),
             HidKeyCode::MediaPlay => Some(ConsumerKey::Play),
             HidKeyCode::MediaPause => Some(ConsumerKey::Pause),
+            HidKeyCode::MediaRandomPlay => Some(ConsumerKey::RandomPlay),
             _ => None,
         }
     }
