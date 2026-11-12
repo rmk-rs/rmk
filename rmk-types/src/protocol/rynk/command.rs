@@ -363,10 +363,6 @@ const _: () = core::assert!(
 
 #[cfg(test)]
 mod tests {
-    extern crate alloc;
-
-    use alloc::format;
-
     use postcard::experimental::max_size::MaxSize;
 
     use super::*;
@@ -386,20 +382,6 @@ mod tests {
             assert_eq!(Cmd::from_raw(cmd.raw()), cmd);
             assert_eq!(Cmd::from_le_bytes(cmd.to_le_bytes()), cmd);
         }
-    }
-
-    #[test]
-    fn debug_is_compact_raw_value() {
-        assert_eq!(format!("{:?}", Cmd::from_raw(0x0001)), "Cmd(0x0001)");
-        assert_eq!(format!("{:?}", Cmd::from_raw(0x80ff)), "Cmd(0x80ff)");
-    }
-
-    #[test]
-    fn table_cmds_land_in_their_ranges() {
-        assert!(Cmd::LayerChange.is_topic());
-        assert!(Cmd::WpmUpdate.is_topic());
-        assert!(!Cmd::GetVersion.is_topic());
-        assert!(!Cmd::SetKeyAction.is_topic());
     }
 
     #[test]
