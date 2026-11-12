@@ -227,6 +227,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `AcCopy`           | `ac_copy`                    | Copy (consumer page AC Copy)                         |
 | `AcCut`            | `ac_cut`                     | Cut (consumer page AC Cut)                           |
 | `AcPaste`          | `ac_paste`                   | Paste (consumer page AC Paste)                       |
+| `AcFind`           | `ac_find`                    | Find (consumer page AC Find)                         |
 
 ## System & keyboard-page keys
 
