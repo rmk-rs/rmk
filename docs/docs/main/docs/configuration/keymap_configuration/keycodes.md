@@ -219,6 +219,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `AcNew`            | `ac_new`                     | New (consumer page AC New)                           |
 | `AcOpen`           | `ac_open`                    | Open (consumer page AC Open)                         |
 | `AcClose`          | `ac_close`                   | Close (consumer page AC Close)                       |
+| `AcExit`           | `ac_exit`                    | Exit (consumer page AC Exit)                         |
 
 ## System & keyboard-page keys
 
