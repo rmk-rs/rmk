@@ -22,8 +22,9 @@ const DONGLE_SEEKING: u8 = 1;
 pub(crate) enum Adv<'a> {
     /// A peer that already knows us: ADV_DIRECT_IND carries no data, only this address.
     Directed(Address),
-    /// Any BLE host, which finds us as a standard HID keyboard.
-    Host { name: &'a str },
+    /// Any BLE host, which finds us as a standard HID keyboard. `fast` selects
+    /// the short interval used right after a profile switch or a wake.
+    Host { name: &'a str, fast: bool },
     /// A bonded host reconnecting without HID discovery data.
     HostReconnect,
     /// The split central that owns peripheral `id`.
@@ -37,7 +38,7 @@ impl Adv<'_> {
     fn build<'b>(&self, buf: &'b mut [u8; 31]) -> Result<Advertisement<'b>, Error> {
         let adv_data: &[AdStructure] = match *self {
             Self::Directed(peer) => return Ok(Advertisement::ConnectableNonscannableDirected { peer }),
-            Self::Host { name } => &[
+            Self::Host { name, .. } => &[
                 AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
                 AdStructure::CompleteServiceUuids16(&[BATTERY.to_le_bytes(), HUMAN_INTERFACE_DEVICE.to_le_bytes()]),
                 AdStructure::CompleteLocalName(name.as_bytes()),
@@ -100,7 +101,8 @@ impl Adv<'_> {
     /// All variants use legacy PDUs, which require the 1M primary PHY.
     fn params(&self) -> AdvertisementParameters {
         let interval = match self {
-            Self::Host { .. } => Duration::from_millis(200),
+            Self::Host { fast: true, .. } => HOST_FAST_INTERVAL,
+            Self::Host { fast: false, .. } => HOST_SLOW_INTERVAL,
             _ => Duration::from_millis(50),
         };
         AdvertisementParameters {
@@ -113,6 +115,11 @@ impl Adv<'_> {
         }
     }
 }
+
+/// Host advertising interval during the fast window after a switch or wake.
+pub(crate) const HOST_FAST_INTERVAL: Duration = Duration::from_millis(30);
+/// Host advertising interval once the fast window has passed.
+pub(crate) const HOST_SLOW_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Advertise with an optional local address override and accept a connection within `timeout`.
 pub(crate) async fn advertise<'a, 'b, C: Controller + ExtAdvCmds, const ATT: usize, const CONN: usize>(
@@ -146,10 +153,11 @@ pub(crate) async fn advertise<'a, 'b, C: Controller + ExtAdvCmds, const ATT: usi
 
 #[cfg(test)]
 mod tests {
+    use embassy_time::Duration;
     use rmk_types::ble::BLE_ADV_NAME_MAX_LEN;
     use trouble_host::prelude::{Address, Advertisement, PhyKind};
 
-    use super::Adv;
+    use super::{Adv, HOST_FAST_INTERVAL, HOST_SLOW_INTERVAL};
 
     #[test]
     fn legacy_advertisements_use_1m_and_fit_the_payload_budget() {
@@ -157,7 +165,10 @@ mod tests {
         const LONGEST_NAME: &str = "0123456789abcdef";
         assert_eq!(LONGEST_NAME.len(), BLE_ADV_NAME_MAX_LEN);
         for adv in [
-            Adv::Host { name: LONGEST_NAME },
+            Adv::Host {
+                name: LONGEST_NAME,
+                fast: false,
+            },
             Adv::HostReconnect,
             Adv::Directed(Address::random([1, 2, 3, 4, 5, 0xC6])),
             Adv::SplitPeripheral { id: 0xFF },
@@ -168,11 +179,34 @@ mod tests {
         }
         assert!(
             Adv::Host {
-                name: "0123456789abcdefg"
+                name: "0123456789abcdefg",
+                fast: false,
             }
             .build(&mut [0; 31])
             .is_err()
         );
+    }
+
+    #[test]
+    fn host_advertising_is_fast_only_when_asked() {
+        let name = "kb";
+        let fast = Adv::Host { name, fast: true }.params();
+        let slow = Adv::Host { name, fast: false }.params();
+        assert_eq!(HOST_FAST_INTERVAL, Duration::from_millis(30));
+        assert_eq!(HOST_SLOW_INTERVAL, Duration::from_millis(200));
+        assert_eq!(
+            (fast.interval_min, fast.interval_max),
+            (HOST_FAST_INTERVAL, HOST_FAST_INTERVAL)
+        );
+        assert_eq!(
+            (slow.interval_min, slow.interval_max),
+            (HOST_SLOW_INTERVAL, HOST_SLOW_INTERVAL)
+        );
+        let mut fast_buf = [0; 31];
+        let mut slow_buf = [0; 31];
+        Adv::Host { name, fast: true }.build(&mut fast_buf).unwrap();
+        Adv::Host { name, fast: false }.build(&mut slow_buf).unwrap();
+        assert_eq!(fast_buf, slow_buf, "the interval never changes the advertising data");
     }
 
     #[test]
