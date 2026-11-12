@@ -72,6 +72,7 @@ pub enum ConsumerKey {
     NextKeyboardLayoutSelect,
     DesktopShowAllWindows,
     AcSoftKeyLeft,
+    Redo,
 }
 
 impl From<u16> for ConsumerKey {
@@ -126,6 +127,7 @@ impl From<u16> for ConsumerKey {
             0x226 => Self::Stop,
             0x227 => Self::Refresh,
             0x22A => Self::Bookmarks,
+            0x279 => Self::Redo,
             0x29D => Self::NextKeyboardLayoutSelect,
             0x29F => Self::DesktopShowAllWindows,
             0x2A0 => Self::AcSoftKeyLeft,
@@ -186,6 +188,7 @@ impl From<ConsumerKey> for u16 {
             ConsumerKey::Stop => 0x226,
             ConsumerKey::Refresh => 0x227,
             ConsumerKey::Bookmarks => 0x22A,
+            ConsumerKey::Redo => 0x279,
             ConsumerKey::NextKeyboardLayoutSelect => 0x29D,
             ConsumerKey::DesktopShowAllWindows => 0x29F,
             ConsumerKey::AcSoftKeyLeft => 0x2A0,
@@ -230,6 +233,7 @@ impl ConsumerKey {
             ConsumerKey::Assistant => Some(HidKeyCode::Assistant),
             ConsumerKey::DesktopShowAllWindows => Some(HidKeyCode::MissionControl),
             ConsumerKey::AcSoftKeyLeft => Some(HidKeyCode::Launchpad),
+            ConsumerKey::Redo => Some(HidKeyCode::AcRedo),
             _ => None,
         }
     }

@@ -380,6 +380,7 @@ pub enum HidKeyCode {
     RAlt = 0x00E6,
     /// Right GUI
     RGui = 0x00E7,
+    AcRedo = 0x00C3,
 }
 
 impl HidKeyCode {
@@ -481,6 +482,7 @@ impl HidKeyCode {
             HidKeyCode::Assistant => Some(ConsumerKey::Assistant),
             HidKeyCode::MissionControl => Some(ConsumerKey::DesktopShowAllWindows),
             HidKeyCode::Launchpad => Some(ConsumerKey::AcSoftKeyLeft),
+            HidKeyCode::AcRedo => Some(ConsumerKey::Redo),
             _ => None,
         }
     }

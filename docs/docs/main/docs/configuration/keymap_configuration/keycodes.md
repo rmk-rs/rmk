@@ -208,6 +208,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `Assistant`        | `asst`                       | Open OS Assistant (Cortana / Google Assistant / Siri) |
 | `MissionControl`   | `mission_control`, `mctl`    | macOS Mission Control                                 |
 | `Launchpad`        | `lpad`                       | macOS Launchpad                                       |
+| `AcRedo`           | `ac_redo`                    | Redo / Repeat (consumer page AC Redo/Repeat)           |
 
 ## System & keyboard-page keys
 
