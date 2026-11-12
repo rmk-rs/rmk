@@ -228,6 +228,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `AcCut`            | `ac_cut`                     | Cut (consumer page AC Cut)                           |
 | `AcPaste`          | `ac_paste`                   | Paste (consumer page AC Paste)                       |
 | `AcFind`           | `ac_find`                    | Find (consumer page AC Find)                         |
+| `NextKeyboardLayoutSelect` | `next_keyboard_layout_select` | Next Keyboard Layout Select / Apple Globe       |
 
 ## System & keyboard-page keys
 
