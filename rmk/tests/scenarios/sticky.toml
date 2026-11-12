@@ -188,3 +188,17 @@ steps = [
   { release = [0, 4] },
 ]
 expect = [["LShift"], ["LShift", "LCtrl"], ["LCtrl"], ["LCtrl", "A"], ["LCtrl"], []]
+
+# Regression from the one-shot implementation: releasing a key that went down
+# before the OSL must not disarm it.
+[[test]]
+name = "releasing_earlier_key_keeps_osl_armed"
+steps = [
+  { press = [0, 2] },
+  { press = [0, 1] },
+  { release = [0, 2] },
+  { release = [0, 1] },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["A"], [], ["C"], [], ["A"], []]
