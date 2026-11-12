@@ -214,6 +214,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `MediaPause`       | `media_pause`                | Media Pause                                          |
 | `MediaRandomPlay`  | `media_random_play`          | Media Random Play / Shuffle                          |
 | `MediaRepeat`      | `media_repeat`               | Media Playback Repeat                                |
+| `MediaStopEject`   | `media_stop_eject`           | Media Stop / Eject                                   |
 
 ## System & keyboard-page keys
 

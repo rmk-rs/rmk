@@ -239,6 +239,7 @@ impl ConsumerKey {
             ConsumerKey::Pause => Some(HidKeyCode::MediaPause),
             ConsumerKey::RandomPlay => Some(HidKeyCode::MediaRandomPlay),
             ConsumerKey::Repeat => Some(HidKeyCode::MediaRepeat),
+            ConsumerKey::StopEject => Some(HidKeyCode::MediaStopEject),
             _ => None,
         }
     }
