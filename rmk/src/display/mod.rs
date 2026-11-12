@@ -90,15 +90,6 @@ use crate::processor::Processor;
 
 /// Snapshot of keyboard state passed to renderers on every redraw.
 ///
-/// # Feature-gated fields
-///
-/// Some fields are only available when specific RMK features are enabled:
-///
-/// - `connection` — requires the `_ble` feature
-/// - `central_connected`, `peripherals_connected` — require the `split` feature
-/// - `peripheral_batteries` — requires the `split` feature
-/// - `dongle_state` — requires the `dongle` feature
-///
 /// Third-party renderers that access these fields must enable the
 /// corresponding features in their `Cargo.toml` dependency on `rmk`,
 /// and guard access with matching `#[cfg]` attributes.

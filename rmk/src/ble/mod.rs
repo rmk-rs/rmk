@@ -39,7 +39,7 @@ use crate::ble::led::BleLedReader;
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
 #[cfg(feature = "dongle")]
 use crate::ble::profile::DONGLE_PROFILE;
-use crate::ble::profile::{ProfileInfo, ProfileManager, load_stack_bond};
+use crate::ble::profile::{ProfileInfo, ProfileManager, set_stack_bond};
 use crate::channel::{BLE_PROFILE_CHANNEL, BLE_REPORT_CHANNEL, LED_SIGNAL};
 use crate::config::{BleBatteryConfig, DeviceConfig, RmkConfig};
 use crate::core_traits::Runnable;
@@ -481,7 +481,7 @@ async fn run_ble_keyboard<
                     Adv::Host { fast: true, .. } => fast_until,
                     _ => start + ADV_PERIOD,
                 };
-                load_stack_bond(stack, bond.as_ref().map(|bond| bond.info.clone()));
+                set_stack_bond(stack, bond.as_ref().map(|bond| bond.info.clone()));
                 set_ble_state(profile_id, BleState::Advertising);
                 advertise(
                     &mut peripheral,

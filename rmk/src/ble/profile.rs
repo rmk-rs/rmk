@@ -30,8 +30,9 @@ pub(crate) fn profile_address(base: [u8; 6], profile: u8) -> [u8; 6] {
     addr
 }
 
-/// Make `bond` the stack's only key: the stack holds just the active profile's bond.
-pub(crate) fn load_stack_bond<C: Controller, P: PacketPool>(stack: &Stack<'_, C, P>, bond: Option<BondInformation>) {
+/// Replace used bond on the stack with `bond`, dropping stale bonds left by a previous profile
+/// or an unfinished pairing.
+pub(crate) fn set_stack_bond<C: Controller, P: PacketPool>(stack: &Stack<'_, C, P>, bond: Option<BondInformation>) {
     // The stack can also hold keys from an unfinished pairing.
     while let Some(identity) = stack.with_bond_information(|bonds| bonds.first().map(|b| b.identity)) {
         if let Err(e) = stack.remove_bond_information(identity) {
