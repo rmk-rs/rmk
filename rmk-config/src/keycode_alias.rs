@@ -223,6 +223,7 @@ pub static KEYCODE_ALIAS: Lazy<HashMap<&str, &str>> = Lazy::new(|| {
     add_alias!("AcClose" = "ac_close");
     add_alias!("AcExit" = "ac_exit");
     add_alias!("AcSave" = "ac_save");
+    add_alias!("AcPrint" = "ac_print");
     add_alias!("MouseUp" = "mousecursorup", "mouse_cursor_up", "ms_up");
     add_alias!("MouseDown" = "mousecursordown", "mouse_cursor_down", "ms_down");
     add_alias!("MouseLeft" = "mousecursorleft", "mouse_cursor_left", "ms_left");
