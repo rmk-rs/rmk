@@ -234,6 +234,7 @@ impl ConsumerKey {
             ConsumerKey::DesktopShowAllWindows => Some(HidKeyCode::MissionControl),
             ConsumerKey::AcSoftKeyLeft => Some(HidKeyCode::Launchpad),
             ConsumerKey::Redo => Some(HidKeyCode::AcRedo),
+            ConsumerKey::SnapShot => Some(HidKeyCode::SnapShot),
             _ => None,
         }
     }

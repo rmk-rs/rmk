@@ -209,6 +209,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `MissionControl`   | `mission_control`, `mctl`    | macOS Mission Control                                 |
 | `Launchpad`        | `lpad`                       | macOS Launchpad                                       |
 | `AcRedo`           | `ac_redo`                    | Redo / Repeat (consumer page AC Redo/Repeat)           |
+| `SnapShot`         | `snap_shot`                  | Snapshot (consumer page)                              |
 
 ## System & keyboard-page keys
 
