@@ -250,6 +250,7 @@ impl ConsumerKey {
             ConsumerKey::Properties => Some(HidKeyCode::AcProperties),
             ConsumerKey::Undo => Some(HidKeyCode::AcUndo),
             ConsumerKey::Copy => Some(HidKeyCode::AcCopy),
+            ConsumerKey::Cut => Some(HidKeyCode::AcCut),
             _ => None,
         }
     }

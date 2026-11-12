@@ -225,6 +225,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `AcProperties`     | `ac_properties`              | Properties (consumer page AC Properties)             |
 | `AcUndo`           | `ac_undo`                    | Undo (consumer page AC Undo)                         |
 | `AcCopy`           | `ac_copy`                    | Copy (consumer page AC Copy)                         |
+| `AcCut`            | `ac_cut`                     | Cut (consumer page AC Cut)                           |
 
 ## System & keyboard-page keys
 

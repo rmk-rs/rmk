@@ -397,6 +397,7 @@ pub enum HidKeyCode {
     AcProperties = 0x00EC,
     AcUndo = 0x00ED,
     AcCopy = 0x00EE,
+    AcCut = 0x00EF,
 }
 
 impl HidKeyCode {
@@ -515,6 +516,7 @@ impl HidKeyCode {
             HidKeyCode::AcProperties => Some(ConsumerKey::Properties),
             HidKeyCode::AcUndo => Some(ConsumerKey::Undo),
             HidKeyCode::AcCopy => Some(ConsumerKey::Copy),
+            HidKeyCode::AcCut => Some(ConsumerKey::Cut),
             _ => None,
         }
     }
