@@ -129,6 +129,28 @@ pub const NUM_HOST_LINKS: usize = crate::NUM_HOST_LINKS;
 /// own — see [`crate::dongle::Dongle`].
 #[doc(hidden)]
 pub const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + NUM_HOST_LINKS;
+// Fixed ATT/SMP/signalling channels do not consume dynamic L2CAP slots.
+const L2CAP_CHANNELS_MAX: usize = 0;
+// Custom messages share the GATT write dispatcher with the host protocol.
+const GATT_WRITE_BUFFER_SIZE: usize = {
+    #[cfg(feature = "host")]
+    let size = HOST_WRITE_BUFFER_SIZE;
+    #[cfg(not(feature = "host"))]
+    let size = 32;
+    #[cfg(all(feature = "dongle", feature = "custom_message"))]
+    let size = {
+        let custom =
+            <crate::custom_message::CustomMessage as postcard::experimental::max_size::MaxSize>::POSTCARD_MAX_SIZE;
+        if custom > size { custom } else { size }
+    };
+    size
+};
+/// Default SDC Link Layer TX/RX packet size, in bytes.
+pub const SDC_PACKET_SIZE: usize = 251;
+/// Default number of SDC TX packet buffers per connection.
+pub const SDC_TX_BUFFERS: u8 = 3;
+/// Default number of SDC RX packet buffers per connection.
+pub const SDC_RX_BUFFERS: u8 = 3;
 
 /// Calculate ESP BLE controller capacity for central and peripheral links.
 #[doc(hidden)]
@@ -152,13 +174,6 @@ pub const fn calculate_esp_ble_capacity(central_links: usize, peripheral_links: 
     );
     capacity as u8
 }
-
-/// Default SDC Link Layer TX/RX packet size, in bytes.
-pub const SDC_PACKET_SIZE: usize = 251;
-/// Default number of SDC TX packet buffers per connection.
-pub const SDC_TX_BUFFERS: u8 = 3;
-/// Default number of SDC RX packet buffers per connection.
-pub const SDC_RX_BUFFERS: u8 = 3;
 
 /// Calculate SDC memory using the same packet size and buffer counts as the controller.
 #[doc(hidden)]
@@ -187,24 +202,6 @@ pub const fn calculate_sdc_memory_size(
     let filter_accept_list = 4 + 8 * 8; // SDC_MEM_FAL(8).
     (links + advertising + scanning + subrating + filter_accept_list + 7) & !7
 }
-
-// Fixed ATT/SMP/signalling channels do not consume dynamic L2CAP slots.
-const L2CAP_CHANNELS_MAX: usize = 0;
-
-// Custom messages share the GATT write dispatcher with the host protocol.
-const GATT_WRITE_BUFFER_SIZE: usize = {
-    #[cfg(feature = "host")]
-    let size = HOST_WRITE_BUFFER_SIZE;
-    #[cfg(not(feature = "host"))]
-    let size = 32;
-    #[cfg(all(feature = "dongle", feature = "custom_message"))]
-    let size = {
-        let custom =
-            <crate::custom_message::CustomMessage as postcard::experimental::max_size::MaxSize>::POSTCARD_MAX_SIZE;
-        if custom > size { custom } else { size }
-    };
-    size
-};
 
 /// BLE transport. Owns the whole BLE stack.
 ///
@@ -279,10 +276,6 @@ where
         let controller = self.controller.take().expect("BleTransport::run called twice");
         rng::init(&controller).await;
 
-        // Load the preferred connection from storage
-        let preferred = crate::state::load_preferred_connection().await;
-        crate::state::set_preferred_connection(preferred);
-
         // Host connections share the stack resources.
         let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
             HostResources::new();
@@ -323,23 +316,19 @@ impl<
         let controller = self.controller.take().expect("BleTransport::run called twice");
         rng::init(&controller).await;
 
-        // Load the preferred connection from storage
-        let preferred = crate::state::load_preferred_connection().await;
-        crate::state::set_preferred_connection(preferred);
-
         let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
             HostResources::new();
         let stack = trouble_host::new(controller, &mut resources)
             .set_random_address(Address::random(self.address))
             .build();
 
-        // The connect peripherals task hands each established connection to its
-        // session task, and a session task reports back when its session ends.
+        // `scan_and_connect_peripherals` task sends each established connection to its session task via `conn_channels`
         let conn_channels: [Channel<NoopRawMutex, Connection<'_, DefaultPacketPool>, 1>; crate::SPLIT_PERIPHERALS_NUM] =
             core::array::from_fn(|_| Channel::new());
+        // A session task reports back when its session ends via `ended`
         let ended: Channel<NoopRawMutex, usize, { crate::SPLIT_PERIPHERALS_NUM }> = Channel::new();
 
-        let sessions =
+        let peripheral_sessions =
             embassy_futures::join::join_array(core::array::from_fn::<_, { crate::SPLIT_PERIPHERALS_NUM }, _>(|i| {
                 run_peripheral_session(i, &conn_channels[i], &ended, &stack, self.peripheral_matrices[i])
             }));
@@ -352,7 +341,7 @@ impl<
                 #[cfg(feature = "host")]
                 self.host_service,
             ),
-            sessions,
+            peripheral_sessions,
             scan_and_connect_peripherals(&stack, &conn_channels, &ended),
         )
         .await;
@@ -405,18 +394,19 @@ async fn run_ble_keyboard<
         )
         .unwrap();
 
-    let server = &server;
-
     if crate::ble::passkey::passkey_entry_enabled() {
         stack.set_io_capabilities(IoCapabilities::KeyboardOnly);
     }
-    let mut profile_manager: ProfileManager<BOND_SLOTS> = ProfileManager::new();
-    // Load the bonded devices from storage
-    profile_manager.load_bonded_devices().await;
+
+    // Restore the persisted state from storage
+    crate::state::restore_preferred_connection().await;
+    let profile_manager: ProfileManager<BOND_SLOTS> = ProfileManager::new().await;
 
     let mut peripheral = stack.peripheral();
     let runner = stack.runner();
 
+    // When a connection is ended, the worker sends `completed` signal to `connection_loop` where the u8 indicates the profile number,
+    // then `connection_loop` determines whether to start advertising again.
     let accepted_connections: Channel<NoopRawMutex, (GattConnection<'_, '_, DefaultPacketPool>, u8), 1> =
         Channel::new();
     let completed: Channel<NoopRawMutex, u8, NUM_HOST_LINKS> = Channel::new();
@@ -424,7 +414,7 @@ async fn run_ble_keyboard<
         loop {
             let (conn, profile_id) = accepted_connections.receive().await;
             serve_keyboard_connection(
-                server,
+                &server,
                 &conn,
                 stack,
                 profile_id,
@@ -439,13 +429,16 @@ async fn run_ble_keyboard<
         }
     }));
 
+    // The connection loop advertises and connects to a host, then handles the connection to workers via `accepted_connections` channel.
     let connection_loop = async {
         // Keep host and dongle handles until their GATT workers finish.
         let mut host_connections = LinearMap::<u8, Connection<'_, DefaultPacketPool>, NUM_HOST_LINKS>::new();
-        const ADV_TIMEOUT: Duration = Duration::from_secs(300);
-        // A bonded host usually reconnects soon, so its advertising starts fast and then slows.
-        const FAST_ADV_DURATION: Duration = Duration::from_secs(30);
-        let mut adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
+        // How long a profile keeps advertising before it sleeps, and how much of
+        // that a bonded host gets fast advertising: it usually reconnects soon.
+        const ADV_PERIOD: Duration = Duration::from_secs(300);
+        const FAST_ADV: Duration = Duration::from_secs(30);
+        // Start of the current advertising period; `None` while asleep until input.
+        let mut adv_start = Some(Instant::now());
         // Let USB detection run before the first advertisement.
         Timer::after_millis(10).await;
 
@@ -461,18 +454,18 @@ async fn run_ble_keyboard<
                     return core::future::pending().await;
                 }
 
-                let deadline = match adv_deadline {
-                    Some(deadline) => deadline,
+                let start = match adv_start {
+                    Some(start) => start,
                     None => {
                         let mut keys = crate::event::KeyboardEvent::subscriber();
                         let mut pointing = crate::event::PointingEvent::subscriber();
                         let _ = select(keys.next_message_pure(), pointing.next_message_pure()).await;
                         report_activity();
-                        *adv_deadline.insert(Instant::now() + ADV_TIMEOUT)
+                        *adv_start.insert(Instant::now())
                     }
                 };
 
-                let fast_until = deadline - (ADV_TIMEOUT - FAST_ADV_DURATION);
+                let fast_until = start + FAST_ADV;
                 let adv = match &bond {
                     #[cfg(feature = "dongle")]
                     Some(bond) if profile_id == DONGLE_PROFILE => Adv::Directed(bond.info.identity.addr),
@@ -486,7 +479,7 @@ async fn run_ble_keyboard<
                 // Fast advertising stops early, so it restarts at the slow interval.
                 let stop = match adv {
                     Adv::Host { fast: true, .. } => fast_until,
-                    _ => deadline,
+                    _ => start + ADV_PERIOD,
                 };
                 load_stack_bond(stack, bond.as_ref().map(|bond| bond.info.clone()));
                 set_ble_state(profile_id, BleState::Advertising);
@@ -511,13 +504,13 @@ async fn run_ble_keyboard<
                 Either3::First(Ok(gatt_conn)) => gatt_conn,
                 // Only fast advertising ended; the advertising period continues.
                 Either3::First(Err(BleHostError::BleHost(Error::Timeout)))
-                    if adv_deadline.is_some_and(|deadline| Instant::now() < deadline) =>
+                    if adv_start.is_some_and(|start| Instant::now() < start + ADV_PERIOD) =>
                 {
                     continue;
                 }
                 Either3::First(Err(BleHostError::BleHost(Error::Timeout))) => {
                     profile_manager.set_pairing(None);
-                    adv_deadline = None;
+                    adv_start = None;
                     set_ble_state(profile_id, BleState::Inactive);
                     request_sleep();
                     continue;
@@ -546,7 +539,7 @@ async fn run_ble_keyboard<
                             profile_manager.set_pairing(Some(slot));
                             set_ble_state(slot, BleState::Inactive);
                             report_activity();
-                            adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
+                            adv_start = Some(Instant::now());
                         }
                         if let Some(conn) = host_connections.get(&slot) {
                             conn.disconnect();
@@ -562,7 +555,7 @@ async fn run_ble_keyboard<
                     // End re-pairing before a switch leaves this profile's status behind.
                     profile_manager.set_pairing(None);
                     report_activity();
-                    adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
+                    adv_start = Some(Instant::now());
                     // Keep a paired link unless the target profile needs its slot.
                     let keep_connected = (host_connections.contains_key(&slot)
                         || host_connections.len() < NUM_HOST_LINKS)
@@ -584,7 +577,7 @@ async fn run_ble_keyboard<
                 Either3::Third(ended) => {
                     host_connections.remove(&ended);
                     if ended == profile_id && crate::state::current_ble_status().state == BleState::Connected {
-                        adv_deadline = Some(Instant::now() + ADV_TIMEOUT);
+                        adv_start = Some(Instant::now());
                     }
                     set_ble_state(ended, BleState::Inactive);
                     continue;
@@ -625,7 +618,7 @@ async fn run_ble_keyboard<
                     warn!("Remove previous peer from BLE stack: {:?}", e);
                 }
             }
-            assert!(host_connections.insert(profile_id, conn.clone()).is_ok());
+            let _ = host_connections.insert(profile_id, conn.clone());
             accepted_connections.send((gatt_conn, profile_id)).await;
         }
     };
@@ -1335,7 +1328,7 @@ mod tests {
             ..Default::default()
         };
         with_stalled_keyboard(core::slice::from_ref(&bond), async {
-            wait_for_connection_status(|s| s.selected_ble().state == BleState::Advertising).await;
+            wait_for_connection_status(|s| s.selected_profile().state == BleState::Advertising).await;
             assert!(current_ble_status().bonded);
 
             // Holding the profile key of the selected profile.
@@ -1343,7 +1336,7 @@ mod tests {
             BLE_PROFILE_CHANNEL.send(BleProfileAction::Disconnect(0)).await;
             embassy_time::with_timeout(
                 Duration::from_millis(20),
-                wait_for_connection_status(|s| s.selected == 0 && !s.selected_ble().bonded),
+                wait_for_connection_status(|s| s.selected == 0 && !s.selected_profile().bonded),
             )
             .await
             .expect("holding the current profile key must start re-pairing");
@@ -1354,8 +1347,8 @@ mod tests {
             assert!(!current_ble_status().bonded);
 
             MockDriver::get().advance(Duration::from_secs(300));
-            let expired = wait_for_connection_status(|s| s.selected_ble().state == BleState::Inactive).await;
-            assert!(expired.selected_ble().bonded);
+            let expired = wait_for_connection_status(|s| s.selected_profile().state == BleState::Inactive).await;
+            assert!(expired.selected_profile().bonded);
             let Some(StorageValue::BondInfo(saved)) = read(StorageKey::BondInfo(0)).await.unwrap() else {
                 panic!("re-pairing must preserve the stored bond");
             };
@@ -1370,7 +1363,7 @@ mod tests {
         use crate::state::{current_profile, wait_for_connection_status};
 
         with_stalled_keyboard(&[], async {
-            wait_for_connection_status(|s| s.selected_ble().state == BleState::Advertising).await;
+            wait_for_connection_status(|s| s.selected_profile().state == BleState::Advertising).await;
             for (action, expected) in [(Previous, crate::NUM_BLE_PROFILE.saturating_sub(1) as u8), (Next, 0)] {
                 BLE_PROFILE_CHANNEL.send(action).await;
                 // The one-slot queue makes this wait until the preceding action was consumed.
@@ -1397,8 +1390,7 @@ mod tests {
                 panic!("the slot must keep a removal record");
             };
             assert!(saved.removed);
-            let mut restored = ProfileManager::<{ super::BOND_SLOTS }>::new();
-            restored.load_bonded_devices().await;
+            let restored = ProfileManager::<{ super::BOND_SLOTS }>::new().await;
             assert!(restored.bond_info(0).is_none());
         });
     }
@@ -1411,10 +1403,10 @@ mod tests {
         use crate::state::wait_for_connection_status;
 
         with_stalled_keyboard(&[], async {
-            wait_for_connection_status(|s| s.selected_ble().state == BleState::Advertising).await;
+            wait_for_connection_status(|s| s.selected_profile().state == BleState::Advertising).await;
             for wake in 0..3 {
                 MockDriver::get().advance(Duration::from_secs(300));
-                wait_for_connection_status(|s| s.selected_ble().state == BleState::Inactive).await;
+                wait_for_connection_status(|s| s.selected_profile().state == BleState::Inactive).await;
                 match wake {
                     0 => publish_event(KeyboardEvent::key(0, 0, true)),
                     1 => publish_event(PointingEvent {
@@ -1443,7 +1435,7 @@ mod tests {
                         BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(0)).await;
                     }
                 }
-                let resumed = wait_for_connection_status(|s| s.selected_ble().state == BleState::Advertising).await;
+                let resumed = wait_for_connection_status(|s| s.selected_profile().state == BleState::Advertising).await;
                 assert_eq!(resumed.selected, u8::from(wake == 2 && BOND_SLOTS > 1));
             }
         });
@@ -1456,16 +1448,16 @@ mod tests {
         use crate::state::{current_profile, wait_for_connection_status};
 
         with_stalled_keyboard(&[], async {
-            wait_for_connection_status(|s| s.selected_ble().state == BleState::Advertising).await;
+            wait_for_connection_status(|s| s.selected_profile().state == BleState::Advertising).await;
             MockDriver::get().advance(Duration::from_secs(300));
-            wait_for_connection_status(|s| s.selected_ble().state == BleState::Inactive).await;
+            wait_for_connection_status(|s| s.selected_profile().state == BleState::Inactive).await;
             publish_event(KeyboardEvent::key(0, 0, true));
             BLE_PROFILE_CHANNEL
                 .try_send(BleProfileAction::Switch(current_profile()))
                 .unwrap();
             embassy_time::with_timeout(
                 Duration::from_millis(10),
-                wait_for_connection_status(|s| s.selected_ble().state == BleState::Advertising),
+                wait_for_connection_status(|s| s.selected_profile().state == BleState::Advertising),
             )
             .await
             .expect("queued profile action must not discard the input that wakes advertising");
@@ -1479,7 +1471,7 @@ mod tests {
         use crate::state::{current_profile, wait_for_connection_status};
 
         with_stalled_keyboard(&[], async {
-            wait_for_connection_status(|s| s.selected_ble().state == BleState::Advertising).await;
+            wait_for_connection_status(|s| s.selected_profile().state == BleState::Advertising).await;
             MockDriver::get().advance(Duration::from_secs(150));
             // A same-profile switch restarts advertising, as a rejected connection does.
             BLE_PROFILE_CHANNEL
@@ -1489,7 +1481,7 @@ mod tests {
             MockDriver::get().advance(Duration::from_secs(150));
             embassy_time::with_timeout(
                 Duration::from_millis(10),
-                wait_for_connection_status(|s| s.selected_ble().state == BleState::Inactive),
+                wait_for_connection_status(|s| s.selected_profile().state == BleState::Inactive),
             )
             .await
             .expect("restarting advertising must not extend its window");
@@ -1536,7 +1528,7 @@ mod tests {
         advertising(hci, 0).await;
         hci.connect(handle, peer);
         hci.encrypt(handle);
-        until(|s| s.selected_ble().state == BleState::Connected).await;
+        until(|s| s.selected_profile().state == BleState::Connected).await;
     }
 
     #[test]
@@ -1668,7 +1660,7 @@ mod tests {
             MockDriver::get().advance(Duration::from_secs(110));
             embassy_time::with_timeout(
                 Duration::from_millis(10),
-                until(|s| s.selected_ble().state == BleState::Inactive),
+                until(|s| s.selected_profile().state == BleState::Inactive),
             )
             .await
             .expect("an unencrypted link must not extend advertising");
@@ -1687,7 +1679,7 @@ mod tests {
             MockDriver::get().advance(Duration::from_secs(270));
             embassy_time::with_timeout(
                 Duration::from_millis(10),
-                until(|s| s.selected_ble().state == BleState::Inactive),
+                until(|s| s.selected_profile().state == BleState::Inactive),
             )
             .await
             .expect("slow advertising must end with its period");

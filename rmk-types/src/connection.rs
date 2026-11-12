@@ -82,7 +82,7 @@ impl Default for ConnectionStatus {
 
 impl ConnectionStatus {
     /// Status of the selected profile; `Inactive` on a firmware without BLE profiles.
-    pub fn selected_ble(&self) -> BleStatus {
+    pub fn selected_profile(&self) -> BleStatus {
         self.ble.get(self.selected as usize).copied().unwrap_or_default()
     }
 
@@ -91,7 +91,7 @@ impl ConnectionStatus {
     }
 
     fn ble_ready(&self) -> bool {
-        matches!(self.selected_ble().state, BleState::Connected)
+        matches!(self.selected_profile().state, BleState::Connected)
     }
 
     /// Pick the active transport from current readiness + preference. Suspended

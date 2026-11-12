@@ -39,7 +39,7 @@ pub(crate) fn current_sleep_state() -> bool {
 /// The selected BLE profile's status, with the same subscribe-first rule as [`current_connection_status`].
 #[cfg(feature = "_ble")]
 pub fn current_ble_status() -> BleStatus {
-    current_connection_status().selected_ble()
+    current_connection_status().selected_profile()
 }
 
 /// Waits until `f` holds for the connection status, then returns that status.
@@ -106,23 +106,24 @@ pub(crate) fn set_preferred_connection(t: ConnectionType) {
     update_status(|c| c.preferred = t);
 }
 
-/// Load the preferred connection type at startup.
+/// Restore the persisted preferred connection at startup.
 ///
-/// With the `storage` feature, reads the persisted `ConnectionType` from flash;
-/// otherwise falls back to a build-time default — `Ble` when USB is disabled, `Usb` otherwise.
+/// Falls back to a build-time default when nothing is stored: `Ble` when USB is
+/// disabled, `Usb` otherwise.
 #[cfg(feature = "_ble")]
-pub(crate) async fn load_preferred_connection() -> ConnectionType {
-    #[cfg(feature = "storage")]
+pub(crate) async fn restore_preferred_connection() {
     if let Ok(Some(crate::storage::StorageValue::ConnectionType(c))) =
         crate::storage::read(crate::storage::StorageKey::ConnectionType).await
     {
-        return c;
+        set_preferred_connection(c);
+        return;
     }
-    if cfg!(feature = "_no_usb") {
+    let default = if cfg!(feature = "_no_usb") {
         ConnectionType::Ble
     } else {
         ConnectionType::Usb
-    }
+    };
+    set_preferred_connection(default);
 }
 
 #[cfg(all(feature = "_ble", not(feature = "_no_usb")))]
@@ -136,7 +137,6 @@ pub(crate) async fn toggle_preferred() {
         new = c.preferred;
     });
     info!("Switching preferred transport to: {:?}", new);
-    #[cfg(feature = "storage")]
     crate::storage::store_unchecked(crate::storage::StorageItem::ConnectionType(new)).await;
 }
 
@@ -278,7 +278,7 @@ mod tests {
             }
         );
         assert_eq!(
-            status.selected_ble(),
+            status.selected_profile(),
             BleStatus {
                 state: BleState::Connected,
                 bonded: false

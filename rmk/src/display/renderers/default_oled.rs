@@ -371,7 +371,7 @@ fn is_connected(_ctx: &RenderContext) -> bool {
     // - peripheral: connected when paired to the central
     // - central: connected when host BLE is connected
     #[cfg(all(feature = "split", feature = "_ble"))]
-    return _ctx.central_connected || _ctx.connection.selected_ble().state == crate::types::ble::BleState::Connected;
+    return _ctx.central_connected || _ctx.connection.selected_profile().state == crate::types::ble::BleState::Connected;
 
     // Split without BLE:
     // - peripheral: connected when paired to the central
@@ -381,7 +381,7 @@ fn is_connected(_ctx: &RenderContext) -> bool {
 
     // BLE: connected when BLE state reports connected
     #[cfg(all(not(feature = "split"), feature = "_ble"))]
-    return _ctx.connection.selected_ble().state == crate::types::ble::BleState::Connected;
+    return _ctx.connection.selected_profile().state == crate::types::ble::BleState::Connected;
 
     // Wired: always connected
     #[cfg(not(any(feature = "split", feature = "_ble")))]

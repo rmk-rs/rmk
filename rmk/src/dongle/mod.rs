@@ -193,8 +193,7 @@ where
             .build();
         let stack = &stack;
         let scan = ScanHandler::new();
-        let mut profile_manager = ProfileManager::new();
-        profile_manager.load_bonded_devices().await;
+        let profile_manager = ProfileManager::new().await;
         load_stack_bond(stack, profile_manager.bond_info(BOND_SLOT).map(|bond| bond.info));
         let mut central = DongleCentral {
             stack,
