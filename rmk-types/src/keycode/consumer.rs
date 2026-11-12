@@ -242,6 +242,7 @@ impl ConsumerKey {
             ConsumerKey::StopEject => Some(HidKeyCode::MediaStopEject),
             ConsumerKey::Lock => Some(HidKeyCode::ScreenLock),
             ConsumerKey::New => Some(HidKeyCode::AcNew),
+            ConsumerKey::Open => Some(HidKeyCode::AcOpen),
             _ => None,
         }
     }

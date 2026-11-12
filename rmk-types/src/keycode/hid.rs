@@ -389,6 +389,7 @@ pub enum HidKeyCode {
     MediaStopEject = 0x00C9,
     ScreenLock = 0x00CA,
     AcNew = 0x00CB,
+    AcOpen = 0x00CC,
 }
 
 impl HidKeyCode {
@@ -499,6 +500,7 @@ impl HidKeyCode {
             HidKeyCode::MediaStopEject => Some(ConsumerKey::StopEject),
             HidKeyCode::ScreenLock => Some(ConsumerKey::Lock),
             HidKeyCode::AcNew => Some(ConsumerKey::New),
+            HidKeyCode::AcOpen => Some(ConsumerKey::Open),
             _ => None,
         }
     }

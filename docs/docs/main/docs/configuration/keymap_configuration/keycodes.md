@@ -217,6 +217,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `MediaStopEject`   | `media_stop_eject`           | Media Stop / Eject                                   |
 | `ScreenLock`       | `screen_lock`                | Lock Screen / Launch Screensaver                     |
 | `AcNew`            | `ac_new`                     | New (consumer page AC New)                           |
+| `AcOpen`           | `ac_open`                    | Open (consumer page AC Open)                         |
 
 ## System & keyboard-page keys
 
