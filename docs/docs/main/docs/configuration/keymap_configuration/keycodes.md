@@ -218,6 +218,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `ScreenLock`       | `screen_lock`                | Lock Screen / Launch Screensaver                     |
 | `AcNew`            | `ac_new`                     | New (consumer page AC New)                           |
 | `AcOpen`           | `ac_open`                    | Open (consumer page AC Open)                         |
+| `AcClose`          | `ac_close`                   | Close (consumer page AC Close)                       |
 
 ## System & keyboard-page keys
 

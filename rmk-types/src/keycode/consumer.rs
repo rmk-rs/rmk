@@ -243,6 +243,7 @@ impl ConsumerKey {
             ConsumerKey::Lock => Some(HidKeyCode::ScreenLock),
             ConsumerKey::New => Some(HidKeyCode::AcNew),
             ConsumerKey::Open => Some(HidKeyCode::AcOpen),
+            ConsumerKey::Close => Some(HidKeyCode::AcClose),
             _ => None,
         }
     }

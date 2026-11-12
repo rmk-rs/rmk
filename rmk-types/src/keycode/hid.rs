@@ -390,6 +390,7 @@ pub enum HidKeyCode {
     ScreenLock = 0x00CA,
     AcNew = 0x00CB,
     AcOpen = 0x00CC,
+    AcClose = 0x00E8,
 }
 
 impl HidKeyCode {
@@ -501,6 +502,7 @@ impl HidKeyCode {
             HidKeyCode::ScreenLock => Some(ConsumerKey::Lock),
             HidKeyCode::AcNew => Some(ConsumerKey::New),
             HidKeyCode::AcOpen => Some(ConsumerKey::Open),
+            HidKeyCode::AcClose => Some(ConsumerKey::Close),
             _ => None,
         }
     }
