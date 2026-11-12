@@ -241,6 +241,7 @@ impl ConsumerKey {
             ConsumerKey::Repeat => Some(HidKeyCode::MediaRepeat),
             ConsumerKey::StopEject => Some(HidKeyCode::MediaStopEject),
             ConsumerKey::Lock => Some(HidKeyCode::ScreenLock),
+            ConsumerKey::New => Some(HidKeyCode::AcNew),
             _ => None,
         }
     }
