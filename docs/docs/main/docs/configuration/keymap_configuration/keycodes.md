@@ -211,6 +211,7 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `AcRedo`           | `ac_redo`                    | Redo / Repeat (consumer page AC Redo/Repeat)           |
 | `SnapShot`         | `snap_shot`                  | Snapshot (consumer page)                              |
 | `MediaPlay`        | `media_play`                 | Media Play                                           |
+| `MediaPause`       | `media_pause`                | Media Pause                                          |
 
 ## System & keyboard-page keys
 

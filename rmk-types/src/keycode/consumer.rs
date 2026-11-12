@@ -236,6 +236,7 @@ impl ConsumerKey {
             ConsumerKey::Redo => Some(HidKeyCode::AcRedo),
             ConsumerKey::SnapShot => Some(HidKeyCode::SnapShot),
             ConsumerKey::Play => Some(HidKeyCode::MediaPlay),
+            ConsumerKey::Pause => Some(HidKeyCode::MediaPause),
             _ => None,
         }
     }
