@@ -1609,13 +1609,8 @@ impl<'a> Keyboard<'a> {
 
     /// Process system control action. System control keys are keys in system page, such as power key.
     async fn process_action_system_control(&mut self, key: SystemControlKey, event: KeyboardEvent) {
-        if event.pressed {
-            self.system_control_report.usage_id = key as u8;
-            self.send_system_control_report().await;
-        } else {
-            self.system_control_report.usage_id = 0;
-            self.send_system_control_report().await;
-        }
+        self.system_control_report.usage_id = if event.pressed { key as u8 } else { 0 };
+        self.send_system_control_report().await;
     }
 
     /// Process mouse key action with acceleration support.
