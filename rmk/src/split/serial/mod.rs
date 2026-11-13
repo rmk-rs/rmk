@@ -191,7 +191,7 @@ mod tests {
     fn two_bundled_messages_do_not_trigger_extra_read() {
         let status = rmk_types::connection::ConnectionStatus::new();
         let mut bundled = encode(&SplitMessage::LedState(true));
-        bundled.extend_from_slice(&encode(&SplitMessage::ConnectionStatus(status)));
+        bundled.extend_from_slice(&encode(&SplitMessage::ConnectionStatus(status.clone())));
 
         let fake = FakeSerial::new([bundled]);
         let mut drv = SerialSplitDriver::new(fake);
@@ -216,7 +216,7 @@ mod tests {
     fn trailing_partial_message_is_carried_over() {
         let status = rmk_types::connection::ConnectionStatus::new();
         let full1 = encode(&SplitMessage::LedState(true));
-        let full2 = encode(&SplitMessage::ConnectionStatus(status));
+        let full2 = encode(&SplitMessage::ConnectionStatus(status.clone()));
         let (prefix, suffix) = full2.split_at(full2.len() / 2);
 
         let mut first_chunk = full1;

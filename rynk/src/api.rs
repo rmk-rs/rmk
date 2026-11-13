@@ -14,7 +14,6 @@ use postcard::experimental::max_size::MaxSize;
 use postcard::experimental::serialized_size;
 use rmk_types::action::{EncoderAction, KeyAction};
 use rmk_types::battery::BatteryStatus;
-use rmk_types::ble::BleStatus;
 use rmk_types::combo::Combo;
 use rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rmk_types::fork::Fork;
@@ -363,38 +362,40 @@ impl Client {
         self.request::<command::GetLedIndicator>(&()).await
     }
 
-    /// Read the active connection type (USB / BLE).
+    /// Read the preferred transport (USB / BLE), not the active one. For the active transport,
+    /// call [`ConnectionStatus::decide_active`] on [`get_connection_status`](Self::get_connection_status).
     pub async fn get_connection_type(&self) -> Result<ConnectionType, RynkHostError> {
         self.request::<command::GetConnectionType>(&()).await
     }
 
-    /// Read the full connection status. This is the same payload the
-    /// `ConnectionChange` topic pushes; use it to catch up after a missed
-    /// push.
+    /// Read the full connection status, every BLE profile included. This is the same
+    /// payload the `ConnectionChange` topic pushes; use it to catch up after a missed push.
     pub async fn get_connection_status(&self) -> Result<ConnectionStatus, RynkHostError> {
         self.request::<command::GetConnectionStatus>(&()).await
     }
 
-    /// Read BLE status (active profile, connection state, and bond presence). Requires
-    /// [`DeviceCapabilities::ble_enabled`]; nothing is sent otherwise.
-    pub async fn get_ble_status(&self) -> Result<BleStatus, RynkHostError> {
-        self.require_ble(Cmd::GetBleStatus)?;
-        self.request::<command::GetBleStatus>(&()).await
-    }
-
-    /// Switch to a BLE profile by slot. Requires [`DeviceCapabilities::ble_enabled`];
-    /// nothing is sent otherwise.
+    /// Queue a switch to a host or dongle profile. The switch can disconnect the requesting
+    /// BLE host before it receives the reply. Requires [`DeviceCapabilities::ble_enabled`].
     pub async fn switch_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
         self.require_ble(Cmd::SwitchBleProfile)?;
         self.request::<command::SwitchBleProfile>(&slot).await
     }
 
-    /// Clear (unbond) a BLE profile by slot. Clearing the currently connected profile
-    /// drops that connection. Requires [`DeviceCapabilities::ble_enabled`]; nothing is
-    /// sent otherwise.
+    /// Queue disconnecting `slot` and forgetting its bond; requires an unlocked connection.
+    /// The reply confirms the queue, not the flash write, and may never reach a host on that slot.
+    /// A selected slot then advertises for a new host; any other slot stays offline until selected.
+    /// Requires [`DeviceCapabilities::ble_enabled`].
     pub async fn clear_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
         self.require_ble(Cmd::ClearBleProfile)?;
         self.request::<command::ClearBleProfile>(&slot).await
+    }
+
+    /// Queue disconnecting `slot` and keep its bond. The reply may never reach a host on that slot.
+    /// A selected slot then advertises for a new host, which replaces the bond if it pairs; any other
+    /// slot stays offline until selected. Requires [`DeviceCapabilities::ble_enabled`].
+    pub async fn disconnect_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
+        self.require_ble(Cmd::DisconnectBleProfile)?;
+        self.request::<command::DisconnectBleProfile>(&slot).await
     }
 }
 

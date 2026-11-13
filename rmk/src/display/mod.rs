@@ -68,7 +68,7 @@ pub use oled_async;
 pub use renderers::{LogoRenderer, OledRenderer};
 use rmk_macro::processor;
 #[cfg(feature = "_ble")]
-use rmk_types::ble::BleStatus;
+use rmk_types::connection::ConnectionStatus;
 use rmk_types::modifier::ModifierCombination;
 #[cfg(feature = "ssd1306")]
 pub use ssd1306;
@@ -90,15 +90,6 @@ use crate::processor::Processor;
 
 /// Snapshot of keyboard state passed to renderers on every redraw.
 ///
-/// # Feature-gated fields
-///
-/// Some fields are only available when specific RMK features are enabled:
-///
-/// - `ble_status` — requires the `_ble` feature
-/// - `central_connected`, `peripherals_connected` — require the `split` feature
-/// - `peripheral_batteries` — requires the `split` feature
-/// - `dongle_state` — requires the `dongle` feature
-///
 /// Third-party renderers that access these fields must enable the
 /// corresponding features in their `Cargo.toml` dependency on `rmk`,
 /// and guard access with matching `#[cfg]` attributes.
@@ -115,9 +106,9 @@ pub struct RenderContext {
     pub battery: BatteryStatusEvent,
     /// Whether the keyboard is sleeping.
     pub sleeping: bool,
-    /// Current BLE status (active profile, connection state, and bond presence).
+    /// Current connection status: USB, every BLE profile, and the selected profile.
     #[cfg(feature = "_ble")]
-    pub ble_status: BleStatus,
+    pub connection: ConnectionStatus,
     /// Whether the central is connected (only meaningful on peripherals).
     #[cfg(feature = "split")]
     pub central_connected: bool,
@@ -151,7 +142,7 @@ impl Default for RenderContext {
             battery: BatteryStatusEvent(rmk_types::battery::BatteryStatus::Unavailable),
             sleeping: false,
             #[cfg(feature = "_ble")]
-            ble_status: BleStatus::default(),
+            connection: ConnectionStatus::new(),
             #[cfg(feature = "split")]
             central_connected: false,
             #[cfg(feature = "split")]
@@ -391,7 +382,7 @@ where
 
     #[cfg(feature = "_ble")]
     async fn on_connection_status_change_event(&mut self, event: ConnectionStatusChangeEvent) {
-        self.ctx.ble_status = event.0.ble;
+        self.ctx.connection = event.0;
         self.render().await;
     }
 
@@ -437,7 +428,7 @@ where
         // reflects state that was set before the processor started.
         #[cfg(feature = "_ble")]
         {
-            self.ctx.ble_status = crate::state::current_ble_status();
+            self.ctx.connection = crate::state::current_connection_status();
         }
 
         self.pending_render = true;

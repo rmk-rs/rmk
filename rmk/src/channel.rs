@@ -1,8 +1,10 @@
 //! Exposed channels which can be used to share data across devices & processors
 
-use core::future::poll_fn;
+use core::future::{Future, poll_fn};
+use core::pin::pin;
+use core::task::Poll;
 
-use embassy_sync::channel::{Channel, TrySendError};
+use embassy_sync::channel::Channel;
 #[cfg(feature = "_ble")]
 use embassy_sync::signal::Signal;
 pub use embassy_sync::{blocking_mutex, channel, pubsub, zerocopy_channel};
@@ -11,8 +13,6 @@ use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 #[cfg(feature = "_ble")]
 use {crate::ble::profile::BleProfileAction, rmk_types::led_indicator::LedIndicator};
 
-#[cfg(all(feature = "vial", feature = "_ble"))]
-use crate::VIAL_CHANNEL_SIZE;
 #[cfg(feature = "steno")]
 use crate::hid::StenoReport;
 use crate::hid::{KeyboardReport, MouseReport, Report};
@@ -50,22 +50,19 @@ fn active_report_channel() -> Option<(ConnectionType, &'static ReportChannel)> {
 }
 
 /// Reports generated while no transport is selected are dropped on the floor.
-pub(crate) async fn send_hid_report(mut report: Report) {
+pub(crate) async fn send_hid_report(report: Report) {
     let Some((transport, ch)) = active_report_channel() else {
         return;
     };
 
-    loop {
-        match ch.try_send(report) {
-            Ok(()) => return,
-            Err(TrySendError::Full(r)) => report = r,
-        }
-
-        poll_fn(|cx| ch.poll_ready_to_send(cx)).await;
+    let mut send = pin!(ch.send(report));
+    poll_fn(|cx| {
         if crate::state::active_transport() != Some(transport) {
-            return;
+            return Poll::Ready(());
         }
-    }
+        send.as_mut().poll(cx)
+    })
+    .await;
 }
 
 /// Never waits for queue space, so a steno send cannot stall the keyboard
@@ -98,12 +95,3 @@ pub(crate) fn clear_and_release_report_channel(transport: ConnectionType) {
 
 #[cfg(feature = "_ble")]
 pub(crate) static BLE_PROFILE_CHANNEL: Channel<RawMutex, BleProfileAction, 1> = Channel::new();
-
-/// Vial RX from BLE GATT `output_data` writes — one 32-byte chunk per write.
-/// Pushed by `gatt_events_task`, drained by [`crate::ble::host::HostGattHandler::run`].
-#[cfg(all(feature = "vial", feature = "_ble"))]
-pub(crate) static VIAL_BLE_RX_CHANNEL: Channel<RawMutex, [u8; 32], VIAL_CHANNEL_SIZE> = Channel::new();
-
-/// Rynk RX from the BLE `output_data` writes. The 512 B ring is ~2× one MTU's maximal payload.
-#[cfg(all(feature = "rynk", feature = "_ble"))]
-pub(crate) static RYNK_BLE_RX_PIPE: embassy_sync::pipe::Pipe<RawMutex, 512> = embassy_sync::pipe::Pipe::new();

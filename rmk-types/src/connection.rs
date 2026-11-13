@@ -1,9 +1,11 @@
 //! Shared connection type definitions used across RMK crates.
 
+use heapless::Vec;
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 
 use crate::ble::{BleState, BleStatus};
+use crate::constants::BOND_SLOTS;
 
 /// Connection type for the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
@@ -34,26 +36,39 @@ pub enum UsbState {
 /// Unified connection status: the single source of truth for transport
 /// availability and routing. The active transport is derived on demand via
 /// [`Self::decide_active`] from the input fields below.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct ConnectionStatus {
     pub usb: UsbState,
-    pub ble: BleStatus,
+    /// Every host profile, then the dongle profile when there is one, indexed by profile number.
+    #[cfg_attr(feature = "wasm", tsify(type = "BleStatus[]"))]
+    pub ble: Vec<BleStatus, BOND_SLOTS>,
+    /// The profile that carries input when BLE is the active transport.
+    pub selected: u8,
     /// Tiebreaker when both transports are ready.
     pub preferred: ConnectionType,
+}
+
+impl MaxSize for ConnectionStatus {
+    const POSTCARD_MAX_SIZE: usize = UsbState::POSTCARD_MAX_SIZE
+        + crate::heapless_vec_max_size::<BleStatus, BOND_SLOTS>()
+        + u8::POSTCARD_MAX_SIZE
+        + ConnectionType::POSTCARD_MAX_SIZE;
 }
 
 impl ConnectionStatus {
     pub const fn new() -> Self {
         Self {
             usb: UsbState::Disabled,
-            ble: BleStatus {
-                profile: 0,
-                state: BleState::Inactive,
-                bonded: false,
-            },
+            ble: Vec::from_array(
+                [BleStatus {
+                    state: BleState::Inactive,
+                    bonded: false,
+                }; BOND_SLOTS],
+            ),
+            selected: 0,
             preferred: ConnectionType::Usb,
         }
     }
@@ -66,12 +81,17 @@ impl Default for ConnectionStatus {
 }
 
 impl ConnectionStatus {
+    /// Status of the selected profile; `Inactive` on a firmware without BLE profiles.
+    pub fn selected_profile(&self) -> BleStatus {
+        self.ble.get(self.selected as usize).copied().unwrap_or_default()
+    }
+
     fn usb_ready(&self) -> bool {
         matches!(self.usb, UsbState::Configured | UsbState::Suspended)
     }
 
     fn ble_ready(&self) -> bool {
-        matches!(self.ble.state, BleState::Connected)
+        matches!(self.selected_profile().state, BleState::Connected)
     }
 
     /// Pick the active transport from current readiness + preference. Suspended
@@ -90,18 +110,16 @@ impl ConnectionStatus {
 #[cfg(test)]
 mod tests {
     use super::{ConnectionStatus, ConnectionType, UsbState};
-    use crate::ble::{BleState, BleStatus};
+    use crate::ble::BleState;
 
     fn status(usb: UsbState, ble_state: BleState, preferred: ConnectionType) -> ConnectionStatus {
-        ConnectionStatus {
+        let mut status = ConnectionStatus {
             usb,
-            ble: BleStatus {
-                profile: 0,
-                state: ble_state,
-                bonded: false,
-            },
             preferred,
-        }
+            ..ConnectionStatus::new()
+        };
+        status.ble[0].state = ble_state;
+        status
     }
 
     #[test]

@@ -12,9 +12,9 @@ use embassy_futures::select::{Either, select};
 use embedded_io_adapters::tokio_1::FromTokio;
 use rynk::rmk_types::action::{Action, EncoderAction, KeyAction};
 use rynk::rmk_types::battery::BatteryStatus;
-use rynk::rmk_types::ble::{BleState, BleStatus};
+use rynk::rmk_types::ble::BleStatus;
 use rynk::rmk_types::combo::Combo;
-use rynk::rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
+use rynk::rmk_types::connection::{ConnectionType, UsbState};
 use rynk::rmk_types::fork::{Fork, StateBits};
 use rynk::rmk_types::keyboard_macros::MacroOp;
 use rynk::rmk_types::keycode::{HidKeyCode, KeyCode};
@@ -277,22 +277,15 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     assert!(!client.get_sleep_state().await?);
     assert_eq!(client.get_led_indicator().await?, LedIndicator::default());
     assert_eq!(client.get_connection_type().await?, ConnectionType::Usb);
+    let connection = client.get_connection_status().await?;
     assert_eq!(
-        client.get_connection_status().await?,
-        ConnectionStatus {
-            usb: UsbState::Disabled,
-            ble: BleStatus {
-                profile: 0,
-                state: BleState::Inactive,
-                bonded: false,
-            },
-            preferred: ConnectionType::Usb,
-        }
+        (connection.usb, connection.selected, connection.preferred),
+        (UsbState::Disabled, 0, ConnectionType::Usb)
     );
+    assert!(connection.ble.iter().all(|profile| *profile == BleStatus::default()));
 
     // Every capability-gated command the fixture lacks is rejected client-side,
     // before touching the wire.
-    expect_unsupported("get_ble_status", client.get_ble_status().await);
     expect_unsupported("switch_ble_profile", client.switch_ble_profile(0).await);
     expect_unsupported("clear_ble_profile", client.clear_ble_profile(0).await);
     expect_unsupported("get_peripheral_status", client.get_peripheral_status(0).await);

@@ -1,8 +1,10 @@
+use core::pin::pin;
+
 #[cfg(feature = "subrating")]
 use bt_hci::cmd::le::LeSubrateRequest;
 use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
-use embassy_futures::select::{Either, Either3, select, select3};
+use embassy_futures::select::{Either, Either3, select, select_slice, select3};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
@@ -204,10 +206,10 @@ impl EventHandler for ScanHandler {
     }
 }
 
-/// Serve one peripheral slot: take each link established by
+/// Serve every peripheral slot: take each link established by
 /// [`scan_and_connect_peripherals`], run the split session over it until it ends, and
 /// report back so the radio reconnects or rediscovers the peripheral.
-pub(crate) async fn run_peripheral_session<
+pub(crate) async fn run_peripheral_sessions<
     'a,
     #[cfg(not(feature = "subrating"))] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
     #[cfg(feature = "subrating")] C: Controller
@@ -215,29 +217,35 @@ pub(crate) async fn run_peripheral_session<
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdAsync<LeSubrateRequest>,
 >(
-    id: usize,
-    conns: &Channel<NoopRawMutex, Connection<'a, DefaultPacketPool>, 1>,
+    conns: &[Channel<NoopRawMutex, Connection<'a, DefaultPacketPool>, 1>; crate::SPLIT_PERIPHERALS_NUM],
     ended: &Channel<NoopRawMutex, usize, { crate::SPLIT_PERIPHERALS_NUM }>,
     stack: &'a Stack<'_, C, DefaultPacketPool>,
-    matrix_config: PeripheralMatrixConfig,
-) {
+    matrix_configs: &[PeripheralMatrixConfig; crate::SPLIT_PERIPHERALS_NUM],
+) -> ! {
     trace!("SPLIT_MESSAGE_MAX_SIZE: {}", SPLIT_MESSAGE_MAX_SIZE);
-    loop {
-        let conn = conns.receive().await;
-        set_peripheral_connected(id, true);
-        if let Err(e) = run_central_manager_task(id, stack, &conn, matrix_config).await {
-            #[cfg(feature = "defmt")]
-            let e = defmt::Debug2Format(&e);
-            error!("BLE central error: {:?}", e);
+    // Pinned in place, like the host workers in `run_ble_keyboard`.
+    let sessions = pin!(crate::ble::array_from_fn::<_, { crate::SPLIT_PERIPHERALS_NUM }>(
+        |id| async move {
+            loop {
+                let conn = conns[id].receive().await;
+                set_peripheral_connected(id, true);
+                if let Err(e) = run_central_manager_task(id, stack, &conn, matrix_configs[id]).await {
+                    #[cfg(feature = "defmt")]
+                    let e = defmt::Debug2Format(&e);
+                    error!("BLE central error: {:?}", e);
+                }
+                set_peripheral_connected(id, false);
+                // Dropping the last handle files a disconnect request that the stack
+                // runner serves on its own; the pause lets that finish and lets the
+                // peripheral advertise again, so the reconnect finds a clean state.
+                drop(conn);
+                Timer::after_millis(500).await;
+                ended.send(id).await;
+            }
         }
-        set_peripheral_connected(id, false);
-        // Dropping the last handle files a disconnect request that the stack
-        // runner serves on its own; the pause lets that finish and lets the
-        // peripheral advertise again, so the reconnect finds a clean state.
-        drop(conn);
-        Timer::after_millis(500).await;
-        ended.send(id).await;
-    }
+    ));
+    select_slice(sessions).await;
+    unreachable!("peripheral sessions run forever")
 }
 
 /// Default connection parameters for the central <-> peripheral connection.

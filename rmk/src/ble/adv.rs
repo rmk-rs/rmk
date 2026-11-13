@@ -22,10 +22,8 @@ const DONGLE_SEEKING: u8 = 1;
 pub(crate) enum Adv<'a> {
     /// A peer that already knows us: ADV_DIRECT_IND carries no data, only this address.
     Directed(Address),
-    /// Any BLE host, which finds us as a standard HID keyboard.
-    Host { name: &'a str },
-    /// A bonded host reconnecting without HID discovery data.
-    HostReconnect,
+    /// Any BLE host, which finds us as a standard HID keyboard; `fast` shortens the interval.
+    Host { name: &'a str, fast: bool },
     /// The split central that owns peripheral `id`.
     SplitPeripheral { id: u8 },
     /// An RMK dongle whose pairing window is open.
@@ -37,7 +35,7 @@ impl Adv<'_> {
     fn build<'b>(&self, buf: &'b mut [u8; 31]) -> Result<Advertisement<'b>, Error> {
         let adv_data: &[AdStructure] = match *self {
             Self::Directed(peer) => return Ok(Advertisement::ConnectableNonscannableDirected { peer }),
-            Self::Host { name } => &[
+            Self::Host { name, .. } => &[
                 AdStructure::Flags(LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED),
                 AdStructure::CompleteServiceUuids16(&[BATTERY.to_le_bytes(), HUMAN_INTERFACE_DEVICE.to_le_bytes()]),
                 AdStructure::CompleteLocalName(name.as_bytes()),
@@ -46,7 +44,6 @@ impl Adv<'_> {
                     data: &KEYBOARD.to_le_bytes(),
                 },
             ],
-            Self::HostReconnect => &[AdStructure::Flags(BR_EDR_NOT_SUPPORTED)],
             // The two kinds below name themselves to another RMK device and nothing
             // else, undiscoverable: only RMK should act on these, and no host should
             // list them.
@@ -100,7 +97,7 @@ impl Adv<'_> {
     /// All variants use legacy PDUs, which require the 1M primary PHY.
     fn params(&self) -> AdvertisementParameters {
         let interval = match self {
-            Self::Host { .. } => Duration::from_millis(200),
+            Self::Host { fast: false, .. } => Duration::from_millis(200),
             _ => Duration::from_millis(50),
         };
         AdvertisementParameters {
@@ -115,6 +112,7 @@ impl Adv<'_> {
 }
 
 /// Advertise with an optional local address override and accept a connection within `timeout`.
+/// The timeout includes controller setup.
 pub(crate) async fn advertise<'a, 'b, C: Controller + ExtAdvCmds, const ATT: usize, const CONN: usize>(
     peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
     server: &'b AttributeServer<'_, NoopRawMutex, DefaultPacketPool, ATT, CONN>,
@@ -122,26 +120,28 @@ pub(crate) async fn advertise<'a, 'b, C: Controller + ExtAdvCmds, const ATT: usi
     address: Option<BdAddr>,
     timeout: Duration,
 ) -> Result<GattConnection<'a, 'b, DefaultPacketPool>, BleHostError<C::Error>> {
-    let mut buf = [0; 31];
-    #[cfg(feature = "ext_adv")]
-    let advertiser = {
-        let sets = [AdvertisementSet {
-            params: adv.params(),
-            data: adv.build(&mut buf)?,
-            address,
-        }];
-        let mut handles = AdvertisementSet::handles(&sets);
-        peripheral.advertise_ext(&sets, &mut handles).await?
-    };
-    #[cfg(not(feature = "ext_adv"))]
-    let advertiser = {
-        let _ = address;
-        peripheral.advertise(&adv.params(), adv.build(&mut buf)?).await?
-    };
-    let conn = with_timeout(timeout, advertiser.accept())
-        .await
-        .map_err(|_| Error::Timeout)??;
-    Ok(conn.with_attribute_server(server)?)
+    with_timeout(timeout, async {
+        let mut buf = [0; 31];
+        #[cfg(feature = "ext_adv")]
+        let advertiser = {
+            let sets = [AdvertisementSet {
+                params: adv.params(),
+                data: adv.build(&mut buf)?,
+                address,
+            }];
+            let mut handles = AdvertisementSet::handles(&sets);
+            peripheral.advertise_ext(&sets, &mut handles).await?
+        };
+        #[cfg(not(feature = "ext_adv"))]
+        let advertiser = {
+            let _ = address;
+            peripheral.advertise(&adv.params(), adv.build(&mut buf)?).await?
+        };
+        let conn = advertiser.accept().await?;
+        Ok(conn.with_attribute_server(server)?)
+    })
+    .await
+    .map_err(|_| Error::Timeout)?
 }
 
 #[cfg(test)]
@@ -157,8 +157,14 @@ mod tests {
         const LONGEST_NAME: &str = "0123456789abcdef";
         assert_eq!(LONGEST_NAME.len(), BLE_ADV_NAME_MAX_LEN);
         for adv in [
-            Adv::Host { name: LONGEST_NAME },
-            Adv::HostReconnect,
+            Adv::Host {
+                name: LONGEST_NAME,
+                fast: false,
+            },
+            Adv::Host {
+                name: LONGEST_NAME,
+                fast: true,
+            },
             Adv::Directed(Address::random([1, 2, 3, 4, 5, 0xC6])),
             Adv::SplitPeripheral { id: 0xFF },
             Adv::DongleSeeking,
@@ -168,7 +174,8 @@ mod tests {
         }
         assert!(
             Adv::Host {
-                name: "0123456789abcdefg"
+                name: "0123456789abcdefg",
+                fast: false,
             }
             .build(&mut [0; 31])
             .is_err()
@@ -176,15 +183,26 @@ mod tests {
     }
 
     #[test]
-    fn host_reconnect_has_only_flags() {
-        let mut buf = [0; 31];
-        let Advertisement::ConnectableScannableUndirected { adv_data, scan_data } =
-            Adv::HostReconnect.build(&mut buf).unwrap()
-        else {
-            panic!("reconnection must use undirected advertising");
-        };
-        assert_eq!(adv_data, [0x02, 0x01, 0x04]);
-        assert!(scan_data.is_empty());
+    fn fast_and_slow_hosts_advertise_keyboard_discovery_data() {
+        for fast in [false, true] {
+            let adv = Adv::Host { name: "RMK", fast };
+            let mut buf = [0; 31];
+            let Advertisement::ConnectableScannableUndirected { adv_data, scan_data } = adv.build(&mut buf).unwrap()
+            else {
+                panic!("hosts must use undirected advertising");
+            };
+            assert_eq!(
+                adv_data,
+                [
+                    2, 0x01, 0x06, 5, 0x03, 0x0F, 0x18, 0x12, 0x18, 4, 0x09, b'R', b'M', b'K', 3, 0x19, 0xC1, 0x03,
+                ]
+            );
+            assert!(scan_data.is_empty());
+            assert_eq!(
+                adv.params().interval_min,
+                embassy_time::Duration::from_millis(if fast { 50 } else { 200 })
+            );
+        }
     }
 
     #[test]

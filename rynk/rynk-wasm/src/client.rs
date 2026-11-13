@@ -15,7 +15,6 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use rynk::rmk_types::action::{EncoderAction, KeyAction};
 use rynk::rmk_types::battery::BatteryStatus;
-use rynk::rmk_types::ble::BleStatus;
 use rynk::rmk_types::combo::Combo;
 use rynk::rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rynk::rmk_types::fork::Fork;
@@ -56,6 +55,12 @@ pub async fn connect(link: JsByteLink) -> Result<RynkClient, JsValue> {
         client,
         driver: Mutex::new(driver),
     })
+}
+
+/// Resolve the input route using the same rules as the firmware.
+#[wasm_bindgen]
+pub fn decide_active_connection(status: ConnectionStatus) -> Option<ConnectionType> {
+    status.decide_active()
 }
 
 impl RynkClient {
@@ -175,7 +180,7 @@ endpoints! {
     // connection
     get_connection_type() -> ConnectionType,
     get_connection_status() -> ConnectionStatus,
-    get_ble_status() -> BleStatus,
     switch_ble_profile(slot: u8) -> (),
     clear_ble_profile(slot: u8) -> (),
+    disconnect_ble_profile(slot: u8) -> (),
 }

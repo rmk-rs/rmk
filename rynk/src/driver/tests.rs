@@ -5,7 +5,7 @@ use embassy_futures::join::join;
 use rmk_types::action::KeyAction;
 use rmk_types::battery::BatteryStatus;
 use rmk_types::ble::BleStatus;
-use rmk_types::connection::{ConnectionStatus, ConnectionType};
+use rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
 use rmk_types::protocol::rynk::{
     GetComboBulkResponse, GetKeymapBulkResponse, GetMorseBulkResponse, PeripheralStatus, ProtocolVersion,
     SetComboBulkRequest, SetKeymapBulkRequest, SetMorseBulkRequest,
@@ -416,19 +416,21 @@ async fn topic_queue_overflow_drops_oldest() {
 #[tokio::test]
 async fn next_topic_decodes_typed_payload() {
     let status = ConnectionStatus {
-        ble: BleStatus {
+        usb: UsbState::Disabled,
+        ble: heapless::Vec::from_slice(&[BleStatus {
             bonded: true,
             ..Default::default()
-        },
+        }])
+        .unwrap(),
+        selected: 0,
         preferred: ConnectionType::Ble,
-        ..Default::default()
     };
     let (client, mut driver) = raw_session(vec![Step::Chunk(topic(Cmd::ConnectionChange, status)), Step::Hang]);
     let ev = drive(&mut driver, &client, client.next_topic()).await;
     match ev {
         TopicEvent::ConnectionChange(s) => {
             assert_eq!(s.preferred, ConnectionType::Ble);
-            assert!(s.ble.bonded);
+            assert!(s.ble[0].bonded);
         }
         other => panic!("expected ConnectionChange, got {other:?}"),
     }
@@ -443,8 +445,8 @@ async fn connect_session(mut steps: Vec<Step>, trailing: Vec<Step>) -> (Client, 
 async fn capability_gate_rejects_without_wire_send() {
     let (client, _driver) = connect_session(handshake_steps(caps()), vec![Step::Hang]).await;
     assert!(!client.capabilities.ble_enabled);
-    let r = client.get_ble_status().await;
-    assert!(matches!(r, Err(RynkHostError::Unsupported(Cmd::GetBleStatus, _))));
+    let r = client.switch_ble_profile(0).await;
+    assert!(matches!(r, Err(RynkHostError::Unsupported(Cmd::SwitchBleProfile, _))));
 }
 
 // Battery reporting is independent of whether the keyboard has a BLE transport.

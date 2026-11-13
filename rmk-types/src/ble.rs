@@ -7,55 +7,28 @@ use serde::{Deserialize, Serialize};
 /// UUIDs (6) and the appearance (4) claim the rest of its 31 bytes.
 pub const BLE_ADV_NAME_MAX_LEN: usize = 16;
 
-/// BLE state (what the BLE subsystem is currently doing).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
+/// Connection and advertising state of one BLE host or dongle profile.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub enum BleState {
-    /// The BLE is advertising.
+    /// The profile is advertising.
     Advertising,
-    /// The BLE is connected.
+    /// The profile has an encrypted connection that can carry input.
     Connected,
-    /// The BLE is not in use (USB mode or sleep mode, default).
+    /// The profile has no connection ready for input.
+    #[default]
     Inactive,
 }
 
-/// Unified BLE status: active profile, connection state, and whether that profile currently has bond information.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
+/// Connection state and bond of one BLE host or dongle profile.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct BleStatus {
-    pub profile: u8,
     pub state: BleState,
-    /// Whether the active BLE profile currently has bond information, independent of connection state.
+    /// Whether the profile holds a bond, independent of connection state. False while it re-pairs.
     pub bonded: bool,
-}
-
-impl Default for BleStatus {
-    fn default() -> Self {
-        Self {
-            profile: 0,
-            state: BleState::Inactive,
-            bonded: false,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{BleState, BleStatus};
-
-    #[test]
-    fn default_ble_status_is_profile_zero_and_inactive() {
-        assert_eq!(
-            BleStatus::default(),
-            BleStatus {
-                profile: 0,
-                state: BleState::Inactive,
-                bonded: false,
-            }
-        );
-    }
 }

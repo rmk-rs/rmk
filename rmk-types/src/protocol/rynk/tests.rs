@@ -245,9 +245,11 @@ fn exemplars() -> Exemplars {
         num_split_peripherals: 12,
         ble_enabled: false,
         num_ble_profiles: 13,
-        max_payload_size: 14,
-        max_bulk_keys: 15,
-        max_bulk_items: 16,
+        max_connections: 14,
+        dongle_profile: Some(3),
+        max_payload_size: 15,
+        max_bulk_keys: 16,
+        max_bulk_items: 17,
         bulk_transfer_supported: true,
     };
     // Ascending version/id values; distinct strings so a field swap shows.
@@ -276,11 +278,18 @@ fn exemplars() -> Exemplars {
     };
     let connection = ConnectionStatus {
         usb: UsbState::Configured,
-        ble: BleStatus {
-            profile: 1,
-            state: BleState::Advertising,
-            bonded: true,
-        },
+        ble: heapless::Vec::from_slice(&[
+            BleStatus {
+                state: BleState::Connected,
+                bonded: true,
+            },
+            BleStatus {
+                state: BleState::Advertising,
+                bonded: true,
+            },
+        ])
+        .unwrap(),
+        selected: 1,
         preferred: ConnectionType::Ble,
     };
     // All three sub-bitfields distinct so a StateBits field swap shows.
@@ -510,11 +519,11 @@ fn wire_values_locked() {
         ("Macro{[Tap(A),Delay(300),Char(a),Pause]}", encode(&ex.macro_ops)),
         // --- Status / system responses ---
         ("MatrixState{[0x05,0x00,0x20]}", encode(&ex.matrix)),
-        ("DeviceCapabilities{1..16}", encode(&ex.capabilities)),
+        ("DeviceCapabilities{1..17}", encode(&ex.capabilities)),
         ("DeviceInfo{1.2.3,4,5,RMK,..}", encode(&ex.device_info)),
         ("BehaviorConfig{50..120}", encode(&ex.behavior)),
         (
-            "ConnectionStatus{Configured,{1,Adv,bonded},Ble}",
+            "ConnectionStatus{Configured,[Conn,Adv],s=1,Ble}",
             encode(&ex.connection)
         ),
         ("ProtocolVersion{1,0}", encode(&ProtocolVersion { major: 1, minor: 0 })),
@@ -529,9 +538,8 @@ fn wire_values_locked() {
         ("BleState::Connected", encode(&BleState::Connected)),
         ("BleState::Inactive", encode(&BleState::Inactive)),
         (
-            "BleStatus{2,Connected,bonded}",
+            "BleStatus{Connected,bonded}",
             encode(&BleStatus {
-                profile: 2,
                 state: BleState::Connected,
                 bonded: true,
             })
@@ -672,7 +680,7 @@ fn wire_frames_locked() {
             encode_frame(Cmd::GetCapabilities, SEQ, &())
         ),
         (
-            "GetCapabilities reply Ok(DeviceCapabilities{1..16})",
+            "GetCapabilities reply Ok(DeviceCapabilities{1..17})",
             encode_frame(
                 Cmd::GetCapabilities,
                 SEQ,
@@ -921,11 +929,11 @@ fn wire_frames_locked() {
             encode_frame(Cmd::GetConnectionStatus, SEQ, &())
         ),
         (
-            "GetConnectionStatus reply Ok(ConnectionStatus{Configured,{1,Adv,bonded},Ble})",
+            "GetConnectionStatus reply Ok(ConnectionStatus{Configured,[Conn,Adv],s=1,Ble})",
             encode_frame(
                 Cmd::GetConnectionStatus,
                 SEQ,
-                &Ok::<ConnectionStatus, RynkError>(ex.connection)
+                &Ok::<ConnectionStatus, RynkError>(ex.connection.clone())
             ),
         ),
         // Status (0x08xx).
@@ -965,11 +973,6 @@ fn wire_frames_locked() {
             encode_frame(Cmd::GetLedIndicator, SEQ, &Ok::<LedIndicator, RynkError>(led)),
         ),
         // Connection / status rows behind `_ble` and `split`.
-        ("GetBleStatus request ()", encode_frame(Cmd::GetBleStatus, SEQ, &())),
-        (
-            "GetBleStatus reply Ok(BleStatus{1,Advertising,bonded})",
-            encode_frame(Cmd::GetBleStatus, SEQ, &Ok::<BleStatus, RynkError>(ex.connection.ble)),
-        ),
         (
             "SwitchBleProfile request 1",
             encode_frame(Cmd::SwitchBleProfile, SEQ, &1u8)
@@ -985,6 +988,14 @@ fn wire_frames_locked() {
         (
             "ClearBleProfile reply Ok(())",
             encode_frame(Cmd::ClearBleProfile, SEQ, &Ok::<(), RynkError>(())),
+        ),
+        (
+            "DisconnectBleProfile request 1",
+            encode_frame(Cmd::DisconnectBleProfile, SEQ, &1u8),
+        ),
+        (
+            "DisconnectBleProfile reply Ok(())",
+            encode_frame(Cmd::DisconnectBleProfile, SEQ, &Ok::<(), RynkError>(())),
         ),
         (
             "GetBatteryStatus request ()",
@@ -1013,7 +1024,7 @@ fn wire_frames_locked() {
         ("LayerChange topic 3", encode_frame(Cmd::LayerChange, 0, &3u8)),
         ("WpmUpdate topic 42", encode_frame(Cmd::WpmUpdate, 0, &42u16)),
         (
-            "ConnectionChange topic ConnectionStatus{Configured,{1,Adv,bonded},Ble}",
+            "ConnectionChange topic ConnectionStatus{Configured,[Conn,Adv],s=1,Ble}",
             encode_frame(Cmd::ConnectionChange, 0, &ex.connection)
         ),
         ("SleepState topic true", encode_frame(Cmd::SleepState, 0, &true)),
@@ -1093,7 +1104,7 @@ mod protocol_reference {
         ),
         (
             RynkError::Locked,
-            "The command is gated by the lock and this session is locked (see Lock).",
+            "The command is gated by the lock and this connection is locked (see Lock).",
         ),
         (
             RynkError::Busy,
@@ -1241,14 +1252,22 @@ mod protocol_reference {
              A [dongle](../features/dongle) relays these frames untouched, so a host talks to the dongle's USB interface exactly as it would to the keyboard.\n\n\
              ## Sizing and bulk transfer\n\n\
              Each peer holds one frame in a buffer of `rynk_buffer_size` bytes (a `[rmk]` option, see [RMK config](../configuration/rmk_config#rynk-protocol-configuration)). The largest payload a frame can carry is what remains after COBS overhead, the delimiter, and the {header_size}-byte header; the firmware reports it as `DeviceCapabilities.max_payload_size`. Read the capabilities and size requests from them rather than assuming a fixed limit.\n\n\
+             `DeviceCapabilities::max_connections` reports the maximum simultaneous BLE host and dongle connections: 0 without BLE, otherwise `[ble] max_connections` (1 by default). USB and split peripheral links are excluded.\n\n\
              `DeviceCapabilities` also advertises `bulk_transfer_supported` and the paging strides `max_bulk_keys` (worst-case keys per `GetKeymapBulk` page) and `max_bulk_items` (worst-case entries per `GetComboBulk`/`GetMorseBulk` page). A bulk read names a start — for the keymap `(layer, row, col)`, read forward through the flat row-major, layer-major keymap; for combos and morses a slot index — and returns as many consecutive entries as fit in one payload, or fewer at the end. A host pages by advancing its start by the stride; a short page ends the read. A bulk write carries a start plus a list of entries and is packed by encoded size up to `max_payload_size`. A reply that does not fit beside other pipelined requests answers `Busy`; retry once they complete.\n\n\
              `GetLayout` serves the compressed layout blob {ble_chunk} bytes per call: the request is a byte offset and `LayoutChunk` carries `total_len` plus that page's bytes. `GetMacro`/`SetMacro` move one whole macro per call, a `MacroOp` list indexed below `max_macros`; every macro shares one buffer of `macro_space_size` bytes, in the list's postcard encoding plus a length prefix per slot, so a write that no longer fits answers `Invalid`; `macros_writable` is false on a firmware without storage, whose `SetMacro` answers `Unimplemented`.\n\n\
+             ## Connections\n\n\
+             `DeviceCapabilities` lists the BLE profiles a host can address: host profiles `0..num_ble_profiles`, plus the dongle profile at index `dongle_profile` when it is set. The profile commands below answer `Invalid` for any other index.\n\n\
+             `GetConnectionStatus` returns every profile at once, and each `ConnectionChange` push carries the same payload. `ble[i]` is profile `i`, so `ble` holds the host profiles, then the dongle profile; without BLE (`ble_enabled` false) its entries stay `Inactive`. `selected` is the profile that carries input when BLE is active. `state` is `Connected` only when the profile has an encrypted link that can carry input. `bonded` reports whether the profile has a paired host, and is false while the selected profile waits to pair a new one.\n\n\
+             The transport that carries input follows one rule: USB is ready when `usb` is `Configured` or `Suspended`, BLE is ready when `ble[selected].state` is `Connected`, and `preferred` decides when both are ready; `ConnectionStatus::decide_active()` (`decide_active_connection` in `rynk-wasm`) applies this rule. `GetConnectionType` returns only `preferred`.\n\n\
+             {profile_actions}\n\
+             These commands answer `Ok` once the keyboard accepts the action, before it takes effect; watch `ConnectionChange` for the result. `NotReady` means earlier profile actions are still pending; retry. If the action closes the link the request arrived on, the link can drop before the reply arrives, but the action still runs.\n\n\
+             Disconnecting or clearing the selected profile starts a new advertising period for a new host, the same as holding its profile key; `bonded` is false meanwhile. A disconnected profile keeps its bond as a fallback: the old host can't reconnect while the profile waits, and the bond comes back if no new host pairs before advertising ends or another profile is selected. A profile that isn't selected stays offline until it is, and other profiles keep their connections.\n\n\
              ## Errors\n\n\
              A request's response is postcard `Result<T, RynkError>`; the `Err` side is one of these variants.\n\n\
              {errors}\n\
              ## Lock\n\n\
-             Commands that can flash firmware, wipe storage, or read the matrix sit behind a physical-presence unlock. `BootloaderJump`, `StorageReset`, `GetMatrixState`, and (with `_ble`) `ClearBleProfile` always need an unlocked session; every `Set*` command joins them when the firmware was built with `[host] write_requires_unlock = true`. A gated command on a locked session answers `Locked` and does nothing. `GetLockStatus`, `UnlockPoll`, and `Lock` are never gated.\n\n\
-             The lock is per session and starts locked; `Lock` or the end of the session (unplug, BLE disconnect) relocks it. To unlock, a host polls `UnlockPoll` while the user holds the challenge keys that `LockStatus.key_positions` reports (`[host].unlock_keys`); the session is unlocked once `locked` clears. With no `unlock_keys` configured the challenge is empty and the gated commands can never be unlocked; a firmware built with `[host] insecure = true` starts unlocked and ignores `Lock`. See [Rynk](../features/rynk#locking-dangerous-operations) for the user-facing side.\n\n\
+             Commands that can flash firmware, wipe storage, or read the matrix sit behind a physical-presence unlock. `BootloaderJump`, `StorageReset`, `GetMatrixState`, and (with `_ble`) `ClearBleProfile` always need an unlocked connection; every `Set*` command joins them when the firmware was built with `[host] write_requires_unlock = true`. A gated command on a locked connection answers `Locked` and does nothing. `GetLockStatus`, `UnlockPoll`, and `Lock` are never gated.\n\n\
+             The lock belongs to the connection and starts locked; `Lock` or disconnection relocks it. To unlock, a host polls `UnlockPoll` while the user holds the challenge keys that `LockStatus.key_positions` reports (`[host].unlock_keys`); the connection is unlocked once `locked` clears. With no `unlock_keys` configured the challenge is empty and the gated commands can never be unlocked; a firmware built with `[host] insecure = true` starts unlocked and ignores `Lock`. See [Rynk](../features/rynk#locking-dangerous-operations) for the user-facing side.\n\n\
              ## Endpoints\n\n\
              {endpoints}\n\
              ## Topics\n\n\
@@ -1290,6 +1309,30 @@ mod protocol_reference {
                         ),
                     ],
                 ]
+            ),
+            profile_actions = table(
+                &["Command", "Effect", "Bond", "Needs unlock"],
+                &[
+                    [
+                        "`SwitchBleProfile`",
+                        "Selects the profile and advertises if it has no connection.",
+                        "Kept",
+                        "No"
+                    ],
+                    [
+                        "`DisconnectBleProfile`",
+                        "Closes the profile's connection; the selected profile then waits for a new host.",
+                        "Kept until a new host pairs",
+                        "No"
+                    ],
+                    [
+                        "`ClearBleProfile`",
+                        "Closes the profile's connection; the selected profile then waits for a new host.",
+                        "Deleted, even if offline",
+                        "Yes"
+                    ],
+                ]
+                .map(|row| row.map(String::from).to_vec())
             ),
             errors = table(
                 &["Variant", "Meaning"],

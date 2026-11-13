@@ -392,25 +392,20 @@ async fn run_all(client: &Client, over_ble: bool) -> Result<(), Box<dyn std::err
 
     info!("── connection ──");
     report(&mut fails, "get_connection_type", client.get_connection_type().await);
-    report(
-        &mut fails,
-        "get_connection_status",
-        client.get_connection_status().await,
-    );
-    match client.get_ble_status().await {
+    match client.get_connection_status().await {
         Ok(s) => {
-            info!("  ✓ {:<22} {s:?}", "get_ble_status");
-            // Re-selecting the active profile is a no-op.
+            info!("  ✓ {:<22} {s:?}", "get_connection_status");
+            // Re-selecting the selected profile is a no-op.
             ack(
                 &mut fails,
-                &format!("switch_ble_profile {} (already active)", s.profile),
-                client.switch_ble_profile(s.profile).await,
+                &format!("switch_ble_profile {} (already selected)", s.selected),
+                client.switch_ble_profile(s.selected).await,
             );
             // Clearing bonds is not restorable.
             info!("  (skipping clear_ble_profile: deleting a bond is unrestorable)");
         }
         other => {
-            report(&mut fails, "get_ble_status", other);
+            report(&mut fails, "get_connection_status", other);
             info!("  (active profile unknown — skipping switch_ble_profile / clear_ble_profile)");
         }
     }

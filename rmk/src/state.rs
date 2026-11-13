@@ -1,4 +1,4 @@
-use core::cell::Cell;
+use core::cell::RefCell;
 
 use embassy_sync::blocking_mutex::Mutex;
 use rmk_types::ble::BleState;
@@ -12,11 +12,11 @@ use crate::event::{ConnectionStatusChangeEvent, publish_event};
 /// Single source of truth for transport state and routing. All writes go
 /// through the mutator helpers below so the active-output cascade runs and
 /// change events fire on every transition.
-pub(crate) static CONNECTION_STATUS: Mutex<RawMutex, Cell<ConnectionStatus>> =
-    Mutex::new(Cell::new(ConnectionStatus::new()));
+static CONNECTION_STATUS: Mutex<RawMutex, RefCell<ConnectionStatus>> =
+    Mutex::new(RefCell::new(ConnectionStatus::new()));
 
 pub(crate) fn active_transport() -> Option<ConnectionType> {
-    CONNECTION_STATUS.lock(|c| c.get().decide_active())
+    current_connection_status().decide_active()
 }
 
 /// Snapshot of the current connection status.
@@ -24,11 +24,11 @@ pub(crate) fn active_transport() -> Option<ConnectionType> {
 /// Nothing is retained on [`ConnectionStatusChangeEvent`]: subscribe before reading
 /// this, or a transition landing in between is lost.
 pub fn current_connection_status() -> ConnectionStatus {
-    CONNECTION_STATUS.lock(|c| c.get())
+    CONNECTION_STATUS.lock(|c| c.borrow().clone())
 }
 
 pub(crate) fn current_usb_state() -> UsbState {
-    CONNECTION_STATUS.lock(|c| c.get().usb)
+    current_connection_status().usb
 }
 
 /// Current unibody/central sleep state for host polling and split synchronization.
@@ -36,23 +36,35 @@ pub(crate) fn current_sleep_state() -> bool {
     crate::sleep::SLEEPING_STATE.load(core::sync::atomic::Ordering::Acquire)
 }
 
-/// The BLE half of [`current_connection_status`], with the same subscribe-first rule.
+/// The selected BLE profile's status, with the same subscribe-first rule as [`current_connection_status`].
 #[cfg(feature = "_ble")]
 pub fn current_ble_status() -> BleStatus {
-    CONNECTION_STATUS.lock(|c| c.get().ble)
+    current_connection_status().selected_profile()
+}
+
+/// Waits until `f` holds for the connection status, then returns that status.
+#[cfg(feature = "_ble")]
+pub(crate) async fn wait_for_connection_status(f: impl Fn(&ConnectionStatus) -> bool) -> ConnectionStatus {
+    use crate::event::{EventSubscriber, SubscribableEvent};
+
+    // Subscribe first, so a change made after the check below still wakes us.
+    let mut changes = ConnectionStatusChangeEvent::subscriber();
+    loop {
+        let status = current_connection_status();
+        if f(&status) {
+            return status;
+        }
+        changes.next_event().await;
+    }
 }
 
 /// Read-modify-write the connection status atomically.
 pub(crate) fn update_status(f: impl FnOnce(&mut ConnectionStatus)) {
     let Some((prev, new)) = CONNECTION_STATUS.lock(|c| {
-        let prev = c.get();
-        let mut new = prev;
-        f(&mut new);
-        if prev == new {
-            return None;
-        }
-        c.set(new);
-        Some((prev, new))
+        let mut c = c.borrow_mut();
+        let prev = c.clone();
+        f(&mut c);
+        (prev != *c).then(|| (prev, c.clone()))
     }) else {
         return;
     };
@@ -76,25 +88,16 @@ pub fn set_usb_state(s: UsbState) {
     update_status(|c| c.usb = s);
 }
 
-pub(crate) fn set_ble_state(s: BleState) {
-    update_status(|c| c.ble.state = s);
+pub(crate) fn set_ble_state(profile: u8, state: BleState) {
+    update_status(|c| c.ble[profile as usize].state = state);
 }
 
-/// Switching profiles always drops the BLE state back to `Inactive`; the
-/// connection loop re-advertises and updates state from there. `bonded` is the bond
-/// presence of `profile`, the slot being switched to, not of the outgoing one.
-pub(crate) fn set_ble_profile(profile: u8, bonded: bool) {
-    update_status(|c| {
-        c.ble.profile = profile;
-        c.ble.state = BleState::Inactive;
-        c.ble.bonded = bonded;
-    });
+pub(crate) fn set_ble_bonded(profile: u8, bonded: bool) {
+    update_status(|c| c.ble[profile as usize].bonded = bonded);
 }
 
-/// `bonded` always describes `c.ble.profile`, so call this only for a change to the
-/// currently active profile. Use [`set_ble_profile`] to move both at once.
-pub(crate) fn set_ble_bonded(bonded: bool) {
-    update_status(|c| c.ble.bonded = bonded);
+pub(crate) fn select_ble_profile(profile: u8) {
+    update_status(|c| c.selected = profile);
 }
 
 /// Persistence is the caller's responsibility: `storage::store` the new
@@ -103,23 +106,24 @@ pub(crate) fn set_preferred_connection(t: ConnectionType) {
     update_status(|c| c.preferred = t);
 }
 
-/// Load the preferred connection type at startup.
+/// Restore the persisted preferred connection at startup.
 ///
-/// With the `storage` feature, reads the persisted `ConnectionType` from flash;
-/// otherwise falls back to a build-time default — `Ble` when USB is disabled, `Usb` otherwise.
+/// Falls back to a build-time default when nothing is stored: `Ble` when USB is
+/// disabled, `Usb` otherwise.
 #[cfg(feature = "_ble")]
-pub(crate) async fn load_preferred_connection() -> ConnectionType {
-    #[cfg(feature = "storage")]
+pub(crate) async fn restore_preferred_connection() {
     if let Ok(Some(crate::storage::StorageValue::ConnectionType(c))) =
         crate::storage::read(crate::storage::StorageKey::ConnectionType).await
     {
-        return c;
+        set_preferred_connection(c);
+        return;
     }
-    if cfg!(feature = "_no_usb") {
+    let default = if cfg!(feature = "_no_usb") {
         ConnectionType::Ble
     } else {
         ConnectionType::Usb
-    }
+    };
+    set_preferred_connection(default);
 }
 
 #[cfg(all(feature = "_ble", not(feature = "_no_usb")))]
@@ -133,13 +137,12 @@ pub(crate) async fn toggle_preferred() {
         new = c.preferred;
     });
     info!("Switching preferred transport to: {:?}", new);
-    #[cfg(feature = "storage")]
     crate::storage::store_unchecked(crate::storage::StorageItem::ConnectionType(new)).await;
 }
 
 #[cfg(feature = "_ble")]
 pub(crate) fn current_profile() -> u8 {
-    CONNECTION_STATUS.lock(|c| c.get().ble.profile)
+    current_connection_status().selected
 }
 
 #[cfg(test)]
@@ -149,14 +152,16 @@ mod tests {
     use embassy_futures::select::{Either, select};
     use embassy_sync::channel::Channel;
     use embassy_time::{Duration, Timer};
-
-    use super::{
-        CONNECTION_STATUS, ConnectionStatus, ConnectionType, UsbState, set_preferred_connection, set_usb_state,
-    };
     #[cfg(feature = "_ble")]
-    use super::{set_ble_bonded, set_ble_profile, set_ble_state};
+    use rmk_types::ble::{BleState, BleStatus};
+
+    use super::{ConnectionType, UsbState, set_preferred_connection, set_usb_state};
+    #[cfg(feature = "_ble")]
+    use super::{select_ble_profile, set_ble_bonded, set_ble_state};
     use crate::event::{ConnectionStatusChangeEvent, EventSubscriber, SubscribableEvent};
-    use crate::hid::{KeyboardReport, MouseReport, Report};
+    #[cfg(not(feature = "_no_usb"))]
+    use crate::hid::MouseReport;
+    use crate::hid::{KeyboardReport, Report};
     use crate::test_support::test_block_on as block_on;
 
     fn state_test_lock() -> &'static Mutex<()> {
@@ -165,7 +170,7 @@ mod tests {
     }
 
     fn reset_state() {
-        CONNECTION_STATUS.lock(|c| c.set(ConnectionStatus::default()));
+        crate::test_support::reset_connection_status();
         #[cfg(not(feature = "_no_usb"))]
         crate::channel::USB_REPORT_CHANNEL.clear();
         #[cfg(feature = "_ble")]
@@ -236,56 +241,51 @@ mod tests {
 
     #[cfg(feature = "_ble")]
     #[test]
-    fn ble_profile_update_publishes_profile_state_and_bond_together() {
-        use rmk_types::ble::{BleState, BleStatus};
-
+    fn each_profile_update_publishes_a_status_event() {
         let _guard = state_test_lock().lock().unwrap();
         reset_state();
         let mut sub = ConnectionStatusChangeEvent::subscriber();
 
-        set_ble_profile(1, true);
+        for profile in [1, 2] {
+            select_ble_profile(profile);
+        }
 
-        assert_eq!(
-            block_on(sub.next_event()).0.ble,
-            BleStatus {
-                profile: 1,
-                state: BleState::Inactive,
-                bonded: true,
-            }
-        );
-
-        set_ble_profile(2, false);
-
-        assert_eq!(
-            block_on(sub.next_event()).0.ble,
-            BleStatus {
-                profile: 2,
-                state: BleState::Inactive,
-                bonded: false,
-            }
-        );
+        for profile in [1, 2] {
+            assert_eq!(block_on(sub.next_event()).0.selected, profile);
+        }
     }
 
     #[cfg(feature = "_ble")]
     #[test]
-    fn ble_bond_update_publishes_status_event_and_preserves_profile_and_state() {
-        use rmk_types::ble::{BleState, BleStatus};
-
+    fn profile_update_changes_only_its_entry_and_keeps_the_route() {
         let _guard = state_test_lock().lock().unwrap();
         reset_state();
-        set_ble_profile(2, true);
-        set_ble_state(BleState::Connected);
-        let mut sub = ConnectionStatusChangeEvent::subscriber();
+        set_preferred_connection(ConnectionType::Ble);
+        set_ble_state(0, BleState::Connected);
+        crate::channel::BLE_REPORT_CHANNEL
+            .try_send(pressed_keyboard_report())
+            .unwrap();
 
-        set_ble_bonded(false);
+        set_ble_state(1, BleState::Connected);
+        set_ble_bonded(1, true);
 
+        let status = super::current_connection_status();
         assert_eq!(
-            block_on(sub.next_event()).0.ble,
+            status.ble[1],
             BleStatus {
-                profile: 2,
                 state: BleState::Connected,
-                bonded: false,
+                bonded: true
             }
+        );
+        assert_eq!(
+            status.selected_profile(),
+            BleStatus {
+                state: BleState::Connected,
+                bonded: false
+            }
+        );
+        assert!(
+            matches!(crate::channel::BLE_REPORT_CHANNEL.try_receive(), Ok(Report::KeyboardReport(r)) if r.modifier == 0x02)
         );
     }
 
@@ -347,12 +347,11 @@ mod tests {
     #[test]
     fn usb_preference_flip_releases_previous_ble_transport() {
         use crate::channel::BLE_REPORT_CHANNEL;
-        use crate::state::{BleState, set_ble_state};
 
         let _guard = state_test_lock().lock().unwrap();
         reset_state();
         set_preferred_connection(ConnectionType::Usb);
-        set_ble_state(BleState::Connected);
+        set_ble_state(0, BleState::Connected);
         assert_eq!(super::active_transport(), Some(ConnectionType::Ble));
 
         BLE_REPORT_CHANNEL
@@ -362,6 +361,37 @@ mod tests {
         set_usb_state(UsbState::Configured);
         assert_eq!(super::active_transport(), Some(ConnectionType::Usb));
         assert_all_released(&BLE_REPORT_CHANNEL);
+    }
+
+    #[cfg(all(feature = "_ble", not(feature = "_no_usb")))]
+    #[test]
+    fn toggling_preference_routes_and_persists_the_selected_transport() {
+        use crate::config::StorageConfig;
+        use crate::core_traits::Runnable;
+        use crate::storage::{Storage, StorageKey, StorageValue, async_flash_wrapper, read};
+        use crate::test_support::{InMemoryFlash, clear_flash_channel};
+
+        let _guard = state_test_lock().lock().expect("state test lock");
+        reset_state();
+        clear_flash_channel();
+        set_usb_state(UsbState::Configured);
+        set_ble_state(0, BleState::Connected);
+
+        block_on(async {
+            let flash = async_flash_wrapper(InMemoryFlash::<16_384, 4_096, 1>::new());
+            let mut storage = Box::pin(Storage::new(flash, &StorageConfig::default())).await;
+            select(storage.run(), async {
+                for expected in [ConnectionType::Ble, ConnectionType::Usb] {
+                    super::toggle_preferred().await;
+                    assert_eq!(super::active_transport(), Some(expected));
+                    assert!(matches!(
+                        read(StorageKey::ConnectionType).await,
+                        Ok(Some(StorageValue::ConnectionType(stored))) if stored == expected
+                    ));
+                }
+            })
+            .await;
+        });
     }
 
     #[cfg(not(feature = "_no_usb"))]

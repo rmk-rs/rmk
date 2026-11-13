@@ -24,7 +24,7 @@ pub(crate) fn build_host_usb<D: Driver<'static>>(
 
 impl super::HostSession for VialService<'_> {
     async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
-        self.run_session(rx, tx).await
+        self.run(rx, tx).await
     }
 }
 

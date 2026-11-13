@@ -129,6 +129,11 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     // Host uses protocol ceilings; firmware uses keyboard.toml/default capacities.
     let is_host = env::var("CARGO_FEATURE_HOST").is_ok();
 
+    // A host takes every u8 profile index, so it decodes the profile list of any firmware.
+    let bond_slots = if is_host { u8::MAX as usize + 1 } else { bc.bond_slots };
+    lines.push(format!("pub const BOND_SLOTS: usize = {bond_slots};"));
+    lines.push(format!("pub const NUM_HOST_LINKS: usize = {};", bc.num_host_links));
+
     // Protocol ceilings — always emitted so rmk-types source code can reference them.
     lines.push(format!(
         "pub const MAX_COMBO_SIZE: usize = {};",

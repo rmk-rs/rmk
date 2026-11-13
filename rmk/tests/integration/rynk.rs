@@ -7,9 +7,8 @@
 //! `Action`'s `#[cfg(feature = "steno")]` variant would shift every postcard
 //! discriminant after it.
 //!
-//! Endpoint coverage lives in `tests/scenarios/rynk_*.toml`. What stays below is
-//! the case a scenario has no vocabulary for: two keyboards built over one
-//! flash, which is a lifetime a timeline cannot describe.
+//! Endpoint coverage lives in `tests/scenarios/rynk_*.toml`; this file keeps the
+//! cases TOML cannot express.
 
 use rmk::event::{
     ConnectionStatusChangeEvent, LedIndicatorEvent, SleepStateEvent, WpmUpdateEvent, publish_event_async,
@@ -90,6 +89,48 @@ fn frame<T: serde::Serialize>(cmd: Cmd, seq: u8, payload: &T) -> Vec<u8> {
 /// spells it, while postcard still sees the typed value.
 fn payload<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> T {
     serde_json::from_str(json).unwrap_or_else(|e| panic!("rynk {what} payload `{json}`: {e}"))
+}
+
+#[cfg(feature = "_ble")]
+#[test]
+fn profile_commands_accept_every_host_and_dongle_slot() {
+    use rmk::config::{LockConfig, RmkConfig};
+
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[k!(A)]]])
+            .rmk_config(RmkConfig {
+                lock_config: LockConfig {
+                    insecure: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .build()
+            .await;
+        let slots = rmk_types::constants::NUM_BLE_PROFILE + usize::from(cfg!(feature = "dongle"));
+        let mut actions = Vec::new();
+        for slot in 0..slots {
+            let request = slot.to_string();
+            keyboard
+                .rynk::<command::SwitchBleProfile>(&request, RynkReply::Ok("null"))
+                .rynk::<command::DisconnectBleProfile>(&request, RynkReply::Ok("null"))
+                .rynk::<command::ClearBleProfile>(&request, RynkReply::Ok("null"));
+            actions.extend([
+                format!("Switch({slot})"),
+                format!("Disconnect({slot})"),
+                format!("ClearBond({slot})"),
+            ]);
+        }
+        if let Ok(invalid) = u8::try_from(slots) {
+            let request = invalid.to_string();
+            keyboard
+                .rynk::<command::SwitchBleProfile>(&request, RynkReply::Err(RynkError::Invalid))
+                .rynk::<command::DisconnectBleProfile>(&request, RynkReply::Err(RynkError::Invalid))
+                .rynk::<command::ClearBleProfile>(&request, RynkReply::Err(RynkError::Invalid));
+        }
+        keyboard.run().await;
+        assert_eq!(keyboard.ble_profile_actions(), actions);
+    });
 }
 
 /// A macro write lands in flash and outlives the keyboard; a write the flash

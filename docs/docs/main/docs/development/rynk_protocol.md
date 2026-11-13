@@ -5,7 +5,7 @@
 
 # Rynk Protocol Reference
 
-Current protocol version: **0.2**.
+Current protocol version: **0.3**.
 
 Every transport (USB vendor bulk, BLE GATT, BLE HID) carries the same frame — a 3-byte header plus a [postcard](https://docs.rs/postcard)-encoded payload:
 
@@ -40,9 +40,29 @@ A [dongle](../features/dongle) relays these frames untouched, so a host talks to
 
 Each peer holds one frame in a buffer of `rynk_buffer_size` bytes (a `[rmk]` option, see [RMK config](../configuration/rmk_config#rynk-protocol-configuration)). The largest payload a frame can carry is what remains after COBS overhead, the delimiter, and the 3-byte header; the firmware reports it as `DeviceCapabilities.max_payload_size`. Read the capabilities and size requests from them rather than assuming a fixed limit.
 
+`DeviceCapabilities::max_connections` reports the maximum simultaneous BLE host and dongle connections: 0 without BLE, otherwise `[ble] max_connections` (1 by default). USB and split peripheral links are excluded.
+
 `DeviceCapabilities` also advertises `bulk_transfer_supported` and the paging strides `max_bulk_keys` (worst-case keys per `GetKeymapBulk` page) and `max_bulk_items` (worst-case entries per `GetComboBulk`/`GetMorseBulk` page). A bulk read names a start — for the keymap `(layer, row, col)`, read forward through the flat row-major, layer-major keymap; for combos and morses a slot index — and returns as many consecutive entries as fit in one payload, or fewer at the end. A host pages by advancing its start by the stride; a short page ends the read. A bulk write carries a start plus a list of entries and is packed by encoded size up to `max_payload_size`. A reply that does not fit beside other pipelined requests answers `Busy`; retry once they complete.
 
 `GetLayout` serves the compressed layout blob 244 bytes per call: the request is a byte offset and `LayoutChunk` carries `total_len` plus that page's bytes. `GetMacro`/`SetMacro` move one whole macro per call, a `MacroOp` list indexed below `max_macros`; every macro shares one buffer of `macro_space_size` bytes, in the list's postcard encoding plus a length prefix per slot, so a write that no longer fits answers `Invalid`; `macros_writable` is false on a firmware without storage, whose `SetMacro` answers `Unimplemented`.
+
+## Connections
+
+`DeviceCapabilities` lists the BLE profiles a host can address: host profiles `0..num_ble_profiles`, plus the dongle profile at index `dongle_profile` when it is set. The profile commands below answer `Invalid` for any other index.
+
+`GetConnectionStatus` returns every profile at once, and each `ConnectionChange` push carries the same payload. `ble[i]` is profile `i`, so `ble` holds the host profiles, then the dongle profile; without BLE (`ble_enabled` false) its entries stay `Inactive`. `selected` is the profile that carries input when BLE is active. `state` is `Connected` only when the profile has an encrypted link that can carry input. `bonded` reports whether the profile has a paired host, and is false while the selected profile waits to pair a new one.
+
+The transport that carries input follows one rule: USB is ready when `usb` is `Configured` or `Suspended`, BLE is ready when `ble[selected].state` is `Connected`, and `preferred` decides when both are ready; `ConnectionStatus::decide_active()` (`decide_active_connection` in `rynk-wasm`) applies this rule. `GetConnectionType` returns only `preferred`.
+
+| Command                | Effect                                                                           | Bond                        | Needs unlock |
+| ---------------------- | -------------------------------------------------------------------------------- | --------------------------- | ------------ |
+| `SwitchBleProfile`     | Selects the profile and advertises if it has no connection.                      | Kept                        | No           |
+| `DisconnectBleProfile` | Closes the profile's connection; the selected profile then waits for a new host. | Kept until a new host pairs | No           |
+| `ClearBleProfile`      | Closes the profile's connection; the selected profile then waits for a new host. | Deleted, even if offline    | Yes          |
+
+These commands answer `Ok` once the keyboard accepts the action, before it takes effect; watch `ConnectionChange` for the result. `NotReady` means earlier profile actions are still pending; retry. If the action closes the link the request arrived on, the link can drop before the reply arrives, but the action still runs.
+
+Disconnecting or clearing the selected profile starts a new advertising period for a new host, the same as holding its profile key; `bonded` is false meanwhile. A disconnected profile keeps its bond as a fallback: the old host can't reconnect while the profile waits, and the bond comes back if no new host pairs before advertising ends or another profile is selected. A profile that isn't selected stays offline until it is, and other profiles keep their connections.
 
 ## Errors
 
@@ -57,63 +77,63 @@ A request's response is postcard `Result<T, RynkError>`; the `Err` side is one o
 | `Unimplemented` | The command is recognized but its handler is not implemented yet.                                               |
 | `Invalid`       | The request decoded cleanly but is semantically invalid (out-of-range index, bad value).                        |
 | `UnknownCmd`    | The frame is well-formed but its CMD is unknown to this firmware.                                               |
-| `Locked`        | The command is gated by the lock and this session is locked (see Lock).                                         |
+| `Locked`        | The command is gated by the lock and this connection is locked (see Lock).                                      |
 | `Busy`          | Transient backpressure: the reply did not fit beside pipelined requests still queued. Retry once they complete. |
 
 ## Lock
 
-Commands that can flash firmware, wipe storage, or read the matrix sit behind a physical-presence unlock. `BootloaderJump`, `StorageReset`, `GetMatrixState`, and (with `_ble`) `ClearBleProfile` always need an unlocked session; every `Set*` command joins them when the firmware was built with `[host] write_requires_unlock = true`. A gated command on a locked session answers `Locked` and does nothing. `GetLockStatus`, `UnlockPoll`, and `Lock` are never gated.
+Commands that can flash firmware, wipe storage, or read the matrix sit behind a physical-presence unlock. `BootloaderJump`, `StorageReset`, `GetMatrixState`, and (with `_ble`) `ClearBleProfile` always need an unlocked connection; every `Set*` command joins them when the firmware was built with `[host] write_requires_unlock = true`. A gated command on a locked connection answers `Locked` and does nothing. `GetLockStatus`, `UnlockPoll`, and `Lock` are never gated.
 
-The lock is per session and starts locked; `Lock` or the end of the session (unplug, BLE disconnect) relocks it. To unlock, a host polls `UnlockPoll` while the user holds the challenge keys that `LockStatus.key_positions` reports (`[host].unlock_keys`); the session is unlocked once `locked` clears. With no `unlock_keys` configured the challenge is empty and the gated commands can never be unlocked; a firmware built with `[host] insecure = true` starts unlocked and ignores `Lock`. See [Rynk](../features/rynk#locking-dangerous-operations) for the user-facing side.
+The lock belongs to the connection and starts locked; `Lock` or disconnection relocks it. To unlock, a host polls `UnlockPoll` while the user holds the challenge keys that `LockStatus.key_positions` reports (`[host].unlock_keys`); the connection is unlocked once `locked` clears. With no `unlock_keys` configured the challenge is empty and the gated commands can never be unlocked; a firmware built with `[host] insecure = true` starts unlocked and ignores `Lock`. See [Rynk](../features/rynk#locking-dangerous-operations) for the user-facing side.
 
 ## Endpoints
 
-| CMD      | Name                  | Request                | Response                | Feature | Notes                                                                               |
-| -------- | --------------------- | ---------------------- | ----------------------- | ------- | ----------------------------------------------------------------------------------- |
-| `0x0001` | `GetVersion`          | `()`                   | `ProtocolVersion`       |         |                                                                                     |
-| `0x0002` | `GetCapabilities`     | `()`                   | `DeviceCapabilities`    |         |                                                                                     |
-| `0x0003` | `Reboot`              | `()`                   | `()`                    |         |                                                                                     |
-| `0x0004` | `BootloaderJump`      | `()`                   | `()`                    |         |                                                                                     |
-| `0x0005` | `StorageReset`        | `StorageResetMode`     | `()`                    |         |                                                                                     |
-| `0x0006` | `GetLockStatus`       | `()`                   | `LockStatus`            |         | Pure read of the current lock state — no side effects.                              |
-| `0x0007` | `UnlockPoll`          | `()`                   | `LockStatus`            |         | Arms/refreshes the unlock attempt and samples the held challenge keys.              |
-| `0x0008` | `Lock`                | `()`                   | `()`                    |         | Relock immediately.                                                                 |
-| `0x0009` | `GetLayout`           | `u32`                  | `LayoutChunk`           |         | Get layout blob chunk. `u32` is the byte offset.                                    |
-| `0x000A` | `GetDeviceInfo`       | `()`                   | `DeviceInfo`            |         | Identity strings and USB ids; feature gating stays in `GetCapabilities`.            |
-| `0x0101` | `GetKeyAction`        | `KeyPosition`          | `KeyAction`             |         |                                                                                     |
-| `0x0102` | `SetKeyAction`        | `SetKeyRequest`        | `()`                    |         |                                                                                     |
-| `0x0103` | `GetDefaultLayer`     | `()`                   | `u8`                    |         |                                                                                     |
-| `0x0104` | `SetDefaultLayer`     | `u8`                   | `()`                    |         |                                                                                     |
-| `0x0105` | `GetEncoderAction`    | `GetEncoderRequest`    | `EncoderAction`         |         |                                                                                     |
-| `0x0106` | `SetEncoderAction`    | `SetEncoderRequest`    | `()`                    |         |                                                                                     |
-| `0x0107` | `GetKeymapBulk`       | `GetKeymapBulkRequest` | `GetKeymapBulkResponse` |         |                                                                                     |
-| `0x0108` | `SetKeymapBulk`       | `SetKeymapBulkRequest` | `()`                    |         |                                                                                     |
-| `0x0201` | `GetMacro`            | `u8`                   | `Macro`                 |         |                                                                                     |
-| `0x0202` | `SetMacro`            | `SetMacroRequest`      | `()`                    |         |                                                                                     |
-| `0x0301` | `GetCombo`            | `u8`                   | `Combo`                 |         |                                                                                     |
-| `0x0302` | `SetCombo`            | `SetComboRequest`      | `()`                    |         |                                                                                     |
-| `0x0303` | `GetComboBulk`        | `GetComboBulkRequest`  | `GetComboBulkResponse`  |         |                                                                                     |
-| `0x0304` | `SetComboBulk`        | `SetComboBulkRequest`  | `()`                    |         |                                                                                     |
-| `0x0401` | `GetMorse`            | `u8`                   | `Morse`                 |         |                                                                                     |
-| `0x0402` | `SetMorse`            | `SetMorseRequest`      | `()`                    |         |                                                                                     |
-| `0x0403` | `GetMorseBulk`        | `GetMorseBulkRequest`  | `GetMorseBulkResponse`  |         |                                                                                     |
-| `0x0404` | `SetMorseBulk`        | `SetMorseBulkRequest`  | `()`                    |         |                                                                                     |
-| `0x0501` | `GetFork`             | `u8`                   | `Fork`                  |         |                                                                                     |
-| `0x0502` | `SetFork`             | `SetForkRequest`       | `()`                    |         |                                                                                     |
-| `0x0601` | `GetBehaviorConfig`   | `()`                   | `BehaviorConfig`        |         |                                                                                     |
-| `0x0602` | `SetBehaviorConfig`   | `BehaviorConfig`       | `()`                    |         |                                                                                     |
-| `0x0701` | `GetConnectionType`   | `()`                   | `ConnectionType`        |         |                                                                                     |
-| `0x0702` | `GetConnectionStatus` | `()`                   | `ConnectionStatus`      |         | Full `ConnectionStatus` snapshot.                                                   |
-| `0x0703` | `GetBleStatus`        | `()`                   | `BleStatus`             | `_ble`  | Active profile, BLE state, and whether that profile currently has bond information. |
-| `0x0704` | `SwitchBleProfile`    | `u8`                   | `()`                    | `_ble`  |                                                                                     |
-| `0x0705` | `ClearBleProfile`     | `u8`                   | `()`                    | `_ble`  |                                                                                     |
-| `0x0801` | `GetCurrentLayer`     | `()`                   | `u8`                    |         |                                                                                     |
-| `0x0802` | `GetMatrixState`      | `()`                   | `MatrixState`           |         |                                                                                     |
-| `0x0803` | `GetBatteryStatus`    | `()`                   | `BatteryStatus`         |         |                                                                                     |
-| `0x0804` | `GetPeripheralStatus` | `u8`                   | `PeripheralStatus`      | `split` |                                                                                     |
-| `0x0805` | `GetWpm`              | `()`                   | `u16`                   |         | Latest WPM, sourced from the `WpmUpdate` topic snapshot.                            |
-| `0x0806` | `GetSleepState`       | `()`                   | `bool`                  |         | Latest sleep flag, sourced from the `SleepState` topic snapshot.                    |
-| `0x0807` | `GetLedIndicator`     | `()`                   | `LedIndicator`          |         | Latest HID LED bitmap, sourced from the `LedIndicatorChange` topic snapshot.        |
+| CMD      | Name                   | Request                | Response                | Feature | Notes                                                                        |
+| -------- | ---------------------- | ---------------------- | ----------------------- | ------- | ---------------------------------------------------------------------------- |
+| `0x0001` | `GetVersion`           | `()`                   | `ProtocolVersion`       |         |                                                                              |
+| `0x0002` | `GetCapabilities`      | `()`                   | `DeviceCapabilities`    |         |                                                                              |
+| `0x0003` | `Reboot`               | `()`                   | `()`                    |         |                                                                              |
+| `0x0004` | `BootloaderJump`       | `()`                   | `()`                    |         |                                                                              |
+| `0x0005` | `StorageReset`         | `StorageResetMode`     | `()`                    |         |                                                                              |
+| `0x0006` | `GetLockStatus`        | `()`                   | `LockStatus`            |         | Pure read of the current lock state — no side effects.                       |
+| `0x0007` | `UnlockPoll`           | `()`                   | `LockStatus`            |         | Arms/refreshes the unlock attempt and samples the held challenge keys.       |
+| `0x0008` | `Lock`                 | `()`                   | `()`                    |         | Relock immediately.                                                          |
+| `0x0009` | `GetLayout`            | `u32`                  | `LayoutChunk`           |         | Get layout blob chunk. `u32` is the byte offset.                             |
+| `0x000A` | `GetDeviceInfo`        | `()`                   | `DeviceInfo`            |         | Identity strings and USB ids; feature gating stays in `GetCapabilities`.     |
+| `0x0101` | `GetKeyAction`         | `KeyPosition`          | `KeyAction`             |         |                                                                              |
+| `0x0102` | `SetKeyAction`         | `SetKeyRequest`        | `()`                    |         |                                                                              |
+| `0x0103` | `GetDefaultLayer`      | `()`                   | `u8`                    |         |                                                                              |
+| `0x0104` | `SetDefaultLayer`      | `u8`                   | `()`                    |         |                                                                              |
+| `0x0105` | `GetEncoderAction`     | `GetEncoderRequest`    | `EncoderAction`         |         |                                                                              |
+| `0x0106` | `SetEncoderAction`     | `SetEncoderRequest`    | `()`                    |         |                                                                              |
+| `0x0107` | `GetKeymapBulk`        | `GetKeymapBulkRequest` | `GetKeymapBulkResponse` |         |                                                                              |
+| `0x0108` | `SetKeymapBulk`        | `SetKeymapBulkRequest` | `()`                    |         |                                                                              |
+| `0x0201` | `GetMacro`             | `u8`                   | `Macro`                 |         |                                                                              |
+| `0x0202` | `SetMacro`             | `SetMacroRequest`      | `()`                    |         |                                                                              |
+| `0x0301` | `GetCombo`             | `u8`                   | `Combo`                 |         |                                                                              |
+| `0x0302` | `SetCombo`             | `SetComboRequest`      | `()`                    |         |                                                                              |
+| `0x0303` | `GetComboBulk`         | `GetComboBulkRequest`  | `GetComboBulkResponse`  |         |                                                                              |
+| `0x0304` | `SetComboBulk`         | `SetComboBulkRequest`  | `()`                    |         |                                                                              |
+| `0x0401` | `GetMorse`             | `u8`                   | `Morse`                 |         |                                                                              |
+| `0x0402` | `SetMorse`             | `SetMorseRequest`      | `()`                    |         |                                                                              |
+| `0x0403` | `GetMorseBulk`         | `GetMorseBulkRequest`  | `GetMorseBulkResponse`  |         |                                                                              |
+| `0x0404` | `SetMorseBulk`         | `SetMorseBulkRequest`  | `()`                    |         |                                                                              |
+| `0x0501` | `GetFork`              | `u8`                   | `Fork`                  |         |                                                                              |
+| `0x0502` | `SetFork`              | `SetForkRequest`       | `()`                    |         |                                                                              |
+| `0x0601` | `GetBehaviorConfig`    | `()`                   | `BehaviorConfig`        |         |                                                                              |
+| `0x0602` | `SetBehaviorConfig`    | `BehaviorConfig`       | `()`                    |         |                                                                              |
+| `0x0701` | `GetConnectionType`    | `()`                   | `ConnectionType`        |         | Preferred transport, not the active one.                                     |
+| `0x0702` | `GetConnectionStatus`  | `()`                   | `ConnectionStatus`      |         | Full `ConnectionStatus` snapshot, every BLE profile included.                |
+| `0x0704` | `SwitchBleProfile`     | `u8`                   | `()`                    | `_ble`  | Select a profile.                                                            |
+| `0x0705` | `ClearBleProfile`      | `u8`                   | `()`                    | `_ble`  | Disconnect a profile and forget its bond.                                    |
+| `0x0706` | `DisconnectBleProfile` | `u8`                   | `()`                    | `_ble`  | Disconnect a profile and keep its bond until a new host pairs with it.       |
+| `0x0801` | `GetCurrentLayer`      | `()`                   | `u8`                    |         |                                                                              |
+| `0x0802` | `GetMatrixState`       | `()`                   | `MatrixState`           |         |                                                                              |
+| `0x0803` | `GetBatteryStatus`     | `()`                   | `BatteryStatus`         |         |                                                                              |
+| `0x0804` | `GetPeripheralStatus`  | `u8`                   | `PeripheralStatus`      | `split` |                                                                              |
+| `0x0805` | `GetWpm`               | `()`                   | `u16`                   |         | Latest WPM, sourced from the `WpmUpdate` topic snapshot.                     |
+| `0x0806` | `GetSleepState`        | `()`                   | `bool`                  |         | Latest sleep flag, sourced from the `SleepState` topic snapshot.             |
+| `0x0807` | `GetLedIndicator`      | `()`                   | `LedIndicator`          |         | Latest HID LED bitmap, sourced from the `LedIndicatorChange` topic snapshot. |
 
 ## Topics
 

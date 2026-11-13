@@ -131,6 +131,6 @@ async fn main(_spawner: Spawner) {
     // A UART has no "connected" notion, so just restart the framing session on
     // every read/write error, dropping whatever frame was in flight.
     loop {
-        service.run_session(&mut rx, &mut tx).await;
+        service.run(&mut rx, &mut tx).await;
     }
 }

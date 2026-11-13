@@ -29,7 +29,7 @@ use rmk_types::protocol::rynk::{
 
 /// Field order is the attribute order: append, never insert, so a bonded host's
 /// cached GATT table survives a firmware update that adds a service.
-#[gatt_server]
+#[gatt_server(connections_max = crate::ble::NUM_HOST_LINKS)]
 pub(crate) struct Server {
     pub(crate) battery_service: BatteryService,
     #[cfg(feature = "split")]
@@ -100,8 +100,7 @@ pub(crate) struct DongleEventService {
 /// `heapless::Vec` so each notify only spends MTU − 3 bytes for the bytes it
 /// actually carries (a fixed `[u8; N]` would always send N).
 ///
-/// `gatt_events_task` forwards `output_data` writes into
-/// [`crate::channel::RYNK_BLE_RX_PIPE`] for [`crate::ble::host::HostGattHandler::run`] to drain.
+/// `gatt_events_task` feeds `output_data` writes to the connection's Rynk pipe.
 #[cfg(feature = "rynk")]
 #[gatt_service(uuid = RYNK_SERVICE_UUID)]
 pub(crate) struct RynkGattService {
@@ -114,8 +113,7 @@ pub(crate) struct RynkGattService {
 }
 
 /// Rynk HID-over-GATT service.
-/// `gatt_events_task` feeds the payload into [`crate::channel::RYNK_BLE_RX_PIPE`],
-/// [`crate::ble::host::HostGattHandler::run`] drains the pipe to get data.
+/// `gatt_events_task` feeds the payload to the same connection's Rynk pipe.
 #[cfg(feature = "rynk")]
 #[gatt_service(uuid = service::HUMAN_INTERFACE_DEVICE)]
 pub(crate) struct RynkHidService {
@@ -139,8 +137,7 @@ pub(crate) struct RynkHidService {
 
 /// GATT service exposing the Vial-over-HID protocol. The keyboard writes replies via
 /// `input_data` notify; hosts push requests through `output_data`. `gatt_events_task`
-/// forwards `output_data` writes into [`crate::channel::VIAL_BLE_RX_CHANNEL`] for
-/// [`crate::ble::host::HostGattHandler::run`] to drain.
+/// forwards `output_data` writes to the connection's Vial queue.
 #[cfg(feature = "vial")]
 #[gatt_service(uuid = service::HUMAN_INTERFACE_DEVICE)]
 pub(crate) struct VialGattService {

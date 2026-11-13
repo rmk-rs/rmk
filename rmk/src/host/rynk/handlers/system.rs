@@ -68,7 +68,16 @@ impl Handle<GetCapabilities> for RynkService<'_> {
             is_split: cfg!(feature = "split"),
             num_split_peripherals: constants::SPLIT_PERIPHERALS_NUM as u8,
             ble_enabled: cfg!(feature = "_ble"),
-            num_ble_profiles: constants::NUM_BLE_PROFILE as u8,
+            num_ble_profiles: if cfg!(feature = "_ble") {
+                constants::NUM_BLE_PROFILE as u8
+            } else {
+                0
+            },
+            max_connections: constants::NUM_HOST_LINKS as u8,
+            #[cfg(all(feature = "_ble", feature = "dongle"))]
+            dongle_profile: Some(crate::ble::profile::DONGLE_PROFILE),
+            #[cfg(not(all(feature = "_ble", feature = "dongle")))]
+            dongle_profile: None,
 
             // Protocol limits
             max_payload_size: RYNK_MAX_PAYLOAD_SIZE as u16,
