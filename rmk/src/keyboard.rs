@@ -27,7 +27,7 @@ use crate::hid::{KeyboardReport, Report};
 use crate::keyboard::combo::Combo;
 use crate::keyboard::fork::ActiveFork;
 use crate::keyboard::held_buffer::{HeldBuffer, HeldKey, KeyState};
-use crate::keyboard::mouse::{MouseAction, MouseState};
+use crate::keyboard::mouse::MouseState;
 use crate::keyboard::oneshot::OneShotState;
 use crate::keymap::KeyMap;
 use crate::sleep::report_activity;
@@ -221,7 +221,7 @@ pub struct Keyboard<'a> {
     /// Current registered keys, ordered by the press time
     registered: Vec<RegisteredKey, 16>,
 
-    /// Mouse state (report, acceleration, repeat counters, repeat deadlines)
+    /// Held mouse keys and their pending relative motion
     mouse: MouseState,
 
     /// Internal media report buf
@@ -331,7 +331,7 @@ impl<'a> Keyboard<'a> {
         }
         #[cfg(feature = "_ble")]
         self.fire_user_hold().await;
-        self.fire_mouse_repeat().await;
+        self.update_mouse(None).await;
         self.fire_macro().await;
     }
 
@@ -892,7 +892,7 @@ impl<'a> Keyboard<'a> {
             // "explicit modifiers" includes the effect of one-shot modifiers, held modifiers keys only
             modifiers: self.resolve_explicit_modifiers(event.pressed),
             leds: LedIndicator::from_bits(LOCK_LED_STATES.load(core::sync::atomic::Ordering::Relaxed)),
-            mouse: MouseButtons::from_bits(self.mouse.report.buttons),
+            mouse: MouseButtons::from_bits(self.mouse.buttons),
         };
         let layer_bit = 1u32.checked_shl(self.keymap.pressed_layer(event.source).into());
 
@@ -1572,7 +1572,7 @@ impl<'a> Keyboard<'a> {
         } else if let Some(system_control) = key.process_as_system_control() {
             self.process_action_system_control(system_control, event).await;
         } else if key.is_mouse_key() {
-            self.process_action_mouse(key, event).await;
+            self.update_mouse(Some((key, event))).await;
         } else {
             self.process_hid_keycode(key, mods, event).await;
         }
@@ -1618,31 +1618,14 @@ impl<'a> Keyboard<'a> {
         }
     }
 
-    /// Process mouse key action with acceleration support.
-    async fn process_action_mouse(&mut self, key: HidKeyCode, event: KeyboardEvent) {
-        let action = {
-            let config = self.keymap.mouse_key_config();
-            self.mouse.process(key, event.pressed, &config)
-        };
-
-        // Sync button state to keymap for conditional layer / fork consumers
-        self.keymap.set_mouse_buttons(self.mouse.report.buttons);
-
-        if let MouseAction::SendReport = action {
-            self.send_mouse_report().await;
-        }
-    }
-
-    /// Fire pending mouse repeats: recalculate movement with acceleration,
-    /// send the report, and schedule the next repeat.
-    async fn fire_mouse_repeat(&mut self) {
-        let report = {
-            let config = self.keymap.mouse_key_config();
-            self.mouse.fire_repeats(&config)
-        };
-
-        if let Some(report) = report {
-            self.keymap.set_mouse_buttons(self.mouse.report.buttons);
+    /// Process a mouse key event, or fire any repeats due at the timer wakeup.
+    async fn update_mouse(&mut self, event: Option<(HidKeyCode, KeyboardEvent)>) {
+        let now = Instant::now();
+        let config = self.keymap.mouse_key_config();
+        if let Some(report) = self.mouse.update(event, now, config) {
+            if event.is_some() {
+                self.keymap.set_mouse_buttons(report.buttons);
+            }
             self.send_report(Report::MouseReport(report)).await;
             yield_now().await;
         }
@@ -1827,13 +1810,6 @@ impl<'a> Keyboard<'a> {
     pub(crate) async fn send_media_report(&mut self) {
         self.send_report(Report::MediaKeyboardReport(self.media_report)).await;
         self.media_report.usage_id = 0;
-        yield_now().await;
-    }
-
-    /// Send mouse report. Rate is implicitly bounded by the repeat interval
-    /// for movement/wheel, but button events are sent immediately.
-    pub(crate) async fn send_mouse_report(&mut self) {
-        self.send_report(Report::MouseReport(self.mouse.get_report())).await;
         yield_now().await;
     }
 
@@ -2631,12 +2607,12 @@ mod test {
             // Press Z key, by itself it should emit 'MouseBtn5'
             keyboard.process_inner(KeyboardEvent::key(3, 1, true)).await;
             assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
-            assert_eq!(keyboard.mouse.report.buttons, 1u8 << 4); // MouseBtn5
+            assert_eq!(keyboard.mouse.buttons, 1u8 << 4); // MouseBtn5
 
             // Release Z key
             keyboard.process_inner(KeyboardEvent::key(3, 1, false)).await;
             assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
-            assert_eq!(keyboard.mouse.report.buttons, 0);
+            assert_eq!(keyboard.mouse.buttons, 0);
 
             // Press LCtrl key
             keyboard.process_inner(KeyboardEvent::key(4, 0, true)).await;
@@ -2654,7 +2630,7 @@ mod test {
                 ModifierCombination::new().with_left_shift(true)
             );
             assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::C);
-            assert_eq!(keyboard.mouse.report.buttons, 0);
+            assert_eq!(keyboard.mouse.buttons, 0);
 
             // Release 'Z' key, suppression of ctrl is removed
             keyboard.process_inner(KeyboardEvent::key(3, 1, false)).await;
@@ -2683,7 +2659,7 @@ mod test {
             keyboard.process_inner(KeyboardEvent::key(2, 1, false)).await;
             assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
             assert_eq!(keyboard.resolve_modifiers(false), ModifierCombination::new());
-            assert_eq!(keyboard.mouse.report.buttons, 0);
+            assert_eq!(keyboard.mouse.buttons, 0);
 
             // Skip ahead 200ms of virtual time.
             embassy_time::MockDriver::get().advance(Duration::from_millis(200));
@@ -2691,7 +2667,7 @@ mod test {
             // Press Z key, by itself it should emit 'MouseBtn5'
             keyboard.process_inner(KeyboardEvent::key(3, 1, true)).await;
             assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No);
-            assert_eq!(keyboard.mouse.report.buttons, 1u8 << 4); // MouseBtn5 //this fails, but ok in debug - why?
+            assert_eq!(keyboard.mouse.buttons, 1u8 << 4); // MouseBtn5 //this fails, but ok in debug - why?
 
             // Press 'A' key, with 'MouseBtn5' it should emit 'D'
             keyboard.process_inner(KeyboardEvent::key(2, 1, true)).await;

@@ -11,10 +11,10 @@ keyboard = "boards/split.toml"
 name = "buffered_morse_wait_does_not_stall_mouse_repeats"
 behavior.morse = { hold_timeout = "400ms" }
 steps = [
-  { press = [0, 8] },   # Wheel: initial delta, repeats due at +100/+180ms
+  { press = [0, 8] },   # Wheel: first step, then 10 scroll units per second
   { delay = 20 },
   { press = [0, 3] },   # TH(B, C): buffered, waiting out the 400ms hold timeout
-  { delay = 210 },      # covers two repeat ticks while the morse key waits
+  { delay = 210 },      # two more wheel units while the morse key waits
   { release = [0, 3] }, # well before the hold timeout: resolves as tap B
   { delay = 20 },
   { release = [0, 8] },
@@ -24,5 +24,4 @@ expect = [
   { mouse = { wheel = 1 } },  # repeat while the morse key is buffered
   { mouse = { wheel = 1 } },  # repeat
   ["B"], [],
-  { mouse = {} },
 ]
