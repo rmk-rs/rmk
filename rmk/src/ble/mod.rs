@@ -226,6 +226,16 @@ pub(crate) fn array_from_fn<T, const N: usize>(f: impl FnMut(usize) -> T) -> [T;
     core::array::from_fn(f)
 }
 
+#[cfg(feature = "split")]
+fn poll_separately<F: Future>(mut future: Pin<&mut F>) -> impl Future<Output = F::Output> {
+    #[inline(never)]
+    fn poll<F: Future>(future: Pin<&mut F>, cx: &mut core::task::Context<'_>) -> core::task::Poll<F::Output> {
+        future.poll(cx)
+    }
+
+    core::future::poll_fn(move |cx| poll(future.as_mut(), cx))
+}
+
 /// BLE transport. Owns the whole BLE stack.
 ///
 /// On a split build the transport is the BLE split central:
@@ -347,9 +357,7 @@ impl<
         // A session task reports back when its session ends via `ended`
         let ended: Channel<NoopRawMutex, usize, { crate::SPLIT_PERIPHERALS_NUM }> = Channel::new();
 
-        // Polled through `dyn`, which the compiler can't inline: each branch then uses its own stack
-        // frame while it runs, instead of one frame big enough for both at once.
-        let keyboard: Pin<&mut dyn Future<Output = _>> = pin!(run_ble_keyboard(
+        let keyboard = pin!(run_ble_keyboard(
             &stack,
             self.address,
             &self.device_config,
@@ -357,15 +365,15 @@ impl<
             #[cfg(feature = "host")]
             self.host_service,
         ));
-        let sessions: Pin<&mut dyn Future<Output = _>> = pin!(run_peripheral_sessions(
+        let sessions = pin!(run_peripheral_sessions(
             &conn_channels,
             &ended,
             &stack,
             &self.peripheral_matrices
         ));
         embassy_futures::join::join3(
-            keyboard,
-            sessions,
+            poll_separately(keyboard),
+            poll_separately(sessions),
             scan_and_connect_peripherals(&stack, &conn_channels, &ended),
         )
         .await;
