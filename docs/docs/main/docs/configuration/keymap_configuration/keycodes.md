@@ -208,6 +208,27 @@ For simple keycodes with shift active you can use `SHIFTED(key)` in your [layout
 | `Assistant`        | `asst`                       | Open OS Assistant (Cortana / Google Assistant / Siri) |
 | `MissionControl`   | `mission_control`, `mctl`    | macOS Mission Control                                 |
 | `Launchpad`        | `lpad`                       | macOS Launchpad                                       |
+| `AcRedo`           | `ac_redo`                    | Redo / Repeat (consumer page AC Redo/Repeat)           |
+| `SnapShot`         | `snap_shot`                  | Snapshot (consumer page)                              |
+| `MediaPlay`        | `media_play`                 | Media Play                                           |
+| `MediaPause`       | `media_pause`                | Media Pause                                          |
+| `MediaRandomPlay`  | `media_random_play`          | Media Random Play / Shuffle                          |
+| `MediaRepeat`      | `media_repeat`               | Media Playback Repeat                                |
+| `MediaStopEject`   | `media_stop_eject`           | Media Stop / Eject                                   |
+| `ScreenLock`       | `screen_lock`                | Lock Screen / Launch Screensaver                     |
+| `AcNew`            | `ac_new`                     | New (consumer page AC New)                           |
+| `AcOpen`           | `ac_open`                    | Open (consumer page AC Open)                         |
+| `AcClose`          | `ac_close`                   | Close (consumer page AC Close)                       |
+| `AcExit`           | `ac_exit`                    | Exit (consumer page AC Exit)                         |
+| `AcSave`           | `ac_save`                    | Save (consumer page AC Save)                         |
+| `AcPrint`          | `ac_print`                   | Print (consumer page AC Print)                       |
+| `AcProperties`     | `ac_properties`              | Properties (consumer page AC Properties)             |
+| `AcUndo`           | `ac_undo`                    | Undo (consumer page AC Undo)                         |
+| `AcCopy`           | `ac_copy`                    | Copy (consumer page AC Copy)                         |
+| `AcCut`            | `ac_cut`                     | Cut (consumer page AC Cut)                           |
+| `AcPaste`          | `ac_paste`                   | Paste (consumer page AC Paste)                       |
+| `AcFind`           | `ac_find`                    | Find (consumer page AC Find)                         |
+| `NextKeyboardLayoutSelect` | `next_keyboard_layout_select` | Next Keyboard Layout Select / Apple Globe       |
 
 ## System & keyboard-page keys
 
