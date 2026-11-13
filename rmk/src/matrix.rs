@@ -411,7 +411,8 @@ where
 
                     // If there's key still pressed, always refresh the self.scan_start
                     #[cfg(feature = "async_matrix")]
-                    if self.key_states[col_idx][row_idx].pressed {
+                    if self.key_states[col_idx][row_idx].pressed || matches!(debounce_state, DebounceState::InProgress)
+                    {
                         self.rescan_needed = true;
                     }
                 }
