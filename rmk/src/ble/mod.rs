@@ -1,4 +1,7 @@
 use core::cell::Cell;
+#[cfg(feature = "split")]
+use core::pin::Pin;
+use core::pin::pin;
 
 #[cfg(not(feature = "ext_adv"))]
 use bt_hci::cmd::le::LeSetScanParams;
@@ -12,8 +15,8 @@ use bt_hci::cmd::le::{
 use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
-use embassy_futures::join::{join_array, join5};
-use embassy_futures::select::{Either, Either3, select, select3, select5};
+use embassy_futures::join::join5;
+use embassy_futures::select::{Either, Either3, select, select_slice, select3, select5};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
@@ -49,7 +52,7 @@ use crate::sleep::{report_activity, request_sleep};
 #[cfg(feature = "split")]
 use crate::split::PeripheralMatrixConfig;
 #[cfg(feature = "split")]
-use crate::split::ble::central::{run_peripheral_session, scan_and_connect_peripherals};
+use crate::split::ble::central::{run_peripheral_sessions, scan_and_connect_peripherals};
 use crate::state::{set_ble_state, wait_for_connection_status};
 
 pub(crate) mod adv;
@@ -203,6 +206,26 @@ pub const fn calculate_sdc_memory_size(
     (links + advertising + scanning + subrating + filter_accept_list + 7) & !7
 }
 
+// Not inlined, so `trouble_host::new`'s by-value temporaries leave the stack before the BLE tasks are polled.
+// TODO: Remove this after `trouble_host` makes `new` never inlined.
+#[inline(never)]
+fn build_ble_stack<'a, C: Controller>(
+    controller: C,
+    resources: &'a mut HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS>,
+    address: [u8; 6],
+) -> Stack<'a, C, DefaultPacketPool> {
+    trouble_host::new(controller, resources)
+        .set_random_address(Address::random(address))
+        .build()
+}
+
+// Not inlined: `from_fn` builds the array in a local before returning it, and inlined that
+// local stays in the BLE poll frame for as long as BLE runs.
+#[inline(never)]
+pub(crate) fn array_from_fn<T, const N: usize>(f: impl FnMut(usize) -> T) -> [T; N] {
+    core::array::from_fn(f)
+}
+
 /// BLE transport. Owns the whole BLE stack.
 ///
 /// On a split build the transport is the BLE split central:
@@ -279,9 +302,7 @@ where
         // Host connections share the stack resources.
         let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
             HostResources::new();
-        let stack = trouble_host::new(controller, &mut resources)
-            .set_random_address(Address::random(self.address))
-            .build();
+        let stack = build_ble_stack(controller, &mut resources, self.address);
         run_ble_keyboard(
             &stack,
             self.address,
@@ -318,9 +339,7 @@ impl<
 
         let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
             HostResources::new();
-        let stack = trouble_host::new(controller, &mut resources)
-            .set_random_address(Address::random(self.address))
-            .build();
+        let stack = build_ble_stack(controller, &mut resources, self.address);
 
         // `scan_and_connect_peripherals` task sends each established connection to its session task via `conn_channels`
         let conn_channels: [Channel<NoopRawMutex, Connection<'_, DefaultPacketPool>, 1>; crate::SPLIT_PERIPHERALS_NUM] =
@@ -328,20 +347,25 @@ impl<
         // A session task reports back when its session ends via `ended`
         let ended: Channel<NoopRawMutex, usize, { crate::SPLIT_PERIPHERALS_NUM }> = Channel::new();
 
-        let peripheral_sessions =
-            embassy_futures::join::join_array(core::array::from_fn::<_, { crate::SPLIT_PERIPHERALS_NUM }, _>(|i| {
-                run_peripheral_session(i, &conn_channels[i], &ended, &stack, self.peripheral_matrices[i])
-            }));
+        // Polled through `dyn`, which the compiler can't inline: each branch then uses its own stack
+        // frame while it runs, instead of one frame big enough for both at once.
+        let keyboard: Pin<&mut dyn Future<Output = _>> = pin!(run_ble_keyboard(
+            &stack,
+            self.address,
+            &self.device_config,
+            &self.config,
+            #[cfg(feature = "host")]
+            self.host_service,
+        ));
+        let sessions: Pin<&mut dyn Future<Output = _>> = pin!(run_peripheral_sessions(
+            &conn_channels,
+            &ended,
+            &stack,
+            &self.peripheral_matrices
+        ));
         embassy_futures::join::join3(
-            run_ble_keyboard(
-                &stack,
-                self.address,
-                &self.device_config,
-                &self.config,
-                #[cfg(feature = "host")]
-                self.host_service,
-            ),
-            peripheral_sessions,
+            keyboard,
+            sessions,
             scan_and_connect_peripherals(&stack, &conn_channels, &ended),
         )
         .await;
@@ -364,11 +388,12 @@ async fn run_ble_keyboard<
     let product_name = device_config.product_name;
 
     info!("Starting advertising and GATT service");
-    let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
+    let Ok(server) = &Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
         name: product_name,
         appearance: &appearance::human_interface_device::KEYBOARD,
-    }))
-    .unwrap();
+    })) else {
+        panic!("product name is too long for BLE");
+    };
 
     server
         .set(
@@ -410,11 +435,11 @@ async fn run_ble_keyboard<
     let accepted_connections: Channel<NoopRawMutex, (GattConnection<'_, '_, DefaultPacketPool>, u8), 1> =
         Channel::new();
     let completed: Channel<NoopRawMutex, u8, NUM_HOST_LINKS> = Channel::new();
-    let workers = join_array(core::array::from_fn::<_, NUM_HOST_LINKS, _>(|_| async {
+    let workers = pin!(array_from_fn::<_, NUM_HOST_LINKS>(|_| async {
         loop {
             let (conn, profile_id) = accepted_connections.receive().await;
             serve_keyboard_connection(
-                &server,
+                server,
                 &conn,
                 stack,
                 profile_id,
@@ -632,7 +657,7 @@ async fn run_ble_keyboard<
     join5(
         ble_task(runner, &event_handler),
         connection_loop,
-        workers,
+        select_slice(workers),
         run_led_reader(&mut ble_led_reader, ConnectionType::Ble),
         profile_manager.run(),
     )
