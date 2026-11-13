@@ -48,7 +48,7 @@ use crate::keymap::HOLD_BUFFER_SIZE;
 
 // Timestamp of the last key action, the value is the number of seconds since the boot
 #[cfg(feature = "_ble")]
-pub(crate) static LAST_KEY_TIMESTAMP: Watch<crate::RawMutex, u32, { crate::ble::NUM_HOST_LINKS }> = Watch::new();
+pub(crate) static LAST_KEY_TIMESTAMP: Watch<crate::RawMutex, u32, { crate::ble::NUM_HOST_CONNECTIONS }> = Watch::new();
 
 /// Led states for the keyboard hid report (its value is received by by the light service in a hid report)
 /// LedIndicator type would be nicer, but that does not have const expr constructor

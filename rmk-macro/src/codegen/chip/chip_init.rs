@@ -52,7 +52,7 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
     let (central_links, peripheral_links) = if peripheral_id.is_some() {
         (0, quote! { 1 })
     } else {
-        (peri_num, quote! { ::rmk::ble::NUM_HOST_LINKS })
+        (peri_num, quote! { ::rmk::ble::NUM_HOST_CONNECTIONS })
     };
     let is_peripheral_not_ble = if peripheral_id.is_some() {
         match &hardware.board {

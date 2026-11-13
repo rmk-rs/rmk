@@ -132,7 +132,10 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     // A host takes every u8 profile index, so it decodes the profile list of any firmware.
     let bond_slots = if is_host { u8::MAX as usize + 1 } else { bc.bond_slots };
     lines.push(format!("pub const BOND_SLOTS: usize = {bond_slots};"));
-    lines.push(format!("pub const NUM_HOST_LINKS: usize = {};", bc.num_host_links));
+    lines.push(format!(
+        "pub const NUM_HOST_CONNECTIONS: usize = {};",
+        bc.num_host_connections
+    ));
 
     // Protocol ceilings — always emitted so rmk-types source code can reference them.
     lines.push(format!(

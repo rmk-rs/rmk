@@ -56,7 +56,7 @@ fn build_sdc<'d, const N: usize>(
         .support_dle_peripheral()
         .support_phy_update_peripheral()
         .support_le_2m_phy()
-        .peripheral_count(rmk::ble::NUM_HOST_LINKS as u8)?
+        .peripheral_count(rmk::ble::NUM_HOST_CONNECTIONS as u8)?
         .buffer_cfg(
             SDC_PACKET_SIZE as u16,
             SDC_PACKET_SIZE as u16,
@@ -106,7 +106,7 @@ async fn main(spawner: Spawner) {
         {
             rmk::ble::calculate_sdc_memory_size(
                 0,
-                rmk::ble::NUM_HOST_LINKS,
+                rmk::ble::NUM_HOST_CONNECTIONS,
                 SDC_PACKET_SIZE,
                 SDC_TX_BUFFERS,
                 SDC_RX_BUFFERS,

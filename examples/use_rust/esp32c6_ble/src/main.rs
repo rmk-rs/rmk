@@ -41,7 +41,7 @@ async fn main(_s: Spawner) {
     esp_rtos::start(timg0.timer0, peripherals.FROM_CPU_INTR0);
     let _trng_source = TrngSource::new(peripherals.RNG, peripherals.ADC1);
 
-    const BLE_CAPACITY: u8 = rmk::ble::calculate_esp_ble_capacity(0, rmk::ble::NUM_HOST_LINKS);
+    const BLE_CAPACITY: u8 = rmk::ble::calculate_esp_ble_capacity(0, rmk::ble::NUM_HOST_CONNECTIONS);
     let ble_config = esp_radio::ble::Config::default().with_max_connections(BLE_CAPACITY.into());
     let connector = BleConnector::new(peripherals.BT, ble_config).unwrap();
     let controller: ExternalController<_, 64> = ExternalController::new(connector);

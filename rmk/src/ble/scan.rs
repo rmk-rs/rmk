@@ -5,8 +5,8 @@ use trouble_host::prelude::*;
 
 use crate::ble::CentralCmds;
 
-/// Split central: the radio is shared with the host link and the peripheral
-/// connections, so it can spare only 30ms of every 100ms.
+/// Split central: the radio is shared with the host connection and the
+/// peripheral connections, so it can spare only 30ms of every 100ms.
 #[cfg(feature = "split")]
 pub(crate) const SPLIT_CENTRAL_SCAN_WINDOW: Duration = Duration::from_millis(30);
 

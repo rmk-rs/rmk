@@ -8,7 +8,7 @@
 # static memory when a feature is disabled.
 #
 # Format per event: { name = "event_name", count = N }
-# `count` defaults to 1 if omitted. Subscribers held once per BLE host link
+# `count` defaults to 1 if omitted. Subscribers held once per host connection
 # are counted in build_constants.rs from `[ble] max_connections`.
 
 # --- Display-gated internal subscribers ---

@@ -121,14 +121,14 @@ pub trait CentralCmds: ControllerCmdSync<LeSetScanParams> {}
 #[cfg(not(feature = "ext_adv"))]
 impl<T: ControllerCmdSync<LeSetScanParams>> CentralCmds for T {}
 
-/// Simultaneous host and dongle connections, set by `[ble] max_connections`.
+/// Maximum simultaneous host and dongle connections, set by `[ble] max_connections`.
 #[doc(hidden)]
-pub const NUM_HOST_LINKS: usize = crate::NUM_HOST_LINKS;
+pub const NUM_HOST_CONNECTIONS: usize = crate::NUM_HOST_CONNECTIONS;
 
-/// Max number of connections of a keyboard's BLE stack; a dongle sizes its
-/// own — see [`crate::dongle::Dongle`].
+/// Trouble's `connections_max` for a keyboard build: host connections plus one
+/// per split peripheral. A dongle sizes its own — see [`crate::dongle::Dongle`].
 #[doc(hidden)]
-pub const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + NUM_HOST_LINKS;
+pub const STACK_CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + NUM_HOST_CONNECTIONS;
 // Fixed ATT/SMP/signalling channels do not consume dynamic L2CAP slots.
 const L2CAP_CHANNELS_MAX: usize = 0;
 // Custom messages share the GATT write dispatcher with the host protocol.
@@ -277,7 +277,7 @@ where
         rng::init(&controller).await;
 
         // Host connections share the stack resources.
-        let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
+        let mut resources: HostResources<DefaultPacketPool, STACK_CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
             HostResources::new();
         let stack = trouble_host::new(controller, &mut resources)
             .set_random_address(Address::random(self.address))
@@ -316,7 +316,7 @@ impl<
         let controller = self.controller.take().expect("BleTransport::run called twice");
         rng::init(&controller).await;
 
-        let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
+        let mut resources: HostResources<DefaultPacketPool, STACK_CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
             HostResources::new();
         let stack = trouble_host::new(controller, &mut resources)
             .set_random_address(Address::random(self.address))
@@ -409,8 +409,8 @@ async fn run_ble_keyboard<
     // then `connection_loop` determines whether to start advertising again.
     let accepted_connections: Channel<NoopRawMutex, (GattConnection<'_, '_, DefaultPacketPool>, u8), 1> =
         Channel::new();
-    let completed: Channel<NoopRawMutex, u8, NUM_HOST_LINKS> = Channel::new();
-    let workers = join_array(core::array::from_fn::<_, NUM_HOST_LINKS, _>(|_| async {
+    let completed: Channel<NoopRawMutex, u8, NUM_HOST_CONNECTIONS> = Channel::new();
+    let workers = join_array(core::array::from_fn::<_, NUM_HOST_CONNECTIONS, _>(|_| async {
         loop {
             let (conn, profile_id) = accepted_connections.receive().await;
             serve_keyboard_connection(
@@ -432,7 +432,7 @@ async fn run_ble_keyboard<
     // The connection loop advertises and connects to a host, then handles the connection to workers via `accepted_connections` channel.
     let connection_loop = async {
         // Keep host and dongle handles until their GATT workers finish.
-        let mut host_connections = LinearMap::<u8, Connection<'_, DefaultPacketPool>, NUM_HOST_LINKS>::new();
+        let mut host_connections = LinearMap::<u8, Connection<'_, DefaultPacketPool>, NUM_HOST_CONNECTIONS>::new();
         // How long a profile keeps advertising before it sleeps, and how much of
         // that a bonded host gets fast advertising: it usually reconnects soon.
         const ADV_PERIOD: Duration = Duration::from_secs(300);
@@ -450,7 +450,7 @@ async fn run_ble_keyboard<
 
             let advertise_and_connect = async {
                 // Advertise only while this profile has no link and a worker is free.
-                if host_connections.contains_key(&profile_id) || host_connections.len() == NUM_HOST_LINKS {
+                if host_connections.contains_key(&profile_id) || host_connections.len() == NUM_HOST_CONNECTIONS {
                     return core::future::pending().await;
                 }
 
@@ -558,7 +558,7 @@ async fn run_ble_keyboard<
                     adv_start = Some(Instant::now());
                     // Keep a paired link unless the target profile needs its slot.
                     let keep_connected = (host_connections.contains_key(&slot)
-                        || host_connections.len() < NUM_HOST_LINKS)
+                        || host_connections.len() < NUM_HOST_CONNECTIONS)
                         && host_connections.get(&profile_id).is_some_and(|conn| {
                             conn.security_level().is_ok_and(|level| level.encrypted())
                                 && profile_manager
@@ -1273,7 +1273,7 @@ mod tests {
     }
 
     fn with_keyboard(hci: FakeController, bonds: &[super::ProfileInfo], test: impl core::future::Future<Output = ()>) {
-        use super::{BOND_SLOTS, CONNECTIONS_MAX, DefaultPacketPool, HostResources, L2CAP_CHANNELS_MAX};
+        use super::{BOND_SLOTS, DefaultPacketPool, HostResources, L2CAP_CHANNELS_MAX, STACK_CONNECTIONS_MAX};
         use crate::config::{BleBatteryConfig, DeviceConfig};
         use crate::core_traits::Runnable;
         use crate::storage::{Storage, StorageKey, StorageValue, async_flash_wrapper};
@@ -1285,7 +1285,7 @@ mod tests {
         crate::test_support::reset_connection_status();
         crate::channel::BLE_PROFILE_CHANNEL.clear();
         let mut resources =
-            HostResources::<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS>::new();
+            HostResources::<DefaultPacketPool, STACK_CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS>::new();
         let stack = trouble_host::new(hci, &mut resources).build();
         block_on(select3(
             super::run_ble_keyboard(
@@ -1548,7 +1548,7 @@ mod tests {
             BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await;
             // Profile 1 advertises once profile 0's link is kept or gone.
             advertising(&hci, 1).await;
-            let kept = crate::NUM_HOST_LINKS > 1;
+            let kept = crate::NUM_HOST_CONNECTIONS > 1;
             let status = crate::state::current_connection_status();
             assert_eq!(status.ble[0].state == BleState::Connected, kept);
             assert_eq!(hci.sent::<bt_hci::cmd::link_control::Disconnect>().is_empty(), kept);
@@ -1560,7 +1560,7 @@ mod tests {
         use crate::ble::profile::BleProfileAction;
         use crate::channel::BLE_PROFILE_CHANNEL;
 
-        const LINKS: usize = crate::NUM_HOST_LINKS;
+        const LINKS: usize = crate::NUM_HOST_CONNECTIONS;
         // Needs a profile without a link once every link is taken: build with an `ext_adv` feature set
         // and a KEYBOARD_TOML_PATH whose `[ble] max_connections` is at least 2 and below the profile count.
         if LINKS < 2 || super::BOND_SLOTS <= LINKS {

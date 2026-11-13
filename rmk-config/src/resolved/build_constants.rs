@@ -53,8 +53,8 @@ pub struct BuildConstants {
     pub ble_profiles_num: usize,
     /// Host profiles plus the dongle profile.
     pub bond_slots: usize,
-    /// Simultaneous BLE host and dongle connections: 0 without BLE.
-    pub num_host_links: usize,
+    /// Maximum simultaneous BLE host and dongle connections, from `[ble] max_connections`: 0 without BLE.
+    pub num_host_connections: usize,
     pub ble_use_2m_phy: bool,
     pub split_central_sleep_timeout_seconds: u32,
     pub auto_mouse_layer_max_num: usize,
@@ -135,31 +135,31 @@ impl crate::KeyboardTomlConfig {
         if bond_slots == 0 && active_features.contains(&"_ble") {
             return Err("BLE requires at least one bond slot; set ble_profiles_num > 0 or enable dongle".to_string());
         }
-        let num_host_links = if active_features.contains(&"_ble") {
-            let links = self.ble.as_ref().and_then(|ble| ble.max_connections).unwrap_or(1);
-            if links == 0 || links > bond_slots {
+        let num_host_connections = if active_features.contains(&"_ble") {
+            let connections = self.ble.as_ref().and_then(|ble| ble.max_connections).unwrap_or(1);
+            if connections == 0 || connections > bond_slots {
                 return Err(format!(
-                    "keyboard.toml: [ble.max_connections] must be between 1 and the {bond_slots} BLE profiles, got {links}"
+                    "keyboard.toml: [ble.max_connections] must be between 1 and the {bond_slots} BLE profiles, got {connections}"
                 ));
             }
-            // Only extended advertising gives each profile an address, and so a link, of its own.
-            if links > 1 && !active_features.contains(&"_ext_adv") {
+            // Only extended advertising gives each profile an address, and so a connection, of its own.
+            if connections > 1 && !active_features.contains(&"_ext_adv") {
                 return Err("keyboard.toml: [ble.max_connections] above 1 requires the `ext_adv` feature".to_string());
             }
-            links
+            connections
         } else {
             0
         };
 
         let mut event_config = self.event.clone();
-        // ble/mod.rs: each host link runs a battery service, and its HID writer
-        // waits for the link's profile to be selected.
-        event_config.battery_status.subs += num_host_links;
-        event_config.connection_status_change.subs += num_host_links;
+        // ble/mod.rs: each host connection runs a battery service, and its HID writer
+        // waits for the connection's profile to be selected.
+        event_config.battery_status.subs += num_host_connections;
+        event_config.connection_status_change.subs += num_host_connections;
         if !split_battery_peripheral_ids.is_empty() {
-            event_config.peripheral_battery.subs += num_host_links;
+            event_config.peripheral_battery.subs += num_host_connections;
         }
-        // host/rynk/topics.rs: each host link opens its own Rynk session.
+        // host/rynk/topics.rs: each host connection opens its own Rynk session.
         if active_features.contains(&"rynk") {
             for event in [
                 &mut event_config.battery_status,
@@ -169,7 +169,7 @@ impl crate::KeyboardTomlConfig {
                 &mut event_config.sleep_state,
                 &mut event_config.led_indicator,
             ] {
-                event.subs += num_host_links;
+                event.subs += num_host_connections;
             }
         }
 
@@ -289,7 +289,7 @@ impl crate::KeyboardTomlConfig {
         validate_u8_capability("morse_max_num", rmk.morse_max_num)?;
         validate_u8_capability("split_peripherals_num", split_peripherals_num)?;
         validate_u8_capability("ble_profiles_num", rmk.ble_profiles_num)?;
-        validate_u8_capability("max_connections", num_host_links)?;
+        validate_u8_capability("max_connections", num_host_connections)?;
         validate_u8_capability("macro_max_num", rmk.macro_max_num)?;
         validate_u16_capability("macro_space_size", rmk.macro_space_size)?;
         validate_u16_capability("rynk_buffer_size", rmk.rynk_buffer_size)?;
@@ -315,7 +315,7 @@ impl crate::KeyboardTomlConfig {
             split_battery_peripheral_user_descriptions,
             ble_profiles_num: rmk.ble_profiles_num,
             bond_slots,
-            num_host_links,
+            num_host_connections,
             ble_use_2m_phy: self.ble.as_ref().and_then(|ble| ble.use_2m_phy).unwrap_or(true),
             split_central_sleep_timeout_seconds: rmk.split_central_sleep_timeout_seconds,
             auto_mouse_layer_max_num,
@@ -536,8 +536,14 @@ mod tests {
     fn max_connections_fit_the_profiles_and_need_extended_advertising() {
         let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
         config.rmk.ble_profiles_num = 2;
-        assert_eq!(config.build_constants(&["_ble", "_ext_adv"]).unwrap().num_host_links, 1);
-        for (max_connections, features, links) in [
+        assert_eq!(
+            config
+                .build_constants(&["_ble", "_ext_adv"])
+                .unwrap()
+                .num_host_connections,
+            1
+        );
+        for (max_connections, features, expected_connections) in [
             (0, &["_ble", "_ext_adv"][..], None),
             (2, &["_ble"], None),
             (2, &["_ble", "_ext_adv"], Some(2)),
@@ -551,8 +557,11 @@ mod tests {
             let resolved = config
                 .build_constants(features)
                 .ok()
-                .map(|constants| constants.num_host_links);
-            assert_eq!(resolved, links, "{max_connections} links with {features:?}");
+                .map(|constants| constants.num_host_connections);
+            assert_eq!(
+                resolved, expected_connections,
+                "{max_connections} connections with {features:?}"
+            );
         }
     }
 

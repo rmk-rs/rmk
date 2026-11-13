@@ -307,7 +307,7 @@ pub(crate) fn bind_interrupt_default(
                         .support_le_2m_phy()
                         #tx_power
                         .central_count(#num_peri)?
-                        .peripheral_count(::rmk::ble::NUM_HOST_LINKS as u8)?
+                        .peripheral_count(::rmk::ble::NUM_HOST_CONNECTIONS as u8)?
                         .buffer_cfg(SDC_PACKET_SIZE as u16, SDC_PACKET_SIZE as u16, SDC_TX_BUFFERS, SDC_RX_BUFFERS)?
                         .build(p, rng, mpsl, mem)
                     }
@@ -321,7 +321,7 @@ pub(crate) fn bind_interrupt_default(
                     .support_le_2m_phy()
                     #tx_power
                     #central_count
-                    .peripheral_count(::rmk::ble::NUM_HOST_LINKS as u8)?
+                    .peripheral_count(::rmk::ble::NUM_HOST_CONNECTIONS as u8)?
                     .buffer_cfg(SDC_PACKET_SIZE as u16, SDC_PACKET_SIZE as u16, SDC_TX_BUFFERS, SDC_RX_BUFFERS)?
                     .build(p, rng, mpsl, mem)
                 },
