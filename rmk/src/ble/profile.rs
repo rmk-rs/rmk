@@ -21,7 +21,7 @@ use crate::storage::{StorageItem, StorageKey, StorageValue, read, store};
 /// so pairing a dongle never touches a host bond. Selected only via the
 /// `SwitchToDongle` key, never by profile cycling.
 #[cfg(feature = "dongle")]
-pub(crate) const DONGLE_PROFILE: u8 = crate::NUM_BLE_PROFILE as u8;
+pub(crate) const DONGLE_PROFILE: u8 = crate::NUM_BLE_PROFILES as u8;
 
 /// A fixed profile address that preserves the base address's random-address type bits.
 pub(crate) fn profile_address(base: [u8; 6], profile: u8) -> [u8; 6] {
@@ -279,7 +279,7 @@ mod tests {
         assert_eq!(profile_address(base, 2), [1, 2, 3, 6, 5, 0xC6]);
         for byte in [0, 0xFF] {
             let base = [1, 2, 3, byte, 5, 0xC6];
-            for profile in 0..=crate::NUM_BLE_PROFILE as u8 {
+            for profile in 0..=crate::NUM_BLE_PROFILES as u8 {
                 for other in 0..profile {
                     assert_ne!(profile_address(base, profile), profile_address(base, other));
                 }

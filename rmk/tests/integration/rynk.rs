@@ -107,7 +107,7 @@ fn profile_commands_accept_every_host_and_dongle_slot() {
             })
             .build()
             .await;
-        let slots = rmk_types::constants::NUM_BLE_PROFILE + usize::from(cfg!(feature = "dongle"));
+        let slots = rmk_types::constants::NUM_BLE_PROFILES + usize::from(cfg!(feature = "dongle"));
         let mut actions = Vec::new();
         for slot in 0..slots {
             let request = slot.to_string();

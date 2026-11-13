@@ -526,7 +526,7 @@ async fn run_ble_keyboard<
                 Either3::Second(action) => {
                     use crate::ble::profile::BleProfileAction::{ClearBond, Disconnect, Next, Previous, Switch};
 
-                    let last_host = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
+                    let last_host = crate::NUM_BLE_PROFILES.saturating_sub(1) as u8;
                     let slot = match action {
                         Switch(slot) | ClearBond(slot) | Disconnect(slot) => slot,
                         Next if profile_id < last_host => profile_id + 1,
@@ -1364,7 +1364,7 @@ mod tests {
 
         with_stalled_keyboard(&[], async {
             wait_for_connection_status(|s| s.selected_profile().state == BleState::Advertising).await;
-            for (action, expected) in [(Previous, crate::NUM_BLE_PROFILE.saturating_sub(1) as u8), (Next, 0)] {
+            for (action, expected) in [(Previous, crate::NUM_BLE_PROFILES.saturating_sub(1) as u8), (Next, 0)] {
                 BLE_PROFILE_CHANNEL.send(action).await;
                 // The one-slot queue makes this wait until the preceding action was consumed.
                 BLE_PROFILE_CHANNEL.send(ClearBond(0)).await;
