@@ -7,11 +7,11 @@ use bt_hci::cmd::le::{
     LeClearAdvSets, LeExtCreateConn, LeReadNumberOfSupportedAdvSets, LeSetAdvSetRandomAddr, LeSetExtAdvData,
     LeSetExtAdvParams, LeSetExtScanParams, LeSetExtScanResponseData,
 };
-use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeSetPhy};
+use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeReadPhy, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
 use embassy_futures::join::{join3, join4};
-use embassy_futures::select::{Either, Either3, select, select3};
+use embassy_futures::select::{Either, Either4, select, select4};
 #[cfg(feature = "split")]
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(feature = "split")]
@@ -45,7 +45,7 @@ use crate::sleep::{report_activity, request_sleep};
 use crate::split::PeripheralMatrixConfig;
 #[cfg(feature = "split")]
 use crate::split::ble::central::{run_peripheral_session, scan_and_connect_peripherals};
-use crate::state::set_ble_state;
+use crate::state::{current_ble_status, set_ble_state};
 
 pub(crate) mod adv;
 pub(crate) mod battery_service;
@@ -241,6 +241,7 @@ where
     C: Controller
         + ExtAdvCmds
         + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<LeRand>,
 {
@@ -275,12 +276,14 @@ impl<
         + CentralCmds
         + ExtAdvCmds
         + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<LeRand>,
     #[cfg(feature = "subrating")] C: Controller
         + CentralCmds
         + ExtAdvCmds
         + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<LeRand>
         + ControllerCmdAsync<LeSubrateRequest>,
@@ -330,7 +333,11 @@ impl<
 /// serves forever, joined with the stack runner and the sleep manager.
 async fn run_ble_keyboard<
     #[cfg(feature = "host")] 'r,
-    C: Controller + ExtAdvCmds + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    C: Controller
+        + ExtAdvCmds
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 >(
     stack: &Stack<'_, C, DefaultPacketPool>,
     device_config: &DeviceConfig<'static>,
@@ -897,7 +904,10 @@ async fn serve_keyboard_connection<
     'a,
     'b,
     #[cfg(feature = "host")] 'r,
-    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    C: Controller
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 >(
     server: &'b Server<'_>,
     conn: &GattConnection<'a, 'b, DefaultPacketPool>,
@@ -938,7 +948,13 @@ async fn serve_keyboard_connection<
     } else {
         PhyKind::Le2M
     };
-    update_ble_phy(stack, conn.raw(), host_phy).await;
+    let update_phy_task = async {
+        while !matches!(current_ble_status().state, BleState::Connected) {
+            Timer::after_millis(500).await;
+        }
+        update_ble_phy(stack, conn.raw(), host_phy).await;
+        core::future::pending::<()>().await;
+    };
 
     #[cfg(not(feature = "split"))]
     let battery_task = ble_battery_server.run();
@@ -946,9 +962,10 @@ async fn serve_keyboard_connection<
     let battery_task = embassy_futures::join::join(ble_battery_server.run(), ble_peripheral_battery_server.run());
 
     let communication_task = async {
-        if let Either3::First(e) = select3(
+        if let Either4::First(e) = select4(
             gatt_events_task(server, conn, profile, profiles),
             set_conn_params(stack, conn),
+            update_phy_task,
             battery_task,
         )
         .await
@@ -1000,10 +1017,17 @@ async fn serve_keyboard_connection<
 
 // Set the connection PHY.
 pub(crate) async fn update_ble_phy<P: PacketPool>(
-    stack: &Stack<'_, impl Controller + ControllerCmdAsync<LeSetPhy>, P>,
+    stack: &Stack<'_, impl Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadPhy>, P>,
     conn: &Connection<'_, P>,
     phy: PhyKind,
 ) {
+    if let Ok((tx_phy, rx_phy)) = conn.read_phy(stack).await
+        && tx_phy == phy
+        && rx_phy == phy
+    {
+        return;
+    };
+
     // Retry 10 times
     for _ in 0..10 {
         match conn.set_phy(stack, phy).await {
