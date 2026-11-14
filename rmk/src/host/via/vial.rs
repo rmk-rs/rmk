@@ -74,17 +74,17 @@ pub(crate) async fn process_vial<'a>(
         }
         VialCommand::UnlockStart => {
             #[cfg(feature = "host_lock")]
-            locker.unlocking();
+            locker.vial_unlock_start();
             #[cfg(not(feature = "host_lock"))]
             error!("Vial lock feature is not enabled");
         }
         VialCommand::UnlockPoll => {
             #[cfg(feature = "host_lock")]
             {
-                locker.unlocking();
+                let remaining = locker.vial_unlock_poll();
                 report.input_data[0] = locker.is_unlocked() as u8;
                 report.input_data[1] = locker.is_unlocking() as u8;
-                report.input_data[2] = locker.check_unlock();
+                report.input_data[2] = remaining;
             }
             #[cfg(not(feature = "host_lock"))]
             error!("Vial lock feature is not enabled");

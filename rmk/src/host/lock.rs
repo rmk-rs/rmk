@@ -8,12 +8,24 @@ use rmk_types::protocol::rynk::LockStatus;
 
 use crate::keymap::KeyMap;
 
+/// QMK's `VIAL_UNLOCK_COUNTER_MAX`: how many polls Vial needs before it commits
+/// the unlock. The host uses the remaining count to draw its progress bar.
+const VIAL_UNLOCK_COUNTER_MAX: u8 = 50;
+/// QMK only consumes a counter tick after this much time has passed, so a host
+/// polling faster cannot speed up the ramp.
+const VIAL_UNLOCK_TICK_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Unlock gate. Interior mutability lets protocol handlers update it through a
 /// shared reference without holding a borrow across an `.await` point.
 pub(crate) struct HostLock<'a> {
     unlocked: Cell<bool>,
     unlocking: Cell<bool>,
     last_poll: Cell<Instant>,
+    /// Ticks left in the Vial hold-to-unlock ramp (QMK's
+    /// `vial_unlock_counter`). Reaching zero commits the unlock.
+    vial_counter: Cell<u8>,
+    /// When the last Vial tick was consumed, or when the attempt started.
+    vial_last_tick: Cell<Instant>,
     /// Start (and stay) unlocked — development escape hatch.
     insecure: bool,
     /// How long an armed attempt survives without a refreshing poll. Vial
@@ -29,6 +41,8 @@ impl<'a> HostLock<'a> {
             unlocked: Cell::new(insecure),
             unlocking: Cell::new(false),
             last_poll: Cell::new(Instant::MIN),
+            vial_counter: Cell::new(VIAL_UNLOCK_COUNTER_MAX),
+            vial_last_tick: Cell::new(Instant::MIN),
             insecure,
             window,
             unlock_keys,
@@ -56,6 +70,47 @@ impl<'a> HostLock<'a> {
             self.unlocked.set(true);
             self.unlocking.set(false);
         }
+    }
+
+    /// Arm a fresh Vial attempt (`vial_unlock_start`) and reset the hold ramp.
+    pub fn vial_unlock_start(&self) {
+        self.unlocking();
+        self.vial_counter.set(VIAL_UNLOCK_COUNTER_MAX);
+        self.vial_last_tick.set(Instant::now());
+    }
+
+    /// Vial `unlock_poll`: refresh the attempt, advance the hold ramp, and
+    /// return the ticks left for the host's progress bar.
+    ///
+    /// This mirrors QMK's `vial_unlock_poll`: one tick is consumed only while
+    /// every challenge key stays held and at least
+    /// [`VIAL_UNLOCK_TICK_INTERVAL`] has passed. Releasing a key restarts the
+    /// ramp, and the unlock commits when the counter reaches zero. Rynk's
+    /// `poll` keeps its own `remaining_keys` semantics and does not use this
+    /// ramp.
+    pub fn vial_unlock_poll(&self) -> u8 {
+        self.unlocking();
+
+        if self.unlock_keys.is_empty() {
+            warn!("No unlock keys provided");
+            return 1;
+        }
+
+        if self.remaining_held() == 0 && self.vial_last_tick.get().elapsed() > VIAL_UNLOCK_TICK_INTERVAL {
+            self.vial_last_tick.set(Instant::now());
+            let remaining = self.vial_counter.get().saturating_sub(1);
+            self.vial_counter.set(remaining);
+            if remaining == 0 {
+                self.unlock();
+            }
+        } else {
+            // Not a full tick of continuous holding: restart the ramp, and
+            // require a fresh interval before the next tick can count.
+            self.vial_counter.set(VIAL_UNLOCK_COUNTER_MAX);
+            self.vial_last_tick.set(Instant::now());
+        }
+
+        self.vial_counter.get()
     }
 
     /// Count challenge keys not currently held, committing the unlock when all
@@ -195,6 +250,39 @@ mod tests {
         keymap.update_matrix_state(&KeyboardEvent::key(1, 1, true));
         assert_eq!(lock.check_unlock(), 0, "all held");
         assert!(lock.is_unlocked(), "unlocked once all keys held");
+    }
+
+    #[test]
+    fn vial_unlock_requires_continuous_hold() {
+        keymap!(keymap);
+        let keys = [(0u8, 0u8), (1u8, 1u8)];
+        let lock = HostLock::new(&keys, &keymap, false, WINDOW);
+
+        MockDriver::get().reset();
+        lock.vial_unlock_start();
+        keymap.update_matrix_state(&KeyboardEvent::key(0, 0, true));
+        keymap.update_matrix_state(&KeyboardEvent::key(1, 1, true));
+
+        // A poll before the tick interval elapses does not advance the ramp.
+        assert_eq!(lock.vial_unlock_poll(), VIAL_UNLOCK_COUNTER_MAX);
+
+        MockDriver::get().advance(Duration::from_millis(101));
+        assert_eq!(lock.vial_unlock_poll(), VIAL_UNLOCK_COUNTER_MAX - 1);
+        assert!(!lock.is_unlocked());
+
+        // Releasing a key restarts the ramp.
+        keymap.update_matrix_state(&KeyboardEvent::key(1, 1, false));
+        MockDriver::get().advance(Duration::from_millis(101));
+        assert_eq!(lock.vial_unlock_poll(), VIAL_UNLOCK_COUNTER_MAX);
+        assert!(!lock.is_unlocked());
+
+        // Holding both keys through every remaining tick commits the unlock.
+        keymap.update_matrix_state(&KeyboardEvent::key(1, 1, true));
+        for _ in 0..VIAL_UNLOCK_COUNTER_MAX {
+            MockDriver::get().advance(Duration::from_millis(101));
+            lock.vial_unlock_poll();
+        }
+        assert!(lock.is_unlocked());
     }
 
     #[test]
