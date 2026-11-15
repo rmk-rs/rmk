@@ -402,10 +402,10 @@ report_channel_size = 16
 vial_channel_size = 4
 # Flash channel size
 flash_channel_size = 4
-# The number of the split peripherals
-split_peripherals_num = 0
-# The number of available BLE profiles
-ble_profiles_num = 3
+# The number of the split peripherals. Renamed from `split_peripherals_num` (still parses).
+num_split_peripherals = 0
+# The number of available BLE profiles. Renamed from `ble_profiles_num` (still parses).
+num_ble_profiles = 3
 # BLE Split Central sleep timeout in seconds (0 = disabled)
 split_central_sleep_timeout_seconds = 0
 # Rynk RX/TX buffer size in bytes. 488 bytes = 2*BLE maximum packet size

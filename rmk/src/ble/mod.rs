@@ -131,7 +131,7 @@ pub const NUM_HOST_LINKS: usize = crate::NUM_HOST_LINKS;
 /// Max number of connections of a keyboard's BLE stack; a dongle sizes its
 /// own — see [`crate::dongle::Dongle`].
 #[doc(hidden)]
-pub const CONNECTIONS_MAX: usize = crate::SPLIT_PERIPHERALS_NUM + NUM_HOST_LINKS;
+pub const CONNECTIONS_MAX: usize = crate::NUM_SPLIT_PERIPHERALS + NUM_HOST_LINKS;
 // Fixed ATT/SMP/signalling channels do not consume dynamic L2CAP slots.
 const L2CAP_CHANNELS_MAX: usize = 0;
 // Custom messages share the GATT write dispatcher with the host protocol.
@@ -254,7 +254,7 @@ where
     config: BleBatteryConfig,
     /// One matrix region per split peripheral.
     #[cfg(feature = "split")]
-    peripheral_matrices: [PeripheralMatrixConfig; crate::SPLIT_PERIPHERALS_NUM],
+    peripheral_matrices: [PeripheralMatrixConfig; crate::NUM_SPLIT_PERIPHERALS],
     #[cfg(feature = "host")]
     host_service: Option<&'a crate::host::HostService<'a>>,
     // Keeps `'a` in the type's parameter list across all feature configurations.
@@ -270,7 +270,7 @@ where
         controller: C,
         address: [u8; 6],
         rmk_config: RmkConfig<'static>,
-        #[cfg(feature = "split")] peripheral_matrices: [PeripheralMatrixConfig; crate::SPLIT_PERIPHERALS_NUM],
+        #[cfg(feature = "split")] peripheral_matrices: [PeripheralMatrixConfig; crate::NUM_SPLIT_PERIPHERALS],
     ) -> Self {
         Self {
             controller: Some(controller),
@@ -365,10 +365,10 @@ impl<
         let stack = build_ble_stack(controller, &mut resources, self.address);
 
         // `scan_and_connect_peripherals` task sends each established connection to its session task via `conn_channels`
-        let conn_channels: [Channel<NoopRawMutex, Connection<'_, DefaultPacketPool>, 1>; crate::SPLIT_PERIPHERALS_NUM] =
+        let conn_channels: [Channel<NoopRawMutex, Connection<'_, DefaultPacketPool>, 1>; crate::NUM_SPLIT_PERIPHERALS] =
             core::array::from_fn(|_| Channel::new());
         // A session task reports back when its session ends via `ended`
-        let ended: Channel<NoopRawMutex, usize, { crate::SPLIT_PERIPHERALS_NUM }> = Channel::new();
+        let ended: Channel<NoopRawMutex, usize, { crate::NUM_SPLIT_PERIPHERALS }> = Channel::new();
 
         let keyboard = pin!(run_ble_keyboard(
             &stack,
@@ -580,7 +580,7 @@ async fn run_ble_keyboard<
                 Either3::Second(action) => {
                     use crate::ble::profile::BleProfileAction::{ClearBond, Disconnect, Next, Previous, Switch};
 
-                    let last_host = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
+                    let last_host = crate::NUM_BLE_PROFILES.saturating_sub(1) as u8;
                     let target = match action {
                         Switch(target) | Disconnect(target) => target,
                         ClearBond(target) => target.unwrap_or(profile_id),
@@ -1431,7 +1431,7 @@ mod tests {
 
         with_stalled_keyboard(&[], async {
             wait_for_connection_status(|s| s.selected_profile().state == BleState::Advertising).await;
-            for (action, expected) in [(Previous, crate::NUM_BLE_PROFILE.saturating_sub(1) as u8), (Next, 0)] {
+            for (action, expected) in [(Previous, crate::NUM_BLE_PROFILES.saturating_sub(1) as u8), (Next, 0)] {
                 BLE_PROFILE_CHANNEL.send(action).await;
                 // The one-slot queue makes this wait until the preceding action was consumed.
                 BLE_PROFILE_CHANNEL.send(ClearBond(Some(0))).await;

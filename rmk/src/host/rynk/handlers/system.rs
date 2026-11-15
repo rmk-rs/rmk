@@ -66,10 +66,10 @@ impl Handle<GetCapabilities> for RynkService<'_> {
 
             // Connectivity
             is_split: cfg!(feature = "split"),
-            num_split_peripherals: constants::SPLIT_PERIPHERALS_NUM as u8,
+            num_split_peripherals: constants::NUM_SPLIT_PERIPHERALS as u8,
             ble_enabled: cfg!(feature = "_ble"),
             num_ble_profiles: if cfg!(feature = "_ble") {
-                constants::NUM_BLE_PROFILE as u8
+                constants::NUM_BLE_PROFILES as u8
             } else {
                 0
             },

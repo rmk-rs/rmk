@@ -236,14 +236,14 @@ impl KeyboardTomlConfig {
     pub(crate) fn auto_calculate_parameters(&mut self) {
         // Update the number of peripherals
         if let Some(split) = &self.split
-            && split.peripheral.len() > self.rmk.split_peripherals_num
+            && split.peripheral.len() > self.rmk.num_split_peripherals
         {
             // eprintln!(
             //     "The number of split peripherals is updated to {} from {}",
             //     split.peripheral.len(),
-            //     self.rmk.split_peripherals_num
+            //     self.rmk.num_split_peripherals
             // );
-            self.rmk.split_peripherals_num = split.peripheral.len();
+            self.rmk.num_split_peripherals = split.peripheral.len();
         }
 
         if let Some(behavior) = &self.behavior {
@@ -338,12 +338,14 @@ pub(crate) struct RmkConstantsConfig {
     /// Flash channel size
     #[serde_inline_default(4)]
     pub flash_channel_size: usize,
-    /// The number of the split peripherals
+    /// The number of the split peripherals. Renamed from `split_peripherals_num`; the old name still parses.
+    #[serde(alias = "split_peripherals_num")]
     #[serde_inline_default(0)]
-    pub split_peripherals_num: usize,
-    /// The number of available BLE profiles
+    pub num_split_peripherals: usize,
+    /// The number of available BLE profiles. Renamed from `ble_profiles_num`; the old name still parses.
+    #[serde(alias = "ble_profiles_num")]
     #[serde_inline_default(3)]
-    pub ble_profiles_num: usize,
+    pub num_ble_profiles: usize,
     /// Unibody/split central sleep timeout in seconds, independent of transport (0 = disabled).
     #[serde_inline_default(0)]
     pub split_central_sleep_timeout_seconds: u32,
@@ -472,8 +474,8 @@ impl Default for RmkConstantsConfig {
             report_channel_size: 16,
             vial_channel_size: 4,
             flash_channel_size: 4,
-            split_peripherals_num: 0,
-            ble_profiles_num: 3,
+            num_split_peripherals: 0,
+            num_ble_profiles: 3,
             split_central_sleep_timeout_seconds: 0,
             auto_mouse_layer_max_num: None,
             rynk_buffer_size: 488,
@@ -1648,6 +1650,14 @@ channel_size = 32
         assert_eq!(config.event.modifier.channel_size, 8);
         assert_eq!(config.event.modifier.subs, 2);
         assert_eq!(config.event.layer_change.subs, 1);
+    }
+
+    #[test]
+    fn renamed_rmk_count_keys_still_parse() {
+        let config: KeyboardTomlConfig =
+            toml::from_str("[rmk]\nble_profiles_num = 5\nsplit_peripherals_num = 2\n").unwrap();
+        assert_eq!(config.rmk.num_ble_profiles, 5);
+        assert_eq!(config.rmk.num_split_peripherals, 2);
     }
 
     #[test]

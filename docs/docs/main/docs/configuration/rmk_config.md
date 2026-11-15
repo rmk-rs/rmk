@@ -34,10 +34,10 @@ report_channel_size = 16
 vial_channel_size = 4
 # Flash channel size
 flash_channel_size = 4
-# The number of the split peripherals
-split_peripherals_num = 0
-# The number of available BLE profiles
-ble_profiles_num = 3
+# The number of the split peripherals. Renamed from `split_peripherals_num` (still parses).
+num_split_peripherals = 0
+# The number of available BLE profiles. Renamed from `ble_profiles_num` (still parses).
+num_ble_profiles = 3
 # BLE Split Central sleep timeout in seconds (0 = disabled)
 split_central_sleep_timeout_seconds = 0
 # Maximum number of auto mouse layer entries (auto-derived from [[behavior.auto_mouse_layer]] if unset)
@@ -94,11 +94,11 @@ These tune the [Rynk](../features/rynk) protocol and rarely need changing.
 
 ### Split Keyboard Configuration
 
-- `split_peripherals_num`: The number of split peripherals, default value is 0. If peripherals are specified in `keyboard.toml`, this value is automatically set to the actual count. If you're using the Rust API without `[[split.peripheral]]` entries, set this manually to match your peripheral count. This value must be between 0 and 255; when the `split` feature is enabled, it is raised to at least 1.
+- `num_split_peripherals`: The number of split peripherals, default value is 0. Renamed from `split_peripherals_num`, which still parses. If peripherals are specified in `keyboard.toml`, this value is automatically set to the actual count. If you're using the Rust API without `[[split.peripheral]]` entries, set this manually to match your peripheral count. This value must be between 0 and 255; when the `split` feature is enabled, it is raised to at least 1.
 
 ### Wireless Configuration
 
-- `ble_profiles_num`: The number of available Bluetooth profiles, default value is 3. This parameter defines how many Bluetooth paired devices the keyboard can store. This value must be between 0 and 255.
+- `num_ble_profiles`: The number of available Bluetooth profiles, default value is 3. Renamed from `ble_profiles_num`, which still parses. This parameter defines how many Bluetooth paired devices the keyboard can store. This value must be between 0 and 255.
 - `split_central_sleep_timeout_seconds`: Idle sleep timeout for unibody and split central keyboards in seconds, independent of transport. A non-zero value enables sleep after this many seconds without key or pointing activity. The default `0` disables both automatic sleep and explicit sleep requests. Split peripherals follow the central's sleep state.
 - `dongle_pairing_window_secs`: Length of one dongle pairing window in seconds, default value is 30. Used only by builds with the `dongle` feature. A dongle without a bonded keyboard repeats the window until one pairs. A bonded dongle opens it exactly once, at power-on, and afterwards reconnects only its bonded keyboard.
 

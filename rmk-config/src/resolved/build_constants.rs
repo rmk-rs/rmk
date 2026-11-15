@@ -46,11 +46,12 @@ pub struct BuildConstants {
     pub report_channel_size: usize,
     pub vial_channel_size: usize,
     pub flash_channel_size: usize,
-    pub split_peripherals_num: usize,
+    pub num_split_peripherals: usize,
     pub central_battery_user_description: String,
     pub split_battery_peripheral_ids: Vec<usize>,
     pub split_battery_peripheral_user_descriptions: Vec<String>,
-    pub ble_profiles_num: usize,
+    /// Host profiles, set by `[rmk] num_ble_profiles`.
+    pub num_ble_profiles: usize,
     /// Host profiles plus the dongle profile.
     pub total_ble_profiles: usize,
     /// Simultaneous BLE host and dongle connections: 0 without BLE.
@@ -104,11 +105,11 @@ impl crate::KeyboardTomlConfig {
     pub fn build_constants(&self, active_features: &[&str]) -> Result<BuildConstants, String> {
         let rmk = &self.rmk;
 
-        // Fix split_peripherals_num: when split feature is enabled, ensure at least 1
-        let split_peripherals_num = if active_features.contains(&"split") && rmk.split_peripherals_num < 1 {
+        // Fix num_split_peripherals: when split feature is enabled, ensure at least 1
+        let num_split_peripherals = if active_features.contains(&"split") && rmk.num_split_peripherals < 1 {
             1
         } else {
-            rmk.split_peripherals_num
+            rmk.num_split_peripherals
         };
         let central_battery_user_description = self
             .resolve_battery_config(None)?
@@ -131,9 +132,9 @@ impl crate::KeyboardTomlConfig {
                 }
             }
         }
-        let total_ble_profiles = rmk.ble_profiles_num + usize::from(active_features.contains(&"dongle"));
+        let total_ble_profiles = rmk.num_ble_profiles + usize::from(active_features.contains(&"dongle"));
         if total_ble_profiles == 0 && active_features.contains(&"_ble") {
-            return Err("BLE requires at least one BLE profile; set ble_profiles_num > 0 or enable dongle".to_string());
+            return Err("BLE requires at least one BLE profile; set num_ble_profiles > 0 or enable dongle".to_string());
         }
         let num_host_links = if active_features.contains(&"_ble") {
             let links = self.ble.as_ref().and_then(|ble| ble.max_connections).unwrap_or(1);
@@ -180,13 +181,13 @@ impl crate::KeyboardTomlConfig {
         // Every link subscribes to the outgoing queue, so a central needs one
         // slot per split peripheral on top of its link toward the dongle.
         if active_features.contains(&"custom_message") && active_features.contains(&"split") {
-            event_config.custom_message_out.subs += split_peripherals_num;
+            event_config.custom_message_out.subs += num_split_peripherals;
         }
 
         // Dynamically size dfu_cmd subscribers: 1 (central) + N (peripherals).
         // The base count of 1 covers the central; each peripheral adds one.
         if active_features.contains(&"dfu_split") {
-            event_config.dfu_cmd.subs += split_peripherals_num;
+            event_config.dfu_cmd.subs += num_split_peripherals;
             event_config.dfu_cmd.pubs += 1; // Split-Loop as second publisher (USB-Proxy is first)
         }
 
@@ -285,10 +286,10 @@ impl crate::KeyboardTomlConfig {
         }
 
         // Host capability fields are u8/u16 on the wire; check the values no deserializer bound
-        // covers (morse_max_num and split_peripherals_num can also be auto-raised past 255).
+        // covers (morse_max_num and num_split_peripherals can also be auto-raised past 255).
         validate_u8_capability("morse_max_num", rmk.morse_max_num)?;
-        validate_u8_capability("split_peripherals_num", split_peripherals_num)?;
-        validate_u8_capability("ble_profiles_num", rmk.ble_profiles_num)?;
+        validate_u8_capability("num_split_peripherals", num_split_peripherals)?;
+        validate_u8_capability("num_ble_profiles", rmk.num_ble_profiles)?;
         validate_u8_capability("max_connections", num_host_links)?;
         validate_u8_capability("macro_max_num", rmk.macro_max_num)?;
         validate_u16_capability("macro_space_size", rmk.macro_space_size)?;
@@ -309,11 +310,11 @@ impl crate::KeyboardTomlConfig {
             report_channel_size: rmk.report_channel_size,
             vial_channel_size: rmk.vial_channel_size,
             flash_channel_size: rmk.flash_channel_size,
-            split_peripherals_num,
+            num_split_peripherals,
             central_battery_user_description,
             split_battery_peripheral_ids,
             split_battery_peripheral_user_descriptions,
-            ble_profiles_num: rmk.ble_profiles_num,
+            num_ble_profiles: rmk.num_ble_profiles,
             total_ble_profiles,
             num_host_links,
             ble_use_2m_phy: self.ble.as_ref().and_then(|ble| ble.use_2m_phy).unwrap_or(true),
@@ -493,7 +494,7 @@ mod tests {
     #[test]
     fn ble_battery_subscribers_cover_each_host_link() {
         let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
-        config.rmk.ble_profiles_num = 5;
+        config.rmk.num_ble_profiles = 5;
         config.event.battery_status.subs = 2;
         config.event.peripheral_battery.subs = 3;
         config.split = Some(SplitConfig {
@@ -535,7 +536,7 @@ mod tests {
     #[test]
     fn max_connections_fit_the_profiles_and_need_extended_advertising() {
         let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
-        config.rmk.ble_profiles_num = 2;
+        config.rmk.num_ble_profiles = 2;
         assert_eq!(config.build_constants(&["_ble", "_ext_adv"]).unwrap().num_host_links, 1);
         for (max_connections, features, links) in [
             (0, &["_ble", "_ext_adv"][..], None),
@@ -807,10 +808,10 @@ mod tests {
 
     #[test]
     fn validates_capability_wire_widths() {
-        assert!(validate_u8_capability("ble_profiles_num", 255).is_ok());
+        assert!(validate_u8_capability("num_ble_profiles", 255).is_ok());
         assert_eq!(
-            validate_u8_capability("ble_profiles_num", 256),
-            Err("ble_profiles_num (256) exceeds the u8 host capability field (max 255)".to_string())
+            validate_u8_capability("num_ble_profiles", 256),
+            Err("num_ble_profiles (256) exceeds the u8 host capability field (max 255)".to_string())
         );
 
         assert!(validate_u16_capability("rynk_buffer_size", 65535).is_ok());

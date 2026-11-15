@@ -114,10 +114,10 @@ pub struct RenderContext {
     pub central_connected: bool,
     /// Per-peripheral connection state, indexed by peripheral id.
     #[cfg(feature = "split")]
-    pub peripherals_connected: [bool; crate::SPLIT_PERIPHERALS_NUM],
+    pub peripherals_connected: [bool; crate::NUM_SPLIT_PERIPHERALS],
     /// Per-peripheral battery status, indexed by peripheral id.
     #[cfg(feature = "split")]
-    pub peripheral_batteries: [BatteryStatusEvent; crate::SPLIT_PERIPHERALS_NUM],
+    pub peripheral_batteries: [BatteryStatusEvent; crate::NUM_SPLIT_PERIPHERALS],
     /// The dongle's link to its keyboard (only meaningful on a dongle).
     #[cfg(feature = "dongle")]
     pub dongle_state: DongleState,
@@ -146,10 +146,10 @@ impl Default for RenderContext {
             #[cfg(feature = "split")]
             central_connected: false,
             #[cfg(feature = "split")]
-            peripherals_connected: [false; crate::SPLIT_PERIPHERALS_NUM],
+            peripherals_connected: [false; crate::NUM_SPLIT_PERIPHERALS],
             #[cfg(feature = "split")]
             peripheral_batteries: [BatteryStatusEvent(rmk_types::battery::BatteryStatus::Unavailable);
-                crate::SPLIT_PERIPHERALS_NUM],
+                crate::NUM_SPLIT_PERIPHERALS],
             #[cfg(feature = "dongle")]
             dongle_state: DongleState::default(),
             modifiers: ModifierCombination::new(),

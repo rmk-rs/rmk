@@ -107,7 +107,7 @@ fn profile_commands_accept_every_host_and_dongle_profile() {
             })
             .build()
             .await;
-        let profiles = rmk_types::constants::NUM_BLE_PROFILE + usize::from(cfg!(feature = "dongle"));
+        let profiles = rmk_types::constants::NUM_BLE_PROFILES + usize::from(cfg!(feature = "dongle"));
         let mut actions = Vec::new();
         for profile in 0..profiles {
             let request = profile.to_string();

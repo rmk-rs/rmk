@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Rename the `[rmk]` keys `ble_profiles_num` to `num_ble_profiles` and `split_peripherals_num` to `num_split_peripherals`. The old names still parse.
 - **BREAKING**: Rename `KeyboardEventPos` to `KeyboardEventSource` and `KeyboardEvent::pos` to `source`.
 - **BREAKING**: Use bare `#[register_processor]` to run the type's `Runnable`. See [processor migration](https://rmk.rs/docs/migration/v09_v10#processors).
 - **BREAKING**: Keyboard macros are reworked around `MacroOp` lists.

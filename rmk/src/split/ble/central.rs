@@ -48,11 +48,11 @@ const CUSTOM_TO_PERIPHERAL_UUID: u128 = 0x5f2a7c15_9b3e_4a51_8d76_2c1e4b8a6f03;
 /// that slot's session; sessions report back on `ended`.
 pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + CentralCmds>(
     stack: &'a Stack<'_, C, DefaultPacketPool>,
-    conns: &[Channel<NoopRawMutex, Connection<'a, DefaultPacketPool>, 1>; crate::SPLIT_PERIPHERALS_NUM],
-    ended: &Channel<NoopRawMutex, usize, { crate::SPLIT_PERIPHERALS_NUM }>,
+    conns: &[Channel<NoopRawMutex, Connection<'a, DefaultPacketPool>, 1>; crate::NUM_SPLIT_PERIPHERALS],
+    ended: &Channel<NoopRawMutex, usize, { crate::NUM_SPLIT_PERIPHERALS }>,
 ) {
     // Load each peripheral's stored address first.
-    let mut peripheral_slots: [SlotState; crate::SPLIT_PERIPHERALS_NUM] = core::array::from_fn(|_| SlotState::NoAddr);
+    let mut peripheral_slots: [SlotState; crate::NUM_SPLIT_PERIPHERALS] = core::array::from_fn(|_| SlotState::NoAddr);
     for (id, slot) in peripheral_slots.iter_mut().enumerate() {
         if let Ok(Some(StorageValue::PeerAddress(peer))) = read(StorageKey::PeerAddress(id as u8)).await
             && peer.is_valid
@@ -74,7 +74,7 @@ pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + CentralCmds
         // Put every pending address in one accept list: the controller connects
         // to whichever peripheral answers first, so an absent one doesn't block
         // a present one for the whole timeout window.
-        let mut pending: heapless::Vec<(usize, [u8; 6]), { crate::SPLIT_PERIPHERALS_NUM }> = heapless::Vec::new();
+        let mut pending: heapless::Vec<(usize, [u8; 6]), { crate::NUM_SPLIT_PERIPHERALS }> = heapless::Vec::new();
         for (id, slot) in peripheral_slots.iter().enumerate() {
             if let SlotState::Disconnected(addr) = slot {
                 let _ = pending.push((id, *addr));
@@ -82,7 +82,7 @@ pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + CentralCmds
         }
         if !pending.is_empty() {
             // If there're `Disconnected` peripherals, connect to them first.
-            let targets: heapless::Vec<Address, { crate::SPLIT_PERIPHERALS_NUM }> =
+            let targets: heapless::Vec<Address, { crate::NUM_SPLIT_PERIPHERALS }> =
                 pending.iter().map(|(_, addr)| Address::random(*addr)).collect();
             let config = ConnectConfig {
                 connect_params: default_split_conn_params(),
@@ -165,7 +165,7 @@ pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + CentralCmds
     }
 }
 
-async fn wait_until_wakeup(ended: &Channel<NoopRawMutex, usize, { crate::SPLIT_PERIPHERALS_NUM }>) {
+async fn wait_until_wakeup(ended: &Channel<NoopRawMutex, usize, { crate::NUM_SPLIT_PERIPHERALS }>) {
     while crate::state::current_sleep_state() {
         if with_timeout(Duration::from_secs(1), ended.ready_to_receive())
             .await
@@ -219,14 +219,14 @@ pub(crate) async fn run_peripheral_sessions<
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdAsync<LeSubrateRequest>,
 >(
-    conns: &[Channel<NoopRawMutex, Connection<'a, DefaultPacketPool>, 1>; crate::SPLIT_PERIPHERALS_NUM],
-    ended: &Channel<NoopRawMutex, usize, { crate::SPLIT_PERIPHERALS_NUM }>,
+    conns: &[Channel<NoopRawMutex, Connection<'a, DefaultPacketPool>, 1>; crate::NUM_SPLIT_PERIPHERALS],
+    ended: &Channel<NoopRawMutex, usize, { crate::NUM_SPLIT_PERIPHERALS }>,
     stack: &'a Stack<'_, C, DefaultPacketPool>,
-    matrix_configs: &[PeripheralMatrixConfig; crate::SPLIT_PERIPHERALS_NUM],
+    matrix_configs: &[PeripheralMatrixConfig; crate::NUM_SPLIT_PERIPHERALS],
 ) -> ! {
     trace!("SPLIT_MESSAGE_MAX_SIZE: {}", SPLIT_MESSAGE_MAX_SIZE);
     // Pinned in place, like the host workers in `run_ble_keyboard`.
-    let sessions = pin!(crate::ble::array_from_fn::<_, { crate::SPLIT_PERIPHERALS_NUM }>(
+    let sessions = pin!(crate::ble::array_from_fn::<_, { crate::NUM_SPLIT_PERIPHERALS }>(
         |id| async move {
             loop {
                 let conn = conns[id].receive().await;
