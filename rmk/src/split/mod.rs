@@ -12,12 +12,17 @@ pub mod central;
 #[cfg(feature = "dfu_split")]
 pub(crate) mod dfu;
 /// Common abstraction layer of split driver
-pub(crate) mod driver;
+pub mod driver;
 pub mod peripheral;
 #[cfg(feature = "rp2040")]
 pub mod rp;
 #[cfg(not(feature = "_ble"))]
 pub mod serial;
+
+/// Check the task supplied by a custom split transport at compile time.
+pub fn require_split_task<F: core::future::Future<Output = ()>>(task: F) -> F {
+    task
+}
 
 /// Maximum size of a split message
 pub const SPLIT_MESSAGE_MAX_SIZE: usize = SplitMessage::POSTCARD_MAX_SIZE + 4;
@@ -36,7 +41,7 @@ pub struct PeripheralMatrixConfig {
 #[repr(u8)]
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub(crate) enum SplitMessage {
+pub enum SplitMessage {
     /// Keyboard event, from peripheral to central
     Key(KeyboardEvent),
     /// Pointing device event, from peripheral to central
