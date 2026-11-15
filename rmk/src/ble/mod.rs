@@ -403,29 +403,35 @@ async fn run_ble_keyboard<
         panic!("product name is too long for BLE");
     };
 
-    server
-        .set(
-            &server.device_config_service.pnp_id,
-            &PnPID {
-                vid_source: VidSource::UsbIF,
-                vendor_id: device_config.vid,
-                product_id: device_config.pid,
-                product_version: 0x0001,
-            },
-        )
-        .unwrap();
-    server
-        .set(
-            &server.device_config_service.serial_number,
-            &device_config.serial_number,
-        )
-        .unwrap();
-    server
-        .set(
-            &server.device_config_service.manufacturer_name,
-            &heapless::String::try_from(device_config.manufacturer).expect("manufacturer is too long for BLE"),
-        )
-        .unwrap();
+    unwrap!(
+        server
+            .set(
+                &server.device_config_service.pnp_id,
+                &PnPID {
+                    vid_source: VidSource::UsbIF,
+                    vendor_id: device_config.vid,
+                    product_id: device_config.pid,
+                    product_version: 0x0001,
+                },
+            )
+            .as_ref()
+    );
+    unwrap!(
+        server
+            .set(
+                &server.device_config_service.serial_number,
+                &device_config.serial_number,
+            )
+            .as_ref()
+    );
+    unwrap!(
+        server
+            .set(
+                &server.device_config_service.manufacturer_name,
+                &heapless::String::try_from(device_config.manufacturer).expect("manufacturer is too long for BLE"),
+            )
+            .as_ref()
+    );
 
     if crate::ble::passkey::passkey_entry_enabled() {
         stack.set_io_capabilities(IoCapabilities::KeyboardOnly);
@@ -550,8 +556,6 @@ async fn run_ble_keyboard<
                 }
                 Either3::First(Err(e)) => {
                     set_ble_state(profile_id, BleState::Inactive);
-                    #[cfg(feature = "defmt")]
-                    let e = defmt::Debug2Format(&e);
                     error!("Advertise error: {:?}", e);
                     Timer::after_millis(200).await;
                     continue;
@@ -1201,8 +1205,6 @@ pub(crate) async fn update_ble_phy<P: PacketPool>(
                 error!("[update_ble_phy] HCI error: {:?}", error);
             }
             Err(e) => {
-                #[cfg(feature = "defmt")]
-                let e = defmt::Debug2Format(&e);
                 error!("[update_ble_phy] error: {:?}", e);
             }
             Ok(_) => {
@@ -1243,8 +1245,6 @@ pub(crate) async fn update_conn_params<
                 return false;
             }
             Err(e) => {
-                #[cfg(feature = "defmt")]
-                let e = defmt::Debug2Format(&e);
                 error!("[update_conn_params] BLE host error: {:?}", e);
                 return false;
             }

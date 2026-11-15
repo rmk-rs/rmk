@@ -293,8 +293,6 @@ where
         match with_timeout(Duration::from_secs(15), connect(&mut central, &config)).await {
             Ok(Ok(conn)) => Some(conn),
             Ok(Err(e)) => {
-                #[cfg(feature = "defmt")]
-                let e = defmt::Debug2Format(&e);
                 debug!("[dongle] connect error: {:?}", e);
                 None
             }

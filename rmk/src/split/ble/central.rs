@@ -105,8 +105,6 @@ pub(crate) async fn scan_and_connect_peripherals<'a, C: Controller + CentralCmds
                     true
                 }
                 Ok(Err(e)) => {
-                    #[cfg(feature = "defmt")]
-                    let e = defmt::Debug2Format(&e);
                     error!("Connect error: {:?}", e);
                     Timer::after_millis(500).await;
                     false
@@ -230,8 +228,6 @@ pub(crate) async fn run_peripheral_sessions<
                 let conn = conns[id].receive().await;
                 set_peripheral_connected(id, true);
                 if let Err(e) = run_central_manager_task(id, stack, &conn, matrix_configs[id]).await {
-                    #[cfg(feature = "defmt")]
-                    let e = defmt::Debug2Format(&e);
                     error!("BLE central error: {:?}", e);
                 }
                 set_peripheral_connected(id, false);
@@ -391,8 +387,6 @@ pub(crate) mod subrating {
                     return false;
                 }
                 Err(e) => {
-                    #[cfg(feature = "defmt")]
-                    let e = defmt::Debug2Format(&e);
                     error!("[update_subrate_factor] BLE host error: {:?}", e);
                     return false;
                 }
@@ -594,8 +588,6 @@ impl<'a, 'b, 'c, C: Controller + ControllerCmdAsync<LeSetPhy>, P: PacketPool> Sp
                 error!("Peripheral disconnected");
                 return Err(SplitDriverError::Disconnected);
             }
-            #[cfg(feature = "defmt")]
-            let e = defmt::Debug2Format(&e);
             error!("BLE message_to_peripheral_write error: {:?}", e);
         }
 
