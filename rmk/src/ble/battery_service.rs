@@ -1,7 +1,6 @@
 use core::sync::atomic::Ordering;
 
-use embassy_futures::join::join;
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::select;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
@@ -172,32 +171,29 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
         // Try to do the first battery report in 30 seconds
         with_timeout(Duration::from_secs(30), first_report).await.ok();
 
-        // Report the battery level.
+        // Hold each battery change until the keyboard is in use: a key press within the last
+        // minute, the next key press, or 30 awake minutes. Every link wakes on the same change
+        // and sends the same cached level, so hosts on different profiles agree.
         loop {
-            // Calculate timeout when reporting battery level
-            let timeout = async {
-                loop {
-                    embassy_time::Timer::after_secs(1800).await;
-                    // 30 minutes passed and the keyboard isn't in sleep mode: timeout
-                    if !SLEEPING_STATE.load(Ordering::Acquire) {
-                        break;
+            self.sub.next_message_pure().await;
+            // `try_get` marks the latest press as seen, so `changed` waits for a new one.
+            let idle = last_key
+                .try_get()
+                .is_none_or(|last_press| (Instant::now().as_secs() as u32).saturating_sub(last_press) >= 60);
+            if idle {
+                let awake_timeout = async {
+                    loop {
+                        Timer::after_secs(1800).await;
+                        if !SLEEPING_STATE.load(Ordering::Acquire) {
+                            break;
+                        }
                     }
-                }
-            };
-
-            // Wait until there are both battery status update and key pressing or timeout
-            let (mut state, last_press) = join(self.sub.next_message_pure(), select(timeout, last_key.changed())).await;
-
-            if let Either::Second(last_press) = last_press
-                && (Instant::now().as_secs() as u32).saturating_sub(last_press) >= 60
-            {
-                continue;
+                };
+                select(awake_timeout, last_key.changed()).await;
             }
-
-            while let Some(newer) = self.sub.try_next_message_pure() {
-                state = newer;
-            }
-            if let BatteryStatus::Available { level: Some(level), .. } = state.0
+            while self.sub.try_next_message_pure().is_some() {}
+            if let BatteryStatus::Available { level: Some(level), .. } =
+                crate::input_device::battery::current_battery_status()
                 && let Err(e) = self.battery_level.notify(self.conn, &level, true).await
             {
                 error!("Failed to notify battery level: {:?}", e);
@@ -286,6 +282,101 @@ impl<P: PacketPool> Runnable for BlePeripheralBatteryServer<'_, '_, '_, P> {
                 error!("Failed to notify peripheral {} battery level: {:?}", event.id, e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod report_tests {
+    use embassy_futures::join::join;
+    use embassy_futures::select::select;
+    use embassy_time::{Duration, Instant, MockDriver, Timer, with_timeout};
+    use rmk_types::battery::{BatteryStatus, ChargeState};
+    use trouble_host::prelude::*;
+
+    use super::BleBatteryServer;
+    use crate::ble::adv::{Adv, advertise};
+    use crate::ble::ble_server::Server;
+    use crate::ble::fake_hci::FakeController;
+    use crate::ble::{NoopHandler, ble_task};
+    use crate::core_traits::Runnable;
+    use crate::event::{BatteryStatusEvent, publish_event};
+    use crate::keyboard::LAST_KEY_TIMESTAMP;
+    use crate::test_support::test_block_on;
+
+    fn set_level(level: u8) {
+        let status = BatteryStatus::Available {
+            charge_state: ChargeState::Discharging,
+            level: Some(level),
+        };
+        crate::input_device::battery::BATTERY_STATUS.lock(|cache| cache.set(status));
+        publish_event(BatteryStatusEvent(status));
+    }
+
+    #[test]
+    fn a_change_late_in_continuous_typing_reaches_the_host() {
+        crate::ble::rng::seed([7; 32]);
+        let hci = FakeController::default();
+        let mut resources = HostResources::<DefaultPacketPool, 1, 0, 1, 1>::new();
+        let stack = trouble_host::new(hci.clone(), &mut resources).build();
+        let mut peripheral = stack.peripheral();
+        let Ok(server) = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
+            name: "test",
+            appearance: &appearance::human_interface_device::KEYBOARD,
+        })) else {
+            panic!("the GATT server must build");
+        };
+        let level = server.battery_service.level;
+
+        test_block_on(select(ble_task(stack.runner(), &NoopHandler), async {
+            let (conn, ()) = join(
+                advertise(
+                    &mut peripheral,
+                    &server.server,
+                    Adv::Host {
+                        name: "test",
+                        fast: false,
+                    },
+                    cfg!(feature = "ext_adv").then(|| BdAddr::new([1, 2, 3, 4, 5, 0xC6])),
+                    Duration::from_secs(1),
+                ),
+                async {
+                    while hci.advertising_starts() == 0 {
+                        Timer::after_millis(1).await;
+                    }
+                    hci.connect(1, [0xA1, 0, 0, 0, 0, 0xC1]);
+                },
+            )
+            .await;
+            let conn = conn.expect("the host must connect");
+            // The host subscribed to battery notifications.
+            let cccd = level.cccd_handle.expect("battery level must be notifiable");
+            let mut table = ClientAttTable::builder();
+            table.push(cccd, 2, false);
+            let mut table = table.build();
+            table.write(cccd, 0, &[1, 0]).unwrap();
+            server.set_client_att_table(conn.raw(), &table.view());
+
+            set_level(80);
+            let mut battery = BleBatteryServer::new(&server, &conn);
+            select(battery.run(), async {
+                // The connect report goes out, then typing runs past a minute before the level drops.
+                for _ in 0..4 {
+                    LAST_KEY_TIMESTAMP.sender().send(Instant::now().as_secs() as u32);
+                    MockDriver::get().advance(Duration::from_secs(30));
+                    Timer::after_millis(1).await;
+                }
+                set_level(79);
+                with_timeout(Duration::from_secs(1), async {
+                    while hci.notifications(1, level.handle).len() < 2 {
+                        Timer::after_millis(1).await;
+                    }
+                })
+                .await
+                .expect("the new level must reach the host");
+                assert_eq!(hci.notifications(1, level.handle), [[80], [79]]);
+            })
+            .await;
+        }));
     }
 }
 

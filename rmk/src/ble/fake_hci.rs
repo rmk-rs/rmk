@@ -24,6 +24,8 @@ struct State {
     events: Channel<CriticalSectionRawMutex, Vec<u8>, 16>,
     /// The opcode and parameters of every command, in order.
     commands: Mutex<Vec<(Opcode, Vec<u8>)>>,
+    /// The connection handle and payload of every ACL packet sent, in order.
+    acl: Mutex<Vec<(u16, Vec<u8>)>>,
 }
 
 impl Default for State {
@@ -31,6 +33,7 @@ impl Default for State {
         Self {
             events: Channel::new(),
             commands: Mutex::default(),
+            acl: Mutex::default(),
         }
     }
 }
@@ -60,6 +63,20 @@ impl FakeController {
         #[cfg(not(feature = "ext_adv"))]
         let enables = self.sent::<bt_hci::cmd::le::LeSetAdvEnable>();
         enables.iter().filter(|params| params[0] == 1).count()
+    }
+
+    /// The value of every notification of attribute `attr` sent on `handle`.
+    pub(crate) fn notifications(&self, handle: u16, attr: u16) -> Vec<Vec<u8>> {
+        let [lo, hi] = attr.to_le_bytes();
+        let acl = self.state.acl.lock().unwrap();
+        acl.iter()
+            .filter(|(link, _)| *link == handle)
+            // L2CAP length and the ATT channel, then a Handle Value Notification.
+            .filter_map(|(_, data)| match data.as_slice() {
+                [_, _, 4, 0, 0x1B, l, h, value @ ..] if [*l, *h] == [lo, hi] => Some(value.to_vec()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The minimum interval of every advertising setup, in 0.625 ms units.
@@ -134,7 +151,9 @@ impl Controller for FakeController {
 
     async fn write_acl_data(&self, packet: &AclPacket<'_>) -> Result<(), Infallible> {
         // Number Of Completed Packets returns the buffer credit at once.
-        let [lo, hi] = packet.handle().raw().to_le_bytes();
+        let handle = packet.handle().raw();
+        self.state.acl.lock().unwrap().push((handle, packet.data().to_vec()));
+        let [lo, hi] = handle.to_le_bytes();
         self.push(vec![0x13, 5, 1, lo, hi, 1, 0]);
         Ok(())
     }

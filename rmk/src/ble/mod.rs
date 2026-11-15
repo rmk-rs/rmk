@@ -226,6 +226,7 @@ pub(crate) fn array_from_fn<T, const N: usize>(f: impl FnMut(usize) -> T) -> [T;
     core::array::from_fn(f)
 }
 
+// A wrapper of `poll` to make the `poll` never inlined, it reduces the stack usage.
 #[cfg(feature = "split")]
 fn poll_separately<F: Future>(mut future: Pin<&mut F>) -> impl Future<Output = F::Output> {
     #[inline(never)]
