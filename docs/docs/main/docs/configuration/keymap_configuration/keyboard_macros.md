@@ -25,9 +25,9 @@ Macros come from two places:
 - All macros share `macro_space_size` bytes of memory (default 256). A text character takes 1 byte with Vial and 2 with Rynk, any other step up to 5.
 - A macro has at most one pause for release.
 - Text is ASCII only. For other characters, see [Special characters and unicode](./special_characters_and_unicode).
-- There are at most `macro_max_num` macros (default 32).
+- There are at most `max_macros` macros (default 32).
 
-Set `macro_space_size` and `macro_max_num` in the [`[rmk]`](../rmk_config#behavior-configuration) section. Default macros that break a limit fail the build.
+Set `macro_space_size` and `max_macros` in the [`[rmk]`](../rmk_config#behavior-configuration) section. Default macros that break a limit fail the build.
 
 ## Defining macros
 
@@ -113,7 +113,7 @@ const MACROS: &[&[MacroOp]] = &[
 ];
 const _: () = assert!(validate_default_macros(MACROS));
 
-// `combos` is a `[Option<Combo>; COMBO_MAX_NUM]` array; unused slots stay `None`.
+// `combos` is a `[Option<Combo>; MAX_COMBOS]` array; unused slots stay `None`.
 let mut combo_config = CombosConfig::default();
 combo_config.combos[0] = Some(Combo::new(ComboConfig::new([k!(T), k!(Y)], macros!(0), Some(1))));
 combo_config.combos[1] = Some(Combo::new(ComboConfig::new([k!(G)], macros!(1), Some(1))));

@@ -1117,9 +1117,9 @@ mod tests {
         use crate::custom_message::{CustomMessage, CustomMessageTarget};
 
         for target in [CustomMessageTarget::Central, CustomMessageTarget::Peripherals] {
-            for len in [0, 30, 31, crate::CUSTOM_MESSAGE_MAX_SIZE]
+            for len in [0, 30, 31, crate::MAX_CUSTOM_MESSAGE_SIZE]
                 .into_iter()
-                .filter(|len| *len <= crate::CUSTOM_MESSAGE_MAX_SIZE)
+                .filter(|len| *len <= crate::MAX_CUSTOM_MESSAGE_SIZE)
             {
                 let payload = vec![0xA5; len];
                 let message = CustomMessage::new(&payload, target).unwrap();

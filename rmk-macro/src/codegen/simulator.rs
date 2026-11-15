@@ -705,7 +705,7 @@ expect = [[]]
 
     #[test]
     fn rmk_section_is_rejected() {
-        let doc = format!("{MINIMAL}\n[rmk]\ncombo_max_num = 16\n");
+        let doc = format!("{MINIMAL}\n[rmk]\nmax_combos = 16\n");
         let err = expand(&doc, None).expect_err("expected error");
         assert!(err.contains("[rmk]"), "unexpected error: {err}");
     }

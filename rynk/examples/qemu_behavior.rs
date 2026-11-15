@@ -115,7 +115,7 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(caps.max_macros, 32);
     assert_eq!(caps.macro_space_size, 256);
     assert!(!caps.macros_writable, "no storage, so macros are read-only");
-    assert_eq!(caps.max_morse, 8);
+    assert_eq!(caps.max_morses, 8);
     assert_eq!(caps.max_patterns_per_key, 8);
     assert_eq!(caps.max_forks, 8);
     assert!(!caps.storage_enabled);
@@ -369,12 +369,12 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(client.read_all_combos().await?, mutated_combos);
     client.write_all_combos(all_combos).await?;
 
-    // Morse table pages back every slot (the list is padded to `max_morse`);
+    // Morse table pages back every slot (the list is padded to `max_morses`);
     // slot 0 carries the configured profile, and a page at the slot count is empty.
     let all_morses = client.read_all_morses().await?;
-    assert_eq!(all_morses.len(), caps.max_morse as usize);
+    assert_eq!(all_morses.len(), caps.max_morses as usize);
     assert_eq!(all_morses[0], empty_morse(MorseProfile::const_default()));
-    assert!(client.get_morse_bulk(caps.max_morse).await?.configs.is_empty());
+    assert!(client.get_morse_bulk(caps.max_morses).await?.configs.is_empty());
     let mut mutated_morses = all_morses.clone();
     mutated_morses[0] = empty_morse(MorseProfile::const_default().with_hold_timeout_ms(Some(200)));
     client.write_all_morses(mutated_morses.clone()).await?;

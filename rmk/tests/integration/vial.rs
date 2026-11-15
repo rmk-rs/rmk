@@ -3,7 +3,7 @@
 use rmk::config::BehaviorConfig;
 use rmk::test_support::{test_block_on, to_via_keycode};
 use rmk::types::action::{Action, EncoderAction, KeyAction};
-use rmk::types::constants::{MACRO_MAX_NUM, MACRO_SPACE_SIZE};
+use rmk::types::constants::{MACRO_SPACE_SIZE, MAX_MACROS};
 use rmk::types::keyboard_macros::MacroOp;
 use rmk::types::keycode::{HidKeyCode, KeyCode};
 use rmk::{k, macros, text};
@@ -51,7 +51,7 @@ impl SimKeyboard {
 
     fn set_combo<const N: usize>(&mut self, index: u8, actions: [KeyAction; N], output: KeyAction) {
         let mut request = dynamic(VialDynamic::DynamicVialComboSet, index);
-        const MAX: usize = rmk::test_support::COMBO_MAX_LENGTH;
+        const MAX: usize = rmk::test_support::MAX_COMBO_KEYS;
         assert!(N <= MAX);
         for (idx, action) in actions.into_iter().enumerate() {
             let start = 4 + idx * 2;
@@ -264,7 +264,7 @@ fn a_changed_slot_plays_what_vial_saved() {
     test_block_on(async {
         let mut keyboard = macro_keyboard().build().await;
         let mut data = vec![0x01, 0x01, 0x06, 0x00, b'h', b'i', 0x00];
-        data.resize(data.len() + MACRO_MAX_NUM - 2, 0);
+        data.resize(data.len() + MAX_MACROS - 2, 0);
         save_macro_buffer(&mut keyboard, &data);
         keyboard
             .press(0, 0)
@@ -282,13 +282,13 @@ fn a_changed_slot_plays_what_vial_saved() {
 #[test]
 fn a_macro_past_the_slots_plays_nothing() {
     test_block_on(async {
-        let past = KeyAction::Single(Action::TriggerMacro(MACRO_MAX_NUM as u8));
+        let past = KeyAction::Single(Action::TriggerMacro(MAX_MACROS as u8));
         let mut keyboard = SimKeyboard::builder([[[k!(A), past]]]).build().await;
         let mut long = vec![b'a'; 64];
-        long.resize(long.len() + MACRO_MAX_NUM, 0);
+        long.resize(long.len() + MAX_MACROS, 0);
         save_macro_buffer(&mut keyboard, &long);
         let mut short = vec![b'b'];
-        short.resize(short.len() + MACRO_MAX_NUM, 0);
+        short.resize(short.len() + MAX_MACROS, 0);
         save_macro_buffer(&mut keyboard, &short);
         keyboard.tap(0, 1, 10).expect_no_report(200).run().await;
     });
@@ -304,7 +304,7 @@ async fn save_from_vial_gui(resend_last: bool) -> (SimKeyboard, crate::simulator
     let mut keyboard = macro_keyboard().build_with_flash(flash.clone()).await;
     // Slot 0 is sent back as read, slot 1 becomes `yo`, the rest are empty.
     let mut data = vec![0x01, 0x01, 0x04, 0x01, 0x01, 0x05, 0x00, b'y', b'o', 0x00];
-    data.resize(data.len() + MACRO_MAX_NUM - 2, 0);
+    data.resize(data.len() + MAX_MACROS - 2, 0);
     let packets: Vec<_> = data
         .chunks(8)
         .enumerate()
@@ -410,7 +410,7 @@ fn macro_reset_clears_the_macros() {
 #[cfg(feature = "storage")]
 #[test]
 fn the_longest_macro_vial_can_save_is_kept() {
-    const TEXT: usize = MACRO_SPACE_SIZE - MACRO_MAX_NUM;
+    const TEXT: usize = MACRO_SPACE_SIZE - MAX_MACROS;
     test_block_on(async {
         let flash = crate::simulator::Flash::new();
         let mut keyboard = macro_keyboard().build_with_flash(flash).await;

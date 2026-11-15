@@ -31,7 +31,7 @@ use crate::keyboard::mouse::{MouseAction, MouseState};
 use crate::keyboard::oneshot::OneShotState;
 use crate::keymap::KeyMap;
 use crate::sleep::report_activity;
-use crate::{COMBO_MAX_NUM, FORK_MAX_NUM, boot};
+use crate::{MAX_COMBOS, MAX_FORKS, boot};
 
 pub(crate) mod auto_mouse_layer;
 pub mod combo;
@@ -215,7 +215,7 @@ pub struct Keyboard<'a> {
     macro_due: Instant,
 
     /// The real state before fork activations is stored here
-    fork_states: [Option<ActiveFork>; FORK_MAX_NUM], // chosen replacement key of the currently triggered forks and the related modifier suppression
+    fork_states: [Option<ActiveFork>; MAX_FORKS], // chosen replacement key of the currently triggered forks and the related modifier suppression
     fork_keep_mask: ModifierCombination, // aggregate here the explicit modifiers pressed since the last fork activations
 
     /// Current registered keys, ordered by the press time
@@ -256,7 +256,7 @@ impl<'a> Keyboard<'a> {
             user_hold: None,
             caps_word: CapsWordState::default(),
             macro_due: Instant::from_ticks(0),
-            fork_states: [None; FORK_MAX_NUM],
+            fork_states: [None; MAX_FORKS],
             fork_keep_mask: ModifierCombination::default(),
             held_buffer: HeldBuffer::new(),
             registered: Vec::new(),
@@ -898,7 +898,7 @@ impl<'a> Keyboard<'a> {
         let fork_states = &self.fork_states;
         let fork_keep_mask = &mut self.fork_keep_mask;
         let (replacement, chain_starter, combined_suppress) = self.keymap.with_forks(|forks| {
-            let mut triggered_forks = [false; FORK_MAX_NUM]; // used to avoid loops
+            let mut triggered_forks = [false; MAX_FORKS]; // used to avoid loops
             let mut chain_starter: Option<usize> = None;
             let mut combined_suppress = ModifierCombination::default();
             let mut replacement = *key_action;
@@ -1157,7 +1157,7 @@ impl<'a> Keyboard<'a> {
                 // (e.g. `M+,` and `,+.` both sharing Comma), so collect every combo
                 // output that unwinds — not just the first — otherwise the others
                 // stay stuck on the host.
-                let mut combo_outputs: Vec<(u8, KeyAction), COMBO_MAX_NUM> = Vec::new();
+                let mut combo_outputs: Vec<(u8, KeyAction), MAX_COMBOS> = Vec::new();
                 let mut releasing_triggered_combo = false;
 
                 self.keymap.with_combos_mut(|combos| {

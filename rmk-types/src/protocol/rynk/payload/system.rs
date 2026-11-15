@@ -49,7 +49,7 @@ pub struct DeviceCapabilities {
     /// Whether `SetMacro` persists; a firmware without storage serves its
     /// compiled-in macros read-only.
     pub macros_writable: bool,
-    pub max_morse: u8,
+    pub max_morses: u8,
     pub max_patterns_per_key: u8,
     pub max_forks: u8,
 
@@ -193,7 +193,7 @@ mod tests {
             max_macros: 32,
             macro_space_size: 256,
             macros_writable: true,
-            max_morse: 8,
+            max_morses: 8,
             max_patterns_per_key: 8,
             max_forks: 4,
             storage_enabled: true,
@@ -217,7 +217,7 @@ mod tests {
             max_macros: 0,
             macro_space_size: 0,
             macros_writable: false,
-            max_morse: 0,
+            max_morses: 0,
             max_patterns_per_key: 0,
             max_forks: 0,
             storage_enabled: false,

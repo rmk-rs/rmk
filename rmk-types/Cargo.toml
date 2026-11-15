@@ -16,7 +16,7 @@ defmt = ["dep:defmt", "postcard/defmt", "heapless/defmt"]
 _codegen = []
 # Enable RMK's Rynk protocol
 rynk = ["dep:cobs"]
-# Enable custom message and emit CUSTOM_MESSAGE_MAX_SIZE.
+# Enable custom message and emit MAX_CUSTOM_MESSAGE_SIZE.
 custom_message = []
 # Host tool
 host = ["rynk", "_ble", "split", "steno", "serde/alloc"]

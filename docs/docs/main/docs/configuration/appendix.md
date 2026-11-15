@@ -377,21 +377,21 @@ mouse_key_interval = 20
 # Mouse wheel interval (ms) - controls scrolling speed
 mouse_wheel_interval = 80
 # Maximum number of combos keyboard can store
-combo_max_num = 8
+max_combos = 8
 # Maximum number of keys pressed simultaneously in a combo
-combo_max_length = 4
+max_combo_keys = 4
 # Maximum number of forks for conditional key actions
-fork_max_num = 8
+max_forks = 8
 # Maximum number of morse keys keyboard can store (max 255)
 # (Each morse key is a programmable multi-tap/hold key)
-morse_max_num = 8
+max_morses = 8
 # Capacity of the named morse profile table ([behavior.morse.profiles], max 255)
-morse_profile_max_num = 16
+max_morse_profiles = 16
 # Maximum number of patterns a morse key can handle (min 4, max 32; raised automatically to fit the
 # largest configured morse key)
 max_patterns_per_key = 32
 # Maximum number of macros
-macro_max_num = 32
+max_macros = 32
 # Bytes of macro memory shared by all macros (a multiple of 32, max 8192)
 macro_space_size = 256
 # Default debounce time in ms
@@ -415,7 +415,7 @@ rynk_buffer_size = 488
 dongle_pairing_window_secs = 30
 # Maximum number of [[behavior.auto_mouse_layer]] entries.
 # Auto-derived from the number of configured entries when unset
-# auto_mouse_layer_max_num = 2
+# max_auto_mouse_layers = 2
 
 # Event channel configuration.
 # Tune the pub/sub channel of a single event type with [event.<name>], where

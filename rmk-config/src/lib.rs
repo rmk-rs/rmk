@@ -229,7 +229,7 @@ impl KeyboardTomlConfig {
     }
 
     /// Auto calculate some parameters in toml:
-    /// - Update morse_max_num to fit all configured morses
+    /// - Update max_morses to fit all configured morses
     /// - Update max_patterns_per_key to fit the max number of configured (pattern, action) pairs per morse key
     /// - Update peripheral number based on the number of split boards
     /// - TODO: Update controller number based on the number of split boards
@@ -269,14 +269,14 @@ impl KeyboardTomlConfig {
                 }
                 self.rmk.max_patterns_per_key = max_required_patterns;
 
-                // Update the morse_max_num
-                self.rmk.morse_max_num = self.rmk.morse_max_num.max(morses.len());
+                // Update the max_morses
+                self.rmk.max_morses = self.rmk.max_morses.max(morses.len());
             }
 
             let auto_mouse_layers = behavior.auto_mouse_layer.as_deref().unwrap_or_default();
-            self.rmk.auto_mouse_layer_max_num.get_or_insert(auto_mouse_layers.len());
+            self.rmk.max_auto_mouse_layers.get_or_insert(auto_mouse_layers.len());
         } else {
-            self.rmk.auto_mouse_layer_max_num.get_or_insert(0);
+            self.rmk.max_auto_mouse_layers.get_or_insert(0);
         }
     }
 }
@@ -294,34 +294,34 @@ pub(crate) struct RmkConstantsConfig {
     pub mouse_wheel_interval: u16,
     /// The size of the largest custom message.
     #[serde_inline_default(241)]
-    pub custom_message_max_size: usize,
+    pub max_custom_message_size: usize,
     /// Maximum number of combos keyboard can store
     #[serde_inline_default(8)]
-    #[serde(deserialize_with = "check_combo_max_num")]
-    pub combo_max_num: usize,
+    #[serde(deserialize_with = "check_max_combos")]
+    pub max_combos: usize,
     /// Maximum number of keys pressed simultaneously in a combo
     #[serde_inline_default(4)]
-    pub combo_max_length: usize,
+    pub max_combo_keys: usize,
     /// Maximum number of forks for conditional key actions
     #[serde_inline_default(8)]
-    #[serde(deserialize_with = "check_fork_max_num")]
-    pub fork_max_num: usize,
+    #[serde(deserialize_with = "check_max_forks")]
+    pub max_forks: usize,
     /// Maximum number of morses keyboard can store
     #[serde_inline_default(8)]
-    #[serde(deserialize_with = "check_morse_max_num")]
-    pub morse_max_num: usize,
+    #[serde(deserialize_with = "check_max_morses")]
+    pub max_morses: usize,
     /// Capacity of the morse profile table (named profiles in `[behavior.morse.profiles]`)
     #[serde_inline_default(16)]
-    #[serde(deserialize_with = "check_morse_profile_max_num")]
-    pub morse_profile_max_num: usize,
+    #[serde(deserialize_with = "check_max_morse_profiles")]
+    pub max_morse_profiles: usize,
     /// Maximum number of patterns a morse key can handle
     #[serde_inline_default(8)]
     #[serde(deserialize_with = "check_max_patterns_per_key")]
     pub max_patterns_per_key: usize,
     /// Maximum number of macros, default and host-written together
     #[serde_inline_default(32)]
-    #[serde(deserialize_with = "check_macro_max_num")]
-    pub macro_max_num: usize,
+    #[serde(deserialize_with = "check_max_macros")]
+    pub max_macros: usize,
     /// Bytes of the buffer every macro shares, a multiple of 32
     #[serde_inline_default(256)]
     #[serde(deserialize_with = "check_macro_space_size")]
@@ -349,7 +349,7 @@ pub(crate) struct RmkConstantsConfig {
     pub split_central_sleep_timeout_seconds: u32,
     /// Maximum number of auto mouse layer entries; auto-derived from `[[behavior.auto_mouse_layer]]` if unset.
     #[serde(default)]
-    pub auto_mouse_layer_max_num: Option<usize>,
+    pub max_auto_mouse_layers: Option<usize>,
     /// Exact RAM of each Rynk RX/TX frame buffer (bytes), payload capacity and bulk counts derive from it.
     /// Default 488 fills exactly two BLE notifications.
     #[serde_inline_default(488)]
@@ -360,27 +360,27 @@ pub(crate) struct RmkConstantsConfig {
     pub dongle_pairing_window_secs: u32,
 }
 
-fn check_combo_max_num<'de, D>(deserializer: D) -> Result<usize, D::Error>
+fn check_max_combos<'de, D>(deserializer: D) -> Result<usize, D::Error>
 where
     D: de::Deserializer<'de>,
 {
     let value = Deserialize::deserialize(deserializer)?;
     if value > u8::MAX as usize {
         return Err(de::Error::custom(format!(
-            "combo_max_num must be between 0 and 255, got {value}"
+            "max_combos must be between 0 and 255, got {value}"
         )));
     }
     Ok(value)
 }
 
-fn check_macro_max_num<'de, D>(deserializer: D) -> Result<usize, D::Error>
+fn check_max_macros<'de, D>(deserializer: D) -> Result<usize, D::Error>
 where
     D: de::Deserializer<'de>,
 {
     let value = Deserialize::deserialize(deserializer)?;
     if value > u8::MAX as usize {
         return Err(de::Error::custom(format!(
-            "macro_max_num must be between 0 and 255, got {value}"
+            "max_macros must be between 0 and 255, got {value}"
         )));
     }
     Ok(value)
@@ -400,14 +400,14 @@ where
     Ok(value)
 }
 
-fn check_morse_max_num<'de, D>(deserializer: D) -> Result<usize, D::Error>
+fn check_max_morses<'de, D>(deserializer: D) -> Result<usize, D::Error>
 where
     D: de::Deserializer<'de>,
 {
     let value = Deserialize::deserialize(deserializer)?;
     if value > u8::MAX as usize {
         return Err(de::Error::custom(format!(
-            "morse_max_num must be between 0 and 255, got {value}"
+            "max_morses must be between 0 and 255, got {value}"
         )));
     }
     Ok(value)
@@ -416,13 +416,13 @@ where
 /// The profile index is a `u8` in `KeyAction::TapHold` and an index with no
 /// table entry means "use the default profile", so the table may never cover
 /// the full `u8` range: capacity ≤ 255 keeps at least one index always vacant.
-fn check_morse_profile_max_num<'de, D>(deserializer: D) -> Result<usize, D::Error>
+fn check_max_morse_profiles<'de, D>(deserializer: D) -> Result<usize, D::Error>
 where
     D: de::Deserializer<'de>,
 {
     let value = Deserialize::deserialize(deserializer)?;
     if value > 255 {
-        panic!("❌ Parse `keyboard.toml` error: morse_profile_max_num must be between 0 and 255, got {value}");
+        panic!("❌ Parse `keyboard.toml` error: max_morse_profiles must be between 0 and 255, got {value}");
     }
     Ok(value)
 }
@@ -440,14 +440,14 @@ where
     Ok(value)
 }
 
-fn check_fork_max_num<'de, D>(deserializer: D) -> Result<usize, D::Error>
+fn check_max_forks<'de, D>(deserializer: D) -> Result<usize, D::Error>
 where
     D: de::Deserializer<'de>,
 {
     let value = Deserialize::deserialize(deserializer)?;
     if value > u8::MAX as usize {
         return Err(de::Error::custom(format!(
-            "fork_max_num must be between 0 and 255, got {value}"
+            "max_forks must be between 0 and 255, got {value}"
         )));
     }
     Ok(value)
@@ -459,14 +459,14 @@ impl Default for RmkConstantsConfig {
         Self {
             mouse_key_interval: 20,
             mouse_wheel_interval: 80,
-            custom_message_max_size: 241,
-            combo_max_num: 8,
-            combo_max_length: 4,
-            fork_max_num: 8,
-            morse_max_num: 8,
-            morse_profile_max_num: 16,
+            max_custom_message_size: 241,
+            max_combos: 8,
+            max_combo_keys: 4,
+            max_forks: 8,
+            max_morses: 8,
+            max_morse_profiles: 16,
             max_patterns_per_key: 8,
-            macro_max_num: 32,
+            max_macros: 32,
             macro_space_size: 256,
             debounce_time: 20,
             report_channel_size: 16,
@@ -475,7 +475,7 @@ impl Default for RmkConstantsConfig {
             split_peripherals_num: 0,
             ble_profiles_num: 3,
             split_central_sleep_timeout_seconds: 0,
-            auto_mouse_layer_max_num: None,
+            max_auto_mouse_layers: None,
             rynk_buffer_size: 488,
             dongle_pairing_window_secs: 30,
         }
@@ -1670,20 +1670,20 @@ channel_size = 32
         let ok: KeyboardTomlConfig = toml::from_str(
             r#"
 [rmk]
-combo_max_num = 255
-morse_max_num = 255
-fork_max_num = 255
+max_combos = 255
+max_morses = 255
+max_forks = 255
 "#,
         )
         .unwrap();
-        assert_eq!(ok.rmk.combo_max_num, 255);
-        assert_eq!(ok.rmk.morse_max_num, 255);
-        assert_eq!(ok.rmk.fork_max_num, 255);
+        assert_eq!(ok.rmk.max_combos, 255);
+        assert_eq!(ok.rmk.max_morses, 255);
+        assert_eq!(ok.rmk.max_forks, 255);
 
         for (field, message) in [
-            ("combo_max_num", "combo_max_num must be between 0 and 255"),
-            ("morse_max_num", "morse_max_num must be between 0 and 255"),
-            ("fork_max_num", "fork_max_num must be between 0 and 255"),
+            ("max_combos", "max_combos must be between 0 and 255"),
+            ("max_morses", "max_morses must be between 0 and 255"),
+            ("max_forks", "max_forks must be between 0 and 255"),
         ] {
             let toml = format!("[rmk]\n{field} = 256\n");
             let err = toml::from_str::<KeyboardTomlConfig>(&toml).unwrap_err();

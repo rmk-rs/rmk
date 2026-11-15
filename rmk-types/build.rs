@@ -59,20 +59,20 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         "pub const MOUSE_WHEEL_INTERVAL: u16 = {};",
         bc.mouse_wheel_interval
     ));
-    lines.push(format!("pub const COMBO_MAX_NUM: usize = {};", bc.combo_max_num));
-    lines.push(format!("pub const COMBO_MAX_LENGTH: usize = {};", bc.combo_max_length));
-    lines.push(format!("pub const MACRO_MAX_NUM: usize = {};", bc.macro_max_num));
+    lines.push(format!("pub const MAX_COMBOS: usize = {};", bc.max_combos));
+    lines.push(format!("pub const MAX_COMBO_KEYS: usize = {};", bc.max_combo_keys));
+    lines.push(format!("pub const MAX_MACROS: usize = {};", bc.max_macros));
     lines.push(format!(
         "pub const MACRO_CHUNK_SIZE: usize = {};",
         rmk_config::MACRO_CHUNK_SIZE
     ));
     if env::var("CARGO_FEATURE_CUSTOM_MESSAGE").is_ok() {
         lines.push(format!(
-            "pub const CUSTOM_MESSAGE_MAX_SIZE: usize = {};",
-            bc.custom_message_max_size
+            "pub const MAX_CUSTOM_MESSAGE_SIZE: usize = {};",
+            bc.max_custom_message_size
         ));
     }
-    lines.push(format!("pub const FORK_MAX_NUM: usize = {};", bc.fork_max_num));
+    lines.push(format!("pub const MAX_FORKS: usize = {};", bc.max_forks));
     lines.push(format!("pub const DEBOUNCE_THRESHOLD: u16 = {};", bc.debounce_time));
     lines.push(format!(
         "pub const REPORT_CHANNEL_SIZE: usize = {};",
@@ -95,15 +95,15 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         bc.central_battery_user_description
     ));
     lines.push(format!(
-        "pub const SPLIT_BATTERY_PERIPHERALS_NUM: usize = {};",
+        "pub const NUM_SPLIT_BATTERY_PERIPHERALS: usize = {};",
         bc.split_battery_peripheral_ids.len()
     ));
     lines.push(format!(
-        "pub const SPLIT_BATTERY_PERIPHERAL_IDS: [usize; SPLIT_BATTERY_PERIPHERALS_NUM] = {:?};",
+        "pub const SPLIT_BATTERY_PERIPHERAL_IDS: [usize; NUM_SPLIT_BATTERY_PERIPHERALS] = {:?};",
         bc.split_battery_peripheral_ids
     ));
     lines.push(format!(
-        "pub const SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS: [&str; SPLIT_BATTERY_PERIPHERALS_NUM] = {:?};",
+        "pub const SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS: [&str; NUM_SPLIT_BATTERY_PERIPHERALS] = {:?};",
         bc.split_battery_peripheral_user_descriptions
     ));
     lines.push(format!("pub const NUM_BLE_PROFILE: usize = {};", bc.ble_profiles_num));
@@ -112,14 +112,14 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         "pub const SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS: u32 = {};",
         bc.split_central_sleep_timeout_seconds
     ));
-    lines.push(format!("pub const MORSE_MAX_NUM: usize = {};", bc.morse_max_num));
+    lines.push(format!("pub const MAX_MORSES: usize = {};", bc.max_morses));
     lines.push(format!(
-        "pub const MORSE_PROFILE_MAX_NUM: usize = {};",
-        bc.morse_profile_max_num
+        "pub const MAX_MORSE_PROFILES: usize = {};",
+        bc.max_morse_profiles
     ));
     lines.push(format!(
-        "pub const AUTO_MOUSE_LAYER_MAX_NUM: usize = {};",
-        bc.auto_mouse_layer_max_num
+        "pub const MAX_AUTO_MOUSE_LAYERS: usize = {};",
+        bc.max_auto_mouse_layers
     ));
     lines.push(format!(
         "pub const MAX_PATTERNS_PER_KEY: usize = {};",
@@ -159,7 +159,7 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         ));
     } else {
         // Firmware: per-item constants from keyboard.toml / defaults.
-        lines.push(format!("pub const COMBO_SIZE: usize = {};", bc.combo_max_length));
+        lines.push(format!("pub const COMBO_SIZE: usize = {};", bc.max_combo_keys));
         lines.push(format!("pub const MORSE_SIZE: usize = {};", bc.max_patterns_per_key));
         lines.push(format!("pub const MACRO_SPACE_SIZE: usize = {};", bc.macro_space_size));
         // Firmware Vec sizes must not exceed protocol ceilings (rynk builds only).

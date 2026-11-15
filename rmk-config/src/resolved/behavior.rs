@@ -28,8 +28,8 @@ pub const DEFAULT_AUTO_MOUSE_LAYER_TIMEOUT_MS: u64 = 500;
 /// Default motion threshold for [`AutoMouseLayer`] when not specified.
 pub const DEFAULT_AUTO_MOUSE_LAYER_THRESHOLD: u16 = 1;
 
-/// Fallback for `auto_mouse_layer_max_num` when no `keyboard.toml` is loaded.
-pub const DEFAULT_AUTO_MOUSE_LAYER_MAX_NUM: usize = 2;
+/// Fallback for `max_auto_mouse_layers` when no `keyboard.toml` is loaded.
+pub const DEFAULT_MAX_AUTO_MOUSE_LAYERS: usize = 2;
 
 pub struct OneShot {
     pub activate_on_keypress: Option<bool>,
@@ -238,12 +238,12 @@ impl crate::KeyboardTomlConfig {
         // Named profiles are interned into the fixed-capacity morse profile
         // table; overflowing it would silently drop profiles at runtime.
         if let Some(m) = &morse
-            && m.profiles.len() > self.rmk.morse_profile_max_num
+            && m.profiles.len() > self.rmk.max_morse_profiles
         {
             return Err(format!(
-                "behavior.morse.profiles defines {} profiles, but `[rmk] morse_profile_max_num` is {}. Raise it in keyboard.toml",
+                "behavior.morse.profiles defines {} profiles, but `[rmk] max_morse_profiles` is {}. Raise it in keyboard.toml",
                 m.profiles.len(),
-                self.rmk.morse_profile_max_num
+                self.rmk.max_morse_profiles
             ));
         }
 
@@ -352,10 +352,10 @@ hold_timeout = "200ms"
     }
 
     #[test]
-    fn morse_profiles_overflowing_morse_profile_max_num_is_an_error() {
+    fn morse_profiles_overflowing_max_morse_profiles_is_an_error() {
         let toml = r#"
 [rmk]
-morse_profile_max_num = 1
+max_morse_profiles = 1
 
 [layout]
 rows = 1
@@ -390,7 +390,7 @@ hold_timeout = "300ms"
             Ok(_) => panic!("expected the profile-overflow error"),
             Err(e) => e,
         };
-        assert!(err.contains("morse_profile_max_num"), "unexpected error: {err}");
+        assert!(err.contains("max_morse_profiles"), "unexpected error: {err}");
     }
 
     /// A two-layer keyboard with the given `forks = [...]` list.
@@ -477,8 +477,8 @@ keys = "A"
         assert!(err.contains("trigger list"), "unexpected error: {err}");
 
         let mut config = config_with_forks(r#"forks = [{ trigger = ["A", "B"], match_any = "LShift" }]"#);
-        config.rmk.fork_max_num = 1;
+        config.rmk.max_forks = 1;
         let err = config.behavior().err().unwrap();
-        assert!(err.contains("fork_max_num"), "unexpected error: {err}");
+        assert!(err.contains("max_forks"), "unexpected error: {err}");
     }
 }

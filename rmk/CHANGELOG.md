@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: Rename the Rynk `DeviceCapabilities.max_morse` field to `max_morses`. Its wire encoding is unchanged.
+- **BREAKING**: Rename the `[rmk]` keys `combo_max_num` to `max_combos`, `combo_max_length` to `max_combo_keys`, `fork_max_num` to `max_forks`, `morse_max_num` to `max_morses`, `morse_profile_max_num` to `max_morse_profiles`, `macro_max_num` to `max_macros`, `auto_mouse_layer_max_num` to `max_auto_mouse_layers`, and `custom_message_max_size` to `max_custom_message_size`.
 - **BREAKING**: Rename `KeyboardEventPos` to `KeyboardEventSource` and `KeyboardEvent::pos` to `source`.
 - **BREAKING**: Use bare `#[register_processor]` to run the type's `Runnable`. See [processor migration](https://rmk.rs/docs/migration/v09_v10#processors).
 - **BREAKING**: Keyboard macros are reworked around `MacroOp` lists.

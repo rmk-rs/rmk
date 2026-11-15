@@ -31,14 +31,14 @@ fn default_sub_count() -> usize {
 
 /// Compile-time constants emitted as `pub const` items by `rmk-types/build.rs`.
 pub struct BuildConstants {
-    pub custom_message_max_size: usize,
-    pub combo_max_num: usize,
-    pub combo_max_length: usize,
-    pub fork_max_num: usize,
-    pub morse_max_num: usize,
-    pub morse_profile_max_num: usize,
+    pub max_custom_message_size: usize,
+    pub max_combos: usize,
+    pub max_combo_keys: usize,
+    pub max_forks: usize,
+    pub max_morses: usize,
+    pub max_morse_profiles: usize,
     pub max_patterns_per_key: usize,
-    pub macro_max_num: usize,
+    pub max_macros: usize,
     pub macro_space_size: usize,
     pub debounce_time: u16,
     pub mouse_key_interval: u16,
@@ -53,7 +53,7 @@ pub struct BuildConstants {
     pub ble_profiles_num: usize,
     pub ble_use_2m_phy: bool,
     pub split_central_sleep_timeout_seconds: u32,
-    pub auto_mouse_layer_max_num: usize,
+    pub max_auto_mouse_layers: usize,
     /// Rynk RX/TX buffer size (bytes).
     pub rynk_buffer_size: usize,
     pub dongle_pairing_window_secs: u32,
@@ -214,10 +214,10 @@ impl crate::KeyboardTomlConfig {
 
         // Validate that config values do not exceed protocol ceilings.
         use crate::protocol_limits;
-        if rmk.combo_max_length > protocol_limits::MAX_COMBO_SIZE {
+        if rmk.max_combo_keys > protocol_limits::MAX_COMBO_SIZE {
             return Err(format!(
-                "combo_max_length ({}) exceeds protocol ceiling MAX_COMBO_SIZE ({})",
-                rmk.combo_max_length,
+                "max_combo_keys ({}) exceeds protocol ceiling MAX_COMBO_SIZE ({})",
+                rmk.max_combo_keys,
                 protocol_limits::MAX_COMBO_SIZE
             ));
         }
@@ -235,15 +235,15 @@ impl crate::KeyboardTomlConfig {
                 protocol_limits::MAX_MACRO_SPACE_SIZE
             ));
         }
-        let auto_mouse_layer_max_num = rmk
-            .auto_mouse_layer_max_num
-            .unwrap_or(crate::resolved::behavior::DEFAULT_AUTO_MOUSE_LAYER_MAX_NUM);
+        let max_auto_mouse_layers = rmk
+            .max_auto_mouse_layers
+            .unwrap_or(crate::resolved::behavior::DEFAULT_MAX_AUTO_MOUSE_LAYERS);
         if let Some(entries) = self.behavior.as_ref().and_then(|b| b.auto_mouse_layer.as_ref()) {
-            if entries.len() > auto_mouse_layer_max_num {
+            if entries.len() > max_auto_mouse_layers {
                 return Err(format!(
-                    "number of [[behavior.auto_mouse_layer]] entries ({}) exceeds auto_mouse_layer_max_num ({})",
+                    "number of [[behavior.auto_mouse_layer]] entries ({}) exceeds max_auto_mouse_layers ({})",
                     entries.len(),
-                    auto_mouse_layer_max_num
+                    max_auto_mouse_layers
                 ));
             }
             let uses_action_event = entries
@@ -257,22 +257,22 @@ impl crate::KeyboardTomlConfig {
         }
 
         // Host capability fields are u8/u16 on the wire; check the values no deserializer bound
-        // covers (morse_max_num and split_peripherals_num can also be auto-raised past 255).
-        validate_u8_capability("morse_max_num", rmk.morse_max_num)?;
+        // covers (max_morses and split_peripherals_num can also be auto-raised past 255).
+        validate_u8_capability("max_morses", rmk.max_morses)?;
         validate_u8_capability("split_peripherals_num", split_peripherals_num)?;
         validate_u8_capability("ble_profiles_num", rmk.ble_profiles_num)?;
-        validate_u8_capability("macro_max_num", rmk.macro_max_num)?;
+        validate_u8_capability("max_macros", rmk.max_macros)?;
         validate_u16_capability("macro_space_size", rmk.macro_space_size)?;
         validate_u16_capability("rynk_buffer_size", rmk.rynk_buffer_size)?;
         Ok(BuildConstants {
-            custom_message_max_size: rmk.custom_message_max_size,
-            combo_max_num: rmk.combo_max_num,
-            combo_max_length: rmk.combo_max_length,
-            fork_max_num: rmk.fork_max_num,
-            morse_max_num: rmk.morse_max_num,
-            morse_profile_max_num: rmk.morse_profile_max_num,
+            max_custom_message_size: rmk.max_custom_message_size,
+            max_combos: rmk.max_combos,
+            max_combo_keys: rmk.max_combo_keys,
+            max_forks: rmk.max_forks,
+            max_morses: rmk.max_morses,
+            max_morse_profiles: rmk.max_morse_profiles,
             max_patterns_per_key: rmk.max_patterns_per_key,
-            macro_max_num: rmk.macro_max_num,
+            max_macros: rmk.max_macros,
             macro_space_size: rmk.macro_space_size,
             debounce_time: rmk.debounce_time,
             mouse_key_interval: rmk.mouse_key_interval,
@@ -287,7 +287,7 @@ impl crate::KeyboardTomlConfig {
             ble_profiles_num: rmk.ble_profiles_num,
             ble_use_2m_phy: self.ble.as_ref().and_then(|ble| ble.use_2m_phy).unwrap_or(true),
             split_central_sleep_timeout_seconds: rmk.split_central_sleep_timeout_seconds,
-            auto_mouse_layer_max_num,
+            max_auto_mouse_layers,
             rynk_buffer_size: rmk.rynk_buffer_size,
             dongle_pairing_window_secs: rmk.dongle_pairing_window_secs,
             events,
@@ -687,18 +687,18 @@ mod tests {
     }
 
     #[test]
-    fn auto_mouse_layer_max_num_explicitly_too_small_is_rejected() {
-        let toml = "[rmk]\nauto_mouse_layer_max_num = 0\n\n[[behavior.auto_mouse_layer]]\ntarget_layer = 1\n";
+    fn max_auto_mouse_layers_explicitly_too_small_is_rejected() {
+        let toml = "[rmk]\nmax_auto_mouse_layers = 0\n\n[[behavior.auto_mouse_layer]]\ntarget_layer = 1\n";
         let err = match parse(toml).build_constants(&[]) {
-            Ok(_) => panic!("expected auto_mouse_layer_max_num validation failure"),
+            Ok(_) => panic!("expected max_auto_mouse_layers validation failure"),
             Err(err) => err,
         };
-        assert!(err.contains("auto_mouse_layer_max_num"));
+        assert!(err.contains("max_auto_mouse_layers"));
     }
 
     #[test]
     fn auto_mouse_layer_within_capacity_is_accepted() {
-        let toml = "[rmk]\nauto_mouse_layer_max_num = 1\n\n[[behavior.auto_mouse_layer]]\ntarget_layer = 1\nextra_mouse_keys = [\"LCtrl\"]\n";
+        let toml = "[rmk]\nmax_auto_mouse_layers = 1\n\n[[behavior.auto_mouse_layer]]\ntarget_layer = 1\nextra_mouse_keys = [\"LCtrl\"]\n";
         assert!(parse(toml).build_constants(&[]).is_ok());
     }
 
