@@ -338,12 +338,10 @@ pub(crate) struct RmkConstantsConfig {
     /// Flash channel size
     #[serde_inline_default(4)]
     pub flash_channel_size: usize,
-    /// The number of the split peripherals. Renamed from `split_peripherals_num`; the old name still parses.
-    #[serde(alias = "split_peripherals_num")]
+    /// The number of the split peripherals
     #[serde_inline_default(0)]
     pub num_split_peripherals: usize,
-    /// The number of available BLE profiles. Renamed from `ble_profiles_num`; the old name still parses.
-    #[serde(alias = "ble_profiles_num")]
+    /// The number of available BLE profiles
     #[serde_inline_default(3)]
     pub num_ble_profiles: usize,
     /// Unibody/split central sleep timeout in seconds, independent of transport (0 = disabled).
@@ -1650,14 +1648,6 @@ channel_size = 32
         assert_eq!(config.event.modifier.channel_size, 8);
         assert_eq!(config.event.modifier.subs, 2);
         assert_eq!(config.event.layer_change.subs, 1);
-    }
-
-    #[test]
-    fn renamed_rmk_count_keys_still_parse() {
-        let config: KeyboardTomlConfig =
-            toml::from_str("[rmk]\nble_profiles_num = 5\nsplit_peripherals_num = 2\n").unwrap();
-        assert_eq!(config.rmk.num_ble_profiles, 5);
-        assert_eq!(config.rmk.num_split_peripherals, 2);
     }
 
     #[test]

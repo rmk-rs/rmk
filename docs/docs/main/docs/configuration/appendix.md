@@ -402,9 +402,9 @@ report_channel_size = 16
 vial_channel_size = 4
 # Flash channel size
 flash_channel_size = 4
-# The number of the split peripherals. Renamed from `split_peripherals_num` (still parses).
+# The number of the split peripherals
 num_split_peripherals = 0
-# The number of available BLE profiles. Renamed from `ble_profiles_num` (still parses).
+# The number of available BLE profiles
 num_ble_profiles = 3
 # BLE Split Central sleep timeout in seconds (0 = disabled)
 split_central_sleep_timeout_seconds = 0
