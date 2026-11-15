@@ -99,6 +99,10 @@ tokio = { version = "1.47", features = ["test-util", "macros", "net", "rt", "rt-
 # Keep the Embassy patch in sync with rmk/Cargo.toml; patches only apply in the root workspace.
 
 [patch.crates-io]
+# bluest 0.6.9 pins bluer 0.16.1, which no longer compiles on Rust 1.100 (never
+# type fallback change). Upstream main uses bluer 0.17.4 but 0.6.10 is unreleased;
+# drop this patch once bluest 0.6.10 is on crates.io.
+bluest                       = { git = "https://github.com/alexmoon/bluest", rev = "64bb4df8143defd30a4aa441ab1520816cd3b8eb" }
 embassy-boot                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
 embassy-boot-rp              = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
 embassy-embedded-hal         = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }

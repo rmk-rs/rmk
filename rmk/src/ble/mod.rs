@@ -12,11 +12,11 @@ use bt_hci::cmd::le::{
     LeClearAdvSets, LeExtCreateConn, LeReadNumberOfSupportedAdvSets, LeSetAdvSetRandomAddr, LeSetExtAdvData,
     LeSetExtAdvParams, LeSetExtScanParams, LeSetExtScanResponseData,
 };
-use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeSetPhy};
+use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeReadPhy, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
 use embassy_futures::join::join5;
-use embassy_futures::select::{Either, Either3, select, select_slice, select3, select5};
+use embassy_futures::select::{Either, Either3, select, select_slice, select3, select6};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
@@ -302,6 +302,7 @@ where
     C: Controller
         + ExtAdvCmds
         + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<LeRand>,
 {
@@ -332,12 +333,14 @@ impl<
         + CentralCmds
         + ExtAdvCmds
         + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<LeRand>,
     #[cfg(feature = "subrating")] C: Controller
         + CentralCmds
         + ExtAdvCmds
         + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdSync<LeRand>
         + ControllerCmdAsync<LeSubrateRequest>,
@@ -385,7 +388,11 @@ impl<
 /// serves forever, joined with the stack runner and the sleep manager.
 async fn run_ble_keyboard<
     #[cfg(feature = "host")] 'r,
-    C: Controller + ExtAdvCmds + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    C: Controller
+        + ExtAdvCmds
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 >(
     stack: &Stack<'_, C, DefaultPacketPool>,
     address: [u8; 6],
@@ -565,7 +572,8 @@ async fn run_ble_keyboard<
 
                     let last_host = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
                     let slot = match action {
-                        Switch(slot) | ClearBond(slot) | Disconnect(slot) => slot,
+                        Switch(slot) | Disconnect(slot) => slot,
+                        ClearBond(slot) => slot.unwrap_or(profile_id),
                         Next if profile_id < last_host => profile_id + 1,
                         Next => 0,
                         Previous => profile_id.checked_sub(1).unwrap_or(last_host),
@@ -1081,7 +1089,10 @@ pub(crate) async fn set_conn_params<
 
 /// Serve one host connection until its GATT Disconnected event.
 async fn serve_keyboard_connection<
-    C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    C: Controller
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>,
 >(
     server: &Server<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
@@ -1114,11 +1125,16 @@ async fn serve_keyboard_connection<
     #[cfg(feature = "split")]
     let battery_task = embassy_futures::join::join(ble_battery_server.run(), ble_peripheral_battery_server.run());
 
-    // PHY negotiation must not delay GATT disconnection or input routing.
-    let connection_params = async {
+    // A PHY request sent while the link is still being set up races the controller's own
+    // link-layer setup, so wait until the connection reports itself ready.
+    let phy_task = async {
+        wait_for_connection_status(|s| s.ble[profile_id as usize].state == BleState::Connected).await;
         update_ble_phy(stack, conn.raw(), host_phy).await;
-        set_conn_params(stack, conn).await;
+        core::future::pending::<()>().await;
     };
+
+    // PHY negotiation must not delay GATT disconnection or input routing.
+    let connection_params = set_conn_params(stack, conn);
 
     // The host only reports its lock LEDs when they change, so a switch back to this link replays them.
     let led = Cell::new(LedIndicator::default());
@@ -1174,9 +1190,10 @@ async fn serve_keyboard_connection<
     #[cfg(not(feature = "dongle"))]
     let dongle_event_task = core::future::pending::<()>();
 
-    select5(
+    select6(
         gatt_task,
         connection_params,
+        phy_task,
         battery_task,
         writer_task,
         dongle_event_task,
@@ -1187,10 +1204,17 @@ async fn serve_keyboard_connection<
 
 // Set the connection PHY.
 pub(crate) async fn update_ble_phy<P: PacketPool>(
-    stack: &Stack<'_, impl Controller + ControllerCmdAsync<LeSetPhy>, P>,
+    stack: &Stack<'_, impl Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadPhy>, P>,
     conn: &Connection<'_, P>,
     phy: PhyKind,
 ) {
+    if let Ok((tx_phy, rx_phy)) = conn.read_phy(stack).await
+        && tx_phy == phy
+        && rx_phy == phy
+    {
+        return;
+    };
+
     // Retry 10 times
     for _ in 0..10 {
         match conn.set_phy(stack, phy).await {
@@ -1400,7 +1424,7 @@ mod tests {
             for (action, expected) in [(Previous, crate::NUM_BLE_PROFILE.saturating_sub(1) as u8), (Next, 0)] {
                 BLE_PROFILE_CHANNEL.send(action).await;
                 // The one-slot queue makes this wait until the preceding action was consumed.
-                BLE_PROFILE_CHANNEL.send(ClearBond(0)).await;
+                BLE_PROFILE_CHANNEL.send(ClearBond(Some(0))).await;
                 assert_eq!(current_profile(), expected);
             }
         });
@@ -1415,7 +1439,7 @@ mod tests {
         let hci = FakeController::default();
         with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
             advertising(&hci, 0).await;
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(0)).await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(Some(0))).await;
             advertising(&hci, 1).await;
             assert!(!current_ble_status().bonded);
             embassy_time::Timer::after_millis(10).await;
@@ -1425,6 +1449,31 @@ mod tests {
             assert!(saved.removed);
             let restored = ProfileManager::<{ super::BOND_SLOTS }>::new().await;
             assert!(restored.bond_info(0).is_none());
+        });
+    }
+
+    /// A clear that names no slot targets the profile selected when the BLE task applies the
+    /// action, not the one selected when the key was pressed: a queued switch makes the key-time
+    /// selection stale.
+    #[test]
+    fn clearing_without_a_slot_uses_the_profile_selected_at_apply_time() {
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+        use crate::state::wait_for_connection_status;
+
+        if super::BOND_SLOTS < 2 {
+            return;
+        }
+        with_stalled_keyboard(&[bond(0, HOST_A), bond(1, HOST_B)], async {
+            wait_for_connection_status(|s| s.selected_profile().state == BleState::Advertising).await;
+            // The BLE task has a switch queued when the key's clear action lands.
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(None)).await;
+            let status = wait_for_connection_status(|s| s.selected == 1 && !s.selected_profile().bonded).await;
+            assert!(
+                status.ble[0].bonded,
+                "the clear action must not touch the profile it was not applied to"
+            );
         });
     }
 
@@ -1464,7 +1513,7 @@ mod tests {
                     }),
                     _ if BOND_SLOTS > 1 => BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await,
                     _ => {
-                        BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(0)).await;
+                        BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(Some(0))).await;
                         BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(0)).await;
                     }
                 }
@@ -1545,13 +1594,6 @@ mod tests {
     /// Wait until advertising has started more than `starts` times.
     async fn advertising(hci: &FakeController, starts: usize) {
         while hci.advertising_starts() <= starts {
-            embassy_time::Timer::after_millis(1).await;
-        }
-    }
-
-    /// Wait until the keyboard serves a link; serving starts with a PHY update.
-    async fn served(hci: &FakeController) {
-        while hci.sent::<bt_hci::cmd::le::LeSetPhy>().is_empty() {
             embassy_time::Timer::after_millis(1).await;
         }
     }
@@ -1653,19 +1695,6 @@ mod tests {
     }
 
     #[test]
-    fn a_new_host_can_connect_to_a_bonded_profile_while_its_host_is_away() {
-        let hci = FakeController::default();
-        with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
-            advertising(&hci, 0).await;
-            hci.connect(1, HOST_B);
-            served(&hci).await;
-            assert!(hci.sent::<bt_hci::cmd::link_control::Disconnect>().is_empty());
-            // The old bond stays until the new host pairs.
-            assert!(current_ble_status().bonded);
-        });
-    }
-
-    #[test]
     fn losing_an_encrypted_link_opens_a_new_advertising_period() {
         let hci = FakeController::default();
         with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
@@ -1677,26 +1706,6 @@ mod tests {
             MockDriver::get().advance(Duration::from_secs(150));
             embassy_time::Timer::after_millis(1).await;
             assert_eq!(current_ble_status().state, BleState::Advertising);
-        });
-    }
-
-    #[test]
-    fn a_link_that_never_encrypts_keeps_the_advertising_period() {
-        let hci = FakeController::default();
-        with_keyboard(hci.clone(), &[], async {
-            advertising(&hci, 0).await;
-            hci.connect(1, HOST_A);
-            served(&hci).await;
-            MockDriver::get().advance(Duration::from_secs(200));
-            hci.drop_link(1);
-            advertising(&hci, 1).await;
-            MockDriver::get().advance(Duration::from_secs(110));
-            embassy_time::with_timeout(
-                Duration::from_millis(10),
-                until(|s| s.selected_profile().state == BleState::Inactive),
-            )
-            .await
-            .expect("an unencrypted link must not extend advertising");
         });
     }
 

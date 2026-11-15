@@ -52,6 +52,12 @@ A split wireless keyboard designed from scratch: schematic and PCB in KiCad, cas
 
 ![Lunakbd](https://raw.githubusercontent.com/gbPagano/lunakbd/main/photos/up-down-4-web.jpg)
 
+## [pando-rmk](https://github.com/jyap808/pando-rmk)
+
+RMK firmware for the [Pando](https://github.com/jyap808/pando) split keyboard. An STM32G0B1 scans the left half directly and the right half through a PCA9555 I2C expander, and the left half works standalone. Includes Vial support.
+
+![pando-rmk](../../images/pando.jpg)
+
 ## Show your keyboard!
 
 If you're using RMK to build your keyboard, feel free to open a PR adding your project to this page!

@@ -4,7 +4,7 @@
 use core::convert::Infallible;
 use std::sync::{Arc, Mutex};
 
-use bt_hci::cmd::le::{LeReadBufferSize, LeReadNumberOfSupportedAdvSets};
+use bt_hci::cmd::le::{LeReadBufferSize, LeReadNumberOfSupportedAdvSets, LeReadPhy};
 use bt_hci::cmd::link_control::Disconnect;
 use bt_hci::cmd::{self, AsyncCmd, Cmd, Opcode, SyncCmd};
 use bt_hci::controller::{Controller, ControllerCmdAsync, ControllerCmdSync};
@@ -160,7 +160,7 @@ impl Controller for FakeController {
 
 impl<C: SyncCmd> ControllerCmdSync<C> for FakeController {
     async fn exec(&self, cmd: &C) -> Result<C::Return, cmd::Error<Infallible>> {
-        self.record(cmd).await;
+        let params = self.record(cmd).await;
         // Zeros answer every command, except where the host needs a usable value.
         let mut ret = [0u8; 256];
         if C::OPCODE == LeReadBufferSize::OPCODE {
@@ -168,9 +168,13 @@ impl<C: SyncCmd> ControllerCmdSync<C> for FakeController {
             ret[..3].copy_from_slice(&[251, 0, 3]);
         } else if C::OPCODE == LeReadNumberOfSupportedAdvSets::OPCODE {
             ret[0] = 1;
+        } else if C::OPCODE == LeReadPhy::OPCODE {
+            // Echo the requested handle, then LE 1M on both directions.
+            ret[..2].copy_from_slice(&params[..2]);
+            ret[2..4].copy_from_slice(&[1, 1]);
         }
         Ok(C::Return::from_hci_bytes(&ret)
-            .expect("fake HCI cannot answer this command")
+            .unwrap_or_else(|_| panic!("fake HCI cannot answer command {:?}", C::OPCODE))
             .0)
     }
 }

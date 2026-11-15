@@ -18,7 +18,7 @@ mod mpsc {
     #[automatically_derived]
     impl ::core::clone::Clone for KeyboardEvent {
         #[inline]
-        fn clone(&self) -> KeyboardEvent {
+        fn clone(&self) -> Self {
             let _: ::core::clone::AssertParamIsClone<u8>;
             let _: ::core::clone::AssertParamIsClone<bool>;
             *self
@@ -100,7 +100,7 @@ mod pubsub {
     #[automatically_derived]
     impl ::core::clone::Clone for LedIndicatorEvent {
         #[inline]
-        fn clone(&self) -> LedIndicatorEvent {
+        fn clone(&self) -> Self {
             let _: ::core::clone::AssertParamIsClone<bool>;
             *self
         }
@@ -195,7 +195,7 @@ mod tuple_struct {
     #[automatically_derived]
     impl ::core::clone::Clone for BatteryAdcEvent {
         #[inline]
-        fn clone(&self) -> BatteryAdcEvent {
+        fn clone(&self) -> Self {
             let _: ::core::clone::AssertParamIsClone<u16>;
             *self
         }
@@ -269,7 +269,7 @@ mod default_size {
     #[automatically_derived]
     impl ::core::clone::Clone for LayerChangeEvent {
         #[inline]
-        fn clone(&self) -> LayerChangeEvent {
+        fn clone(&self) -> Self {
             let _: ::core::clone::AssertParamIsClone<u8>;
             *self
         }

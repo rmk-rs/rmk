@@ -1674,10 +1674,8 @@ impl<'a> Keyboard<'a> {
                     // Previous profile
                     BLE_PROFILE_CHANNEL.send(BleProfileAction::Previous).await;
                 } else if id == NUM_BLE_PROFILE as u8 + 2 {
-                    // Clear bond on current profile
-                    BLE_PROFILE_CHANNEL
-                        .send(BleProfileAction::ClearBond(crate::state::current_profile()))
-                        .await;
+                    // Clear bond on the profile selected when the BLE task applies it
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(None)).await;
                 } else if id == NUM_BLE_PROFILE as u8 + 3 {
                     // Toggle preferred transport (USB <-> BLE);
                     // only meaningful when both transports exist in this build.
@@ -2027,6 +2025,34 @@ mod test {
 
     fn create_test_keyboard() -> Keyboard<'static> {
         create_test_keyboard_with_config(BehaviorConfig::default())
+    }
+
+    /// The clear key must not snapshot the selected profile: a queued profile action makes that
+    /// snapshot stale. It sends a slot-less clear instead, resolved when the BLE task applies it.
+    #[cfg(feature = "_ble")]
+    #[test]
+    fn clear_profile_key_defers_the_slot_to_the_ble_task() {
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+
+        let mut keyboard = create_test_keyboard();
+        crate::state::update_status(|status| status.selected = 0);
+        BLE_PROFILE_CHANNEL.clear();
+        // A profile switch is still queued when the clear key is tapped.
+        BLE_PROFILE_CHANNEL.try_send(BleProfileAction::Switch(1)).unwrap();
+        let (_, actions) = block_on(embassy_futures::join::join(
+            keyboard.process_user(crate::NUM_BLE_PROFILE as u8 + 2, KeyboardEvent::key(0, 0, false)),
+            async {
+                let switched = BLE_PROFILE_CHANNEL.receive().await;
+                // The BLE task applies the queued switch before the clear action lands.
+                crate::state::update_status(|status| status.selected = 1);
+                (switched, BLE_PROFILE_CHANNEL.receive().await)
+            },
+        ));
+        assert!(matches!(
+            actions,
+            (BleProfileAction::Switch(1), BleProfileAction::ClearBond(None))
+        ));
     }
 
     async fn force_timeout_first_hold(keyboard: &mut Keyboard<'static>) {

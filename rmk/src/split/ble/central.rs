@@ -2,7 +2,7 @@ use core::pin::pin;
 
 #[cfg(feature = "subrating")]
 use bt_hci::cmd::le::LeSubrateRequest;
-use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeSetPhy};
+use bt_hci::cmd::le::{LeReadLocalSupportedFeatures, LeReadPhy, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use embassy_futures::select::{Either, Either3, select, select_slice, select3};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -209,9 +209,13 @@ impl EventHandler for ScanHandler {
 /// report back so the radio reconnects or rediscovers the peripheral.
 pub(crate) async fn run_peripheral_sessions<
     'a,
-    #[cfg(not(feature = "subrating"))] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(not(feature = "subrating"))] C: Controller
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>,
     #[cfg(feature = "subrating")] C: Controller
         + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdAsync<LeSubrateRequest>,
 >(
@@ -400,9 +404,13 @@ pub(crate) mod subrating {
 async fn run_central_manager_task<
     'b,
     's: 'b,
-    #[cfg(not(feature = "subrating"))] C: Controller + ControllerCmdAsync<LeSetPhy> + ControllerCmdSync<LeReadLocalSupportedFeatures>,
+    #[cfg(not(feature = "subrating"))] C: Controller
+        + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
+        + ControllerCmdSync<LeReadLocalSupportedFeatures>,
     #[cfg(feature = "subrating")] C: Controller
         + ControllerCmdAsync<LeSetPhy>
+        + ControllerCmdSync<LeReadPhy>
         + ControllerCmdSync<LeReadLocalSupportedFeatures>
         + ControllerCmdAsync<LeSubrateRequest>,
     P: PacketPool,
