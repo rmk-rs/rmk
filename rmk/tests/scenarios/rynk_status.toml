@@ -57,10 +57,10 @@ steps = [
   { rynk = { cmd = "GetConnectionStatus", reply = { usb = "Configured", ble = [{ state = "Inactive", bonded = false }, { state = "Inactive", bonded = false }, { state = "Inactive", bonded = false }], selected = 0, preferred = "Usb" } } },
 ]
 
-# Slot bounds come from `num_ble_profiles`; a slot past it is refused rather
-# than queued.
+# Profile bounds come from `num_ble_profiles`; a profile past them is refused
+# rather than queued.
 [[test]]
-name = "ble_profile_switch_checks_the_slot"
+name = "ble_profile_switch_refuses_an_out_of_range_profile"
 features = ["_ble"]
 steps = [
   { rynk = { cmd = "SwitchBleProfile", payload = 0 } },

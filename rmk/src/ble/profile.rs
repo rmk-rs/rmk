@@ -17,9 +17,9 @@ use crate::keyboard::LOCK_LED_STATES;
 use crate::state::{active_transport, current_profile, select_ble_profile, set_ble_bonded};
 use crate::storage::{StorageItem, StorageKey, StorageValue, read, store};
 
-/// The dedicated dongle bond slot: the slot number after the normal profiles,
-/// so pairing a dongle never touches a host bond. Selected only via the
-/// `SwitchToDongle` key, never by profile cycling.
+/// The dongle's dedicated profile, numbered after the host profiles so pairing a
+/// dongle never touches a host bond. Selected only via the `SwitchToDongle` key,
+/// never by profile cycling.
 #[cfg(feature = "dongle")]
 pub(crate) const DONGLE_PROFILE: u8 = crate::NUM_BLE_PROFILE as u8;
 
@@ -52,7 +52,7 @@ pub(crate) fn set_stack_bond<C: Controller, P: PacketPool>(stack: &Stack<'_, C, 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ProfileInfo {
-    pub(crate) slot_num: u8,
+    pub(crate) profile: u8,
     pub(crate) removed: bool,
     pub(crate) info: BondInformation,
     /// Raw bytes of the trouble-host `ClientAttTable` for this peer.
@@ -85,7 +85,7 @@ impl postcard::experimental::max_size::MaxSize for ProfileInfo {
 impl Default for ProfileInfo {
     fn default() -> Self {
         Self {
-            slot_num: 0,
+            profile: 0,
             removed: false,
             info: BondInformation::new(
                 Identity {
@@ -105,44 +105,43 @@ impl Default for ProfileInfo {
 #[derive(Debug)]
 pub(crate) enum BleProfileAction {
     Switch(u8),
-    /// Drop a slot's link; the selected slot then waits for a new host and keeps its bond until one pairs.
+    /// Disconnect a profile. The selected profile then waits for a new host and keeps its bond until one pairs.
     Disconnect(u8),
     Previous,
     Next,
-    /// Clear a slot's bond without selecting it; `None` means the profile selected when the
-    /// action is applied.
+    /// Clear a profile's bond without selecting it. None means clearing the current profile.
     ClearBond(Option<u8>),
 }
 
 /// Stored bonds for host or dongle profiles.
 ///
-/// `SLOTS` sizes the cache to the role: [`BOND_SLOTS`](crate::BOND_SLOTS) for a keyboard, a single
-/// slot for a dongle.
-pub(crate) struct ProfileManager<const SLOTS: usize> {
-    profiles: [Watch<crate::RawMutex, ProfileInfo, 1>; SLOTS],
+/// `PROFILES` sizes the cache to the role: [`TOTAL_BLE_PROFILES`](crate::TOTAL_BLE_PROFILES) for a
+/// keyboard, a single profile for a dongle.
+pub(crate) struct ProfileManager<const PROFILES: usize> {
+    profiles: [Watch<crate::RawMutex, ProfileInfo, 1>; PROFILES],
     updated_active_profile: Signal<crate::RawMutex, ()>,
-    /// The slot whose stored bond stays hidden until a new host pairs with it.
+    /// The profile awaiting pairing, whose stored bond is hidden from `bond_info()`.
     pairing: Cell<Option<u8>>,
 }
 
-impl<const SLOTS: usize> ProfileManager<SLOTS> {
-    /// Create the manager and restore the stored bonds and selected profile.
+impl<const PROFILES: usize> ProfileManager<PROFILES> {
+    /// Create the manager and restore the stored bonds and selected profile from storage.
     pub(crate) async fn new() -> Self {
         let mut manager = Self {
-            profiles: [const { Watch::new() }; SLOTS],
+            profiles: [const { Watch::new() }; PROFILES],
             updated_active_profile: Signal::new(),
             pairing: Cell::new(None),
         };
-        for (slot, state) in manager.profiles.iter_mut().enumerate() {
-            *state = match read(StorageKey::BondInfo(slot as u8)).await {
+        for (profile, state) in manager.profiles.iter_mut().enumerate() {
+            *state = match read(StorageKey::BondInfo(profile as u8)).await {
                 Ok(Some(StorageValue::BondInfo(info))) if !info.removed => Watch::new_with(info),
                 _ => Watch::new(),
             };
         }
 
-        let profile = match read(StorageKey::ActiveBleProfile).await {
+        let selected = match read(StorageKey::ActiveBleProfile).await {
             // A build with more profiles may have saved a profile this build lacks.
-            Ok(Some(StorageValue::ActiveBleProfile(profile))) if (profile as usize) < SLOTS => {
+            Ok(Some(StorageValue::ActiveBleProfile(profile))) if (profile as usize) < PROFILES => {
                 debug!("Loaded active profile: {}", profile);
                 profile
             }
@@ -151,10 +150,10 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
                 0
             }
         };
-        for slot in 0..SLOTS as u8 {
-            set_ble_bonded(slot, manager.bond_info(slot).is_some());
+        for profile in 0..PROFILES as u8 {
+            set_ble_bonded(profile, manager.bond_info(profile).is_some());
         }
-        select_ble_profile(profile);
+        select_ble_profile(selected);
         manager
     }
 
@@ -166,10 +165,10 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
         self.profiles.get(profile as usize)?.try_get_and(|info| !info.removed)
     }
 
-    /// Hide `slot`'s stored bond until a new host pairs with it; `None` restores the hidden bond.
-    pub(crate) fn set_pairing(&self, slot: Option<u8>) {
-        for slot in [self.pairing.replace(slot), slot].into_iter().flatten() {
-            set_ble_bonded(slot, self.bond_info(slot).is_some());
+    /// Mark `profile` as awaiting pairing. `None` clears the currently marked profile's pairing state.
+    pub(crate) fn set_pairing(&self, profile: Option<u8>) {
+        for profile in [self.pairing.replace(profile), profile].into_iter().flatten() {
+            set_ble_bonded(profile, self.bond_info(profile).is_some());
         }
     }
 
@@ -183,28 +182,28 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
             .is_some_and(|info| info.info.identity.match_identity(identity))
     }
 
-    /// Set a slot's bond and initial CCCD state.
+    /// Set a profile's bond and initial CCCD state.
     pub(crate) fn set_bond(&self, info: ProfileInfo) {
-        let Some(state) = self.profiles.get(info.slot_num as usize) else {
+        let Some(state) = self.profiles.get(info.profile as usize) else {
             return;
         };
         if state.try_get().as_ref() == Some(&info) {
             return;
         }
-        // A new bond ends pairing on its slot.
+        // A new bond ends pairing on its profile.
         self.pairing
-            .set(self.pairing.get().filter(|&slot| slot != info.slot_num));
-        set_ble_bonded(info.slot_num, !info.removed);
+            .set(self.pairing.get().filter(|&profile| profile != info.profile));
+        set_ble_bonded(info.profile, !info.removed);
         state.sender().send(info);
     }
 
     pub(crate) fn update_profile_cccd_table(
         &self,
-        slot: u8,
+        profile: u8,
         peer: &Identity,
         table: heapless::Vec<u8, CCCD_TABLE_SIZE>,
     ) {
-        if let Some(state) = self.profiles.get(slot as usize) {
+        if let Some(state) = self.profiles.get(profile as usize) {
             state.sender().send_if_modified(|info| {
                 if let Some(info) = info
                     && !info.removed
@@ -219,7 +218,7 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
         }
     }
 
-    /// One persistence receiver per slot, retained across connection changes.
+    /// One persistence receiver per profile, retained across connection changes.
     pub(crate) async fn run(&self) -> ! {
         let mut receivers = self
             .profiles
@@ -241,15 +240,15 @@ impl<const SLOTS: usize> ProfileManager<SLOTS> {
         }
     }
 
-    /// Clear bonding information of the specified slot.
-    pub(crate) fn clear_bond(&self, slot: u8) {
-        if let Some(state) = self.profiles.get(slot as usize) {
+    /// Clear bonding information of the specified profile.
+    pub(crate) fn clear_bond(&self, profile: u8) {
+        if let Some(state) = self.profiles.get(profile as usize) {
             state.sender().send(ProfileInfo {
-                slot_num: slot,
+                profile,
                 removed: true,
                 ..Default::default()
             });
-            set_ble_bonded(slot, false);
+            set_ble_bonded(profile, false);
         }
     }
 

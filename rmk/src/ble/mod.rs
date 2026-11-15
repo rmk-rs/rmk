@@ -28,7 +28,7 @@ use rmk_types::led_indicator::LedIndicator;
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 
-use crate::BOND_SLOTS;
+use crate::TOTAL_BLE_PROFILES;
 use crate::ble::adv::{Adv, advertise};
 use crate::ble::battery_service::BleBatteryServer;
 #[cfg(feature = "split")]
@@ -211,7 +211,7 @@ pub const fn calculate_sdc_memory_size(
 #[inline(never)]
 fn build_ble_stack<'a, C: Controller>(
     controller: C,
-    resources: &'a mut HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS>,
+    resources: &'a mut HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, TOTAL_BLE_PROFILES>,
     address: [u8; 6],
 ) -> Stack<'a, C, DefaultPacketPool> {
     trouble_host::new(controller, resources)
@@ -311,8 +311,13 @@ where
         rng::init(&controller).await;
 
         // Host connections share the stack resources.
-        let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
-            HostResources::new();
+        let mut resources: HostResources<
+            DefaultPacketPool,
+            CONNECTIONS_MAX,
+            L2CAP_CHANNELS_MAX,
+            1,
+            TOTAL_BLE_PROFILES,
+        > = HostResources::new();
         let stack = build_ble_stack(controller, &mut resources, self.address);
         run_ble_keyboard(
             &stack,
@@ -350,8 +355,13 @@ impl<
         let controller = self.controller.take().expect("BleTransport::run called twice");
         rng::init(&controller).await;
 
-        let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS> =
-            HostResources::new();
+        let mut resources: HostResources<
+            DefaultPacketPool,
+            CONNECTIONS_MAX,
+            L2CAP_CHANNELS_MAX,
+            1,
+            TOTAL_BLE_PROFILES,
+        > = HostResources::new();
         let stack = build_ble_stack(controller, &mut resources, self.address);
 
         // `scan_and_connect_peripherals` task sends each established connection to its session task via `conn_channels`
@@ -446,7 +456,7 @@ async fn run_ble_keyboard<
 
     // Restore the persisted state from storage
     crate::state::restore_preferred_connection().await;
-    let profile_manager: ProfileManager<BOND_SLOTS> = ProfileManager::new().await;
+    let profile_manager: ProfileManager<TOTAL_BLE_PROFILES> = ProfileManager::new().await;
 
     let mut peripheral = stack.peripheral();
     let runner = stack.runner();
@@ -571,30 +581,30 @@ async fn run_ble_keyboard<
                     use crate::ble::profile::BleProfileAction::{ClearBond, Disconnect, Next, Previous, Switch};
 
                     let last_host = crate::NUM_BLE_PROFILE.saturating_sub(1) as u8;
-                    let slot = match action {
-                        Switch(slot) | Disconnect(slot) => slot,
-                        ClearBond(slot) => slot.unwrap_or(profile_id),
+                    let target = match action {
+                        Switch(target) | Disconnect(target) => target,
+                        ClearBond(target) => target.unwrap_or(profile_id),
                         Next if profile_id < last_host => profile_id + 1,
                         Next => 0,
                         Previous => profile_id.checked_sub(1).unwrap_or(last_host),
                     };
                     if matches!(action, Disconnect(_) | ClearBond(_)) {
-                        if slot == profile_id {
+                        if target == profile_id {
                             // The selected profile waits for a new host.
-                            profile_manager.set_pairing(Some(slot));
-                            set_ble_state(slot, BleState::Inactive);
+                            profile_manager.set_pairing(Some(target));
+                            set_ble_state(target, BleState::Inactive);
                             report_activity();
                             adv_start = Some(Instant::now());
                         }
-                        if let Some(conn) = host_connections.get(&slot) {
+                        if let Some(conn) = host_connections.get(&target) {
                             conn.disconnect();
                         }
                         if matches!(action, ClearBond(_)) {
-                            profile_manager.clear_bond(slot);
+                            profile_manager.clear_bond(target);
                         }
                         continue;
                     }
-                    if slot == profile_id {
+                    if target == profile_id {
                         continue;
                     }
                     // End re-pairing before a switch leaves this profile's status behind.
@@ -602,7 +612,7 @@ async fn run_ble_keyboard<
                     report_activity();
                     adv_start = Some(Instant::now());
                     // Keep a paired link unless the target profile needs its slot.
-                    let keep_connected = (host_connections.contains_key(&slot)
+                    let keep_connected = (host_connections.contains_key(&target)
                         || host_connections.len() < NUM_HOST_LINKS)
                         && host_connections.get(&profile_id).is_some_and(|conn| {
                             conn.security_level().is_ok_and(|level| level.encrypted())
@@ -616,7 +626,7 @@ async fn run_ble_keyboard<
                             conn.disconnect();
                         }
                     }
-                    profile_manager.switch_profile(slot);
+                    profile_manager.switch_profile(target);
                     continue;
                 }
                 Either3::Third(ended) => {
@@ -722,7 +732,7 @@ async fn gatt_events_task(
     server: &Server<'_>,
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     profile_id: u8,
-    profile_manager: &ProfileManager<BOND_SLOTS>,
+    profile_manager: &ProfileManager<TOTAL_BLE_PROFILES>,
     led: &Cell<LedIndicator>,
     #[cfg(feature = "host")] host: Option<&HostConnection<'_>>,
 ) {
@@ -771,7 +781,7 @@ async fn gatt_events_task(
                         .and_then(|t| heapless::Vec::from_slice(t.raw()).ok())
                         .unwrap_or_default();
                     profile_manager.set_bond(ProfileInfo {
-                        slot_num: profile_id,
+                        profile: profile_id,
                         info: bond_info,
                         removed: false,
                         cccd_table,
@@ -1098,7 +1108,7 @@ async fn serve_keyboard_connection<
     conn: &GattConnection<'_, '_, DefaultPacketPool>,
     stack: &Stack<'_, C, DefaultPacketPool>,
     profile_id: u8,
-    profile_manager: &ProfileManager<BOND_SLOTS>,
+    profile_manager: &ProfileManager<TOTAL_BLE_PROFILES>,
     config: &BleBatteryConfig,
     #[cfg(feature = "host")] host_service: Option<&crate::host::HostService<'_>>,
 ) {
@@ -1330,7 +1340,7 @@ mod tests {
     }
 
     fn with_keyboard(hci: FakeController, bonds: &[super::ProfileInfo], test: impl core::future::Future<Output = ()>) {
-        use super::{BOND_SLOTS, CONNECTIONS_MAX, DefaultPacketPool, HostResources, L2CAP_CHANNELS_MAX};
+        use super::{CONNECTIONS_MAX, DefaultPacketPool, HostResources, L2CAP_CHANNELS_MAX, TOTAL_BLE_PROFILES};
         use crate::config::{BleBatteryConfig, DeviceConfig};
         use crate::core_traits::Runnable;
         use crate::storage::{Storage, StorageKey, StorageValue, async_flash_wrapper};
@@ -1342,7 +1352,7 @@ mod tests {
         crate::test_support::reset_connection_status();
         crate::channel::BLE_PROFILE_CHANNEL.clear();
         let mut resources =
-            HostResources::<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, BOND_SLOTS>::new();
+            HostResources::<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX, 1, TOTAL_BLE_PROFILES>::new();
         let stack = trouble_host::new(hci, &mut resources).build();
         block_on(select3(
             super::run_ble_keyboard(
@@ -1361,7 +1371,7 @@ mod tests {
                         .flash
                         .store_item(
                             &mut storage.buffer,
-                            &StorageKey::BondInfo(bond.slot_num),
+                            &StorageKey::BondInfo(bond.profile),
                             &StorageValue::BondInfo(bond.clone()),
                         )
                         .await
@@ -1398,7 +1408,7 @@ mod tests {
             .await
             .expect("holding the current profile key must start re-pairing");
 
-            // Releasing the profile key sends a switch to the same slot.
+            // Releasing the profile key sends a switch to the same profile.
             BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(0)).await;
             embassy_time::Timer::after_millis(1).await;
             assert!(!current_ble_status().bonded);
@@ -1444,24 +1454,24 @@ mod tests {
             assert!(!current_ble_status().bonded);
             embassy_time::Timer::after_millis(10).await;
             let Some(StorageValue::BondInfo(saved)) = read(StorageKey::BondInfo(0)).await.unwrap() else {
-                panic!("the slot must keep a removal record");
+                panic!("the profile must keep a removal record");
             };
             assert!(saved.removed);
-            let restored = ProfileManager::<{ super::BOND_SLOTS }>::new().await;
+            let restored = ProfileManager::<{ super::TOTAL_BLE_PROFILES }>::new().await;
             assert!(restored.bond_info(0).is_none());
         });
     }
 
-    /// A clear that names no slot targets the profile selected when the BLE task applies the
+    /// A clear that names no profile targets the profile selected when the BLE task applies the
     /// action, not the one selected when the key was pressed: a queued switch makes the key-time
     /// selection stale.
     #[test]
-    fn clearing_without_a_slot_uses_the_profile_selected_at_apply_time() {
+    fn a_clear_naming_no_profile_uses_the_one_selected_at_apply_time() {
         use crate::ble::profile::BleProfileAction;
         use crate::channel::BLE_PROFILE_CHANNEL;
         use crate::state::wait_for_connection_status;
 
-        if super::BOND_SLOTS < 2 {
+        if super::TOTAL_BLE_PROFILES < 2 {
             return;
         }
         with_stalled_keyboard(&[bond(0, HOST_A), bond(1, HOST_B)], async {
@@ -1478,8 +1488,8 @@ mod tests {
     }
 
     #[test]
-    fn advertising_follows_slot_capacity_and_wakes_on_input() {
-        use super::BOND_SLOTS;
+    fn advertising_follows_the_profile_count_and_wakes_on_input() {
+        use super::TOTAL_BLE_PROFILES;
         use crate::ble::profile::BleProfileAction;
         use crate::channel::BLE_PROFILE_CHANNEL;
         use crate::state::wait_for_connection_status;
@@ -1511,14 +1521,14 @@ mod tests {
                             },
                         ],
                     }),
-                    _ if BOND_SLOTS > 1 => BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await,
+                    _ if TOTAL_BLE_PROFILES > 1 => BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await,
                     _ => {
                         BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(Some(0))).await;
                         BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(0)).await;
                     }
                 }
                 let resumed = wait_for_connection_status(|s| s.selected_profile().state == BleState::Advertising).await;
-                assert_eq!(resumed.selected, u8::from(wake == 2 && BOND_SLOTS > 1));
+                assert_eq!(resumed.selected, u8::from(wake == 2 && TOTAL_BLE_PROFILES > 1));
             }
         });
     }
@@ -1574,9 +1584,9 @@ mod tests {
     const HOST_B: [u8; 6] = [0xB2, 0, 0, 0, 0, 0xC2];
 
     /// A stored bond with the host at random address `peer`.
-    fn bond(slot: u8, peer: [u8; 6]) -> super::ProfileInfo {
+    fn bond(profile: u8, peer: [u8; 6]) -> super::ProfileInfo {
         let mut bond = super::ProfileInfo {
-            slot_num: slot,
+            profile,
             ..Default::default()
         };
         bond.info.identity.addr = trouble_host::prelude::Address::random(peer);
@@ -1638,21 +1648,21 @@ mod tests {
         const LINKS: usize = crate::NUM_HOST_LINKS;
         // Needs a profile without a link once every link is taken: build with an `ext_adv` feature set
         // and a KEYBOARD_TOML_PATH whose `[ble] max_connections` is at least 2 and below the profile count.
-        if LINKS < 2 || super::BOND_SLOTS <= LINKS {
+        if LINKS < 2 || super::TOTAL_BLE_PROFILES <= LINKS {
             return;
         }
-        let peer = |slot: u8| [0xA0 + slot, 0, 0, 0, 0, 0xC0];
-        let bonds: Vec<_> = (0..LINKS as u8).map(|slot| bond(slot, peer(slot))).collect();
+        let peer = |profile: u8| [0xA0 + profile, 0, 0, 0, 0, 0xC0];
+        let bonds: Vec<_> = (0..LINKS as u8).map(|profile| bond(profile, peer(profile))).collect();
         let hci = FakeController::default();
         with_keyboard(hci.clone(), &bonds, async {
-            for slot in 0..LINKS as u8 {
-                if slot > 0 {
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(slot)).await;
+            for profile in 0..LINKS as u8 {
+                if profile > 0 {
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(profile)).await;
                 }
-                advertising(&hci, slot.into()).await;
-                hci.connect(u16::from(slot) + 1, peer(slot));
-                hci.encrypt(u16::from(slot) + 1);
-                until(|s| s.ble[usize::from(slot)].state == BleState::Connected).await;
+                advertising(&hci, profile.into()).await;
+                hci.connect(u16::from(profile) + 1, peer(profile));
+                hci.encrypt(u16::from(profile) + 1);
+                until(|s| s.ble[usize::from(profile)].state == BleState::Connected).await;
             }
             BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(LINKS as u8)).await;
             embassy_time::with_timeout(Duration::from_millis(100), advertising(&hci, LINKS))

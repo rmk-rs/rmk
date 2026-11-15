@@ -5,7 +5,7 @@ use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 
 use crate::ble::{BleState, BleStatus};
-use crate::constants::BOND_SLOTS;
+use crate::constants::TOTAL_BLE_PROFILES;
 
 /// Connection type for the keyboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
@@ -44,7 +44,7 @@ pub struct ConnectionStatus {
     pub usb: UsbState,
     /// Every host profile, then the dongle profile when there is one, indexed by profile number.
     #[cfg_attr(feature = "wasm", tsify(type = "BleStatus[]"))]
-    pub ble: Vec<BleStatus, BOND_SLOTS>,
+    pub ble: Vec<BleStatus, TOTAL_BLE_PROFILES>,
     /// The profile that carries input when BLE is the active transport.
     pub selected: u8,
     /// Tiebreaker when both transports are ready.
@@ -53,7 +53,7 @@ pub struct ConnectionStatus {
 
 impl MaxSize for ConnectionStatus {
     const POSTCARD_MAX_SIZE: usize = UsbState::POSTCARD_MAX_SIZE
-        + crate::heapless_vec_max_size::<BleStatus, BOND_SLOTS>()
+        + crate::heapless_vec_max_size::<BleStatus, TOTAL_BLE_PROFILES>()
         + u8::POSTCARD_MAX_SIZE
         + ConnectionType::POSTCARD_MAX_SIZE;
 }
@@ -66,7 +66,7 @@ impl ConnectionStatus {
                 [BleStatus {
                     state: BleState::Inactive,
                     bonded: false,
-                }; BOND_SLOTS],
+                }; TOTAL_BLE_PROFILES],
             ),
             selected: 0,
             preferred: ConnectionType::Usb,

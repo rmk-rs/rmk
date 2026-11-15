@@ -1682,7 +1682,7 @@ impl<'a> Keyboard<'a> {
                     #[cfg(not(feature = "_no_usb"))]
                     crate::state::toggle_preferred().await;
                 }
-                // Switch to the dongle slot.
+                // Switch to the dongle profile.
                 #[cfg(feature = "dongle")]
                 if id == NUM_BLE_PROFILE as u8 + 5 {
                     info!("Switch to dongle profile");
@@ -2028,10 +2028,11 @@ mod test {
     }
 
     /// The clear key must not snapshot the selected profile: a queued profile action makes that
-    /// snapshot stale. It sends a slot-less clear instead, resolved when the BLE task applies it.
+    /// snapshot stale. It sends a clear that names no profile instead, resolved when the BLE task
+    /// applies it.
     #[cfg(feature = "_ble")]
     #[test]
-    fn clear_profile_key_defers_the_slot_to_the_ble_task() {
+    fn clear_profile_key_defers_the_target_to_the_ble_task() {
         use crate::ble::profile::BleProfileAction;
         use crate::channel::BLE_PROFILE_CHANNEL;
 

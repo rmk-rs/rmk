@@ -130,8 +130,12 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     let is_host = env::var("CARGO_FEATURE_HOST").is_ok();
 
     // A host takes every u8 profile index, so it decodes the profile list of any firmware.
-    let bond_slots = if is_host { u8::MAX as usize + 1 } else { bc.bond_slots };
-    lines.push(format!("pub const BOND_SLOTS: usize = {bond_slots};"));
+    let total_ble_profiles = if is_host {
+        u8::MAX as usize + 1
+    } else {
+        bc.total_ble_profiles
+    };
+    lines.push(format!("pub const TOTAL_BLE_PROFILES: usize = {total_ble_profiles};"));
     lines.push(format!("pub const NUM_HOST_LINKS: usize = {};", bc.num_host_links));
 
     // Protocol ceilings — always emitted so rmk-types source code can reference them.

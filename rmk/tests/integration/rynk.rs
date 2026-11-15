@@ -93,7 +93,7 @@ fn payload<T: serde::de::DeserializeOwned>(json: &str, what: &str) -> T {
 
 #[cfg(feature = "_ble")]
 #[test]
-fn profile_commands_accept_every_host_and_dongle_slot() {
+fn profile_commands_accept_every_host_and_dongle_profile() {
     use rmk::config::{LockConfig, RmkConfig};
 
     test_block_on(async {
@@ -107,21 +107,21 @@ fn profile_commands_accept_every_host_and_dongle_slot() {
             })
             .build()
             .await;
-        let slots = rmk_types::constants::NUM_BLE_PROFILE + usize::from(cfg!(feature = "dongle"));
+        let profiles = rmk_types::constants::NUM_BLE_PROFILE + usize::from(cfg!(feature = "dongle"));
         let mut actions = Vec::new();
-        for slot in 0..slots {
-            let request = slot.to_string();
+        for profile in 0..profiles {
+            let request = profile.to_string();
             keyboard
                 .rynk::<command::SwitchBleProfile>(&request, RynkReply::Ok("null"))
                 .rynk::<command::DisconnectBleProfile>(&request, RynkReply::Ok("null"))
                 .rynk::<command::ClearBleProfile>(&request, RynkReply::Ok("null"));
             actions.extend([
-                format!("Switch({slot})"),
-                format!("Disconnect({slot})"),
-                format!("ClearBond(Some({slot}))"),
+                format!("Switch({profile})"),
+                format!("Disconnect({profile})"),
+                format!("ClearBond(Some({profile}))"),
             ]);
         }
-        if let Ok(invalid) = u8::try_from(slots) {
+        if let Ok(invalid) = u8::try_from(profiles) {
             let request = invalid.to_string();
             keyboard
                 .rynk::<command::SwitchBleProfile>(&request, RynkReply::Err(RynkError::Invalid))

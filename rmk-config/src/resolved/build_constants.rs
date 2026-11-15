@@ -52,7 +52,7 @@ pub struct BuildConstants {
     pub split_battery_peripheral_user_descriptions: Vec<String>,
     pub ble_profiles_num: usize,
     /// Host profiles plus the dongle profile.
-    pub bond_slots: usize,
+    pub total_ble_profiles: usize,
     /// Simultaneous BLE host and dongle connections: 0 without BLE.
     pub num_host_links: usize,
     pub ble_use_2m_phy: bool,
@@ -131,15 +131,15 @@ impl crate::KeyboardTomlConfig {
                 }
             }
         }
-        let bond_slots = rmk.ble_profiles_num + usize::from(active_features.contains(&"dongle"));
-        if bond_slots == 0 && active_features.contains(&"_ble") {
-            return Err("BLE requires at least one bond slot; set ble_profiles_num > 0 or enable dongle".to_string());
+        let total_ble_profiles = rmk.ble_profiles_num + usize::from(active_features.contains(&"dongle"));
+        if total_ble_profiles == 0 && active_features.contains(&"_ble") {
+            return Err("BLE requires at least one BLE profile; set ble_profiles_num > 0 or enable dongle".to_string());
         }
         let num_host_links = if active_features.contains(&"_ble") {
             let links = self.ble.as_ref().and_then(|ble| ble.max_connections).unwrap_or(1);
-            if links == 0 || links > bond_slots {
+            if links == 0 || links > total_ble_profiles {
                 return Err(format!(
-                    "keyboard.toml: [ble.max_connections] must be between 1 and the {bond_slots} BLE profiles, got {links}"
+                    "keyboard.toml: [ble.max_connections] must be between 1 and the {total_ble_profiles} BLE profiles, got {links}"
                 ));
             }
             // Only extended advertising gives each profile an address, and so a link, of its own.
@@ -314,7 +314,7 @@ impl crate::KeyboardTomlConfig {
             split_battery_peripheral_ids,
             split_battery_peripheral_user_descriptions,
             ble_profiles_num: rmk.ble_profiles_num,
-            bond_slots,
+            total_ble_profiles,
             num_host_links,
             ble_use_2m_phy: self.ble.as_ref().and_then(|ble| ble.use_2m_phy).unwrap_or(true),
             split_central_sleep_timeout_seconds: rmk.split_central_sleep_timeout_seconds,
