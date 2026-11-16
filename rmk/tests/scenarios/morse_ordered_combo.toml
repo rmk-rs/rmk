@@ -1,0 +1,79 @@
+# Admission bindings stay stable while execution waits for an ordered owner.
+keyboard = "boards/split.toml"
+
+[behavior.morse]
+hold_timeout = "200ms"
+normal_mode = true
+
+[behavior.combo]
+timeout = "50ms"
+combos = [
+  { actions = ["MT(B, LShift)", "MT(C, LGui)"], output = "X" },
+  { actions = ["MT(B, LShift)", "MT(C, LGui)", "LT(1, D)"], output = "Z" },
+]
+
+[[test]]
+name = "delayed_combo_retains_release_ownership"
+steps = [
+  { press = [1, 1] },
+  { press = [1, 7] },
+  { release = [1, 1] },
+  { release = [1, 7] },
+]
+expect = [["X"], []]
+
+# The interrupting X press follows the combo output in delivery order even
+# though it was admitted before that synthetic output was reserved.
+[[test]]
+name = "delayed_combo_morse_observes_its_interrupting_press"
+behavior.morse = { normal_mode = false, hold_on_other_press = true, enable_flow_tap = false, unilateral_tap = false, quick_tap_timeout = "0ms" }
+behavior.combo = { timeout = "100ms", combos = [
+  { actions = ["A", "B"], output = "TH(C, LShift)" },
+  { actions = ["A", "B", "D"], output = "Z" },
+] }
+steps = [
+  { press = [1, 0] },
+  { press = [2, 4] },
+  { press = [2, 11] },
+  { release = [2, 11] },
+  { release = [1, 0] },
+  { release = [2, 4] },
+]
+expect = [["LShift"], ["LShift", "X"], ["LShift"], []]
+
+[[test]]
+name = "immediate_combo_morse_observes_the_following_press"
+behavior.morse = { normal_mode = false, hold_on_other_press = true, enable_flow_tap = false, unilateral_tap = false, quick_tap_timeout = "0ms" }
+behavior.combo = { timeout = "100ms", combos = [{ actions = ["A", "B"], output = "TH(C, LShift)" }] }
+steps = [
+  { press = [1, 0] },
+  { press = [2, 4] },
+  { press = [2, 11] },
+  { release = [2, 11] },
+  { release = [1, 0] },
+  { release = [2, 4] },
+]
+expect = [["LShift"], ["LShift", "X"], ["LShift"], []]
+
+[[test]]
+name = "failed_member_keeps_original_order"
+steps = [
+  { press = [1, 1] },
+  { tap = { pos = [1, 0], duration = 20 } },
+  { release = [1, 1] },
+]
+expect = [["B"], ["A", "B"], ["B"], []]
+
+[[test]]
+name = "captured_combo_executes_admitted_output_after_layer_hold"
+behavior.combo.combos = [{ actions = ["MT(B, LShift)", "MT(C, LGui)"], output = "X" }]
+steps = [
+  { press = [3, 5] },
+  { press = [1, 1] },
+  { press = [1, 7] },
+  { release = [1, 1] },
+  { release = [1, 7] },
+  { delay = 230 },
+  { release = [3, 5] },
+]
+expect = [["X"], []]

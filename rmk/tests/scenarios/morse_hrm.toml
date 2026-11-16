@@ -58,7 +58,7 @@ steps = [
   { release = [1, 1] },
   { release = [1, 8] },
 ]
-expect = [["B"], [], ["D"], []]
+expect = [["B"], ["B", "D"], ["D"], []]
 
 [[test]]
 name = "mt_2_2"
@@ -69,7 +69,7 @@ steps = [
   { release = [1, 7] },
   { release = [1, 8] },
 ]
-expect = [["C"], [], ["D"], []]
+expect = [["C"], ["C", "D"], ["D"], []]
 
 [[test]]
 name = "mt_timeout_1"
@@ -318,7 +318,7 @@ steps = [
   { delay = 60 },
   { release = [1, 7] },
 ]
-expect = [["A"], [], ["B"], [], ["C"], []]
+expect = [["A"], [], ["B"], ["B", "C"], ["C"], []]
 
 [[test]]
 name = "multi_tap_2"
@@ -378,7 +378,7 @@ steps = [
   { delay = 100 },
   { release = [1, 0] },
 ]
-expect = [["B"], ["B", "A"], ["A"], ["C", "A"], ["A"], []]
+expect = [["B"], ["B", "C"], ["B", "C", "A"], ["C", "A"], ["A"], []]
 
 [[test]]
 name = "rolling_release_order_2"
@@ -430,7 +430,7 @@ steps = [
   { delay = 100 },
   { release = [1, 7] },
 ]
-expect = [["B"], ["LGui", "B"], ["LGui", "B", "A"], ["LGui", "B"], ["LGui"], []]
+expect = [["B"], ["B", "C"], ["B", "C", "A"], ["B", "C"], ["C"], []]
 
 [[test]]
 name = "complex_rolling"
@@ -539,7 +539,7 @@ steps = [
   { release = [1, 1] },
   { release = [1, 8] },
 ]
-expect = [["Kp1"], [], ["Kp2"], []]
+expect = [["Kp1"], ["Kp1", "Kp2"], ["Kp2"], []]
 
 [[test]]
 name = "lt_opposite_hand_roll_permissive_hold_early_modifier_release"
@@ -556,7 +556,7 @@ steps = [
   { delay = 20 },
   { release = [1, 1] },  # Release B
 ]
-expect = [["Kp1"], [], ["B"], []]
+expect = [["Kp1"], ["Kp1", "Kp2"], ["Kp2"], []]
 [[test]]
 name = "normal_mode_same_hand_roll_order"
 behavior.morse = { enable_flow_tap = false, permissive_hold = false, normal_mode = true }
