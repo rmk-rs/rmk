@@ -2433,6 +2433,7 @@ mod test {
             // first press ever of the Again issues KeyCode:No
             keyboard.process_inner(KeyboardEvent::key(0, 0, true)).await;
             assert_eq!(keyboard.held_keycodes()[0], HidKeyCode::No); // A key's HID code is 0x04
+            keyboard.process_inner(KeyboardEvent::key(0, 0, false)).await;
 
             // Press A key
             keyboard.process_inner(KeyboardEvent::key(2, 0, true)).await;
