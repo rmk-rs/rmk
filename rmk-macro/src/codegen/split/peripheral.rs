@@ -586,7 +586,8 @@ fn expand_split_peripheral_entry(
         quote! {}
     };
 
-    match split_config.connection {
+    let mut tasks = vec![device_task];
+    let serial_init = match split_config.connection {
         SplitConnection::Ble => {
             let peripheral_run = quote! {
                 ::rmk::split::peripheral::run_rmk_split_peripheral(
@@ -596,27 +597,11 @@ fn expand_split_peripheral_entry(
                 )
             };
             // Build task list: device, processor (if any), peripheral, registered_processors, dfu
-            let mut tasks = vec![device_task];
             if !processors.is_empty() {
                 tasks.push(processor_task);
             }
             tasks.push(peripheral_run);
-            tasks.extend(registered_processors);
-            if let Some(t) = &watchdog_task {
-                tasks.push(t.clone());
-            }
-
-            if let Some(t) = &usb_task_future {
-                tasks.push(t.clone());
-            }
-            if let Some(t) = &dfu_task {
-                tasks.push(t.clone());
-            }
-
-            let run_rmk_peripheral = join_all_tasks(tasks);
-            quote! {
-                #run_rmk_peripheral
-            }
+            quote! {}
         }
         SplitConnection::Serial => {
             let peripheral_serial = peripheral_config
@@ -642,28 +627,28 @@ fn expand_split_peripheral_entry(
             let peripheral_run = quote! {
                 ::rmk::split::peripheral::run_rmk_split_peripheral(#uart_instance)
             };
-            let mut tasks = vec![device_task, peripheral_run];
+            tasks.push(peripheral_run);
             if !processors.is_empty() {
                 tasks.push(processor_task);
             }
-            tasks.extend(registered_processors);
-            if let Some(t) = &watchdog_task {
-                tasks.push(t.clone());
-            }
-
-            if let Some(t) = &usb_task_future {
-                tasks.push(t.clone());
-            }
-            if let Some(t) = &dfu_task {
-                tasks.push(t.clone());
-            }
-
-            let run_rmk_peripheral = join_all_tasks(tasks);
-            quote! {
-                #serial_init
-                #run_rmk_peripheral
-            }
+            serial_init
         }
+    };
+    tasks.extend(registered_processors);
+    if let Some(t) = &watchdog_task {
+        tasks.push(t.clone());
+    }
+    if let Some(t) = &usb_task_future {
+        tasks.push(t.clone());
+    }
+    if let Some(t) = &dfu_task {
+        tasks.push(t.clone());
+    }
+
+    let run_rmk_peripheral = join_all_tasks(tasks);
+    quote! {
+        #serial_init
+        #run_rmk_peripheral
     }
 }
 
