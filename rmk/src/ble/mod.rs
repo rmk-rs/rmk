@@ -1182,7 +1182,13 @@ async fn serve_keyboard_connection<
             Some(service) => {
                 let host = HostConnection::new(server);
                 let events = gatt_events_task(server, conn, profile_id, profile_manager, &led, Some(&host));
-                select(events, host.run(conn, service)).await;
+                // Restart after a session-fatal TX error so the host service survives the rest of the connection.
+                let sessions = async {
+                    loop {
+                        host.run(conn, service).await;
+                    }
+                };
+                select(events, sessions).await;
             }
             None => gatt_events_task(server, conn, profile_id, profile_manager, &led, None).await,
         }
