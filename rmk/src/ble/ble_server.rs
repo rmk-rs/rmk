@@ -1,5 +1,6 @@
 use core::fmt::Write;
 
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use postcard::experimental::max_size::MaxSize;
 use rmk_types::battery::BatteryStatus;
@@ -32,7 +33,7 @@ use rmk_types::protocol::rynk::{
 };
 
 /// Keep GAP/GATT first and append other services to preserve bonded hosts' cached handles.
-#[gatt_server(mutex_type = crate::RawMutex, connections_max = crate::ble::NUM_HOST_LINKS)]
+#[gatt_server(mutex_type = NoopRawMutex, connections_max = crate::ble::NUM_HOST_LINKS)]
 pub(crate) struct Server {
     profile_name_services: ProfileNameServices,
     pub(crate) battery_service: BatteryService,
@@ -58,7 +59,7 @@ impl ProfileNameServices {
     const ATTRIBUTE_COUNT: usize = trouble_host::gap::GAP_SERVICE_ATTRIBUTE_COUNT * BLE_PROFILE_NAME_SUFFIX as usize;
     const CCCD_COUNT: usize = 0;
 
-    fn new<const MAX: usize>(table: &mut AttributeTable<'_, crate::RawMutex, MAX>) -> Self {
+    fn new<const MAX: usize>(table: &mut AttributeTable<'_, NoopRawMutex, MAX>) -> Self {
         Self {
             gap: core::array::from_fn(|_| {
                 let gap = GapService::new(table);
