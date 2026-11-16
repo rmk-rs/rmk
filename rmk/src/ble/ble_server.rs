@@ -192,27 +192,21 @@ pub(crate) struct HidService {
 }
 
 pub(crate) struct BleHidServer<'stack, 'server, 'conn, P: PacketPool> {
-    input_keyboard: Characteristic<[u8; 8]>,
-    mouse_report: Characteristic<[u8; MOUSE_REPORT_SIZE]>,
-    media_report: Characteristic<[u8; 2]>,
-    system_report: Characteristic<[u8; 1]>,
+    hid: &'conn HidService,
     conn: &'conn GattConnection<'stack, 'server, P>,
 }
 
 impl<'stack, 'server, 'conn, P: PacketPool> BleHidServer<'stack, 'server, 'conn, P> {
-    pub(crate) fn new(server: &Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
+    pub(crate) fn new(server: &'conn Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
         Self {
-            input_keyboard: server.hid_service.input_keyboard,
-            mouse_report: server.hid_service.mouse_report,
-            media_report: server.hid_service.media_report,
-            system_report: server.hid_service.system_report,
+            hid: &server.hid_service,
             conn,
         }
     }
 
     async fn notify_report<R: AsInputReport, const N: usize>(
         &self,
-        characteristic: Characteristic<[u8; N]>,
+        characteristic: &Characteristic<[u8; N]>,
         report: &R,
     ) -> Result<usize, HidError> {
         let mut buf = [0u8; N];
@@ -230,10 +224,10 @@ impl<P: PacketPool> HidWriterTrait for BleHidServer<'_, '_, '_, P> {
 
     async fn write_report(&mut self, report: &Self::ReportType) -> Result<usize, HidError> {
         match report {
-            Report::KeyboardReport(r) => self.notify_report(self.input_keyboard, r).await,
-            Report::MouseReport(r) => self.notify_report(self.mouse_report, r).await,
-            Report::MediaKeyboardReport(r) => self.notify_report(self.media_report, r).await,
-            Report::SystemControlReport(r) => self.notify_report(self.system_report, r).await,
+            Report::KeyboardReport(r) => self.notify_report(&self.hid.input_keyboard, r).await,
+            Report::MouseReport(r) => self.notify_report(&self.hid.mouse_report, r).await,
+            Report::MediaKeyboardReport(r) => self.notify_report(&self.hid.media_report, r).await,
+            Report::SystemControlReport(r) => self.notify_report(&self.hid.system_report, r).await,
             // Plover HID over BLE is not supported: the stock HID-over-GATT service
             // has no stenography characteristic. Drop silently at the writer.
             #[cfg(feature = "steno")]

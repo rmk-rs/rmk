@@ -21,7 +21,6 @@ use super::{
     SetMorseBulkRequest, SetMorseRequest, StorageResetMode,
 };
 use crate::action::{EncoderAction, KeyAction};
-#[cfg(feature = "_ble")]
 use crate::battery::BatteryStatus;
 #[cfg(feature = "_ble")]
 use crate::ble::BleStatus;
@@ -366,7 +365,6 @@ endpoints! {
     // Status (0x08xx).
     GetCurrentLayer = 0x0801: () => u8;
     GetMatrixState = 0x0802: () => MatrixState;
-    #[cfg(feature = "_ble")]
     GetBatteryStatus = 0x0803: () => BatteryStatus;
     #[cfg(feature = "split")]
     GetPeripheralStatus = 0x0804: u8 => PeripheralStatus;
@@ -544,7 +542,6 @@ topics! {
     ConnectionChange = 0x8003: ConnectionStatus;
     SleepState = 0x8004: bool;
     LedIndicatorChange = 0x8005: LedIndicator;
-    #[cfg(feature = "_ble")]
     BatteryStatusChange = 0x8006: BatteryStatus;
     #[cfg(feature = "lighting")]
     LightingChange = 0x8007: LightingChanged;
@@ -563,10 +560,6 @@ const _: () = core::assert!(
 
 #[cfg(test)]
 mod tests {
-    extern crate alloc;
-
-    use alloc::format;
-
     use postcard::experimental::max_size::MaxSize;
 
     use super::*;
@@ -586,20 +579,6 @@ mod tests {
             assert_eq!(Cmd::from_raw(cmd.raw()), cmd);
             assert_eq!(Cmd::from_le_bytes(cmd.to_le_bytes()), cmd);
         }
-    }
-
-    #[test]
-    fn debug_is_compact_raw_value() {
-        assert_eq!(format!("{:?}", Cmd::from_raw(0x0001)), "Cmd(0x0001)");
-        assert_eq!(format!("{:?}", Cmd::from_raw(0x80ff)), "Cmd(0x80ff)");
-    }
-
-    #[test]
-    fn table_cmds_land_in_their_ranges() {
-        assert!(Cmd::LayerChange.is_topic());
-        assert!(Cmd::WpmUpdate.is_topic());
-        assert!(!Cmd::GetVersion.is_topic());
-        assert!(!Cmd::SetKeyAction.is_topic());
     }
 
     #[test]

@@ -6,11 +6,11 @@ features = ["steno"]
 
 [layout]
 rows = 1
-cols = 1
-map = "(0,0)"
+cols = 3
+map = "(0,0) (0,1) (0,2)"
 
 [[keymap.layer]]
-keys = "STN(S1)"
+keys = "STN(S1) STN(T) STN(P)"
 
 [[test]]
 name = "steno_key_sets_its_chord_bit"
@@ -19,3 +19,25 @@ steps = [
   { release = [0, 0] },
 ]
 expect = [{ steno = ["S1"] }, { steno = [] }]
+
+# Plover builds the chord from the live state, so every press and release must
+# re-send the whole bitmap: held keys stay set and a release clears only its
+# own bit.
+[[test]]
+name = "chord_reports_live_state_on_every_change"
+steps = [
+  { press = [0, 0] },
+  { press = [0, 1] },
+  { press = [0, 2] },
+  { release = [0, 0] },
+  { release = [0, 1] },
+  { release = [0, 2] },
+]
+expect = [
+  { steno = ["S1"] },
+  { steno = ["S1", "T"] },
+  { steno = ["S1", "T", "P"] },
+  { steno = ["T", "P"] },
+  { steno = ["P"] },
+  { steno = [] },
+]

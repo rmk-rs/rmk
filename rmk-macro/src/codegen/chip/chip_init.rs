@@ -5,7 +5,6 @@ use rmk_config::resolved::Hardware;
 use rmk_config::resolved::hardware::{BoardConfig, ChipModel, ChipSeries, CommunicationConfig};
 use syn::{ItemFn, ItemMod};
 
-use crate::codegen::feature::{get_rmk_features, is_feature_enabled};
 use crate::codegen::override_helper::{Overwritten, find_overwritten};
 
 /// Expand chip initialization code
@@ -50,6 +49,15 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
     let chip = &hardware.chip;
     let communication = &hardware.communication;
     let peri_num = hardware.board.get_num_peripheral();
+    let is_peripheral_not_ble = if peripheral_id.is_some() {
+        match &hardware.board {
+            BoardConfig::Split(split) => split.connection != rmk_config::SplitConnection::Ble,
+            _ => false,
+        }
+    } else {
+        false
+    };
+
     match chip.series {
         ChipSeries::Stm32 => quote! {
                 let config = ::embassy_stm32::Config::default();
@@ -94,41 +102,17 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                 quote! {}
             };
             let ble_addr = get_ble_addr(hardware, peripheral_id);
-            // Calculate the size of sdc memory pool.
-            // Unibody: 4696. Split central: 6080 + (N-1) * 2288 per peripheral.
-            // Base memory sizes for the nrf-sdc memory pool
-            const SDC_MEM_UNIBODY: usize = 4696;
-            const SDC_MEM_SPLIT_BASE: usize = 6080;
-            const SDC_MEM_PER_EXTRA_PERIPHERAL: usize = 2288;
-
-            // Connection subrating adds extra memory per connection
-            const SDC_MEM_SUBRATING_BASE: usize = 136;
-            const SDC_MEM_SUBRATING_PER_PERIPHERAL: usize = 56;
-            const SDC_MEM_SUBRATING_PER_EXTRA_PERIPHERAL: usize = 8;
-
-            let subrating_enabled =
-                peri_num > 0 && is_feature_enabled(&get_rmk_features(), "subrating");
-
-            let sdc_mem_size = if peripheral_id.is_none() && peri_num > 0 {
-                // Split central
-                let base =
-                    SDC_MEM_SPLIT_BASE + peri_num.saturating_sub(1) * SDC_MEM_PER_EXTRA_PERIPHERAL;
-                if subrating_enabled {
-                    base + SDC_MEM_SUBRATING_BASE
-                        + peri_num.saturating_sub(1) * SDC_MEM_SUBRATING_PER_PERIPHERAL
-                        + peri_num.saturating_sub(2) * SDC_MEM_SUBRATING_PER_EXTRA_PERIPHERAL
-                } else {
-                    base
-                }
+            let central_links = if peripheral_id.is_some() { 0 } else { peri_num };
+            let peripheral_links = if peripheral_id.is_some() {
+                quote! { 1 }
             } else {
-                // Unibody or split peripheral
-                if subrating_enabled {
-                    SDC_MEM_UNIBODY + SDC_MEM_SUBRATING_BASE
-                } else {
-                    SDC_MEM_UNIBODY
-                }
+                quote! { ::rmk::ble::NUM_HOST_LINKS }
             };
+
             let ble_init = match &communication {
+                // we skip ble_init if peripheral is not ble
+                _ if is_peripheral_not_ble => quote! {},
+
                 CommunicationConfig::Ble(_) | CommunicationConfig::Both(_, _) => quote! {
                     // Initialize nrf-sdc and ble stack
                     let mpsl_p = ::nrf_sdc::mpsl::Peripherals::new(p.RTC0, p.TIMER0, p.TEMP, p.PPI_CH19, p.PPI_CH30, p.PPI_CH31);
@@ -155,7 +139,7 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                         p.PPI_CH27, p.PPI_CH28, p.PPI_CH29,
                     );
                     let mut rng = ::embassy_nrf::rng::Rng::new(p.RNG, Irqs);
-                    let mut sdc_mem = ::nrf_sdc::Mem::<#sdc_mem_size>::new();
+                    let mut sdc_mem = ::nrf_sdc::Mem::<{ ::rmk::ble::calculate_sdc_memory_size(#central_links, #peripheral_links, SDC_PACKET_SIZE, SDC_TX_BUFFERS, SDC_RX_BUFFERS) }>::new();
                     let ble_controller = ::defmt::unwrap!(build_sdc(sdc_p, &mut rng, &*mpsl, &mut sdc_mem));
                     let ble_addr = #ble_addr;
                 },
@@ -231,14 +215,31 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
             }
         }
         ChipSeries::Esp32 => {
-            let ble_addr = get_ble_addr(hardware, peripheral_id);
-            let battery = match peripheral_id {
-                Some(id) => &hardware.peripheral_batteries[id],
-                None => &hardware.battery,
+            // The S31 example pins the post-IPC esp-rtos API; other ESP examples use released 0.4.
+            let rtos_init = if hardware.chip.chip == "esp32s31" {
+                quote! { ::esp_rtos::start(timg0.timer0); }
+            } else {
+                quote! { ::esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0); }
             };
-            // Battery measurement and the optional ADC entropy source both need ADC1.
-            let adc_entropy_init = if battery.adc.is_none() {
-                quote! { let _trng_source = ::esp_hal::rng::TrngSource::new(p.RNG, p.ADC1); }
+
+            let ble_init = if communication.ble_enabled() && !is_peripheral_not_ble {
+                let ble_addr = get_ble_addr(hardware, peripheral_id);
+                let battery = match peripheral_id {
+                    Some(id) => &hardware.peripheral_batteries[id],
+                    None => &hardware.battery,
+                };
+                // TrngSource and the battery ADC reader both consume ADC1.
+                let trng_init = if battery.adc.is_none() {
+                    quote! { let _trng_source = ::esp_hal::rng::TrngSource::new(p.RNG, p.ADC1); }
+                } else {
+                    quote! {}
+                };
+                quote! {
+                    #trng_init
+                    let connector = ::esp_radio::ble::controller::BleConnector::new(p.BT, Default::default()).unwrap();
+                    let ble_controller: ::bt_hci::controller::ExternalController<_, 64> = ::bt_hci::controller::ExternalController::new(connector);
+                    let ble_addr = #ble_addr;
+                }
             } else {
                 quote! {}
             };
@@ -247,11 +248,8 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                 let p = ::esp_hal::init(::esp_hal::Config::default().with_cpu_clock(::esp_hal::clock::CpuClock::max()));
                 ::esp_alloc::heap_allocator!(size: 72 * 1024);
                 let timg0 = ::esp_hal::timer::timg::TimerGroup::new(p.TIMG0);
-                ::esp_rtos::start(timg0.timer0, p.FROM_CPU_INTR0);
-                #adc_entropy_init
-                let connector = ::esp_radio::ble::controller::BleConnector::new(p.BT, Default::default()).unwrap();
-                let ble_controller: ::bt_hci::controller::ExternalController<_, 64> = ::bt_hci::controller::ExternalController::new(connector);
-                let ble_addr = #ble_addr;
+                #rtos_init
+                #ble_init
             }
         }
     }
@@ -332,6 +330,66 @@ mod tests {
     use rmk_config::KeyboardTomlConfig;
 
     use super::chip_init_default;
+
+    #[test]
+    fn esp_usb_init_does_not_require_radio_or_consume_rng_adc() {
+        for chip in ["esp32s3", "esp32s31"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../examples/use_config/{chip}_ble/keyboard.toml"));
+            let mut hardware = KeyboardTomlConfig::new_from_toml_path(&path)
+                .hardware()
+                .unwrap();
+            hardware.communication =
+                super::CommunicationConfig::Usb(hardware.communication.get_usb_info().unwrap());
+            let generated = chip_init_default(&hardware, None).to_string();
+            assert!(generated.contains("esp_hal :: init"));
+            assert!(generated.contains("esp_rtos :: start"));
+            for ble_only in [
+                "esp_radio",
+                "bt_hci",
+                "ble_controller",
+                "ble_addr",
+                "TrngSource",
+                "p . BT",
+                "p . ADC1",
+                "p . RNG",
+            ] {
+                assert!(
+                    !generated.contains(ble_only),
+                    "unexpected {ble_only} in {chip} USB init"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn esp_ble_init_preserves_controller_and_battery_adc_ownership() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/use_config/esp32_ble_split/keyboard.toml");
+        let mut hardware = KeyboardTomlConfig::new_from_toml_path(&path)
+            .hardware()
+            .unwrap();
+        for side in [None, Some(0)] {
+            let generated = chip_init_default(&hardware, side).to_string();
+            assert!(generated.contains("BleConnector :: new"));
+            assert!(generated.contains("ExternalController"));
+            let battery = match side {
+                Some(id) => &hardware.peripheral_batteries[id],
+                None => &hardware.battery,
+            };
+            assert_eq!(generated.contains("TrngSource"), battery.adc.is_none());
+        }
+        let super::BoardConfig::Split(split) = &mut hardware.board else {
+            panic!("expected split fixture");
+        };
+        split.connection = rmk_config::SplitConnection::Serial;
+        let peripheral = chip_init_default(&hardware, Some(0)).to_string();
+        assert!(!peripheral.contains("esp_radio"));
+        assert!(!peripheral.contains("TrngSource"));
+        assert!(peripheral.contains("esp_rtos :: start"));
+        let central = chip_init_default(&hardware, None).to_string();
+        assert!(central.contains("BleConnector :: new"));
+    }
 
     /// The chip init generated for an nRF52833 keyboard whose `[chip.nrf52833]` holds `chip_section`.
     fn nrf52833_chip_init(name: &str, chip_section: &str) -> String {

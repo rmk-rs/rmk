@@ -2,9 +2,8 @@
 
 RMK supports [Plover](https://opensteno.org/plover/) stenography over
 USB HID. When the `steno` feature is enabled, the keyboard registers as a
-stenography machine that Plover (v5.1+) connects to via the
-[plover-machine-hid](https://github.com/dnaq/plover-machine-hid) plugin,
-without serial emulation.
+stenography machine that Plover (v5.1+) connects to with its built-in
+**Plover HID** machine type, without serial emulation.
 
 Steno keys are mapped in your layout like any other key. RMK sends the live
 state of all held steno keys to the host on every key press and release,
@@ -66,6 +65,9 @@ let keymap = [
 | Extra (vendor-defined)                             | `X1` to `X26`                                                             |
 
 `STAR` is an alias for `STAR1`.
+
+In `keyboard.toml`, a misspelled name fails the build with a suggestion
+for the closest valid name.
 
 ## Connecting Plover
 

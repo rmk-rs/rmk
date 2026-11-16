@@ -30,6 +30,6 @@ impl Nrf52Watchdog {
 
 impl WatchdogFeed for Nrf52Watchdog {
     fn feed(&mut self) {
-        self.handle.pet();
+        self.handle.feed();
     }
 }

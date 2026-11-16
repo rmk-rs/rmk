@@ -5,7 +5,7 @@
 //! deframer inside `RynkService` treats as inter-frame delimiters.
 
 use embassy_usb::Builder;
-use embassy_usb::class::hid::{HidReader, HidWriter};
+use embassy_usb::class::hid::device::{HidReader, HidWriter};
 use embassy_usb::driver::Driver;
 use embedded_io_async::{ErrorType, Read, Write};
 use rmk_types::protocol::rynk::RYNK_HID_REPORT_SIZE;

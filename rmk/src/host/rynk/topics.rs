@@ -8,13 +8,11 @@
 use futures::FutureExt;
 use rmk_types::protocol::rynk::TopicEvent;
 
-#[cfg(feature = "_ble")]
-use crate::event::BatteryStatusEvent;
 #[cfg(feature = "lighting")]
 use crate::event::LightingChangedEvent;
 use crate::event::{
-    ConnectionStatusChangeEvent, EventSubscriber, LayerChangeEvent, LedIndicatorEvent, ModifierEvent, SleepStateEvent,
-    SubscribableEvent, WpmUpdateEvent,
+    BatteryStatusEvent, ConnectionStatusChangeEvent, EventSubscriber, LayerChangeEvent, LedIndicatorEvent,
+    ModifierEvent, SleepStateEvent, SubscribableEvent, WpmUpdateEvent,
 };
 
 pub(super) struct TopicSubscribers {
@@ -24,7 +22,6 @@ pub(super) struct TopicSubscribers {
     sleep: <SleepStateEvent as SubscribableEvent>::Subscriber,
     led: <LedIndicatorEvent as SubscribableEvent>::Subscriber,
     modifier: <ModifierEvent as SubscribableEvent>::Subscriber,
-    #[cfg(feature = "_ble")]
     battery: <BatteryStatusEvent as SubscribableEvent>::Subscriber,
     #[cfg(feature = "lighting")]
     lighting: <LightingChangedEvent as SubscribableEvent>::Subscriber,
@@ -39,7 +36,6 @@ impl TopicSubscribers {
             sleep: SleepStateEvent::subscriber(),
             led: LedIndicatorEvent::subscriber(),
             modifier: ModifierEvent::subscriber(),
-            #[cfg(feature = "_ble")]
             battery: BatteryStatusEvent::subscriber(),
             #[cfg(feature = "lighting")]
             lighting: LightingChangedEvent::subscriber(),
@@ -57,7 +53,7 @@ impl TopicSubscribers {
             e = self.sleep.next_event().fuse() => TopicEvent::SleepState(*e),
             e = self.led.next_event().fuse() => TopicEvent::LedIndicatorChange(*e),
             e = self.modifier.next_event().fuse() => TopicEvent::ModifierChange(e.modifier),
-            with_feature("_ble"): e = self.battery.next_event().fuse() => TopicEvent::BatteryStatusChange(*e),
+            e = self.battery.next_event().fuse() => TopicEvent::BatteryStatusChange(*e),
             with_feature("lighting"): _ = self.lighting.next_event().fuse() => TopicEvent::LightingChange(rmk_types::protocol::rynk::LightingChanged),
         }
     }

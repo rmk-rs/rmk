@@ -30,7 +30,32 @@ pub fn jump_to_bootloader() {
         core::ptr::write_volatile(GPIOA_ODR, d & !(1 << 9));
     }
 
-    #[cfg(not(any(feature = "adafruit_bl", feature = "rp2040", feature = "zsa_voyager_bl")))]
+    // ESP ROM download flags live in different retained register blocks by chip family.
+    #[cfg(any(feature = "esp32c3", feature = "esp32s3"))]
+    esp_hal::peripherals::LPWR::regs()
+        .option1()
+        .modify(|_, w| w.force_download_boot().set_bit());
+
+    #[cfg(any(feature = "esp32c6", feature = "esp32h2"))]
+    esp_hal::peripherals::LP_AON::regs()
+        .sys_cfg()
+        .modify(|_, w| w.force_download_boot().set_bit());
+
+    #[cfg(feature = "esp32s31")]
+    esp_hal::peripherals::LP_SYS::regs()
+        .sys_ctrl()
+        .modify(|_, w| w.force_download_boot().set_bit());
+
+    #[cfg(not(any(
+        feature = "adafruit_bl",
+        feature = "rp2040",
+        feature = "zsa_voyager_bl",
+        feature = "esp32c3",
+        feature = "esp32c6",
+        feature = "esp32h2",
+        feature = "esp32s3",
+        feature = "esp32s31"
+    )))]
     warn!("Please specify a bootloader to jump to!");
 
     reboot_keyboard();
@@ -46,6 +71,6 @@ pub(crate) fn reboot_keyboard() {
     ))]
     cortex_m::peripheral::SCB::sys_reset();
 
-    #[cfg(feature = "_esp_ble")]
+    #[cfg(feature = "_esp")]
     esp_hal::system::software_reset();
 }

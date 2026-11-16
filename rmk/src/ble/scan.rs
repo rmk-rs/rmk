@@ -1,9 +1,9 @@
 //! Passive scanning, shared by the split central and the dongle.
 
-use bt_hci::cmd::le::LeSetScanParams;
-use bt_hci::controller::ControllerCmdSync;
 use embassy_time::{Duration, Timer};
 use trouble_host::prelude::*;
+
+use crate::ble::CentralCmds;
 
 /// Split central: the radio is shared with the host link and the peripheral
 /// connections, so it can spare only 30ms of every 100ms.
@@ -30,20 +30,36 @@ pub(crate) fn scan_config(window: Duration) -> ScanConfig<'static> {
 /// End the session with [`ScanSession::stop`], which waits for the controller to
 /// confirm. Dropping it only signals the cancel, and the controller refuses an
 /// initiator until the runner has issued the stop.
-pub(crate) async fn start_scan<'a, C: Controller + ControllerCmdSync<LeSetScanParams>>(
+pub(crate) async fn start_scan<'a, C: Controller + CentralCmds>(
     stack: &'a Stack<'_, C, DefaultPacketPool>,
     window: Duration,
     filter_accept_list: &[Address],
-) -> ScanSession<'a, false> {
+) -> ScanSession<'a, { cfg!(feature = "ext_adv") }> {
     let config = ScanConfig {
         filter_accept_list,
         ..scan_config(window)
     };
     loop {
         let mut central = stack.central();
-        match Scanner::new(&mut central).scan(&config).await {
+        let mut scanner = Scanner::new(&mut central);
+        #[cfg(feature = "ext_adv")]
+        let scan = scanner.scan_ext(&config);
+        #[cfg(not(feature = "ext_adv"))]
+        let scan = scanner.scan(&config);
+        match scan.await {
             Ok(session) => return session,
             Err(_) => Timer::after_millis(500).await,
         }
     }
+}
+
+pub(crate) async fn connect<'a, C: Controller + CentralCmds>(
+    central: &mut Central<'a, C, DefaultPacketPool>,
+    config: &ConnectConfig<'_>,
+) -> Result<Connection<'a, DefaultPacketPool>, BleHostError<C::Error>> {
+    #[cfg(feature = "ext_adv")]
+    let connect = central.connect_ext(config);
+    #[cfg(not(feature = "ext_adv"))]
+    let connect = central.connect(config);
+    connect.await
 }

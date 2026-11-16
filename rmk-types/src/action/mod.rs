@@ -82,9 +82,9 @@ pub enum Action {
     ///
     /// Runtime behavior matches [`Action::DefaultLayer`]; additionally persisted to flash.
     PersistentDefaultLayer(u8),
-    /// A Plover HID stenography key. Press/release of this key updates the
-    /// in-progress steno chord; on first release the accumulated chord is
-    /// sent to the host as a vendor HID report.
+    /// A Plover HID stenography key. Each press/release updates the live chord
+    /// bitmap, which is sent to the host on every change; Plover accumulates
+    /// the bitmap and decides when a stroke is complete.
     #[cfg(feature = "steno")]
     Steno(StenoKey),
 }

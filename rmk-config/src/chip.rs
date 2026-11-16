@@ -45,7 +45,7 @@ impl ChipModel {
             "rp2040" => Ok(include_str!("default_config/rp2040.toml")),
             s if s.starts_with("stm32") => Ok(include_str!("default_config/stm32.toml")),
             s if s.starts_with("esp32") => {
-                if s == "esp32s3" {
+                if matches!(s, "esp32s3" | "esp32s31") {
                     Ok(include_str!("default_config/esp32s3.toml"))
                 } else {
                     Ok(include_str!("default_config/esp32.toml"))
@@ -88,35 +88,25 @@ impl KeyboardTomlConfig {
                 )),
             }
         } else if let Some(chip) = keyboard.chip.clone() {
-            if chip.to_lowercase().starts_with("stm32") {
-                Ok(ChipModel {
-                    series: ChipSeries::Stm32,
-                    chip,
-                    board: None,
-                })
-            } else if chip.to_lowercase().starts_with("nrf52") {
-                Ok(ChipModel {
-                    series: ChipSeries::Nrf52,
-                    chip,
-                    board: None,
-                })
-            } else if chip.to_lowercase().starts_with("rp2040") {
-                Ok(ChipModel {
-                    series: ChipSeries::Rp2040,
-                    chip,
-                    board: None,
-                })
-            } else if chip.to_lowercase().starts_with("esp32") {
-                Ok(ChipModel {
-                    series: ChipSeries::Esp32,
-                    chip,
-                    board: None,
-                })
+            let family = chip.to_lowercase();
+            let series = if family.starts_with("stm32") {
+                ChipSeries::Stm32
+            } else if family.starts_with("nrf52") {
+                ChipSeries::Nrf52
+            } else if family.starts_with("rp2040") {
+                ChipSeries::Rp2040
+            } else if family.starts_with("esp32") {
+                ChipSeries::Esp32
             } else {
-                Err(format!(
+                return Err(format!(
                     "Unsupported chip \"{chip}\" — supported chip families are stm32*, nrf52*, rp2040 and esp32*"
-                ))
-            }
+                ));
+            };
+            Ok(ChipModel {
+                series,
+                chip,
+                board: None,
+            })
         } else {
             Err("Neither board nor chip is specified".to_string())
         }

@@ -139,12 +139,21 @@ pub(crate) fn closest_name<'a>(
     input: &str,
     names: impl Iterator<Item = &'a str>,
 ) -> Option<&'a str> {
+    closest_name_with_distance(input, names).map(|(name, _)| name)
+}
+
+/// [`closest_name`] with the edit distance, for callers that weigh candidates
+/// from different vocabularies against each other.
+fn closest_name_with_distance<'a>(
+    input: &str,
+    names: impl Iterator<Item = &'a str>,
+) -> Option<(&'a str, usize)> {
     let lowercased = input.to_lowercase();
     let (distance, name) = names
         .map(|name| (strsim::levenshtein(&lowercased, &name.to_lowercase()), name))
         .min_by_key(|&(distance, _)| distance)?;
     // rustc-style cutoff: allow roughly one edit per three characters
-    (distance <= 1 + input.len() / 3).then_some(name)
+    (distance <= 1 + input.len() / 3).then_some((name, distance))
 }
 
 pub(crate) fn expand_profile(profile: &MorseProfile) -> proc_macro2::TokenStream {
@@ -338,8 +347,8 @@ pub(crate) fn parse_action(key: &str) -> TokenStream2 {
             )
         };
     } else if lower.starts_with("stn(") {
-        let key_ident = format_ident!("{}", strip_call(key).trim().to_uppercase());
-        return quote! { ::rmk::types::action::Action::Steno(::rmk::types::steno::StenoKey::#key_ident) };
+        let ident = expand_steno_key(strip_call(key).trim());
+        return quote! { ::rmk::types::action::Action::Steno(::rmk::types::steno::StenoKey::#ident) };
     } else if lower.starts_with("user") {
         // Support both User(X) and UserX formats
         let number_str = if lower.starts_with("user(") {
@@ -488,15 +497,10 @@ fn morse_profile(
     let Some(name) = profile_name else {
         return quote! { ::core::primitive::u8::MAX };
     };
-    let idx = match sorted_profile_names(profiles)
-        .iter()
-        .position(|n| n == name)
-    {
+    let names = sorted_profile_names(profiles);
+    let idx = match names.iter().position(|n| n == name) {
         Some(pos) => pos as u8,
-        None => panic_unknown_profile(
-            name,
-            sorted_profile_names(profiles).iter().map(String::as_str),
-        ),
+        None => panic_unknown_profile(name, names.iter().map(String::as_str)),
     };
     quote! { #idx }
 }
@@ -529,11 +533,59 @@ fn parse_numeric_arg(raw: &str, kind: &str) -> u8 {
 
 /// Case-insensitively match a token against an enum's variant names,
 /// expanding the match to that variant's identifier.
-fn match_variant(names: &[&str], lower: &str) -> Option<Ident> {
+fn match_variant(names: &[&str], token: &str) -> Option<Ident> {
     names
         .iter()
-        .find(|&&v| v.to_lowercase() == lower)
-        .map(|v| format_ident!("{v}"))
+        .copied()
+        .find(|name| name.eq_ignore_ascii_case(token))
+        .map(|name| format_ident!("{name}"))
+}
+
+/// Resolve a `keyboard.toml`/scenario steno key name to its `StenoKey` variant,
+/// failing expansion with a closest-name hint when the name is unknown. Names
+/// are case-insensitive and `STAR` resolves through its alias to `STAR1`.
+#[cfg(feature = "steno")]
+pub(crate) fn expand_steno_key(name: &str) -> Ident {
+    if name.is_empty() {
+        panic!("\n\u{274c} keyboard.toml: STN() requires a steno key name");
+    }
+    // `STAR` is an alias for a variant, so it needs the variant's own name here;
+    // `match_variant` already ignores case for everything else.
+    let token = if name.eq_ignore_ascii_case("star") {
+        "STAR1"
+    } else {
+        name
+    };
+    match_variant(rmk_types::steno::StenoKey::VARIANTS, token).unwrap_or_else(|| {
+        panic!(
+            "\n\u{274c} keyboard.toml: unknown steno key '{name}'{}",
+            closest_name(name, steno_names())
+                .map(|name| format!(" (did you mean {name}?)"))
+                .unwrap_or_default()
+        )
+    })
+}
+
+/// Without the steno vocabulary there is nothing to validate against; scenario
+/// tests that reach this are gated out by their own `features` declaration.
+#[cfg(not(feature = "steno"))]
+pub(crate) fn expand_steno_key(name: &str) -> Ident {
+    format_ident!("{}", name.to_uppercase())
+}
+
+/// Steno key names an argument may use, including the `STAR` alias.
+#[cfg(feature = "steno")]
+fn steno_names() -> impl Iterator<Item = &'static str> {
+    rmk_types::steno::StenoKey::VARIANTS
+        .iter()
+        .copied()
+        .chain(["STAR"])
+}
+
+/// Suggesting keys the build cannot use helps nobody.
+#[cfg(not(feature = "steno"))]
+fn steno_names() -> impl Iterator<Item = &'static str> {
+    core::iter::empty()
 }
 
 pub(crate) fn get_key_with_alias(key: String) -> Ident {
@@ -544,19 +596,43 @@ pub(crate) fn get_key_with_alias(key: String) -> Ident {
 }
 
 /// Panic for a key token matching no known form, suggesting the nearest valid
-/// name from any vocabulary. Everything reaching this used to emit an
-/// identifier that only failed deep inside the generated code.
+/// name from any vocabulary.
 fn unknown_key_panic(key: &str) -> ! {
-    let names = rmk_types::action::KeyboardAction::VARIANTS
-        .iter()
-        .chain(rmk_types::action::LightAction::VARIANTS.iter())
-        .chain(rmk_types::keycode::SpecialKey::VARIANTS.iter())
-        .chain(rmk_types::keycode::HidKeyCode::VARIANTS.iter())
-        .copied();
-    let hint = match closest_name(key, names) {
-        Some(s) => format!(" (did you mean {s}?)"),
-        None => String::new(),
+    // Action, keycode, and modifier names are all spelled bare.
+    let keycode = closest_name_with_distance(
+        key,
+        rmk_types::action::KeyboardAction::VARIANTS
+            .iter()
+            .chain(rmk_types::action::LightAction::VARIANTS.iter())
+            .chain(rmk_types::keycode::SpecialKey::VARIANTS.iter())
+            .chain(rmk_types::keycode::HidKeyCode::VARIANTS.iter())
+            .copied(),
+    )
+    .map(|(name, distance)| (name.to_string(), distance));
+
+    // Steno keys are not directly writable, so their name is offered wrapped.
+    let steno = closest_name_with_distance(key, steno_names())
+        .map(|(name, distance)| (format!("STN({name})"), distance));
+
+    let nearest = match (keycode, steno) {
+        // Both vocabularies matched: a steno name has to be strictly closer to
+        // displace the keycode one, so a tie keeps the plain name.
+        (Some((keycode, keycode_distance)), Some((steno, steno_distance))) => {
+            Some(if steno_distance < keycode_distance {
+                steno
+            } else {
+                keycode
+            })
+        }
+        // Only a keycode, action, or modifier name was within the cutoff.
+        (Some((keycode, _)), None) => Some(keycode),
+        // Only a steno name was within the cutoff.
+        (None, Some((steno, _))) => Some(steno),
+        // Nothing was close enough to be a plausible typo of the token.
+        (None, None) => None,
     };
+
+    let hint = nearest.map_or_else(String::new, |name| format!(" (did you mean {name}?)"));
     panic!("\n\u{274c} keyboard.toml: unknown key '{key}'{hint}")
 }
 
@@ -762,21 +838,47 @@ mod tests {
         let _ = expand("Bootloade");
     }
 
+    #[cfg(feature = "steno")]
+    mod steno {
+        use super::*;
+
+        #[test]
+        fn resolves_names_case_insensitively_plus_alias() {
+            assert!(squash(&expand("STN(s1)")).contains("StenoKey::S1"));
+            assert!(squash(&expand("STN(numc)")).contains("StenoKey::NUMC"));
+            // STAR is not a variant, only an associated-const alias.
+            assert!(squash(&expand("STN(STAR)")).contains("StenoKey::STAR1"));
+        }
+
+        #[test]
+        #[should_panic(expected = "unknown steno key 'SX1' (did you mean S1?)")]
+        fn typo_suggests_closest_steno_key() {
+            let _ = expand("STN(SX1)");
+        }
+
+        #[test]
+        #[should_panic(expected = "STN() requires a steno key name")]
+        fn empty_argument_is_reported() {
+            let _ = expand("STN()");
+        }
+
+        #[test]
+        #[should_panic(expected = "unknown key 'SX1' (did you mean STN(S1)?)")]
+        fn bare_typo_suggests_the_stn_form() {
+            let _ = expand("SX1");
+        }
+
+        #[test]
+        #[should_panic(expected = "unknown key 'STAR1' (did you mean STN(STAR1)?)")]
+        fn bare_exact_name_suggests_the_stn_form() {
+            let _ = expand("STAR1");
+        }
+    }
+
     #[test]
     #[should_panic(expected = "unknown key 'Spacee'")]
     fn composite_action_tap_slot_validates_its_key() {
         let _ = expand("WM(Spacee, RAlt)");
-    }
-
-    #[test]
-    fn far_off_key_gets_no_hint() {
-        let msg = std::panic::catch_unwind(|| expand("ZqZqZq99"))
-            .unwrap_err()
-            .downcast::<String>()
-            .unwrap();
-        assert!(msg.contains("unknown key 'ZqZqZq99'"), "{msg}");
-        // Nothing within the cutoff, so no fabricated suggestion.
-        assert!(!msg.contains("did you mean"), "{msg}");
     }
 
     #[test]

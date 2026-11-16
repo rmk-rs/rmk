@@ -1,7 +1,6 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use rmk_config::resolved::Hardware;
-use rmk_config::resolved::hardware::{ChipModel, PinConfig};
 use syn::ItemMod;
 
 use super::chip::gpio::convert_gpio_str_to_output_pin;
@@ -57,57 +56,38 @@ fn expand_light_indicator_processors(hardware: &Hardware) -> (TokenStream, Vec<T
     let mut initializers = TokenStream::new();
     let mut executors = vec![];
 
-    create_keyboard_indicator_processor(
-        chip,
-        &light_config.numslock,
-        quote! { numlock_processor },
-        quote! { NumLock },
-        &mut initializers,
-        &mut executors,
-    );
-
-    create_keyboard_indicator_processor(
-        chip,
-        &light_config.scrolllock,
-        quote! { scrolllock_processor },
-        quote! { ScrollLock },
-        &mut initializers,
-        &mut executors,
-    );
-
-    create_keyboard_indicator_processor(
-        chip,
-        &light_config.capslock,
-        quote! { capslock_processor },
-        quote! { CapsLock },
-        &mut initializers,
-        &mut executors,
-    );
+    for (pin_config, processor_ident, led_indicator_variant) in [
+        (
+            &light_config.numslock,
+            quote! { numlock_processor },
+            quote! { NumLock },
+        ),
+        (
+            &light_config.scrolllock,
+            quote! { scrolllock_processor },
+            quote! { ScrollLock },
+        ),
+        (
+            &light_config.capslock,
+            quote! { capslock_processor },
+            quote! { CapsLock },
+        ),
+    ] {
+        if let Some(c) = pin_config {
+            let p = convert_gpio_str_to_output_pin(chip, c.pin.clone(), c.low_active);
+            let low_active = c.low_active;
+            initializers.extend(quote! {
+                let mut #processor_ident = ::rmk::processor::builtin::led_indicator::KeyboardIndicatorProcessor::new(
+                    #p,
+                    #low_active,
+                    ::rmk::types::led_indicator::LedIndicatorType::#led_indicator_variant,
+                );
+            });
+            executors.push(quote! { #processor_ident.run() });
+        }
+    }
 
     (initializers, executors)
-}
-
-fn create_keyboard_indicator_processor(
-    chip: &ChipModel,
-    pin_config: &Option<PinConfig>,
-    processor_ident: TokenStream,
-    led_indicator_variant: TokenStream,
-    initializers: &mut TokenStream,
-    executors: &mut Vec<TokenStream>,
-) {
-    if let Some(c) = pin_config {
-        let p = convert_gpio_str_to_output_pin(chip, c.pin.clone(), c.low_active);
-        let low_active = c.low_active;
-        let processor_init = quote! {
-            let mut #processor_ident = ::rmk::processor::builtin::led_indicator::KeyboardIndicatorProcessor::new(
-                #p,
-                #low_active,
-                ::rmk::types::led_indicator::LedIndicatorType::#led_indicator_variant,
-            );
-        };
-        initializers.extend(processor_init);
-        executors.push(quote! { #processor_ident.run() });
-    }
 }
 
 fn create_dfu_led_processor(

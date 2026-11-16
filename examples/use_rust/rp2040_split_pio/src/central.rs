@@ -10,8 +10,9 @@ mod vial;
 use defmt::info;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
-use embassy_rp::flash::{Async, Flash};
+use embassy_rp::flash::Flash;
 use embassy_rp::gpio::{Input, Output};
+use embassy_rp::mode::Async;
 use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
 use embassy_rp::usb::{Driver, InterruptHandler};
 use embassy_rp::{bind_interrupts, dma};
@@ -53,7 +54,7 @@ async fn main(_spawner: Spawner) {
     let (row_pins, col_pins) = config_matrix_pins_rp!(peripherals: p, input: [PIN_9, PIN_11], output: [PIN_10, PIN_12]);
 
     // Use internal flash to emulate eeprom
-    let flash = Flash::<_, Async, FLASH_SIZE>::new(p.FLASH, p.DMA_CH0, Irqs);
+    let flash = Flash::<Async, FLASH_SIZE>::new(p.FLASH, p.DMA_CH0, Irqs);
 
     let keyboard_device_config = DeviceConfig {
         serial_number,

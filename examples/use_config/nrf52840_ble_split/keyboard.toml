@@ -7,6 +7,9 @@ product_id = 0x4643
 manufacturer = "haobo"
 chip = "nrf52840"
 
+[host]
+unlock_keys = [[0, 0], [0, 1]]
+
 [layout]
 rows = 4
 cols = 3

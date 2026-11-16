@@ -8,8 +8,9 @@ trackpad modules.
 
 - `keyboard.toml` configuration is supported on nRF52 and RP2040 only; other chips
   need the [Rust API](#rust-configuration).
-- Only relative single-finger movement is supported. Gestures, absolute finger
-  positions, pressure, area, and raw channel data are not supported.
+- Relative single-finger movement is supported by default. The [Rust API](#rust-configuration)
+  also exposes absolute finger positions through `Iqs5xxMode::RawTouch`.
+  Gesture recognition, pressure, area, and raw channel data are not provided by this driver.
 - Use [Sniper mode](./pointing_processor#sniper) to reduce cursor sensitivity.
 - An `RDY` (ready) pin is strongly recommended. Without it, the driver falls
   back to timed polling and may stall the I²C bus through clock-stretching if
@@ -116,14 +117,20 @@ run_all!(trackpad, trackpad_proc, /* matrix, ... */);
 
 ::: note
 
-`PointingProcessor` must run on the **central** side, even if the trackpad is
-wired to a peripheral. The peripheral runs the `Iqs5xx` device and forwards
-events over the split link; the central converts them to USB/BLE HID reports.
+In the default pointing mode, `PointingProcessor` must run on the **central**
+side, even if the trackpad is wired to a peripheral. The peripheral runs the
+`Iqs5xx` device and forwards events over the split link; the central converts
+them to USB/BLE HID reports.
 
 You can switch between Cursor, Scroll, Sniper and Caret modes per layer.
 See the [PointingProcessor](./pointing_processor) page for all options.
 
 :::
+
+For raw touch input, use `.with_mode(Iqs5xxMode::RawTouch)` and a processor
+that subscribes to `TouchEvent` on the same board. Set `[event.touch].subs`
+to the number of subscribers (it defaults to `0`). Raw touch events stay
+on that board; the processor can publish keyboard or pointing events for the split link.
 
 ## RDY vs polling
 

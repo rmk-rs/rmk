@@ -20,15 +20,6 @@ pub struct EventConfig {
     pub pubs: Option<TokenStream>,
 }
 
-/// Channel type for event macro.
-/// Automatically inferred: if `subs` or `pubs` is specified, PubSub is used; otherwise MPSC.
-enum ChannelType {
-    /// MPSC channel (embassy_sync::channel::Channel) - single consumer
-    Mpsc,
-    /// PubSub channel (embassy_sync::pubsub::PubSubChannel) - broadcast
-    PubSub,
-}
-
 /// Parse event config from attribute tokens.
 ///
 /// Channel type is automatically inferred: if `subs` or `pubs` is specified, PubSub is used;
@@ -238,28 +229,22 @@ pub fn event_impl(
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     // Infer channel type: if subs or pubs is specified, use PubSub; otherwise MPSC
-    let channel_type = if config.subs.is_some() || config.pubs.is_some() {
-        ChannelType::PubSub
-    } else {
-        ChannelType::Mpsc
-    };
-
-    // Generate channel and trait impls based on channel type
-    let (channel_static, trait_impls) = match channel_type {
-        ChannelType::Mpsc => generate_mpsc_channel(
-            &type_name,
-            &ty_generics,
-            &impl_generics,
-            where_clause,
-            config.channel_size.clone(),
-        ),
-        ChannelType::PubSub => generate_pubsub_channel(
+    let (channel_static, trait_impls) = if config.subs.is_some() || config.pubs.is_some() {
+        generate_pubsub_channel(
             &type_name,
             &ty_generics,
             &impl_generics,
             where_clause,
             &config,
-        ),
+        )
+    } else {
+        generate_mpsc_channel(
+            &type_name,
+            &ty_generics,
+            &impl_generics,
+            where_clause,
+            config.channel_size.clone(),
+        )
     };
 
     let expanded = quote! {

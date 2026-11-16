@@ -7,6 +7,8 @@ pub struct DeviceConfig<'a> {
     pub vid: u16,
     /// USB product ID.
     pub pid: u16,
+    /// USB device release number (bcdDevice), encoded in binary-coded decimal.
+    pub bcd_version: u16,
     /// Manufacturer name.
     pub manufacturer: &'a str,
     /// Product name.
@@ -94,7 +96,7 @@ pub fn build_serial_number(input: impl SerialNumberInput) -> heapless::String<DE
 pub fn rp2040_serial_number(
     flash: embassy_rp::Peri<'_, embassy_rp::peripherals::FLASH>,
 ) -> heapless::String<DEVICE_INFO_STRING_MAX_LEN> {
-    let mut flash = embassy_rp::flash::Flash::<_, embassy_rp::flash::Blocking, 0>::new_blocking(flash);
+    let mut flash = embassy_rp::flash::Flash::<embassy_rp::mode::Blocking, 0>::new_blocking(flash);
     // Flash chips answer the Winbond UID command with 8 bytes, except Zetta's 16.
     let len = if matches!(flash.blocking_jedec_id(), Ok(0xba6015)) {
         16
@@ -112,23 +114,24 @@ pub fn rp2040_serial_number(
 
 impl Default for DeviceConfig<'_> {
     fn default() -> Self {
-        #[cfg(feature = "_nrf_ble")]
+        #[cfg(all(feature = "_nrf", target_os = "none"))]
         let serial_number = {
-            #[cfg(any(feature = "nrf54l15_ble", feature = "nrf54lm20_ble"))]
+            #[cfg(any(feature = "nrf54l15", feature = "nrf54lm20"))]
             let id = embassy_nrf::pac::FICR.deviceaddr(1).read();
-            #[cfg(not(any(feature = "nrf54l15_ble", feature = "nrf54lm20_ble")))]
+            #[cfg(not(any(feature = "nrf54l15", feature = "nrf54lm20")))]
             let id = embassy_nrf::pac::FICR.deviceid(1).read();
             // Keep the 24 bits used by existing nRF device IDs.
             build_serial_number(&id.to_be_bytes()[..3])
         };
         // Skip the vendor prefix shared by Espressif chips.
-        #[cfg(feature = "_esp_ble")]
+        #[cfg(all(feature = "_esp", target_os = "none"))]
         let serial_number = build_serial_number(&esp_hal::efuse::base_mac_address().as_bytes()[3..]);
-        #[cfg(not(any(feature = "_nrf_ble", feature = "_esp_ble")))]
+        #[cfg(not(all(target_os = "none", any(feature = "_nrf", feature = "_esp"))))]
         let serial_number = build_serial_number(&[]);
         Self {
             vid: 0x4c4b,
             pid: 0x4643,
+            bcd_version: 0x0010,
             manufacturer: "RMK",
             product_name: "RMK Keyboard",
             serial_number,

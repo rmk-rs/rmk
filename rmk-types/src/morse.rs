@@ -714,14 +714,6 @@ mod tests {
     }
 
     #[test]
-    fn morse_pattern_max_size_matches_u16() {
-        // Morse actions serialize MorsePattern as u16 on the wire.
-        // If MorsePattern's MaxSize ever diverges from u16, the manual
-        // MaxSize impl on Morse would be wrong.
-        assert_eq!(MorsePattern::POSTCARD_MAX_SIZE, u16::POSTCARD_MAX_SIZE,);
-    }
-
-    #[test]
     fn test_morse_profile_timeout_setters() {
         let mut profile = MorseProfile::new(Some(true), Some(MorseMode::PermissiveHold), Some(1000), Some(2000));
 

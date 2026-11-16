@@ -39,8 +39,7 @@ async fn main(_spawner: Spawner) {
     // DFU partition is passed to the split firmware-update handler — the
     // central forwards new firmware over the split link.
     let flash_mutex = FlashMutex::new(rmk::storage::async_flash_wrapper(Flash::<
-        _,
-        embassy_rp::flash::Blocking,
+        embassy_rp::mode::Blocking,
         { rmk::dfu::FLASH_SIZE },
     >::new_blocking(p.FLASH)));
     let (_, state_partition, dfu_partition) = partitions_from_linkerscript(&flash_mutex);

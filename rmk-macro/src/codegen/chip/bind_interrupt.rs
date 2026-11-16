@@ -6,11 +6,13 @@ use std::collections::HashSet;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use rmk_config::resolved::Hardware;
-use rmk_config::resolved::hardware::{BoardConfig, DfuConfig, InputDeviceConfig, UniBodyConfig};
+use rmk_config::resolved::hardware::{
+    BoardConfig, ChipSeries, DfuConfig, InputDeviceConfig, UniBodyConfig,
+};
 use syn::{ItemFn, ItemMod};
 
 use crate::codegen::display::expand_display_interrupt;
-use crate::codegen::feature::{get_rmk_features, is_feature_enabled};
+use crate::codegen::feature::{get_dependency, get_rmk_features, is_feature_enabled};
 use crate::codegen::input_device::iqs5xx::expand_iqs5xx_interrupts;
 use crate::codegen::override_helper::{Overwritten, find_overwritten};
 
@@ -77,6 +79,21 @@ pub(crate) fn find_extern_irqs(item_mod: &ItemMod) -> Vec<TokenStream2> {
     extern_irqs
 }
 
+/// Bind the configured side's external flash SPIM interrupt on nRF52.
+pub(crate) fn expand_external_flash_interrupt(
+    chip: &ChipSeries,
+    dfu: Option<&DfuConfig>,
+) -> Option<TokenStream2> {
+    if *chip != ChipSeries::Nrf52 {
+        return None;
+    }
+    let flash = dfu?.external_flash.as_ref()?;
+    let instance = format_ident!("{}", flash.spi.instance);
+    Some(quote! {
+        #instance => ::embassy_nrf::spim::InterruptHandler<::embassy_nrf::peripherals::#instance>;
+    })
+}
+
 /// Expand default `bind_interrupt!` for different chips and nrf-sdc config for nRF52
 pub(crate) fn bind_interrupt_default(
     hardware: &Hardware,
@@ -122,23 +139,7 @@ pub(crate) fn bind_interrupt_default(
     };
     let iqs5xx_interrupt = expand_iqs5xx_interrupts(&chip.series, &iqs5xx_config);
 
-    // External DFU flash SPI interrupt for nRF52
-    let ext_flash_spi_interrupt = {
-        let ext_flash = dfu.and_then(|d| d.external_flash.as_ref());
-        if let Some(ext_flash) = ext_flash {
-            match chip.series {
-                rmk_config::resolved::hardware::ChipSeries::Nrf52 => {
-                    let instance = format_ident!("{}", ext_flash.spi.instance);
-                    quote! {
-                        #instance => ::embassy_nrf::spim::InterruptHandler<::embassy_nrf::peripherals::#instance>;
-                    }
-                }
-                _ => quote! {},
-            }
-        } else {
-            quote! {}
-        }
-    };
+    let ext_flash_spi_interrupt = expand_external_flash_interrupt(&chip.series, dfu);
 
     match chip.series {
         rmk_config::resolved::hardware::ChipSeries::Stm32 => {
@@ -189,68 +190,6 @@ pub(crate) fn bind_interrupt_default(
             }
         }
         rmk_config::resolved::hardware::ChipSeries::Nrf52 => {
-            // Usb and clock interrupt
-            let usb_and_clock_interrupt = if let Some(usb_info) = communication.get_usb_info() {
-                let interrupt_name = format_ident!("{}", usb_info.interrupt_name);
-                let peripheral_name = format_ident!("{}", usb_info.peripheral_name);
-                quote! {
-                    #interrupt_name => ::embassy_nrf::usb::InterruptHandler<::embassy_nrf::peripherals::#peripheral_name>;
-                    CLOCK_POWER => ::nrf_sdc::mpsl::ClockInterruptHandler, ::embassy_nrf::usb::vbus_detect::InterruptHandler;
-                }
-            } else {
-                quote! { CLOCK_POWER => ::nrf_sdc::mpsl::ClockInterruptHandler; }
-            };
-
-            let ble_config = communication.get_ble_config().unwrap();
-            let tx_power = if let Some(pwr) = ble_config.default_tx_power {
-                quote! { .default_tx_power(#pwr)?  }
-            } else {
-                quote! {}
-            };
-
-            // nrf-sdc interrupt config
-            let nrf_sdc_config = match &board {
-                BoardConfig::Split(_) => {
-                    let num_peri = board.get_num_peripheral() as u8;
-                    let support_subrating = if is_feature_enabled(&get_rmk_features(), "subrating")
-                    {
-                        quote! { .support_connection_subrating_central() }
-                    } else {
-                        quote! {}
-                    };
-                    quote! {
-                        ::nrf_sdc::Builder::new()?
-                        .support_scan()
-                        .support_central()
-                        .support_adv()
-                        .support_peripheral()
-                        .support_dle_peripheral()
-                        .support_dle_central()
-                        .support_phy_update_central()
-                        .support_phy_update_peripheral()
-                        #support_subrating
-                        .support_le_2m_phy()
-                        #tx_power
-                        .central_count(#num_peri)?
-                        .peripheral_count(1)?
-                        .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
-                        .build(p, rng, mpsl, mem)
-                    }
-                }
-                BoardConfig::UniBody(_) => quote! {
-                    ::nrf_sdc::Builder::new()?
-                    .support_adv()
-                    .support_peripheral()
-                    .support_dle_peripheral()
-                    .support_phy_update_peripheral()
-                    .support_le_2m_phy()
-                    #tx_power
-                    .peripheral_count(1)?
-                    .buffer_cfg(L2CAP_MTU as u16, L2CAP_MTU as u16, L2CAP_TXQ, L2CAP_RXQ)?
-                    .build(p, rng, mpsl, mem)
-                },
-            };
-
             // Extract PMW33xx configuration
             let pmw33xx_config = match &board {
                 BoardConfig::UniBody(UniBodyConfig { input_device, .. }) => {
@@ -284,6 +223,110 @@ pub(crate) fn bind_interrupt_default(
                 }
             };
 
+            if !communication.ble_enabled() {
+                let usb_interrupts = communication.get_usb_info().map(|usb| {
+                    let interrupt = format_ident!("{}", usb.interrupt_name);
+                    let peripheral = format_ident!("{}", usb.peripheral_name);
+                    quote! {
+                        #interrupt => ::embassy_nrf::usb::InterruptHandler<::embassy_nrf::peripherals::#peripheral>;
+                        CLOCK_POWER => ::embassy_nrf::usb::vbus_detect::InterruptHandler;
+                    }
+                });
+                return quote! {
+                    ::embassy_nrf::bind_interrupts!(struct Irqs {
+                        #usb_interrupts
+                        #pmw33xx_spi_interrupts
+                        #ext_flash_spi_interrupt
+                        #iqs5xx_interrupt
+                        #display_interrupt
+                        #extern_irqs
+                    });
+                };
+            }
+
+            // Usb and clock interrupt
+            let usb_and_clock_interrupt = if let Some(usb_info) = communication.get_usb_info() {
+                let interrupt_name = format_ident!("{}", usb_info.interrupt_name);
+                let peripheral_name = format_ident!("{}", usb_info.peripheral_name);
+                quote! {
+                    #interrupt_name => ::embassy_nrf::usb::InterruptHandler<::embassy_nrf::peripherals::#peripheral_name>;
+                    CLOCK_POWER => ::nrf_sdc::mpsl::ClockInterruptHandler, ::embassy_nrf::usb::vbus_detect::InterruptHandler;
+                }
+            } else {
+                quote! { CLOCK_POWER => ::nrf_sdc::mpsl::ClockInterruptHandler; }
+            };
+
+            let ble_config = communication.get_ble_config().unwrap();
+            let tx_power = if let Some(pwr) = ble_config.default_tx_power {
+                quote! { .default_tx_power(#pwr)?  }
+            } else {
+                quote! {}
+            };
+
+            let central_count = if get_dependency("nrf-sdc").is_some_and(|dep| {
+                dep.req_features()
+                    .iter()
+                    .any(|feature| matches!(feature.as_str(), "central" | "multirole"))
+            }) {
+                quote! { .central_count(0)? }
+            } else {
+                quote! {}
+            };
+
+            let support_adv = if cfg!(feature = "ext_adv") {
+                quote! { .support_ext_adv() }
+            } else {
+                quote! { .support_adv() }
+            };
+
+            // nrf-sdc interrupt config
+            let nrf_sdc_config = match &board {
+                BoardConfig::Split(_) => {
+                    let num_peri = board.get_num_peripheral() as u8;
+                    let support_central = if cfg!(feature = "ext_adv") {
+                        quote! { .support_ext_central() }
+                    } else {
+                        quote! { .support_central() }
+                    };
+                    let support_subrating = if is_feature_enabled(&get_rmk_features(), "subrating")
+                    {
+                        quote! { .support_connection_subrating_central() }
+                    } else {
+                        quote! {}
+                    };
+                    quote! {
+                        ::nrf_sdc::Builder::new()?
+                        #support_central
+                        #support_adv
+                        .support_peripheral()
+                        .support_dle_peripheral()
+                        .support_dle_central()
+                        .support_phy_update_central()
+                        .support_phy_update_peripheral()
+                        #support_subrating
+                        .support_le_2m_phy()
+                        #tx_power
+                        .central_count(#num_peri)?
+                        .peripheral_count(::rmk::ble::NUM_HOST_LINKS as u8)?
+                        .buffer_cfg(SDC_PACKET_SIZE as u16, SDC_PACKET_SIZE as u16, SDC_TX_BUFFERS, SDC_RX_BUFFERS)?
+                        .build(p, rng, mpsl, mem)
+                    }
+                }
+                BoardConfig::UniBody(_) => quote! {
+                    ::nrf_sdc::Builder::new()?
+                    #support_adv
+                    .support_peripheral()
+                    .support_dle_peripheral()
+                    .support_phy_update_peripheral()
+                    .support_le_2m_phy()
+                    #tx_power
+                    #central_count
+                    .peripheral_count(::rmk::ble::NUM_HOST_LINKS as u8)?
+                    .buffer_cfg(SDC_PACKET_SIZE as u16, SDC_PACKET_SIZE as u16, SDC_TX_BUFFERS, SDC_RX_BUFFERS)?
+                    .build(p, rng, mpsl, mem)
+                },
+            };
+
             quote! {
                 use ::embassy_nrf::bind_interrupts;
                 bind_interrupts!(struct Irqs {
@@ -304,14 +347,7 @@ pub(crate) fn bind_interrupt_default(
                 async fn mpsl_task(mpsl: &'static ::nrf_sdc::mpsl::MultiprotocolServiceLayer<'static>) -> ! {
                     mpsl.run().await
                 }
-                /// How many outgoing L2CAP buffers per link
-                const L2CAP_TXQ: u8 = 3;
-
-                /// How many incoming L2CAP buffers per link
-                const L2CAP_RXQ: u8 = 3;
-
-                /// Size of L2CAP packets
-                const L2CAP_MTU: usize = 251;
+                use ::rmk::ble::{SDC_PACKET_SIZE, SDC_RX_BUFFERS, SDC_TX_BUFFERS};
                 fn build_sdc<'d, const N: usize>(
                     p: ::nrf_sdc::Peripherals<'d>,
                     rng: &'d mut ::embassy_nrf::rng::Rng<::embassy_nrf::mode::Async>,
@@ -455,6 +491,66 @@ fn get_pin_num_stm32(gpio_name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nrf_usb_codegen_has_no_ble_dependencies() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/use_config/nrf52840_ble/keyboard.toml");
+        let config = rmk_config::KeyboardTomlConfig::new_from_toml_path(&path);
+        let mut hardware = config.hardware().unwrap();
+        hardware.communication = rmk_config::resolved::hardware::CommunicationConfig::Usb(
+            hardware.communication.get_usb_info().unwrap(),
+        );
+        let module = syn::parse_quote!(
+            mod keyboard {
+                add_interrupt!(TEST => TestHandler;);
+            }
+        );
+        let interrupts = bind_interrupt_default(&hardware, &module, None).to_string();
+        let init = crate::codegen::chip::chip_init::chip_init_default(&hardware, None).to_string();
+        assert!(interrupts.contains("HardwareVbusDetect") || interrupts.contains("vbus_detect"));
+        assert!(interrupts.contains("TEST => TestHandler"));
+        assert!(interrupts.contains("USBD"));
+        for generated in [&interrupts, &init] {
+            assert!(!generated.contains("nrf_sdc"));
+            assert!(!generated.contains("mpsl"));
+            assert!(!generated.contains("rmk :: ble"));
+        }
+        #[cfg(not(feature = "_dfu"))]
+        {
+            assert!(hardware.storage.is_some());
+            let flash = crate::codegen::chip::flash::expand_flash_init(&hardware, None).to_string();
+            assert!(flash.contains("Nvmc :: new"));
+            assert!(flash.contains("async_flash_wrapper"));
+            assert!(!flash.contains("mpsl"));
+        }
+    }
+
+    #[test]
+    fn nrf_ble_codegen_keeps_controller_and_flash() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/use_config/nrf52840_ble/keyboard.toml");
+        let hardware = rmk_config::KeyboardTomlConfig::new_from_toml_path(&path)
+            .hardware()
+            .unwrap();
+        let interrupts = bind_interrupt_default(
+            &hardware,
+            &syn::parse_quote!(
+                mod keyboard {}
+            ),
+            None,
+        )
+        .to_string();
+        assert!(interrupts.contains("build_sdc"));
+        assert!(interrupts.contains("ClockInterruptHandler"));
+        assert!(interrupts.contains("vbus_detect"));
+        #[cfg(not(feature = "_dfu"))]
+        assert!(
+            crate::codegen::chip::flash::expand_flash_init(&hardware, None)
+                .to_string()
+                .contains("nrf_mpsl :: Flash :: take")
+        );
+    }
 
     fn parse_fn(src: &str) -> ItemFn {
         syn::parse_str(src).expect("test fn should parse")
