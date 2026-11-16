@@ -1158,12 +1158,9 @@ async fn serve_keyboard_connection<
         loop {
             wait_for_connection_status(|s| s.selected == profile_id).await;
             LED_SIGNAL.signal(led.get());
-            while let Either::Second(report) = select(
-                wait_for_connection_status(|s| s.selected != profile_id),
-                BLE_REPORT_CHANNEL.receive(),
-            )
-            .await
-            {
+            // One wait spans every report of this selection, so a report costs no subscriber.
+            let mut deselected = pin!(wait_for_connection_status(|s| s.selected != profile_id));
+            while let Either::Second(report) = select(deselected.as_mut(), BLE_REPORT_CHANNEL.receive()).await {
                 if let Err(e) = ble_hid_server.write_report(&report).await {
                     error!("Failed to send report: {:?}", e);
                 }

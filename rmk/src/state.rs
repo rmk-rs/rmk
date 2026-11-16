@@ -16,7 +16,7 @@ static CONNECTION_STATUS: Mutex<RawMutex, RefCell<ConnectionStatus>> =
     Mutex::new(RefCell::new(ConnectionStatus::new()));
 
 pub(crate) fn active_transport() -> Option<ConnectionType> {
-    current_connection_status().decide_active()
+    CONNECTION_STATUS.lock(|c| c.borrow().decide_active())
 }
 
 /// Snapshot of the current connection status.
@@ -142,7 +142,7 @@ pub(crate) async fn toggle_preferred() {
 
 /// The selected BLE profile; always 0 without BLE.
 pub(crate) fn current_profile() -> u8 {
-    current_connection_status().selected
+    CONNECTION_STATUS.lock(|c| c.borrow().selected)
 }
 
 #[cfg(test)]
