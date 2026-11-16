@@ -12,7 +12,7 @@ pub struct Host {
 impl crate::KeyboardTomlConfig {
     /// Resolve host-tool configuration from TOML config.
     pub fn host(&self) -> Host {
-        let host_toml = self.get_host_config();
+        let host_toml = self.host.clone().unwrap_or_default();
         let unlock_keys = host_toml.unlock_keys.unwrap_or_default();
 
         validate_unlock_keys("[host]", &unlock_keys, self.layout.as_ref())

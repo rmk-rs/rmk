@@ -1,8 +1,7 @@
 //! Utilities of check cargo feature
 //!
 
-/// Get enabled RMK features list
-pub(crate) fn get_rmk_features() -> Option<Vec<String>> {
+pub(crate) fn get_dependency(name: &str) -> Option<cargo_toml::Dependency> {
     // Use an absolute path. `cargo_toml::Manifest::from_path` resolves the
     // workspace root by walking ancestors of the given path; passing a
     // relative `"./Cargo.toml"` makes its fallback canonicalize an empty
@@ -12,7 +11,12 @@ pub(crate) fn get_rmk_features() -> Option<Vec<String>> {
     )
     .join("Cargo.toml");
     let manifest = cargo_toml::Manifest::from_path(&manifest_path).ok()?;
-    let dep = manifest.dependencies.get("rmk")?;
+    manifest.dependencies.get(name).cloned()
+}
+
+/// Get enabled RMK features list
+pub(crate) fn get_rmk_features() -> Option<Vec<String>> {
+    let dep = get_dependency("rmk")?;
     let mut feature_set = dep.req_features().to_vec();
 
     // Add default features to the feature list.

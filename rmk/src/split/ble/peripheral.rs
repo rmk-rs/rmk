@@ -12,6 +12,7 @@ use trouble_host::prelude::*;
 #[cfg(feature = "storage")]
 use super::PeerAddress;
 use super::{GattSplitMessage, SplitMessage};
+use crate::ble::ExtAdvCmds;
 use crate::ble::adv::{Adv, advertise};
 #[cfg(feature = "custom_message")]
 use crate::custom_message::{CustomMessage, CustomMessageTarget, forward};
@@ -109,10 +110,11 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitReader for BleSplitPeripheralDrive
                                 event.with_data(|_, data| match postcard::from_bytes::<CustomMessage>(data) {
                                     // An end of the chain: it delivers what names it and
                                     // has nowhere to relay the rest to.
-                                    Ok(message) => match message.target {
-                                        CustomMessageTarget::Peripherals => publish_event(message),
-                                        _ => (),
-                                    },
+                                    Ok(message) => {
+                                        if message.target == CustomMessageTarget::Peripherals {
+                                            publish_event(message);
+                                        }
+                                    }
                                     Err(_) => warn!("[split] undecodable custom message dropped"),
                                 });
                             } else {
@@ -182,8 +184,7 @@ impl<'stack, 'server, 'c, P: PacketPool> SplitWriter for BleSplitPeripheralDrive
 async fn init_subrating_host_feature<C: Controller + ControllerCmdSync<LeSetHostFeature>>(
     stack: &Stack<'_, C, impl PacketPool>,
 ) {
-    const CONN_SUBRATING_HOST_BIT: u8 = 38;
-    let cmd = LeSetHostFeature::new(CONN_SUBRATING_HOST_BIT, 1);
+    let cmd = LeSetHostFeature::new(bt_hci::param::LeHostFeature::CONN_SUBRATING, true);
     if let Err(e) = stack.command(cmd).await {
         error!("[split_peri] error setting subrating host feature flag: {:?}", e);
     }
@@ -199,8 +200,8 @@ async fn init_subrating_host_feature<C: Controller + ControllerCmdSync<LeSetHost
 pub async fn initialize_nrf_ble_split_peripheral_and_run<
     'b,
     's: 'b,
-    #[cfg(feature = "subrating")] C: Controller + ControllerCmdSync<LeSetHostFeature>,
-    #[cfg(not(feature = "subrating"))] C: Controller,
+    #[cfg(feature = "subrating")] C: Controller + ExtAdvCmds + ControllerCmdSync<LeSetHostFeature>,
+    #[cfg(not(feature = "subrating"))] C: Controller + ExtAdvCmds,
 >(
     id: usize,
     stack: &'b Stack<'s, C, DefaultPacketPool>,
@@ -283,7 +284,7 @@ pub async fn initialize_nrf_ble_split_peripheral_and_run<
 
 /// Reconnect to the saved central, falling back to seeking any central when it
 /// does not answer.
-async fn split_peripheral_advertise<'a, 'b, C: Controller>(
+async fn split_peripheral_advertise<'a, 'b, C: Controller + ExtAdvCmds>(
     id: usize,
     central_addr: Option<[u8; 6]>,
     peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
@@ -291,11 +292,11 @@ async fn split_peripheral_advertise<'a, 'b, C: Controller>(
 ) -> Result<GattConnection<'a, 'b, DefaultPacketPool>, BleHostError<C::Error>> {
     if let Some(addr) = central_addr {
         let directed = Adv::Directed(Address::random(addr));
-        match advertise(peripheral, &server.server, directed, Duration::from_secs(10)).await {
+        match advertise(peripheral, &server.server, directed, None, Duration::from_secs(10)).await {
             Err(BleHostError::BleHost(Error::Timeout)) => warn!("[adv] Try update central_addr"),
             result => return result,
         }
     }
     let seeking = Adv::SplitPeripheral { id: id as u8 };
-    advertise(peripheral, &server.server, seeking, Duration::from_secs(300)).await
+    advertise(peripheral, &server.server, seeking, None, Duration::from_secs(300)).await
 }

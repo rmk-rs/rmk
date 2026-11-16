@@ -16,7 +16,7 @@ pub(crate) fn expand_battery_devices(
         let constructor = if let Some(adc) = &config.adc {
             let measured = adc.divider_measured;
             let total = adc.divider_total;
-            quote! { ::rmk::input_device::battery::BatteryProcessor::new(#measured, #total) }
+            quote! { const { ::rmk::input_device::battery::BatteryProcessor::new(#measured, #total) } }
         } else {
             quote! { ::rmk::input_device::battery::BatteryProcessor::charging_only() }
         };

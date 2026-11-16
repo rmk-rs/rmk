@@ -48,7 +48,7 @@ pub struct RynkClient {
 
 /// Handshake over an already-open JS link and return a client. The link is the
 /// web transport's [`RynkDevice`], so the browser path uses the same connect
-/// lifecycle as the native serial/BLE transports.
+/// lifecycle as the native USB/BLE transports.
 #[wasm_bindgen]
 pub async fn connect(link: JsByteLink) -> Result<RynkClient, JsValue> {
     let (client, driver) = link.connect().await?;

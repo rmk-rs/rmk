@@ -18,13 +18,10 @@ pub mod resolved;
 pub mod usb_interrupt_map;
 pub(crate) mod behavior;
 pub(crate) mod board;
-pub(crate) mod display;
-pub(crate) mod host;
 pub(crate) mod keycode_alias;
 pub(crate) mod keymap;
 pub mod layout;
 pub use layout::{STOCK_WIDTHS, layout_blob_from_toml, layout_info_from_toml};
-pub(crate) mod storage;
 
 /// Bytes in one persisted macro chunk, shared by configuration and firmware.
 pub const MACRO_CHUNK_SIZE: usize = 32;
@@ -380,7 +377,7 @@ pub(crate) struct RmkConstantsConfig {
     /// The number of available BLE profiles
     #[serde_inline_default(3)]
     pub ble_profiles_num: usize,
-    /// BLE Split Central sleep timeout in seconds (0 = disabled)
+    /// Unibody/split central sleep timeout in seconds, independent of transport (0 = disabled).
     #[serde_inline_default(0)]
     pub split_central_sleep_timeout_seconds: u32,
     /// Maximum number of auto mouse layer entries; auto-derived from `[[behavior.auto_mouse_layer]]` if unset.

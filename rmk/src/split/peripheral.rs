@@ -1,30 +1,30 @@
-#[cfg(feature = "_ble")]
 #[cfg(all(feature = "_ble", feature = "subrating"))]
-use bt_hci::{cmd::le::LeSetHostFeature, controller::ControllerCmdSync};
+use bt_hci::cmd::le::LeSetHostFeature;
+#[cfg(feature = "_ble")]
+use bt_hci::{cmd::le::LeRand, controller::ControllerCmdSync};
 use embassy_futures::select::{Either, select};
 #[cfg(not(feature = "_ble"))]
 use embedded_io_async::{Read, Write};
 use futures::FutureExt;
+#[cfg(feature = "_ble")]
+use trouble_host::prelude::*;
 #[cfg(all(feature = "_ble", feature = "storage"))]
 use {
     super::ble::PeerAddress,
     crate::storage::{StorageItem, store_unchecked},
 };
-#[cfg(feature = "_ble")]
-use {
-    crate::event::{BatteryStatusEvent, EventSubscriber},
-    trouble_host::prelude::*,
-};
 
 use super::SplitMessage;
 use super::driver::{SplitReader, SplitWriter};
+#[cfg(feature = "_ble")]
+use crate::ble::ExtAdvCmds;
 #[cfg(feature = "dfu_split")]
 use crate::dfu::{DfuCmd, DfuTarget, SPLIT_RESPONSE_CHANNEL, SplitResponse};
 #[cfg(feature = "dfu_split")]
 use crate::event::DfuCmdEvent;
 use crate::event::{
-    KeyboardEvent, LayerChangeEvent, LedIndicatorEvent, PointingEvent, SleepStateEvent, SubscribableEvent,
-    publish_event,
+    BatteryStatusEvent, EventSubscriber, KeyboardEvent, LayerChangeEvent, LedIndicatorEvent, PointingEvent,
+    SleepStateEvent, SubscribableEvent, publish_event,
 };
 #[cfg(feature = "display")]
 use crate::event::{ModifierEvent, WpmUpdateEvent};
@@ -47,8 +47,8 @@ use crate::state::update_status;
 /// * `address` - (optional) The BLE address of this peripheral
 /// * `serial` - (optional) serial port used to send peripheral split message. This argument is enabled only for serial split now
 pub async fn run_rmk_split_peripheral<
-    #[cfg(all(feature = "_ble", feature = "subrating"))] C: Controller + ControllerCmdSync<LeSetHostFeature>,
-    #[cfg(all(feature = "_ble", not(feature = "subrating")))] C: Controller,
+    #[cfg(all(feature = "_ble", feature = "subrating"))] C: Controller + ExtAdvCmds + ControllerCmdSync<LeRand> + ControllerCmdSync<LeSetHostFeature>,
+    #[cfg(all(feature = "_ble", not(feature = "subrating")))] C: Controller + ExtAdvCmds + ControllerCmdSync<LeRand>,
     #[cfg(not(feature = "_ble"))] S: Write + Read,
 >(
     #[cfg(feature = "_ble")] id: usize,
@@ -67,8 +67,9 @@ pub async fn run_rmk_split_peripheral<
 
     #[cfg(feature = "_ble")]
     {
-        // Exactly one link — the central.
-        let mut resources: HostResources<DefaultPacketPool, 1, 4> = HostResources::new();
+        crate::ble::rng::init(&controller).await;
+        // One central connection; ATT/SMP/signalling do not need dynamic L2CAP slots.
+        let mut resources: HostResources<DefaultPacketPool, 1, 0> = HostResources::new();
         let stack = trouble_host::new(controller, &mut resources)
             .set_random_address(Address::random(address))
             .build();
@@ -105,7 +106,6 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
 
         let mut key_sub = KeyboardEvent::subscriber();
         let mut pointing_sub = PointingEvent::subscriber();
-        #[cfg(feature = "_ble")]
         let mut battery_sub = BatteryStatusEvent::subscriber();
 
         loop {
@@ -113,7 +113,7 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                 crate::select_biased_with_feature! {
                     e = key_sub.next_message_pure().fuse() => SplitMessage::Key(e),
                     e = pointing_sub.next_message_pure().fuse() => SplitMessage::Pointing(e),
-                    with_feature("_ble"): e = battery_sub.next_event().fuse() => SplitMessage::BatteryStatus(e),
+                    e = battery_sub.next_event().fuse() => SplitMessage::BatteryStatus(e),
                 }
             };
 
@@ -124,8 +124,7 @@ impl<S: SplitWriter + SplitReader> SplitPeripheral<S> {
                         SplitMessage::ConnectionStatus(status) => {
                             trace!("Received central connection status: {:?}", status);
                             update_status(|c| *c = status);
-                            // The central sends this only after subscribing to split notifications.
-                            #[cfg(feature = "_ble")]
+                            // Report cached battery status when the central synchronizes its state.
                             self.split_driver
                                 .write(&SplitMessage::BatteryStatus(
                                     crate::input_device::battery::current_battery_status().into(),

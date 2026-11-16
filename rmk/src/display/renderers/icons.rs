@@ -80,29 +80,3 @@ pub const BT_ICON: [u8; 28] = [
 pub const BT_ICON_W: u32 = 9;
 #[cfg_attr(not(feature = "_ble"), allow(dead_code))]
 pub const BT_ICON_H: u32 = 14;
-
-/// Checkmark (✓) — 7 active rows to match CROSS visual weight
-/// ```text
-/// .......#
-/// ......#.
-/// .....#..
-/// ....#...
-/// #..#....
-/// .##.....
-/// .##.....
-/// ........
-/// ```
-pub const CHECK: [u8; 8] = [0x01, 0x02, 0x04, 0x08, 0x90, 0x60, 0x60, 0x00];
-
-/// Cross / X (✗)
-/// ```text
-/// #.....#.
-/// .#...#..
-/// ..#.#...
-/// ...#....
-/// ..#.#...
-/// .#...#..
-/// #.....#.
-/// ........
-/// ```
-pub const CROSS: [u8; 8] = [0x82, 0x44, 0x28, 0x10, 0x28, 0x44, 0x82, 0x00];

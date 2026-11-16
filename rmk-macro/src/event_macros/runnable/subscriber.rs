@@ -15,18 +15,12 @@ use super::naming::{event_type_to_handler_method_name, generate_unique_variant_n
 /// - A subscriber struct that holds individual event subscribers
 /// - `EventSubscriber` impl with `select_biased!` for event aggregation
 /// - The corresponding `SubscribableEvent` trait impl
-///
-/// # Parameters
-/// - `subscribe_trait_path`: The trait path (e.g., `::rmk::event::SubscribableEvent`)
-/// - `subscriber_method`: The method name to call (e.g., `subscriber`)
 pub fn generate_event_subscriber(
     subscriber_name: &syn::Ident,
     event_types: &[Path],
     variant_names: &[syn::Ident],
     enum_name: &syn::Ident,
     vis: &syn::Visibility,
-    subscribe_trait_path: TokenStream,
-    subscriber_method: TokenStream,
 ) -> TokenStream {
     let num_events = event_types.len();
 
@@ -39,7 +33,7 @@ pub fn generate_event_subscriber(
         .zip(&sub_fields)
         .map(|(event_type, field_name)| {
             quote! {
-                #field_name: <#event_type as #subscribe_trait_path>::Subscriber
+                #field_name: <#event_type as ::rmk::event::SubscribableEvent>::Subscriber
             }
         })
         .collect();
@@ -50,7 +44,7 @@ pub fn generate_event_subscriber(
         .zip(&sub_fields)
         .map(|(event_type, field_name)| {
             quote! {
-                #field_name: <#event_type as #subscribe_trait_path>::#subscriber_method()
+                #field_name: <#event_type as ::rmk::event::SubscribableEvent>::subscriber()
             }
         })
         .collect();
@@ -94,10 +88,10 @@ pub fn generate_event_subscriber(
             }
         }
 
-        impl #subscribe_trait_path for #enum_name {
+        impl ::rmk::event::SubscribableEvent for #enum_name {
             type Subscriber = #subscriber_name;
 
-            fn #subscriber_method() -> Self::Subscriber {
+            fn subscriber() -> Self::Subscriber {
                 #subscriber_name::new()
             }
         }
@@ -131,20 +125,12 @@ pub fn generate_event_match_arms(
 /// For single-event subscriptions, no enum is generated and the event type is used directly.
 /// For multiple events, generates an aggregated enum, subscriber struct, and match-based dispatch.
 ///
-/// # Parameters
-/// - `kind`: Used for naming the generated enum/subscriber (e.g., `"Processor"`)
-/// - `subscribe_trait_path`: e.g. `::rmk::event::SubscribableEvent`
-/// - `subscriber_method`: e.g. `subscriber`
-///
 /// # Returns
 /// `(event_type_tokens, event_enum_def, event_subscriber_impl, dispatch_body)`
 pub fn generate_event_enum_and_dispatch(
     struct_name: &syn::Ident,
     vis: &syn::Visibility,
     event_types: &[Path],
-    kind: &str,
-    subscribe_trait_path: TokenStream,
-    subscriber_method: TokenStream,
 ) -> (TokenStream, TokenStream, TokenStream, TokenStream) {
     if event_types.is_empty() {
         (
@@ -166,8 +152,8 @@ pub fn generate_event_enum_and_dispatch(
         )
     } else {
         // Multiple events: generate aggregated enum
-        let enum_name = format_ident!("{}{}EventEnum", struct_name, kind);
-        let subscriber_name = format_ident!("{}{}EventSubscriber", struct_name, kind);
+        let enum_name = format_ident!("{}ProcessorEventEnum", struct_name);
+        let subscriber_name = format_ident!("{}ProcessorEventSubscriber", struct_name);
         let variant_names = generate_unique_variant_names(event_types);
 
         let enum_variants: Vec<TokenStream> = event_types
@@ -186,8 +172,6 @@ pub fn generate_event_enum_and_dispatch(
             &variant_names,
             &enum_name,
             vis,
-            subscribe_trait_path,
-            subscriber_method,
         );
 
         let enum_def = quote! {

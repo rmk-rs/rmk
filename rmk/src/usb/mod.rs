@@ -1,9 +1,12 @@
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use embassy_futures::join::join5;
 use embassy_futures::select::{Either, select};
 use embassy_sync::signal::Signal;
 #[cfg(feature = "usb_log")]
-use embassy_usb::class::cdc_acm::CdcAcmClass;
-use embassy_usb::class::hid::{HidProtocolMode, HidReader, HidReaderWriter, HidWriter, ReportId, RequestHandler};
+use embassy_usb::class::cdc_acm::device::CdcAcmClass;
+use embassy_usb::class::hid::device::{HidReader, HidReaderWriter, HidWriter, RequestHandler};
+use embassy_usb::class::hid::{HidProtocolMode, ReportId};
 use embassy_usb::control::OutResponse;
 use embassy_usb::driver::{Driver, EndpointError};
 use embassy_usb::{Builder, Handler, UsbDevice};
@@ -45,6 +48,10 @@ use rynk as host_usb;
 use vial as host_usb;
 
 pub(crate) static USB_REMOTE_WAKEUP: Signal<RawMutex, ()> = Signal::new();
+
+// Set while the host has selected the boot protocol (BIOS, UEFI, some KVMs).
+// Such a host reads only the boot keyboard interface, never the composite one.
+static BOOT_MODE: AtomicBool = AtomicBool::new(false);
 
 /// Serves one framed session over the USB byte stream: the keyboard's Vial or
 /// Rynk service, the dongle's router, or `()` in a build that serves none.
@@ -112,6 +119,11 @@ impl<'d, D: Driver<'d>> UsbKeyboardWriter<'_, 'd, D> {
         let n = report
             .serialize(&mut buf[1..])
             .map_err(|_| HidError::ReportSerializeError)?;
+        // A boot protocol host never drains this endpoint, and a blocked write here
+        // would hold up the keyboard reports queued behind it.
+        if BOOT_MODE.load(Ordering::Relaxed) {
+            return Ok(n);
+        }
         self.other_writer
             .write(&buf[0..n + 1])
             .await
@@ -196,6 +208,7 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(
     config_descriptor: &'d mut [u8],
 ) -> Builder<'d, D> {
     let mut usb_config = embassy_usb::Config::new(keyboard_config.vid, keyboard_config.pid);
+    usb_config.device_release = keyboard_config.bcd_version;
     usb_config.manufacturer = Some(keyboard_config.manufacturer);
     usb_config.product = Some(keyboard_config.product_name);
     static SERIAL: StaticCell<heapless::String<DEVICE_INFO_STRING_MAX_LEN>> = StaticCell::new();
@@ -257,7 +270,7 @@ pub struct UsbTransport<'a, D: Driver<'static>, S = ()> {
     steno_writer: HidWriter<'static, D, 9>,
     /// Taken by `run`: the logger future consumes the CDC class.
     #[cfg(feature = "usb_log")]
-    logger: Option<embassy_usb::class::cdc_acm::CdcAcmClass<'static, D>>,
+    logger: Option<embassy_usb::class::cdc_acm::device::CdcAcmClass<'static, D>>,
     #[cfg(any(feature = "host", feature = "dongle"))]
     host_reader: host_usb::HostUsbReader<D>,
     #[cfg(any(feature = "host", feature = "dongle"))]
@@ -548,7 +561,7 @@ pub async fn run_peripheral_usb<D: Driver<'static>>(driver: D, config: DeviceCon
 #[cfg(feature = "usb_log")]
 macro_rules! add_usb_logger {
     ($usb_builder:expr) => {{
-        use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
+        use embassy_usb::class::cdc_acm::device::{CdcAcmClass, State};
         use static_cell::StaticCell;
 
         // The usb logger can be only initialized once, so just use a fixed name for the state
@@ -565,18 +578,16 @@ macro_rules! usb_hid_state_and_config {
     ($descriptor:ty, $max_packet:expr, $subclass:expr, $protocol:expr) => {{
         use usbd_hid::descriptor::SerializedDescriptor;
         paste::paste! {
-            static [<$descriptor:snake:upper _STATE>]: ::static_cell::StaticCell<::embassy_usb::class::hid::State> = ::static_cell::StaticCell::new();
+            static [<$descriptor:snake:upper _STATE>]: ::static_cell::StaticCell<::embassy_usb::class::hid::device::State> = ::static_cell::StaticCell::new();
             static [<$descriptor:snake:upper _HANDLER>]: ::static_cell::StaticCell<$crate::usb::UsbRequestHandler> = ::static_cell::StaticCell::new();
         }
 
-        let state = paste::paste! { [<$descriptor:snake:upper _STATE>].init(::embassy_usb::class::hid::State::new()) };
+        let state = paste::paste! { [<$descriptor:snake:upper _STATE>].init(::embassy_usb::class::hid::device::State::new()) };
         let request_handler = paste::paste! {
-            [<$descriptor:snake:upper _HANDLER>].init($crate::usb::UsbRequestHandler {
-                protocol: ::embassy_usb::class::hid::HidProtocolMode::Report,
-            })
+            [<$descriptor:snake:upper _HANDLER>].init($crate::usb::UsbRequestHandler)
         };
 
-        let hid_config = ::embassy_usb::class::hid::Config {
+        let hid_config = ::embassy_usb::class::hid::device::Config {
             report_descriptor: <$descriptor>::desc(),
             request_handler: Some(request_handler),
             poll_ms: 1,
@@ -596,7 +607,7 @@ macro_rules! add_usb_writer {
             ::embassy_usb::class::hid::HidSubclass::No,
             ::embassy_usb::class::hid::HidBootProtocol::None
         );
-        ::embassy_usb::class::hid::HidWriter::<_, $n>::new($usb_builder, state, hid_config)
+        ::embassy_usb::class::hid::device::HidWriter::<_, $n>::new($usb_builder, state, hid_config)
     }};
 }
 
@@ -615,7 +626,7 @@ macro_rules! add_usb_reader_writer {
     ($usb_builder:expr, $descriptor:ty, $read_n:expr, $write_n:expr, $max_packet:expr, $subclass:expr, $protocol:expr) => {{
         let (state, hid_config) =
             $crate::usb::usb_hid_state_and_config!($descriptor, $max_packet, $subclass, $protocol);
-        ::embassy_usb::class::hid::HidReaderWriter::<_, $read_n, $write_n>::new($usb_builder, state, hid_config)
+        ::embassy_usb::class::hid::device::HidReaderWriter::<_, $read_n, $write_n>::new($usb_builder, state, hid_config)
     }};
 }
 
@@ -625,9 +636,7 @@ pub(crate) use add_usb_reader_writer;
 pub(crate) use add_usb_writer;
 pub(crate) use usb_hid_state_and_config;
 
-pub(crate) struct UsbRequestHandler {
-    pub(crate) protocol: HidProtocolMode,
-}
+pub(crate) struct UsbRequestHandler;
 
 impl RequestHandler for UsbRequestHandler {
     fn set_report(&mut self, id: ReportId, data: &[u8]) -> OutResponse {
@@ -636,15 +645,18 @@ impl RequestHandler for UsbRequestHandler {
     }
 
     fn get_protocol(&self) -> HidProtocolMode {
-        self.protocol
+        if BOOT_MODE.load(Ordering::Relaxed) {
+            HidProtocolMode::Boot
+        } else {
+            HidProtocolMode::Report
+        }
     }
 
     fn set_protocol(&mut self, protocol: HidProtocolMode) -> OutResponse {
         // KeyboardReport is already the 8-byte boot keyboard layout, so the
-        // mode only changes what GET_PROTOCOL answers.
-        // TODO: Return to Report on a bus reset once embassy-usb tells the
-        // request handler about it (embassy-rs/embassy#6891).
-        self.protocol = protocol;
+        // mode only changes what GET_PROTOCOL answers and whether composite
+        // reports are sent.
+        BOOT_MODE.store(protocol == HidProtocolMode::Boot, Ordering::Relaxed);
         OutResponse::Accepted
     }
 }
@@ -677,6 +689,7 @@ impl Handler for UsbDeviceHandler {
     }
 
     fn reset(&mut self) {
+        BOOT_MODE.store(false, Ordering::Relaxed);
         self.pre_suspend = UsbState::Enabled;
         set_usb_state(UsbState::Enabled);
         info!("Bus reset, the Vbus current limit is 100mA");
@@ -740,7 +753,7 @@ impl Handler for UsbDeviceHandler {
 #[cfg(test)]
 mod tests {
     use embassy_usb::Handler;
-    use embassy_usb::class::hid::RequestHandler;
+    use embassy_usb::class::hid::device::RequestHandler;
     use rmk_types::connection::UsbState;
 
     use super::{HidProtocolMode, OutResponse, UsbDeviceHandler, UsbRequestHandler};
@@ -751,15 +764,18 @@ mod tests {
     /// subclass the interface advertises.
     #[test]
     fn the_keyboard_switches_protocol_and_reports_it() {
-        let mut handler = UsbRequestHandler {
-            protocol: HidProtocolMode::Report,
-        };
+        let mut handler = UsbRequestHandler;
         assert_eq!(handler.get_protocol(), HidProtocolMode::Report);
 
         assert_eq!(handler.set_protocol(HidProtocolMode::Boot), OutResponse::Accepted);
         assert_eq!(handler.get_protocol(), HidProtocolMode::Boot);
 
         assert_eq!(handler.set_protocol(HidProtocolMode::Report), OutResponse::Accepted);
+        assert_eq!(handler.get_protocol(), HidProtocolMode::Report);
+
+        // A bus reset returns the device to the default report protocol.
+        handler.set_protocol(HidProtocolMode::Boot);
+        UsbDeviceHandler::new().reset();
         assert_eq!(handler.get_protocol(), HidProtocolMode::Report);
     }
 

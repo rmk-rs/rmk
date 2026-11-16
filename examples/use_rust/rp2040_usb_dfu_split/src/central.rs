@@ -50,8 +50,7 @@ async fn main(_spawner: Spawner) {
     let (row_pins, col_pins) = config_matrix_pins_rp!(peripherals: p, input: [PIN_9, PIN_11], output: [PIN_10, PIN_12]);
 
     let flash_mutex = FlashMutex::new(rmk::storage::async_flash_wrapper(Flash::<
-        _,
-        embassy_rp::flash::Blocking,
+        embassy_rp::mode::Blocking,
         { rmk::dfu::FLASH_SIZE },
     >::new_blocking(p.FLASH)));
     let (storage_partition, state_partition, dfu_partition) = partitions_from_linkerscript(&flash_mutex);
@@ -60,6 +59,7 @@ async fn main(_spawner: Spawner) {
         serial_number,
         vid: 0x4c4b,
         pid: 0x4643,
+        bcd_version: 0x0010,
         manufacturer: "Haobo",
         product_name: "RMK Keyboard",
     };

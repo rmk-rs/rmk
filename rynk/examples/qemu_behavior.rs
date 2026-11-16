@@ -11,6 +11,7 @@ use std::time::Duration;
 use embassy_futures::select::{Either, select};
 use embedded_io_adapters::tokio_1::FromTokio;
 use rynk::rmk_types::action::{Action, EncoderAction, KeyAction};
+use rynk::rmk_types::battery::BatteryStatus;
 use rynk::rmk_types::ble::{BleState, BleStatus};
 use rynk::rmk_types::combo::Combo;
 use rynk::rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
@@ -271,6 +272,8 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
             .all(|&byte| byte == 0)
     );
     assert_eq!(client.get_wpm().await?, 0);
+    // Battery queries work without BLE; this fixture has no battery input.
+    assert_eq!(client.get_battery_status().await?, BatteryStatus::Unavailable);
     assert!(!client.get_sleep_state().await?);
     assert_eq!(client.get_led_indicator().await?, LedIndicator::default());
     assert_eq!(client.get_connection_type().await?, ConnectionType::Usb);
@@ -292,7 +295,6 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     expect_unsupported("get_ble_status", client.get_ble_status().await);
     expect_unsupported("switch_ble_profile", client.switch_ble_profile(0).await);
     expect_unsupported("clear_ble_profile", client.clear_ble_profile(0).await);
-    expect_unsupported("get_battery_status", client.get_battery_status().await);
     expect_unsupported("get_peripheral_status", client.get_peripheral_status(0).await);
     expect_unsupported(
         "storage_reset",

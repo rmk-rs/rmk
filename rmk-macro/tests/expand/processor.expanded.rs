@@ -17,7 +17,7 @@ unsafe impl ::core::clone::TrivialClone for KeyEvent {}
 #[automatically_derived]
 impl ::core::clone::Clone for KeyEvent {
     #[inline]
-    fn clone(&self) -> KeyEvent {
+    fn clone(&self) -> Self {
         let _: ::core::clone::AssertParamIsClone<u8>;
         let _: ::core::clone::AssertParamIsClone<bool>;
         *self
@@ -51,7 +51,7 @@ unsafe impl ::core::clone::TrivialClone for EncoderEvent {}
 #[automatically_derived]
 impl ::core::clone::Clone for EncoderEvent {
     #[inline]
-    fn clone(&self) -> EncoderEvent {
+    fn clone(&self) -> Self {
         let _: ::core::clone::AssertParamIsClone<u8>;
         let _: ::core::clone::AssertParamIsClone<i8>;
         *self
@@ -82,7 +82,7 @@ unsafe impl ::core::clone::TrivialClone for ConfigEvent {}
 #[automatically_derived]
 impl ::core::clone::Clone for ConfigEvent {
     #[inline]
-    fn clone(&self) -> ConfigEvent {
+    fn clone(&self) -> Self {
         let _: ::core::clone::AssertParamIsClone<u16>;
         *self
     }
@@ -132,14 +132,14 @@ mod multi_sub {
     #[automatically_derived]
     impl ::core::clone::Clone for KeyProcessorProcessorEventEnum {
         #[inline]
-        fn clone(&self) -> KeyProcessorProcessorEventEnum {
+        fn clone(&self) -> Self {
             match self {
-                KeyProcessorProcessorEventEnum::Key(__self_0) => {
+                Self::Key(__self_0) => {
                     KeyProcessorProcessorEventEnum::Key(
                         ::core::clone::Clone::clone(__self_0),
                     )
                 }
-                KeyProcessorProcessorEventEnum::Encoder(__self_0) => {
+                Self::Encoder(__self_0) => {
                     KeyProcessorProcessorEventEnum::Encoder(
                         ::core::clone::Clone::clone(__self_0),
                     )
@@ -340,14 +340,14 @@ mod multi_attr {
     #[automatically_derived]
     impl ::core::clone::Clone for MultiAttrProcessorProcessorEventEnum {
         #[inline]
-        fn clone(&self) -> MultiAttrProcessorProcessorEventEnum {
+        fn clone(&self) -> Self {
             match self {
-                MultiAttrProcessorProcessorEventEnum::Key(__self_0) => {
+                Self::Key(__self_0) => {
                     MultiAttrProcessorProcessorEventEnum::Key(
                         ::core::clone::Clone::clone(__self_0),
                     )
                 }
-                MultiAttrProcessorProcessorEventEnum::Encoder(__self_0) => {
+                Self::Encoder(__self_0) => {
                     MultiAttrProcessorProcessorEventEnum::Encoder(
                         ::core::clone::Clone::clone(__self_0),
                     )
@@ -528,19 +528,19 @@ mod polling_multi {
     #[automatically_derived]
     impl ::core::clone::Clone for MultiPollingProcessorProcessorEventEnum {
         #[inline]
-        fn clone(&self) -> MultiPollingProcessorProcessorEventEnum {
+        fn clone(&self) -> Self {
             match self {
-                MultiPollingProcessorProcessorEventEnum::Key(__self_0) => {
+                Self::Key(__self_0) => {
                     MultiPollingProcessorProcessorEventEnum::Key(
                         ::core::clone::Clone::clone(__self_0),
                     )
                 }
-                MultiPollingProcessorProcessorEventEnum::Encoder(__self_0) => {
+                Self::Encoder(__self_0) => {
                     MultiPollingProcessorProcessorEventEnum::Encoder(
                         ::core::clone::Clone::clone(__self_0),
                     )
                 }
-                MultiPollingProcessorProcessorEventEnum::Config(__self_0) => {
+                Self::Config(__self_0) => {
                     MultiPollingProcessorProcessorEventEnum::Config(
                         ::core::clone::Clone::clone(__self_0),
                     )

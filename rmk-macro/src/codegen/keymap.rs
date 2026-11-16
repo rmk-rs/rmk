@@ -54,20 +54,11 @@ pub(crate) fn expand_layer(
     layer: Vec<Vec<String>>,
     profiles: &Option<HashMap<String, MorseProfile>>,
 ) -> TokenStream2 {
-    let mut rows = vec![];
-    for row in layer {
-        rows.push(expand_row(row, profiles));
-    }
+    let rows = layer.into_iter().map(|row| {
+        let keys = row.into_iter().map(|key| parse_key(key, profiles));
+        quote! { [#(#keys), *] }
+    });
     quote! { [#(#rows), *] }
-}
-
-/// Expand a row for keymap
-fn expand_row(row: Vec<String>, profiles: &Option<HashMap<String, MorseProfile>>) -> TokenStream2 {
-    let mut keys = vec![];
-    for key in row {
-        keys.push(parse_key(key, profiles));
-    }
-    quote! { [#(#keys), *] }
 }
 
 /// Expand a layer for encoder map

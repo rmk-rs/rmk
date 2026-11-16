@@ -52,15 +52,10 @@ impl AttributeParser {
         T: std::str::FromStr,
         T::Err: std::fmt::Display,
     {
-        let Some(meta) = self
-            .metas
-            .iter()
-            .find(|meta| matches!(meta, Meta::NameValue(nv) if nv.path.is_ident(name)))
-        else {
-            return Ok(None);
-        };
-
-        let Meta::NameValue(nv) = meta else {
+        let Some(nv) = self.metas.iter().find_map(|meta| match meta {
+            Meta::NameValue(nv) if nv.path.is_ident(name) => Some(nv),
+            _ => None,
+        }) else {
             return Ok(None);
         };
 
@@ -87,15 +82,10 @@ impl AttributeParser {
     /// Returns an error when the key exists but the value is not an array,
     /// or when any array element is not a path.
     pub fn get_path_array(&self, name: &str) -> Result<Vec<syn::Path>, TokenStream> {
-        let Some(meta) = self
-            .metas
-            .iter()
-            .find(|meta| matches!(meta, Meta::NameValue(nv) if nv.path.is_ident(name)))
-        else {
-            return Ok(vec![]);
-        };
-
-        let Meta::NameValue(nv) = meta else {
+        let Some(nv) = self.metas.iter().find_map(|meta| match meta {
+            Meta::NameValue(nv) if nv.path.is_ident(name) => Some(nv),
+            _ => None,
+        }) else {
             return Ok(vec![]);
         };
 

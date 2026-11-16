@@ -2,7 +2,7 @@
 use core::future::Future;
 use core::sync::atomic::Ordering;
 
-use embassy_usb::class::hid::ReadError;
+use embassy_usb::class::hid::device::ReadError;
 use embassy_usb::driver::EndpointError;
 use rmk_types::connection::ConnectionType;
 use rmk_types::led_indicator::LedIndicator;
@@ -151,7 +151,7 @@ impl usbd_hid::descriptor::AsInputReport for StenoReport {
 
 #[cfg(all(test, feature = "steno"))]
 mod steno_tests {
-    use usbd_hid::descriptor::SerializedDescriptor;
+    use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
     use super::StenoReport;
 
@@ -170,6 +170,24 @@ mod steno_tests {
         assert!(contains(desc, &[0x05, 0x0a]), "missing Ordinal UsagePage");
         assert!(contains(desc, &[0x19, 0x00]), "missing UsageMin 0");
         assert!(contains(desc, &[0x29, 0x3f]), "missing UsageMax 63");
+        assert!(contains(desc, &[0x15, 0x00]), "missing LogicalMin 0");
+        assert!(contains(desc, &[0x25, 0x01]), "missing LogicalMax 1");
+    }
+
+    /// The report ID and big-endian bitmap are hand-assembled, so pin the
+    /// actual bytes Plover reads rather than trusting the descriptor.
+    #[test]
+    fn serialize_prefixes_report_id_before_big_endian_bitmap() {
+        let report = StenoReport {
+            keys: [0x80, 0, 0, 0, 0, 0, 0, 0x01],
+        };
+        let mut buf = [0u8; 9];
+        assert_eq!(report.serialize(&mut buf).ok(), Some(9));
+        assert_eq!(buf, [0x50, 0x80, 0, 0, 0, 0, 0, 0, 0x01]);
+        assert_eq!(buf[0], rmk_types::steno::PLOVER_HID_REPORT_ID);
+
+        let mut too_small = [0u8; 8];
+        assert!(report.serialize(&mut too_small).is_err());
     }
 }
 

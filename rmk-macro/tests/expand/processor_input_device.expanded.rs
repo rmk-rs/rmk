@@ -13,7 +13,7 @@ unsafe impl ::core::clone::TrivialClone for SensorEvent {}
 #[automatically_derived]
 impl ::core::clone::Clone for SensorEvent {
     #[inline]
-    fn clone(&self) -> SensorEvent {
+    fn clone(&self) -> Self {
         let _: ::core::clone::AssertParamIsClone<u16>;
         *self
     }
@@ -41,7 +41,7 @@ unsafe impl ::core::clone::TrivialClone for ConfigEvent {}
 #[automatically_derived]
 impl ::core::clone::Clone for ConfigEvent {
     #[inline]
-    fn clone(&self) -> ConfigEvent {
+    fn clone(&self) -> Self {
         let _: ::core::clone::AssertParamIsClone<u16>;
         *self
     }
@@ -69,7 +69,7 @@ unsafe impl ::core::clone::TrivialClone for ModeEvent {}
 #[automatically_derived]
 impl ::core::clone::Clone for ModeEvent {
     #[inline]
-    fn clone(&self) -> ModeEvent {
+    fn clone(&self) -> Self {
         let _: ::core::clone::AssertParamIsClone<u8>;
         *self
     }
@@ -616,14 +616,14 @@ mod multi_event {
     #[automatically_derived]
     impl ::core::clone::Clone for MultiEventSensorControllerProcessorEventEnum {
         #[inline]
-        fn clone(&self) -> MultiEventSensorControllerProcessorEventEnum {
+        fn clone(&self) -> Self {
             match self {
-                MultiEventSensorControllerProcessorEventEnum::Config(__self_0) => {
+                Self::Config(__self_0) => {
                     MultiEventSensorControllerProcessorEventEnum::Config(
                         ::core::clone::Clone::clone(__self_0),
                     )
                 }
-                MultiEventSensorControllerProcessorEventEnum::Mode(__self_0) => {
+                Self::Mode(__self_0) => {
                     MultiEventSensorControllerProcessorEventEnum::Mode(
                         ::core::clone::Clone::clone(__self_0),
                     )
@@ -935,14 +935,14 @@ mod multi_event_polling {
     #[automatically_derived]
     impl ::core::clone::Clone for MultiEventPollingSensorControllerProcessorEventEnum {
         #[inline]
-        fn clone(&self) -> MultiEventPollingSensorControllerProcessorEventEnum {
+        fn clone(&self) -> Self {
             match self {
-                MultiEventPollingSensorControllerProcessorEventEnum::Config(__self_0) => {
+                Self::Config(__self_0) => {
                     MultiEventPollingSensorControllerProcessorEventEnum::Config(
                         ::core::clone::Clone::clone(__self_0),
                     )
                 }
-                MultiEventPollingSensorControllerProcessorEventEnum::Mode(__self_0) => {
+                Self::Mode(__self_0) => {
                     MultiEventPollingSensorControllerProcessorEventEnum::Mode(
                         ::core::clone::Clone::clone(__self_0),
                     )

@@ -2,6 +2,8 @@
 //!
 //! # Example
 //!
+//! Supply `my_renderer` implementing [`DisplayRenderer<Rgb565>`](crate::display::DisplayRenderer).
+//!
 //! ```rust,ignore
 //! use lcd_async::{Builder, models::GC9107};
 //! use rmk::display::{DisplayProcessor, drivers::lcd_async::LcdAsyncDisplay};
@@ -17,8 +19,10 @@
 //!     .display_size(W as u16, H as u16)
 //!     .init(&mut embassy_time::Delay).await.unwrap();
 //!
-//! let mut processor =
-//!     DisplayProcessor::new(LcdAsyncDisplay::<_, _, _, _, W, H>::new(display, fb));
+//! let mut processor = DisplayProcessor::with_renderer(
+//!     LcdAsyncDisplay::<_, _, _, _, W, H>::new(display, fb),
+//!     my_renderer,
+//! );
 //! ```
 
 use embedded_graphics::pixelcolor::Rgb565;

@@ -26,17 +26,15 @@ impl<P: StatefulOutputPin> BatteryLedProcessor<P> {
 
     async fn poll(&mut self) {
         match self.state {
-            BatteryStatus::Unavailable => self.pin.deactivate(),
-            BatteryStatus::Available { charge_state, level } => {
-                if charge_state == ChargeState::Charging {
-                    self.pin.activate();
-                } else if level.unwrap_or(100) < 10 {
-                    // Battery low, blinking the LED
-                    self.pin.toggle();
-                } else {
-                    self.pin.deactivate();
-                }
+            BatteryStatus::Available {
+                charge_state: ChargeState::Charging,
+                ..
+            } => self.pin.activate(),
+            BatteryStatus::Available { level: Some(level), .. } if level < 10 => {
+                // Battery low, blinking the LED
+                self.pin.toggle();
             }
+            _ => self.pin.deactivate(),
         }
     }
 }

@@ -8,7 +8,7 @@ unsafe impl ::core::clone::TrivialClone for BatteryEvent {}
 #[automatically_derived]
 impl ::core::clone::Clone for BatteryEvent {
     #[inline]
-    fn clone(&self) -> BatteryEvent {
+    fn clone(&self) -> Self {
         let _: ::core::clone::AssertParamIsClone<u8>;
         *self
     }
@@ -77,7 +77,7 @@ unsafe impl ::core::clone::TrivialClone for PointingEvent {}
 #[automatically_derived]
 impl ::core::clone::Clone for PointingEvent {
     #[inline]
-    fn clone(&self) -> PointingEvent {
+    fn clone(&self) -> Self {
         let _: ::core::clone::AssertParamIsClone<i16>;
         *self
     }

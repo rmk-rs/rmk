@@ -2,9 +2,8 @@
 
 use super::hid::HidKeyCode;
 
-/// Convert a ascii chat to keycode
-/// bool, if the keycode should be shifted
-/// assumes en-us keyboard mapping
+/// Convert an ASCII byte to a keycode and whether Shift is required.
+/// Assumes the en-US keyboard mapping.
 pub fn from_ascii(ascii: u8) -> (HidKeyCode, bool) {
     match ascii {
         b'0' => (HidKeyCode::Kc0, false),
@@ -111,8 +110,8 @@ pub fn from_ascii(ascii: u8) -> (HidKeyCode, bool) {
     }
 }
 
-/// Convert a ascii chat to keycode
-/// assumes en-us keyboard mapping
+/// Convert a keycode and Shift state to an ASCII byte.
+/// Assumes the en-US keyboard mapping.
 pub fn to_ascii(keycode: HidKeyCode, shifted: bool) -> u8 {
     match (keycode, shifted) {
         (HidKeyCode::Kc0, false) => b'0',

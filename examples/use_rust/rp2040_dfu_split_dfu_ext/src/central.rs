@@ -37,7 +37,7 @@ use rmk::{initialize_keymap_and_storage, run_all, KeymapData};
 use static_cell::StaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
-type ExternalFlash = W25qNorFlash<spi::Spi<'static, embassy_rp::peripherals::SPI0, spi::Async>, Output<'static>>;
+type ExternalFlash = W25qNorFlash<spi::Spi<'static, embassy_rp::mode::Async>, Output<'static>>;
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => InterruptHandler<USB>;
@@ -71,7 +71,8 @@ async fn main(_spawner: Spawner) {
         p.DMA_CH4,
         Irqs,
         spi::Config::default(),
-    );
+    )
+    .unwrap();
     let dfu_cs = Output::new(p.PIN_17, Level::High);
     let ext_flash = ExternalFlash::new(dfu_spi, dfu_cs, 8 * 1024 * 1024);
 
@@ -82,8 +83,7 @@ async fn main(_spawner: Spawner) {
     // Internal flash only provides the boot state and storage partitions —
     // the internal DFU partition from the linkerscript layout is discarded.
     let flash_mutex = FlashMutex::new(async_flash_wrapper(Flash::<
-        _,
-        embassy_rp::flash::Blocking,
+        embassy_rp::mode::Blocking,
         { rmk::dfu::FLASH_SIZE },
     >::new_blocking(p.FLASH)));
     let (storage_partition, state_partition, _) = partitions_from_linkerscript(&flash_mutex);
@@ -92,6 +92,7 @@ async fn main(_spawner: Spawner) {
         serial_number,
         vid: 0x4c4b,
         pid: 0x4643,
+        bcd_version: 0x0010,
         manufacturer: "Haobo",
         product_name: "RMK Keyboard RP2040 embassy-boot split dfu_ext use_rust example",
     };

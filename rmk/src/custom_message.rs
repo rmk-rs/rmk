@@ -30,9 +30,9 @@ pub struct CustomMessage {
 
 impl CustomMessage {
     /// `Err` when `data` is longer than `custom_message_max_size`.
-    pub fn new(data: &[u8], target: CustomMessageTarget) -> Result<Self, ()> {
+    pub fn new(data: &[u8], target: CustomMessageTarget) -> Result<Self, heapless::CapacityError> {
         Ok(Self {
-            data: heapless::Vec::from_slice(data).map_err(|_| ())?,
+            data: heapless::Vec::from_slice(data)?,
             target,
         })
     }

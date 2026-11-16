@@ -81,6 +81,11 @@ impl BatteryConfig {
             if chip.chip == "nrf52820" {
                 return Err("nrf52820 has no ADC for battery_adc_pin".into());
             }
+            if chip.chip == "esp32s31" {
+                return Err(
+                    "ESP32-S31 battery ADC calibration is unavailable in esp-hal; use a custom Rust reader".into(),
+                );
+            }
             if chip.series == ChipSeries::Stm32 {
                 return Err("Automatic battery ADC setup is unavailable for STM32; use a custom Rust reader".into());
             }
@@ -116,7 +121,7 @@ impl crate::KeyboardTomlConfig {
         let communication = self.get_communication_config()?;
         let board = self.get_board_config()?;
         board.validate_pointing_ids()?;
-        let storage_toml = self.get_storage_config();
+        let storage_toml = self.storage.unwrap_or_default();
         let storage = if storage_toml.enabled {
             Some(Storage {
                 start_addr: storage_toml.start_addr.unwrap_or(0),
@@ -137,7 +142,7 @@ impl crate::KeyboardTomlConfig {
         };
         let dfu = self.split_side_dfu(None)?;
         let light = self.light.clone().unwrap_or_default();
-        let display = self.get_display_config();
+        let display = self.display.clone();
         let output = self.get_output_config()?;
         let dependency = self.get_dependency_config();
         let battery = BatteryConfig::resolve(self.resolve_battery_config(None)?, &chip)?;

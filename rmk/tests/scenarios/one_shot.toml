@@ -307,10 +307,10 @@ steps = [
   { tap = { pos = [0, 2], duration = 10 } },  # Control: OSM still armed here
 ]
 expect = [
-  { mouse = { wheel = -1 } },
-  { mouse = { wheel = -1 } },  # repeat while OSM armed
-  { mouse = { wheel = -1 } },  # repeat while OSM armed
-  { mouse = { wheel = -1 } },  # repeat while OSM armed
+  { mouse = { wheel = 1 } },
+  { mouse = { wheel = 1 } },  # repeat while OSM armed
+  { mouse = { wheel = 1 } },  # repeat while OSM armed
+  { mouse = { wheel = 1 } },  # repeat while OSM armed
   { mouse = {} },
   ["LShift", "A"],
   [],
@@ -380,3 +380,15 @@ steps = [
   { tap = { pos = [0, 2], duration = 10 } },
 ]
 expect = [["LShift"], ["LShift", "LCtrl"], ["LShift", "LCtrl", "A"], ["A"], []]
+
+[[test]]
+name = "releasing_earlier_key_keeps_osl_armed"
+steps = [
+  { press = [0, 2] },
+  { press = [0, 1] },
+  { release = [0, 2] },
+  { release = [0, 1] },
+  { tap = { pos = [0, 2], duration = 10 } },
+  { tap = { pos = [0, 2], duration = 10 } },
+]
+expect = [["A"], [], ["C"], [], ["A"], []]

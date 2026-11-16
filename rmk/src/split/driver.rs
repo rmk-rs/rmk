@@ -12,10 +12,9 @@ use rmk_types::protocol::rynk::PeripheralStatus;
 use super::{PeripheralMatrixConfig, SplitMessage};
 #[cfg(feature = "dfu_split")]
 use crate::event::DfuCmdEvent;
-#[cfg(feature = "_ble")]
-use crate::event::{BatteryStatusEvent, PeripheralBatteryEvent};
 use crate::event::{
-    KeyboardEvent, KeyboardEventSource, PeripheralConnectedEvent, SubscribableEvent, publish_event, publish_event_async,
+    BatteryStatusEvent, KeyboardEvent, KeyboardEventSource, PeripheralBatteryEvent, PeripheralConnectedEvent,
+    SubscribableEvent, publish_event, publish_event_async,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -41,8 +40,8 @@ pub(crate) trait SplitWriter {
 
 /// Live per-peripheral status. Latched here in the transport-agnostic split
 /// layer so host services can read a current snapshot at any time, even when
-/// no host session was active when the change happened. Wired peripherals
-/// never report a battery, so theirs stays `Unavailable`.
+/// no host session was active when the change happened. Peripherals without
+/// battery reporting stay `Unavailable`.
 #[derive(Copy, Clone, PartialEq, Eq)]
 struct PeripheralSlot {
     connected: bool,
@@ -83,7 +82,6 @@ pub(crate) fn set_peripheral_connected(id: usize, connected: bool) {
 }
 
 /// Latch peripheral `id`'s battery status and broadcast the change.
-#[cfg(feature = "_ble")]
 pub(crate) fn set_peripheral_battery(id: usize, battery: BatteryStatus) {
     if update_slot(id, |s| s.battery = battery) {
         publish_event(PeripheralBatteryEvent {
@@ -94,7 +92,6 @@ pub(crate) fn set_peripheral_battery(id: usize, battery: BatteryStatus) {
 }
 
 /// Latest battery status reported by peripheral `id`.
-#[cfg(feature = "_ble")]
 pub(crate) fn current_peripheral_battery_status(id: usize) -> Option<BatteryStatus> {
     PERIPHERAL_SLOTS.lock(|slots| slots.get().get(id).map(|slot| slot.battery))
 }
@@ -110,14 +107,17 @@ pub(crate) fn current_peripheral_status(id: usize) -> Option<PeripheralStatus> {
     })
 }
 
-#[cfg(all(test, feature = "_ble"))]
+#[cfg(test)]
 mod tests {
     use rmk_types::battery::ChargeState;
 
     use super::{current_peripheral_battery_status, set_peripheral_battery};
+    use crate::event::{PeripheralBatteryEvent, SubscribableEvent};
+    use crate::split::SplitMessage;
 
     #[test]
     fn caches_latest_peripheral_battery_status() {
+        let mut subscriber = PeripheralBatteryEvent::subscriber();
         let status = rmk_types::battery::BatteryStatus::Available {
             charge_state: ChargeState::Discharging,
             level: Some(73),
@@ -127,6 +127,22 @@ mod tests {
 
         assert_eq!(current_peripheral_battery_status(0), Some(status));
         assert_eq!(current_peripheral_battery_status(crate::SPLIT_PERIPHERALS_NUM), None);
+        let event = subscriber.try_next_message_pure().unwrap();
+        assert_eq!(event.id, 0);
+        assert_eq!(event.state.0, status);
+    }
+
+    // Battery reporting must remain available on serial and other non-BLE split links.
+    #[test]
+    fn battery_status_round_trips_through_split_message() {
+        let status = rmk_types::battery::BatteryStatus::Available {
+            charge_state: ChargeState::Charging,
+            level: None,
+        };
+        let mut buffer = [0; crate::split::SPLIT_MESSAGE_MAX_SIZE];
+        let encoded = postcard::to_slice(&SplitMessage::BatteryStatus(status.into()), &mut buffer).unwrap();
+        let decoded: SplitMessage = postcard::from_bytes(encoded).unwrap();
+        assert!(matches!(decoded, SplitMessage::BatteryStatus(event) if event.0 == status));
     }
 }
 
@@ -296,7 +312,6 @@ impl<T: SplitReader + SplitWriter> PeripheralManager<T> {
             },
             // Non-key events are drop-on-full to keep the split read loop responsive.
             SplitMessage::Pointing(e) => publish_event(e),
-            #[cfg(feature = "_ble")]
             SplitMessage::BatteryStatus(state) => set_peripheral_battery(self.id, state.0),
             #[cfg(feature = "dfu_split")]
             SplitMessage::FirmwareHashResponse(hash) => {

@@ -1,82 +1,55 @@
-# AGENTS.md
+# Repository Guidelines
 
-This file provides guidance to coding agents (Claude Code, and any tool that reads `AGENTS.md`) when working with code in this repository.
+RMK is a Rust keyboard firmware library targeting embedded microcontrollers (`no_std` by default). It supports USB and BLE keyboards, split keyboards, on-the-fly keymap configuration(Vial), and advanced key behaviors (combos, tap-hold, macros, morse, etc).
 
-## What This Project Is
+## Project Structure & Module Organization
 
-RMK is a Rust keyboard firmware library targeting embedded microcontrollers (`no_std` by default). It supports USB and BLE keyboards, split keyboards, on-the-fly keymap configuration(Vial), and advanced key behaviors (combos, tap-hold, macros, morse, etc). The repo is a Cargo monorepo with four crates():
+The repo is a Cargo monorepo:
 
-- **`rmk`** — core firmware logic
-- **`rmk-config`** — TOML configuration parsing (for `keyboard.toml`-based users)
-- **`rmk-macro`** — procedural macros (`#[rmk_keyboard]`, `#[derive(Event)]`, etc.)
-- **`rmk-types`** — shared types (`KeyAction`, `EncoderAction`, etc.)
+- `rmk/`: firmware runtime.
+- `rmk-config/`: TOML parsing.
+- `rmk-macro/`: procedural macros.
+- `rmk-types/`: shared types.
+- `rynk/`: separate workspace for host clients and transports.
+- `examples/use_config/` and `examples/use_rust/`: board firmware using TOML configuration or Rust APIs.
+- `rmk/tests/scenarios/` and `rmk/tests/integration/`: behavioral tests.
+- `docs/`: versioned documentation and images.
+- `scripts/` and `.github/ci/`: contain development automation.
 
-Note that there's no `Cargo.toml` in the project root.
+Each crate has its own `Cargo.toml` and `src/`; there is no root `Cargo.toml`.
 
-The `examples/` directory shows two usage patterns: `use_config/` (driven by `keyboard.toml`) and `use_rust/` (pure Rust API).
-The `docs` directory contains multi-version documentation
-The `scripts` directory contains useful scripts for checking/formatting code
+## Build, Test, and Development Commands
 
-## Commands
+Use stable Rust and install `cargo-nextest`. Run scripts from the repository root; run Cargo commands from the indicated directory.
 
-### Testing
+- `examples/use_config/nrf52840_ble/`: `cargo build --release` builds board firmware.
+- `rmk/`: `cargo nextest run --no-default-features --features=split,vial,storage,async_matrix,_ble` runs a focused feature combination.
+- `rmk-macro/`: `cargo nextest run --features _simulator` runs macro tests; install `cargo-expand` first.
+- `bash scripts/test_all.sh` runs the RMK feature matrix, shared-type tests, and host-tooling checks.
+- `bash scripts/format_all.sh` formats Rust code using nightly rustfmt.
+- `bash .github/ci/check.sh` runs compile and Clippy checks across supported configurations.
 
-Keyboard behavior is tested by the TOML scenarios in `rmk/tests/scenarios/`, which
-`run_tests!` expands into ordinary tests. Read `rmk/tests/scenarios/README.md`
-before adding a test: it documents the step and assertion vocabulary, and how to
-write a case that fails for the right reason.
+## Coding Rules
 
-Dev loop — one feature set, from `rmk/` (requires `cargo nextest`):
-```bash
-cargo nextest run --no-default-features --features=split,vial,storage,async_matrix,_ble
-```
-
-Run macro tests from `rmk-macro/` (requires `cargo expand`).
-
-Run format test from root:
-```bash
-bash scripts/format_all.sh
-```
-
-Dependencies in every `Cargo.toml` are alphabetised with `cargo sort --grouped`: keys
-inside each blank-line-separated group are sorted, groups stay in place. Local path
-dependencies sit in their own first group; the examples order `rmk` first, then
-`esp-*`/`nrf-*`/`embassy-*`, then the rest. Apply it after editing dependencies with:
-`cargo sort --grouped $(git ls-files '*Cargo.toml')`.
-
-Behavioral test suite (RMK feature rows are defined by `RMK_TEST_FEATURESETS` in `.github/ci/_lib.sh`):
-```bash
-bash scripts/test_all.sh
-```
-
-### Building examples
-Examples target specific MCUs; build from an example directory, e.g.:
-```bash
-cd examples/use_config/nrf52840_ble
-cargo build --release
-```
-
-## Architecture
-
-### Basic Data flow
-```
-Matrix / InputDevices → Events (pub/sub channels) -> InputProcessors/Keyboard(keyboard.rs) -> KEYBOARD_REPORT_CHANNEL -> HidWriter (USB or BLE) -> Host
-```
-
-### `keyboard.toml` and compile-time constants
-
-`keyboard.toml` is parsed by `rmk-config` (`KeyboardTomlConfig`) at two points: by `rmk-types/build.rs` at build time, and by `rmk-macro` at macro-expansion time. The path defaults to `keyboard.toml` next to `Cargo.toml` and can be overridden with `KEYBOARD_TOML_PATH` in user space's `.cargo/config.toml`.
-
-Config is loaded in three layers (later overrides earlier): `event_default.toml` → chip-specific default (from `rmk-config/src/default_config/<chip>.toml`, selected via `[keyboard].chip`) → user `keyboard.toml`.
-
-`rmk-types/build.rs` reads only the `[rmk]` and `[event]` sections, then emits `constants.rs` as Rust `const` items. The full `KeyboardTomlConfig` struct in `rmk-config/src/lib.rs` is the authoritative reference for all available fields and their defaults.
-
-`[event]` tunes per-event pub/sub channel sizes (`channel_size`, `pubs`, `subs`). All event names and their defaults live in `rmk-config/src/default_config/event_default.toml`.
-
-## Rules
-
+- Keep things in one function unless composable or reusable
+- Validate unknown values once at the boundary that owns them. Pass typed values inward instead of repeating type checks and property-existence checks. Do not defensively revalidate values already guaranteed by a schema, constructor, or internal type.
+- Do not extract single-use helpers preemptively. Inline the logic at the call site unless the helper is reused, hides a genuinely complex boundary, or has a clear independent name that improves the caller.
+- Before adding complexity for a speculative or vanishingly unlikely race or security edge case, explain the concrete failure mode, likelihood, and complexity cost to the user and get their buy-in. Do not silently expand scope for theoretical robustness.
 - Don't use `pub use` for convenient usage **within** the crate
-- Don't add a small helper function (≤ 10 lines) that has only one call site — inline it at the call site
 - When writing code comments, follow the principles in [Best practices for writing code comments](https://stackoverflow.blog/2021/12/23/best-practices-for-writing-code-comments/)
 - When writing documentation and READMEs, follow the principles in [Best practices for GitHub Docs](https://docs.github.com/en/contributing/writing-for-github-docs/best-practices-for-github-docs)
 - If you need a paragraph-long comment to justify why the workaround is OK, the code is wrong — fix the code.
+
+## Testing Guidelines
+
+- Read `rmk/tests/scenarios/README.md` before adding scenarios.
+- TOML cases expand into ordinary Rust tests.
+- Name cases after the behavior they verify.
+- Reuse board fixtures.
+- Confirm regressions fail without the fix.
+
+Select feature coverage from `RMK_TEST_FEATURESETS` in `.github/ci/_lib.sh`. Distinguish simulator results from physical hardware validation.
+
+## Commit & Pull Request Guidelines
+
+Follow recent commit style: `fix(scope): description`, `feat(scope): description`, or `docs: description`. Keep commits focused, check existing issues/PRs, and link relevant issues. Limit PR descriptions to three concise lines explaining the change and purpose; don't report validation. Ensure required CI checks pass before merging.

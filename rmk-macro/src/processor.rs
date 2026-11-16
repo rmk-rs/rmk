@@ -128,21 +128,14 @@ pub fn processor_impl(
 
     // Check for sibling #[input_device] attribute.
     // Support both simple form (#[input_device]) and qualified form (#[rmk_macro::input_device])
-    let has_input_device = input
+    let input_device_attr = input
         .attrs
         .iter()
-        .any(|attr| attr_matches_name(attr, "input_device"));
+        .find(|attr| attr_matches_name(attr, "input_device"));
 
     // Generate event enum, subscriber, and dispatch body
     let (event_type_tokens, event_enum_def, event_subscriber_impl, process_body) =
-        generate_event_enum_and_dispatch(
-            struct_name,
-            vis,
-            &config.event_types,
-            "Processor",
-            quote! { ::rmk::event::SubscribableEvent },
-            quote! { subscriber },
-        );
+        generate_event_enum_and_dispatch(struct_name, vis, &config.event_types);
 
     let subscriber_body = if config.event_types.is_empty() {
         quote! { ::core::future::pending::<Self::Event>() }
@@ -172,13 +165,7 @@ pub fn processor_impl(
     // Otherwise, we're the first macro to run, so generate Runnable.
 
     // Parse sibling input_device config if present (for combined Runnable generation)
-    let input_device_config = if has_input_device {
-        let attr = input
-            .attrs
-            .iter()
-            .find(|attr| attr_matches_name(attr, "input_device"))
-            .unwrap(); // Safe because has_input_device is true
-
+    let input_device_config = if let Some(attr) = input_device_attr {
         if let Meta::List(meta_list) = &attr.meta {
             use crate::event_macros::parser::parse_input_device_config;
             match parse_input_device_config(meta_list.tokens.clone()) {
@@ -218,7 +205,7 @@ pub fn processor_impl(
         .retain(|attr| !attr_matches_name(attr, "processor"));
 
     // Add marker only when sibling macro needs to know Runnable is already generated.
-    if has_input_device && !has_marker {
+    if input_device_config.is_some() && !has_marker {
         input
             .attrs
             .push(syn::parse_quote!(#[::rmk::macros::runnable_generated]));
