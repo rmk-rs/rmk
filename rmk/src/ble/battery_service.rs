@@ -1,5 +1,3 @@
-use core::sync::atomic::Ordering;
-
 use embassy_futures::join::join;
 use embassy_futures::select::{Either, select};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
@@ -12,7 +10,6 @@ use crate::core_traits::Runnable;
 use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
 use crate::keyboard::LAST_KEY_TIMESTAMP;
-use crate::sleep::SLEEPING_STATE;
 
 const CHARACTERISTIC_PRESENTATION_FORMAT_UINT8: u8 = 0x04;
 const CHARACTERISTIC_PRESENTATION_FORMAT_EXPONENT_ZERO: u8 = 0x00;
@@ -198,7 +195,7 @@ impl<P: PacketPool> BleBatteryServer<'_, '_, '_, P> {
                 loop {
                     embassy_time::Timer::after_secs(1800).await;
                     // 30 minutes passed and the keyboard isn't in sleep mode: timeout
-                    if !SLEEPING_STATE.load(Ordering::Acquire) {
+                    if !crate::state::current_sleeping() {
                         break;
                     }
                 }

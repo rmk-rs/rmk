@@ -158,6 +158,7 @@ where
                 0
             };
         set_ble_profile(profile, self.bond_info(profile).is_some());
+        self.sync_bonded_slots();
     }
 
     /// Read the live bond stored in `profile`.
@@ -177,10 +178,12 @@ where
 
     /// Update bonding information in the stack according to the current active profile
     ///
-    /// Also republishes `BleStatus::bonded`. Every change to `profiles` that can
-    /// alter bond presence is followed by this call, so the flag is derived here once
-    /// instead of at each mutation site.
+    /// Also republishes `BleStatus::bonded` and the bonded-slot bitmap. Every change
+    /// to `profiles` that can alter bond presence is followed by this call, so both
+    /// are derived here once instead of at each mutation site.
     pub(crate) fn update_stack_bonds(&self) {
+        self.sync_bonded_slots();
+
         // Drain one at a time rather than collecting: the stack holds bonds this
         // manager has no slot for — a fresh pairing lands there before we prune —
         // and a `heapless::Vec` collect panics on the overflow.
@@ -203,6 +206,22 @@ where
                 debug!("Add bond info error: {:?}", e);
             }
         }
+    }
+
+    /// Publish which slots hold a bond for lighting.
+    ///
+    /// Slots at or beyond the mask's width are dropped rather than wrapped: a
+    /// board configured with more profiles than the mask can carry loses the
+    /// high slots' observability, which is preferable to reporting them under
+    /// some other slot's bit.
+    fn sync_bonded_slots(&self) {
+        let mut mask = 0u8;
+        for slot in 0..self.profiles.len().min(u8::BITS as usize) {
+            if self.bond_info(slot as u8).is_some() {
+                mask |= 1 << slot;
+            }
+        }
+        crate::state::set_bonded_slots(mask);
     }
 
     /// Set a slot's bond and initial CCCD state.

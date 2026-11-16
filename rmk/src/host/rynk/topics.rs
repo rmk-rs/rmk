@@ -8,9 +8,11 @@
 use futures::FutureExt;
 use rmk_types::protocol::rynk::TopicEvent;
 
+#[cfg(feature = "lighting")]
+use crate::event::LightingChangedEvent;
 use crate::event::{
     BatteryStatusEvent, ConnectionStatusChangeEvent, EventSubscriber, LayerChangeEvent, LedIndicatorEvent,
-    SleepStateEvent, SubscribableEvent, WpmUpdateEvent,
+    ModifierEvent, SleepStateEvent, SubscribableEvent, WpmUpdateEvent,
 };
 
 pub(super) struct TopicSubscribers {
@@ -19,7 +21,10 @@ pub(super) struct TopicSubscribers {
     conn: <ConnectionStatusChangeEvent as SubscribableEvent>::Subscriber,
     sleep: <SleepStateEvent as SubscribableEvent>::Subscriber,
     led: <LedIndicatorEvent as SubscribableEvent>::Subscriber,
+    modifier: <ModifierEvent as SubscribableEvent>::Subscriber,
     battery: <BatteryStatusEvent as SubscribableEvent>::Subscriber,
+    #[cfg(feature = "lighting")]
+    lighting: <LightingChangedEvent as SubscribableEvent>::Subscriber,
 }
 
 impl TopicSubscribers {
@@ -30,7 +35,10 @@ impl TopicSubscribers {
             conn: ConnectionStatusChangeEvent::subscriber(),
             sleep: SleepStateEvent::subscriber(),
             led: LedIndicatorEvent::subscriber(),
+            modifier: ModifierEvent::subscriber(),
             battery: BatteryStatusEvent::subscriber(),
+            #[cfg(feature = "lighting")]
+            lighting: LightingChangedEvent::subscriber(),
         }
     }
 
@@ -44,7 +52,31 @@ impl TopicSubscribers {
             e = self.conn.next_event().fuse() => TopicEvent::ConnectionChange(*e),
             e = self.sleep.next_event().fuse() => TopicEvent::SleepState(*e),
             e = self.led.next_event().fuse() => TopicEvent::LedIndicatorChange(*e),
+            e = self.modifier.next_event().fuse() => TopicEvent::ModifierChange(e.modifier),
             e = self.battery.next_event().fuse() => TopicEvent::BatteryStatusChange(*e),
+            with_feature("lighting"): _ = self.lighting.next_event().fuse() => TopicEvent::LightingChange(rmk_types::protocol::rynk::LightingChanged),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rmk_types::modifier::ModifierCombination;
+
+    use super::*;
+    use crate::event::{ModifierEvent, publish_event};
+    use crate::test_support::test_block_on as block_on;
+
+    #[test]
+    fn resolved_modifier_events_are_forwarded() {
+        let mut topics = TopicSubscribers::new();
+        let modifiers = ModifierCombination::LSHIFT | ModifierCombination::RALT;
+
+        publish_event(ModifierEvent { modifier: modifiers });
+
+        match block_on(topics.next_event()) {
+            TopicEvent::ModifierChange(actual) => assert_eq!(actual, modifiers),
+            other => panic!("expected ModifierChange, got {other:?}"),
         }
     }
 }
