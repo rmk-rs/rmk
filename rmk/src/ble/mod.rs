@@ -1606,13 +1606,6 @@ mod tests {
         bond
     }
 
-    /// Wait until the connection status satisfies `done`.
-    async fn until(done: impl Fn(&rmk_types::connection::ConnectionStatus) -> bool) {
-        while !done(&crate::state::current_connection_status()) {
-            embassy_time::Timer::after_millis(1).await;
-        }
-    }
-
     /// Wait until advertising has started more than `starts` times.
     async fn advertising(hci: &FakeController, starts: usize) {
         while hci.advertising_starts() <= starts {
@@ -1625,7 +1618,7 @@ mod tests {
         advertising(hci, 0).await;
         hci.connect(handle, peer);
         hci.encrypt(handle);
-        until(|s| s.selected_profile().state == BleState::Connected).await;
+        crate::state::wait_for_connection_status(|s| s.selected_profile().state == BleState::Connected).await;
     }
 
     #[test]
@@ -1674,7 +1667,8 @@ mod tests {
                 advertising(&hci, profile.into()).await;
                 hci.connect(u16::from(profile) + 1, peer(profile));
                 hci.encrypt(u16::from(profile) + 1);
-                until(|s| s.ble[usize::from(profile)].state == BleState::Connected).await;
+                crate::state::wait_for_connection_status(|s| s.ble[usize::from(profile)].state == BleState::Connected)
+                    .await;
             }
             BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(LINKS as u8)).await;
             embassy_time::with_timeout(Duration::from_millis(100), advertising(&hci, LINKS))
@@ -1763,7 +1757,7 @@ mod tests {
             MockDriver::get().advance(Duration::from_secs(270));
             embassy_time::with_timeout(
                 Duration::from_millis(10),
-                until(|s| s.selected_profile().state == BleState::Inactive),
+                crate::state::wait_for_connection_status(|s| s.selected_profile().state == BleState::Inactive),
             )
             .await
             .expect("slow advertising must end with its period");
