@@ -143,12 +143,12 @@ locked operation you prove you're physically present by holding a key combo.
 There are three tiers:
 
 - **Open** — everything you normally reach for: read the keymap, change keys,
-  layers, combos, macros, switch or disconnect BLE profiles, reboot. These stay
-  available so on-the-fly configuration is friction-free.
+  layers, combos, macros, switch BLE profiles, reboot. These stay available so
+  on-the-fly configuration is friction-free.
 - **Locked** — the dangerous ones, always gated: entering the bootloader,
   resetting stored settings and bonds, reading the live key matrix (a keylogger
-  if left open), and forgetting a BLE profile. A host tool gets a "locked" error
-  until you unlock.
+  if left open), and disconnecting or forgetting a BLE profile. A host tool
+  gets a "locked" error until you unlock.
 - **Config writes** — open by default, because on-the-fly configuration is the
   point. Set `write_requires_unlock = true` to move every write (keymap, macros,
   …) into the locked tier as well.

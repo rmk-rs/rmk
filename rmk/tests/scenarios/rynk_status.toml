@@ -15,7 +15,7 @@ keys = "A  MO(1)  No"
 [[keymap.layer]]
 keys = "B  _  No"
 
-# `GetMatrixState` and `ClearBleProfile` are gated unconditionally.
+# `GetMatrixState`, `ClearBleProfile` and `DisconnectBleProfile` are gated unconditionally.
 [host]
 unlock_keys = [[0, 2]]
 
@@ -68,13 +68,15 @@ steps = [
 ]
 
 [[test]]
-name = "clearing_a_ble_profile_needs_an_unlock"
+name = "disconnecting_or_clearing_a_ble_profile_needs_an_unlock"
 features = ["_ble"]
 steps = [
+  { rynk = { cmd = "DisconnectBleProfile", payload = 0, error = "Locked" } },
   { rynk = { cmd = "ClearBleProfile", payload = 0, error = "Locked" } },
   { press = [0, 2] },
   { rynk = { cmd = "UnlockPoll", reply = { locked = false, unlocking = false, remaining_keys = 0, key_positions = [[0, 2]] } } },
   { release = [0, 2] },
+  { rynk = { cmd = "DisconnectBleProfile", payload = 0 } },
   { rynk = { cmd = "ClearBleProfile", payload = 0 } },
 ]
 

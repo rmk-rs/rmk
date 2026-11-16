@@ -67,9 +67,9 @@ impl<'a> RynkService<'a> {
     fn requires_unlock(&self, cmd: Cmd) -> bool {
         match cmd {
             Cmd::BootloaderJump | Cmd::StorageReset | Cmd::GetMatrixState => true,
-            // Deleting a bond opens a re-pair hijack window; BLE-only command.
+            // Deleting or hiding a bond opens a re-pair hijack window; BLE-only commands.
             #[cfg(feature = "_ble")]
-            Cmd::ClearBleProfile => true,
+            Cmd::ClearBleProfile | Cmd::DisconnectBleProfile => true,
             _ => Self::needs_storage_write(cmd) && self.lock_config.write_requires_unlock,
         }
     }

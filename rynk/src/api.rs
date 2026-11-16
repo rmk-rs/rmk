@@ -390,7 +390,8 @@ impl Client {
         self.request::<command::ClearBleProfile>(&slot).await
     }
 
-    /// Queue disconnecting `slot` and keep its bond. The reply may never reach a host on that slot.
+    /// Queue disconnecting `slot` and keep its bond; requires an unlocked connection.
+    /// The reply may never reach a host on that slot.
     /// A selected slot then advertises for a new host, which replaces the bond if it pairs; any other
     /// slot stays offline until selected. Requires [`DeviceCapabilities::ble_enabled`].
     pub async fn disconnect_ble_profile(&self, slot: u8) -> Result<(), RynkHostError> {
