@@ -55,11 +55,16 @@ pub(crate) async fn send_hid_report(report: Report) {
         return;
     };
     // A BLE profile switch keeps the transport, but the report must not reach the new host.
+    #[cfg(feature = "_ble")]
     let profile = crate::state::current_profile();
 
     let mut send = pin!(ch.send(report));
     poll_fn(|cx| {
-        if crate::state::active_transport() != Some(transport) || crate::state::current_profile() != profile {
+        if crate::state::active_transport() != Some(transport) {
+            return Poll::Ready(());
+        }
+        #[cfg(feature = "_ble")]
+        if crate::state::current_profile() != profile {
             return Poll::Ready(());
         }
         send.as_mut().poll(cx)

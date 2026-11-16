@@ -140,7 +140,8 @@ pub(crate) async fn toggle_preferred() {
     crate::storage::store_unchecked(crate::storage::StorageItem::ConnectionType(new)).await;
 }
 
-/// The selected BLE profile; always 0 without BLE.
+/// The selected BLE profile.
+#[cfg(feature = "_ble")]
 pub(crate) fn current_profile() -> u8 {
     CONNECTION_STATUS.lock(|c| c.borrow().selected)
 }
