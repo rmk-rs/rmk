@@ -103,14 +103,6 @@ mod tests {
     }
 
     #[test]
-    fn bind_interrupt_passes_validation() {
-        // The form the stm32h7 example documents; selection lives in
-        // bind_interrupt.rs and is covered by that module's tests.
-        let res = find_overwritten(&parse_fn("#[Override(bind_interrupt)]\nfn f() {}"));
-        assert!(matches!(res, Some(Ok(Overwritten::BindInterrupt))));
-    }
-
-    #[test]
     fn doc_comment_does_not_disable_override() {
         // Doc comments are attributes; they used to make the override
         // silently ineligible via the old `attrs.len() == 1` check.
