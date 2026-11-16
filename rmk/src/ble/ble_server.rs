@@ -1,6 +1,5 @@
 use core::fmt::Write;
 
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use postcard::experimental::max_size::MaxSize;
 use rmk_types::battery::BatteryStatus;
@@ -33,7 +32,7 @@ use rmk_types::protocol::rynk::{
 };
 
 /// Keep GAP/GATT first and append other services to preserve bonded hosts' cached handles.
-#[gatt_server(connections_max = crate::ble::NUM_HOST_LINKS)]
+#[gatt_server(mutex_type = crate::RawMutex, connections_max = crate::ble::NUM_HOST_LINKS)]
 pub(crate) struct Server {
     profile_name_services: ProfileNameServices,
     pub(crate) battery_service: BatteryService,
@@ -51,8 +50,6 @@ pub(crate) struct Server {
     pub(crate) dongle_event_service: DongleEventService,
 }
 
-type BleName = heapless::String<BLE_ADV_NAME_MAX_LEN>;
-
 struct ProfileNameServices {
     gap: [GapService; BLE_PROFILE_NAME_SUFFIX as usize],
 }
@@ -61,7 +58,7 @@ impl ProfileNameServices {
     const ATTRIBUTE_COUNT: usize = trouble_host::gap::GAP_SERVICE_ATTRIBUTE_COUNT * BLE_PROFILE_NAME_SUFFIX as usize;
     const CCCD_COUNT: usize = 0;
 
-    fn new<const MAX: usize>(table: &mut AttributeTable<'_, NoopRawMutex, MAX>) -> Self {
+    fn new<const MAX: usize>(table: &mut AttributeTable<'_, crate::RawMutex, MAX>) -> Self {
         Self {
             gap: core::array::from_fn(|_| {
                 let gap = GapService::new(table);
@@ -75,7 +72,7 @@ impl ProfileNameServices {
 #[gatt_service(uuid = service::GAP)]
 struct GapService {
     #[characteristic(uuid = characteristic::DEVICE_NAME, read)]
-    device_name: BleName,
+    device_name: heapless::String<BLE_ADV_NAME_MAX_LEN>,
     #[characteristic(uuid = characteristic::APPEARANCE, read, value = appearance::human_interface_device::KEYBOARD)]
     appearance: BluetoothUuid16,
     #[cfg(any(feature = "split", feature = "dongle"))]
@@ -98,9 +95,13 @@ impl Server<'_> {
     }
 
     /// The empty return array avoids a name buffer in disabled builds.
-    pub(crate) fn set_profile_name(&self, product_name: &str, slot: u8) -> [BleName; BLE_PROFILE_NAME_SUFFIX as usize] {
+    pub(crate) fn set_profile_name(
+        &self,
+        product_name: &str,
+        slot: u8,
+    ) -> [heapless::String<BLE_ADV_NAME_MAX_LEN>; BLE_PROFILE_NAME_SUFFIX as usize] {
         self.profile_name_services.gap.each_ref().map(|gap| {
-            let mut name = BleName::try_from(product_name).expect("product name is too long for BLE");
+            let mut name = heapless::String::try_from(product_name).expect("product name is too long for BLE");
             if (slot as usize) < crate::NUM_BLE_PROFILES {
                 write!(name, "_{}", usize::from(slot) + 1)
                     .expect("product name including BLE profile suffix exceeds 16 bytes");

@@ -1,6 +1,6 @@
 //! Every advertisement RMK sends, in one place.
 
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_time::{Duration, with_timeout};
 use trouble_host::prelude::appearance::human_interface_device::KEYBOARD;
 use trouble_host::prelude::service::{BATTERY, HUMAN_INTERFACE_DEVICE};
@@ -115,7 +115,7 @@ impl Adv<'_> {
 /// The timeout includes controller setup.
 pub(crate) async fn advertise<'a, 'b, C: Controller + ExtAdvCmds, const ATT: usize, const CONN: usize>(
     peripheral: &mut Peripheral<'a, C, DefaultPacketPool>,
-    server: &'b AttributeServer<'_, NoopRawMutex, DefaultPacketPool, ATT, CONN>,
+    server: &'b AttributeServer<'_, impl RawMutex, DefaultPacketPool, ATT, CONN>,
     adv: Adv<'_>,
     address: Option<BdAddr>,
     timeout: Duration,
