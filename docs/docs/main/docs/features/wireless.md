@@ -64,7 +64,7 @@ Vial user keycodes can be configured to operate wireless profiles. Suppose that 
 
 Vial also provides a way to customize the displayed keycode, see `customKeycodes` in [this example](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/vial.json). If `customKeycodes` are configured, the `User0` ~ `User(N+3)` will be displayed as `BT0`, ..., `Switch Output`.
 
-A paired profile reconnects to its host. While that host isn't connected, another host can pair with the active profile and replaces the old host once pairing finishes.
+A paired profile reconnects to its host. While that host isn't connected, another host can pair with the active profile and replaces the old host once pairing finishes. A host paired with one profile can't connect on another; clear that profile first to move the host.
 
 ## BLE Passkey Entry
 

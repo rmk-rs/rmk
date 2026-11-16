@@ -642,6 +642,9 @@ async fn run_ble_keyboard<
 
             let conn = gatt_conn.raw();
             let peer = conn.peer_identity();
+            let own_host = bond
+                .as_ref()
+                .is_some_and(|bond| bond.info.identity.match_identity(&peer));
             // A replaced advertisement can still deliver a late connection.
             #[cfg(feature = "ext_adv")]
             if conn.local_address() != local_address {
@@ -650,13 +653,15 @@ async fn run_ble_keyboard<
                 continue;
             }
             #[cfg(feature = "dongle")]
-            if (profile_id == DONGLE_PROFILE
-                && bond
-                    .as_ref()
-                    .is_some_and(|bond| !bond.info.identity.match_identity(&peer)))
-                || (profile_id != DONGLE_PROFILE && profile_manager.is_bonded_dongle(&peer))
-            {
+            if profile_id == DONGLE_PROFILE && bond.is_some() && !own_host {
                 warn!("[ble] peer does not match its dongle profile");
+                disconnect(&gatt_conn).await;
+                continue;
+            }
+            // Without `ext_adv` every profile shares one address, so a host bonded to another
+            // profile reconnects here on its own.
+            if !own_host && profile_manager.is_bonded(&peer) {
+                warn!("[ble] peer is bonded to another profile");
                 disconnect(&gatt_conn).await;
                 continue;
             }
@@ -665,7 +670,7 @@ async fn run_ble_keyboard<
                 continue;
             }
             if let Some(bond) = bond {
-                if bond.info.identity.match_identity(&peer) {
+                if own_host {
                     match ClientAttTableView::try_from_raw(&bond.cccd_table) {
                         Ok(view) => server.set_client_att_table(conn, &view),
                         Err(e) => warn!("Invalid stored CCCD table: {:?}", e),
@@ -1708,6 +1713,26 @@ mod tests {
                     bonded: false
                 }
             );
+        });
+    }
+
+    #[test]
+    fn a_host_bonded_to_another_profile_is_refused() {
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[bond(0, HOST_A), bond(1, HOST_B)], async {
+            advertising(&hci, 0).await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await;
+            advertising(&hci, 1).await;
+            // Without `ext_adv` profile 1 shares profile 0's address, so host A reconnects to it on its own.
+            hci.connect(1, HOST_A);
+            embassy_time::with_timeout(Duration::from_millis(100), advertising(&hci, 2))
+                .await
+                .expect("profile 1 must turn host A away and keep advertising for host B");
+            assert_eq!(hci.sent::<bt_hci::cmd::link_control::Disconnect>().len(), 1);
+            assert!(crate::state::current_connection_status().ble[1].bonded);
         });
     }
 

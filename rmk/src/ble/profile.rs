@@ -172,14 +172,12 @@ impl<const PROFILES: usize> ProfileManager<PROFILES> {
         }
     }
 
-    /// Check if the `identity` is the bonded dongle's identity.
-    ///
-    /// This function is used when searching for BLE host,
-    /// the connected dongle(in the DONGLE_PROFILE) should be excluded.
-    #[cfg(feature = "dongle")]
-    pub(crate) fn is_bonded_dongle(&self, identity: &Identity) -> bool {
-        self.bond_info(DONGLE_PROFILE)
-            .is_some_and(|info| info.info.identity.match_identity(identity))
+    /// Whether `identity` is the host of any profile's live bond.
+    pub(crate) fn is_bonded(&self, identity: &Identity) -> bool {
+        (0..PROFILES as u8).any(|profile| {
+            self.bond_info(profile)
+                .is_some_and(|bond| bond.info.identity.match_identity(identity))
+        })
     }
 
     /// Set a profile's bond and initial CCCD state.
