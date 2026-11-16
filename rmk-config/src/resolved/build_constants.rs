@@ -153,10 +153,11 @@ impl crate::KeyboardTomlConfig {
         };
 
         let mut event_config = self.event.clone();
-        // ble/mod.rs: each host link runs a battery service, and its HID writer
-        // waits for the link's profile to be selected.
+        // ble/mod.rs: each host link runs a battery service. Its HID writer waits
+        // for the link's profile to be selected, and until the link encrypts its
+        // PHY task waits too.
         event_config.battery_status.subs += num_host_links;
-        event_config.connection_status_change.subs += num_host_links;
+        event_config.connection_status_change.subs += 2 * num_host_links;
         if !split_battery_peripheral_ids.is_empty() {
             event_config.peripheral_battery.subs += num_host_links;
         }
@@ -530,6 +531,29 @@ mod tests {
                 let event = constants.events.iter().find(|event| event.name == name).unwrap();
                 assert_eq!(event.subs, expected, "{features:?}: {name}");
             }
+        }
+    }
+
+    #[test]
+    fn each_host_link_reserves_both_of_its_connection_status_waits() {
+        let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
+        config.rmk.num_ble_profiles = 3;
+        for (features, max_connections, expected) in [
+            (&[][..], None, 1),
+            (&["_ble"], None, 3),
+            (&["_ble", "_ext_adv"], Some(3), 7),
+        ] {
+            config.ble = Some(BleConfig {
+                max_connections,
+                ..Default::default()
+            });
+            let constants = config.build_constants(features).unwrap();
+            let event = constants
+                .events
+                .iter()
+                .find(|event| event.name == "connection_status_change")
+                .unwrap();
+            assert_eq!(event.subs, expected, "{features:?}");
         }
     }
 
