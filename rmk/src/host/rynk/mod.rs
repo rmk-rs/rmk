@@ -148,7 +148,19 @@ impl<'a> RynkService<'a> {
                 tx.write_all(msg.frame()).await?;
                 Ok(true)
             }
-            Err(error) => reject(msg, tx, error).await,
+            Err(error) => {
+                // Pipelined frames can leave too little room for the reply.
+                let error = if msg.capacity() < RYNK_BUFFER_SIZE && error == RynkError::Internal {
+                    RynkError::Busy
+                } else {
+                    error
+                };
+                let mut frame =
+                    [0u8; max_wire_size(RYNK_HEADER_SIZE + <Result<(), RynkError> as MaxSize>::POSTCARD_MAX_SIZE)];
+                let len = encode_frame(&mut frame, msg.header(), &Err::<(), RynkError>(error)).unwrap_or(0);
+                tx.write_all(&frame[..len]).await?;
+                Ok(false)
+            }
         }
     }
 
@@ -217,19 +229,6 @@ impl<'a> RynkService<'a> {
             }
         }
     }
-}
-
-async fn reject<W: Write>(msg: &RynkMessage<'_>, tx: &mut W, error: RynkError) -> Result<bool, W::Error> {
-    // Pipelined frames can leave too little room for the reply.
-    let error = if msg.capacity() < RYNK_BUFFER_SIZE && error == RynkError::Internal {
-        RynkError::Busy
-    } else {
-        error
-    };
-    let mut frame = [0u8; max_wire_size(RYNK_HEADER_SIZE + <Result<(), RynkError> as MaxSize>::POSTCARD_MAX_SIZE)];
-    let len = encode_frame(&mut frame, msg.header(), &Err::<(), RynkError>(error)).unwrap_or(0);
-    tx.write_all(&frame[..len]).await?;
-    Ok(false)
 }
 
 #[cfg(test)]
