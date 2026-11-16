@@ -518,6 +518,14 @@ impl<'a> KeyMap<'a> {
         self.inner.borrow_mut().get_action_with_layer_cache(event)
     }
 
+    pub(crate) fn peek_action(&self, source: KeyboardEventSource) -> KeyAction {
+        self.peek_action_with_layer(source).0
+    }
+
+    pub(crate) fn peek_action_with_layer(&self, source: KeyboardEventSource) -> (KeyAction, u8) {
+        self.inner.borrow().select_action(source)
+    }
+
     pub(crate) fn get_action_at(&self, source: KeyboardEventSource, layer: usize) -> KeyAction {
         self.inner.borrow().get_action_at(source, layer)
     }

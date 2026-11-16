@@ -104,7 +104,7 @@ steps = [
   { release = [0, 0] },  # Release OSM(LShift)
   { release = [0, 3] },  # Release TH(B, C)
 ]
-expect = [["LShift", "B"], []]
+expect = [["LShift", "B"], ["B"], []]
 
 # A tap-hold pressed inside the window keeps the OSM even if the deadline passes
 # while it is still unresolved. Regression: the expiry fired during that wait, so
