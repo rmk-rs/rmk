@@ -140,7 +140,7 @@ pub(crate) async fn toggle_preferred() {
     crate::storage::store_unchecked(crate::storage::StorageItem::ConnectionType(new)).await;
 }
 
-#[cfg(feature = "_ble")]
+/// The selected BLE profile; always 0 without BLE.
 pub(crate) fn current_profile() -> u8 {
     current_connection_status().selected
 }
@@ -341,6 +341,35 @@ mod tests {
         ));
 
         assert_all_released(&USB_REPORT_CHANNEL);
+    }
+
+    /// Switching between two connected profiles keeps BLE active, so the profile must cancel the send too.
+    #[cfg(feature = "_ble")]
+    #[test]
+    fn blocked_send_drops_report_after_profile_switch() {
+        use embassy_futures::join::join;
+
+        use crate::channel::{BLE_REPORT_CHANNEL, send_hid_report};
+
+        let _guard = state_test_lock().lock().unwrap();
+        reset_state();
+        set_ble_state(0, BleState::Connected);
+        set_ble_state(1, BleState::Connected);
+
+        for _ in 0..crate::REPORT_CHANNEL_SIZE {
+            BLE_REPORT_CHANNEL
+                .try_send(pressed_keyboard_report())
+                .expect("channel should have capacity while filling");
+        }
+
+        block_on(join(send_hid_report(pressed_keyboard_report()), async {
+            Timer::after(Duration::from_millis(1)).await;
+            // What `ProfileManager::switch_profile` does.
+            select_ble_profile(1);
+            BLE_REPORT_CHANNEL.clear();
+        }));
+
+        assert!(BLE_REPORT_CHANNEL.try_receive().is_err());
     }
 
     #[cfg(all(not(feature = "_no_usb"), feature = "_ble"))]
