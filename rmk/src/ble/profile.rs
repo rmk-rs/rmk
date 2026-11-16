@@ -30,9 +30,13 @@ pub(crate) fn profile_address(base: [u8; 6], profile: u8) -> [u8; 6] {
     addr
 }
 
-/// Replace used bond on the stack with `bond`, dropping stale bonds left by a previous profile
-/// or an unfinished pairing.
+/// Make `bond` the stack's only bond, dropping stale bonds left by a previous profile or an
+/// unfinished pairing. Links that are already encrypted keep their session keys without it.
 pub(crate) fn set_stack_bond<C: Controller, P: PacketPool>(stack: &Stack<'_, C, P>, bond: Option<BondInformation>) {
+    // Each change queues a resolving-list rebuild, so leave a stack that already holds only `bond`.
+    if stack.with_bond_information(|bonds| bonds == bond.as_slice()) {
+        return;
+    }
     // The stack can also hold keys from an unfinished pairing.
     while let Some(identity) = stack.with_bond_information(|bonds| bonds.first().map(|b| b.identity)) {
         if let Err(e) = stack.remove_bond_information(identity) {
