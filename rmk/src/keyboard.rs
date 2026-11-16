@@ -884,16 +884,46 @@ impl<'a> Keyboard<'a> {
             return (*key_action, false);
         }
 
+        let (replacement, chain_starter, combined_suppress, keep_mask) =
+            self.select_forks(key_action, event, self.keymap.pressed_layer(event.source));
+        self.fork_keep_mask = keep_mask;
+
+        if let Some(initial) = chain_starter {
+            self.fork_states[initial] = Some(ActiveFork {
+                replacement,
+                suppress: combined_suppress,
+                source: event.source,
+            });
+        }
+
+        // Modifiers the replacement adds back are not dropped
+        let readded = match replacement {
+            KeyAction::Single(Action::KeyWithModifier(_, modifiers)) => modifiers,
+            _ => ModifierCombination::default(),
+        };
+        let held = self.resolve_explicit_modifiers(event.pressed);
+        let dropped = held & combined_suppress & !self.fork_keep_mask & !readded;
+        (replacement, dropped.into_bits() != 0)
+    }
+
+    /// Select a fork replacement without committing modifier or source state.
+    fn select_forks(
+        &self,
+        key_action: &KeyAction,
+        event: KeyboardEvent,
+        layer: u8,
+    ) -> (KeyAction, Option<usize>, ModifierCombination, ModifierCombination) {
         let mut decision_state = StateBits {
             // "explicit modifiers" includes the effect of one-shot modifiers, held modifiers keys only
             modifiers: self.resolve_explicit_modifiers(event.pressed),
             leds: LedIndicator::from_bits(LOCK_LED_STATES.load(core::sync::atomic::Ordering::Relaxed)),
             mouse: MouseButtons::from_bits(self.mouse.report.buttons),
         };
-        let layer_bit = 1u32.checked_shl(self.keymap.pressed_layer(event.source).into());
+        let layer_bit = 1u32.checked_shl(layer.into());
 
         let fork_states = &self.fork_states;
-        let fork_keep_mask = &mut self.fork_keep_mask;
+        let mut keep_mask = self.fork_keep_mask;
+        let fork_keep_mask = &mut keep_mask;
         let (replacement, chain_starter, combined_suppress) = self.keymap.with_forks(|forks| {
             let mut triggered_forks = [false; MAX_FORKS]; // used to avoid loops
             let mut chain_starter: Option<usize> = None;
@@ -958,28 +988,7 @@ impl<'a> Keyboard<'a> {
             (replacement, chain_starter, combined_suppress)
         });
 
-        if let Some(initial) = chain_starter {
-            // After the initial fork triggered, we have switched to "bind mode".
-            // The later triggered forks will not really activate, only update
-            // the replacement decision and modifier suppressions of the initially
-            // triggered fork, which is here marked as active:
-            self.fork_states[initial] = Some(ActiveFork {
-                replacement,
-                suppress: combined_suppress,
-                source: event.source,
-            });
-        }
-
-        // Modifiers the replacement adds back are not dropped
-        let readded = match replacement {
-            KeyAction::Single(Action::KeyWithModifier(_, modifiers)) => modifiers,
-            _ => ModifierCombination::default(),
-        };
-        let held = self.resolve_explicit_modifiers(event.pressed);
-        let dropped = held & combined_suppress & !self.fork_keep_mask & !readded;
-
-        // No (or no more) forks were triggered, so we are done
-        (replacement, dropped.into_bits() != 0)
+        (replacement, chain_starter, combined_suppress, keep_mask)
     }
 
     // Release of forked key must deactivate the fork
