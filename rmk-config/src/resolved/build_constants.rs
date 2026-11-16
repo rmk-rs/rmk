@@ -57,6 +57,7 @@ pub struct BuildConstants {
     /// Simultaneous BLE host and dongle connections: 0 without BLE.
     pub num_host_links: usize,
     pub ble_use_2m_phy: bool,
+    pub ble_profile_name_suffix: bool,
     pub split_central_sleep_timeout_seconds: u32,
     pub auto_mouse_layer_max_num: usize,
     /// Rynk RX/TX buffer size (bytes).
@@ -136,7 +137,11 @@ impl crate::KeyboardTomlConfig {
         if total_ble_profiles == 0 && active_features.contains(&"_ble") {
             return Err("BLE requires at least one BLE profile; set num_ble_profiles > 0 or enable dongle".to_string());
         }
+        let ble_profile_name_suffix = self.ble.as_ref().is_some_and(|ble| ble.profile_name_suffix);
         let num_host_links = if active_features.contains(&"_ble") {
+            if ble_profile_name_suffix && !active_features.contains(&"_ext_adv") {
+                return Err("keyboard.toml: [ble] profile_name_suffix requires the `ext_adv` feature".to_string());
+            }
             let links = self.ble.as_ref().and_then(|ble| ble.max_connections).unwrap_or(1);
             if links == 0 || links > total_ble_profiles {
                 return Err(format!(
@@ -319,6 +324,7 @@ impl crate::KeyboardTomlConfig {
             total_ble_profiles,
             num_host_links,
             ble_use_2m_phy: self.ble.as_ref().and_then(|ble| ble.use_2m_phy).unwrap_or(true),
+            ble_profile_name_suffix,
             split_central_sleep_timeout_seconds: rmk.split_central_sleep_timeout_seconds,
             auto_mouse_layer_max_num,
             rynk_buffer_size: rmk.rynk_buffer_size,

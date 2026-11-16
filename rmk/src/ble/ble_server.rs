@@ -1,6 +1,9 @@
+use core::fmt::Write;
+
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use postcard::experimental::max_size::MaxSize;
 use rmk_types::battery::BatteryStatus;
+use rmk_types::ble::BLE_ADV_NAME_MAX_LEN;
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
@@ -27,10 +30,10 @@ use rmk_types::protocol::rynk::{
     RYNK_BLE_CHUNK_SIZE, RYNK_HID_REPORT_SIZE, RYNK_INPUT_CHAR_UUID, RYNK_OUTPUT_CHAR_UUID, RYNK_SERVICE_UUID,
 };
 
-/// Field order is the attribute order: append, never insert, so a bonded host's
-/// cached GATT table survives a firmware update that adds a service.
+/// Keep GAP/GATT first and append other services to preserve bonded hosts' cached handles.
 #[gatt_server(connections_max = crate::ble::NUM_HOST_LINKS)]
 pub(crate) struct Server {
+    profile_name_services: ProfileNameServices,
     pub(crate) battery_service: BatteryService,
     #[cfg(feature = "split")]
     pub(crate) peripheral_battery_services: PeripheralBatteryServices,
@@ -46,7 +49,71 @@ pub(crate) struct Server {
     pub(crate) dongle_event_service: DongleEventService,
 }
 
+struct ProfileNameServices {
+    gap: [GapService; crate::BLE_PROFILE_NAME_SUFFIX as usize],
+}
+
+impl ProfileNameServices {
+    const ATTRIBUTE_COUNT: usize = (GapService::ATTRIBUTE_COUNT + GenericAttributeService::ATTRIBUTE_COUNT)
+        * crate::BLE_PROFILE_NAME_SUFFIX as usize;
+    const CCCD_COUNT: usize = 0;
+
+    fn new<M: embassy_sync::blocking_mutex::raw::RawMutex, const MAX: usize>(
+        table: &mut AttributeTable<'_, M, MAX>,
+    ) -> Self {
+        Self {
+            gap: core::array::from_fn(|_| {
+                let gap = GapService::new(table);
+                GenericAttributeService::new(table);
+                gap
+            }),
+        }
+    }
+}
+
+#[gatt_service(uuid = service::GAP)]
+struct GapService {
+    #[characteristic(uuid = characteristic::DEVICE_NAME, read)]
+    device_name: heapless::String<BLE_ADV_NAME_MAX_LEN>,
+    #[characteristic(uuid = characteristic::APPEARANCE, read, value = appearance::human_interface_device::KEYBOARD)]
+    appearance: BluetoothUuid16,
+    #[cfg(any(feature = "split", feature = "dongle"))]
+    #[characteristic(uuid = characteristic::CENTRAL_ADDRESS_RESOLUTION, read, value = 1)]
+    address_resolution: u8,
+}
+
+#[gatt_service(uuid = service::GATT)]
+struct GenericAttributeService {}
+
 impl Server<'_> {
+    pub(crate) fn new_keyboard(product_name: &'static str) -> Result<Self, &'static str> {
+        if crate::BLE_PROFILE_NAME_SUFFIX {
+            Ok(Self::new(AttributeTable::new()))
+        } else {
+            Self::new_with_config(GapConfig::Peripheral(PeripheralConfig {
+                name: product_name,
+                appearance: &appearance::human_interface_device::KEYBOARD,
+            }))
+        }
+    }
+
+    /// The empty return array avoids a name buffer in disabled builds.
+    pub(crate) fn set_profile_name(
+        &self,
+        product_name: &str,
+        profile: u8,
+    ) -> [heapless::String<BLE_ADV_NAME_MAX_LEN>; crate::BLE_PROFILE_NAME_SUFFIX as usize] {
+        self.profile_name_services.gap.each_ref().map(|gap| {
+            let mut name = heapless::String::try_from(product_name).expect("product name is too long for BLE");
+            if (profile as usize) < crate::NUM_BLE_PROFILES {
+                write!(name, "_{}", usize::from(profile) + 1)
+                    .expect("product name including BLE profile suffix exceeds 16 bytes");
+            }
+            unwrap!(self.set(&gap.device_name, &name));
+            name
+        })
+    }
+
     pub(crate) fn refresh_battery_level(&self, handle: u16) {
         let (attribute, status) = if handle == self.battery_service.level.handle {
             (

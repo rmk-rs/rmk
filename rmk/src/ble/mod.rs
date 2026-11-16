@@ -414,10 +414,7 @@ async fn run_ble_keyboard<
     let product_name = device_config.product_name;
 
     info!("Starting advertising and GATT service");
-    let Ok(server) = &Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-        name: product_name,
-        appearance: &appearance::human_interface_device::KEYBOARD,
-    })) else {
+    let Ok(server) = &Server::new_keyboard(product_name) else {
         panic!("product name is too long for BLE");
     };
 
@@ -501,6 +498,7 @@ async fn run_ble_keyboard<
 
         loop {
             let profile_id = crate::state::current_profile();
+            let name = server.set_profile_name(product_name, profile_id);
             let local_address = cfg!(feature = "ext_adv")
                 .then(|| BdAddr::new(crate::ble::profile::profile_address(address, profile_id)));
             let bond = profile_manager.bond_info(profile_id);
@@ -529,7 +527,7 @@ async fn run_ble_keyboard<
                     #[cfg(feature = "dongle")]
                     None if profile_id == DONGLE_PROFILE => Adv::DongleSeeking,
                     bond => Adv::Host {
-                        name: product_name,
+                        name: name.first().map_or(product_name, |name| name.as_str()),
                         fast: bond.is_some() && Instant::now() < fast_until,
                     },
                 };

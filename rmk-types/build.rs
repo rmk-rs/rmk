@@ -109,6 +109,10 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     lines.push(format!("pub const NUM_BLE_PROFILES: usize = {};", bc.num_ble_profiles));
     lines.push(format!("pub const BLE_USE_2M_PHY: bool = {};", bc.ble_use_2m_phy));
     lines.push(format!(
+        "pub const BLE_PROFILE_NAME_SUFFIX: bool = {};",
+        bc.ble_profile_name_suffix
+    ));
+    lines.push(format!(
         "pub const SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS: u32 = {};",
         bc.split_central_sleep_timeout_seconds
     ));

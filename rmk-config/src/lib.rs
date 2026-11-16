@@ -770,6 +770,9 @@ pub struct BleConfig {
     pub enabled: bool,
     pub default_tx_power: Option<i8>,
     pub use_2m_phy: Option<bool>,
+    /// Append the selected host profile number to BLE names; requires `ext_adv`.
+    #[serde(default)]
+    pub profile_name_suffix: bool,
     /// Simultaneous BLE host and dongle connections; 1 by default.
     pub max_connections: Option<usize>,
     pub passkey_entry: Option<bool>,
