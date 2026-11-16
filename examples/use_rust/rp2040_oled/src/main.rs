@@ -10,9 +10,10 @@ mod vial;
 use defmt::info;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
-use embassy_rp::flash::{Async, Flash};
+use embassy_rp::flash::Flash;
 use embassy_rp::gpio::{Input, Output};
 use embassy_rp::i2c::{self, InterruptHandler as I2cInterruptHandler};
+use embassy_rp::mode::Async;
 use embassy_rp::peripherals::{DMA_CH0, I2C1, USB};
 use embassy_rp::usb::{Driver, InterruptHandler};
 use embassy_rp::{bind_interrupts, dma};
@@ -57,8 +58,8 @@ async fn main(_spawner: Spawner) {
 
     // Use internal flash to emulate eeprom
     // Both blocking and async flash are support, use different API
-    // let flash = Flash::<_, Blocking, FLASH_SIZE>::new_blocking(p.FLASH);
-    let flash = Flash::<_, Async, FLASH_SIZE>::new(p.FLASH, p.DMA_CH0, Irqs);
+    // let flash = Flash::<Blocking, FLASH_SIZE>::new_blocking(p.FLASH);
+    let flash = Flash::<Async, FLASH_SIZE>::new(p.FLASH, p.DMA_CH0, Irqs);
 
     let keyboard_device_config = DeviceConfig {
         serial_number,
@@ -98,7 +99,7 @@ async fn main(_spawner: Spawner) {
     let host_service = HostService::new(&keymap, &rmk_config);
 
     // Initialize I2C1 on PIN_2 (SDA) and PIN_3 (SCL)
-    let i2c = i2c::I2c::new_async(p.I2C1, p.PIN_3, p.PIN_2, Irqs, i2c::Config::default());
+    let i2c = i2c::I2c::new(p.I2C1, p.PIN_3, p.PIN_2, Irqs, i2c::Config::default());
     let interface = display_interface_i2c::I2CInterface::new(i2c, 0x3C, 0x40);
     let display: GraphicsMode<_, _> = Builder::new(Sh1106_128_64 {})
         .with_rotation(DisplayRotation::Rotate0)

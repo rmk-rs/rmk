@@ -84,7 +84,7 @@ fn expand_i2c_init(chip_series: &ChipSeries, i2c: &I2cConfig) -> TokenStream {
     match chip_series {
         ChipSeries::Rp2040 => {
             quote! {
-                let display_i2c = ::embassy_rp::i2c::I2c::new_async(
+                let display_i2c = ::embassy_rp::i2c::I2c::new(
                     p.#instance, p.#scl, p.#sda, Irqs, ::embassy_rp::i2c::Config::default()
                 );
             }

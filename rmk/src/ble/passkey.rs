@@ -236,8 +236,8 @@ impl PasskeyEntryState {
     /// Convert the entered digits to a u32 passkey.
     pub fn to_passkey(&self) -> u32 {
         let mut result: u32 = 0;
-        for i in 0..self.count {
-            result = result * 10 + self.digits[i] as u32;
+        for digit in self.digits.iter().take(self.count) {
+            result = result * 10 + *digit as u32;
         }
         result
     }

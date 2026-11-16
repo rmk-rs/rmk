@@ -15,7 +15,19 @@ jobs:
       actions: read
       pull-requests: write
     steps:
+      - name: Find comment data
+        id: artifact
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.payload.workflow_run.id,
+            });
+            core.setOutput('present', artifacts.some(a => a.name === 'bloat-comment' && !a.expired));
       - name: Download comment data
+        if: steps.artifact.outputs.present == 'true'
         uses: actions/download-artifact@v7
         with:
           name: bloat-comment
@@ -23,6 +35,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Post PR comment
+        if: steps.artifact.outputs.present == 'true'
         uses: actions/github-script@v7
         with:
           script: |

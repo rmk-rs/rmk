@@ -99,7 +99,7 @@ These tune the [Rynk](../features/rynk) protocol and rarely need changing.
 ### Wireless Configuration
 
 - `ble_profiles_num`: The number of available Bluetooth profiles, default value is 3. This parameter defines how many Bluetooth paired devices the keyboard can store. This value must be between 0 and 255.
-- `split_central_sleep_timeout_seconds`: Sleep timeout for BLE split central in seconds, default value is 0 (disabled). When set to a non-zero value, the split central will enter sleep mode after this many seconds of inactivity to save power. Set to 0 to disable automatic sleep.
+- `split_central_sleep_timeout_seconds`: Idle sleep timeout for unibody and split central keyboards in seconds, independent of transport. A non-zero value enables sleep after this many seconds without key or pointing activity. The default `0` disables both automatic sleep and explicit sleep requests. Split peripherals follow the central's sleep state.
 - `dongle_pairing_window_secs`: Length of one dongle pairing window in seconds, default value is 30. Used only by builds with the `dongle` feature. A dongle without a bonded keyboard repeats the window until one pairs. A bonded dongle opens it exactly once, at power-on, and afterwards reconnects only its bonded keyboard.
 
 ### Auto Mouse Layer Configuration

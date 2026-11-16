@@ -40,8 +40,7 @@ async fn main(_spawner: Spawner) {
     // central forwards new firmware over the split link into the internal
     // DFU partition.
     let flash_mutex = FlashMutex::new(rmk::storage::async_flash_wrapper(Flash::<
-        _,
-        embassy_rp::flash::Blocking,
+        embassy_rp::mode::Blocking,
         { rmk::dfu::FLASH_SIZE },
     >::new_blocking(p.FLASH)));
     let (_, state_partition, dfu_partition) = partitions_from_linkerscript(&flash_mutex);

@@ -31,17 +31,9 @@ pub(crate) fn current_usb_state() -> UsbState {
     CONNECTION_STATUS.lock(|c| c.get().usb)
 }
 
-/// Current central sleep state for host polling. Sourced from the BLE sleep
-/// manager's `SLEEPING_STATE`; always `false` in builds without BLE.
+/// Current unibody/central sleep state for host polling and split synchronization.
 pub(crate) fn current_sleep_state() -> bool {
-    #[cfg(feature = "_ble")]
-    {
-        crate::ble::sleep::SLEEPING_STATE.load(core::sync::atomic::Ordering::Acquire)
-    }
-    #[cfg(not(feature = "_ble"))]
-    {
-        false
-    }
+    crate::sleep::SLEEPING_STATE.load(core::sync::atomic::Ordering::Acquire)
 }
 
 /// The BLE half of [`current_connection_status`], with the same subscribe-first rule.
@@ -155,6 +147,7 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     use embassy_futures::select::{Either, select};
+    use embassy_sync::channel::Channel;
     use embassy_time::{Duration, Timer};
 
     use super::{
@@ -163,7 +156,7 @@ mod tests {
     #[cfg(feature = "_ble")]
     use super::{set_ble_bonded, set_ble_profile, set_ble_state};
     use crate::event::{ConnectionStatusChangeEvent, EventSubscriber, SubscribableEvent};
-    use crate::hid::{KeyboardReport, Report};
+    use crate::hid::{KeyboardReport, MouseReport, Report};
     use crate::test_support::test_block_on as block_on;
 
     fn state_test_lock() -> &'static Mutex<()> {
@@ -188,16 +181,16 @@ mod tests {
         })
     }
 
-    fn assert_all_up_keyboard_report(report: Report) {
-        match report {
-            Report::KeyboardReport(r) => {
-                assert_eq!(r.modifier, 0);
-                assert_eq!(r.reserved, 0);
-                assert_eq!(r.leds, 0);
-                assert_eq!(r.keycodes, [0; 6]);
-            }
-            _ => panic!("expected keyboard all-up report"),
-        }
+    fn assert_all_released(ch: &Channel<crate::RawMutex, Report, { crate::REPORT_CHANNEL_SIZE }>) {
+        assert!(matches!(ch.try_receive(), Ok(Report::KeyboardReport(r))
+            if r.modifier == 0 && r.reserved == 0 && r.leds == 0 && r.keycodes == [0; 6]));
+        assert!(matches!(ch.try_receive(), Ok(Report::MouseReport(r))
+            if r.buttons == 0 && r.x == 0 && r.y == 0 && r.wheel == 0 && r.pan == 0));
+        assert!(matches!(ch.try_receive(), Ok(Report::MediaKeyboardReport(r)) if r.usage_id == 0));
+        assert!(matches!(ch.try_receive(), Ok(Report::SystemControlReport(r)) if r.usage_id == 0));
+        #[cfg(feature = "steno")]
+        assert!(matches!(ch.try_receive(), Ok(Report::StenoReport(r)) if r.keys == [0; 8]));
+        assert!(ch.try_receive().is_err());
     }
 
     #[test]
@@ -306,28 +299,20 @@ mod tests {
         set_usb_state(UsbState::Configured);
         assert_eq!(super::active_transport(), Some(ConnectionType::Usb));
 
-        // Drain anything left over from earlier tests, then queue a sentinel
-        // that would otherwise persist across a flip.
-        USB_REPORT_CHANNEL.clear();
-        USB_REPORT_CHANNEL
-            .try_send(pressed_keyboard_report())
-            .expect("channel should have capacity for sentinel");
-        assert!(USB_REPORT_CHANNEL.try_receive().is_ok());
-        USB_REPORT_CHANNEL
-            .try_send(pressed_keyboard_report())
-            .expect("channel should have capacity for sentinel");
+        for report in [
+            pressed_keyboard_report(),
+            Report::MouseReport(MouseReport {
+                buttons: 1,
+                ..Default::default()
+            }),
+            Report::MediaKeyboardReport(usbd_hid::descriptor::MediaKeyboardReport { usage_id: 0xE9 }),
+        ] {
+            USB_REPORT_CHANNEL.try_send(report).unwrap();
+        }
 
         set_usb_state(UsbState::Disabled);
         assert!(super::active_transport().is_none());
-        assert_all_up_keyboard_report(
-            USB_REPORT_CHANNEL
-                .try_receive()
-                .expect("USB_REPORT_CHANNEL should contain keyboard all-up report"),
-        );
-        assert!(
-            USB_REPORT_CHANNEL.try_receive().is_err(),
-            "USB_REPORT_CHANNEL should contain only the all-up report"
-        );
+        assert_all_released(&USB_REPORT_CHANNEL);
     }
 
     #[cfg(not(feature = "_no_usb"))]
@@ -355,15 +340,7 @@ mod tests {
             },
         ));
 
-        assert_all_up_keyboard_report(
-            USB_REPORT_CHANNEL
-                .try_receive()
-                .expect("USB_REPORT_CHANNEL should contain keyboard all-up report"),
-        );
-        assert!(
-            USB_REPORT_CHANNEL.try_receive().is_err(),
-            "USB_REPORT_CHANNEL should contain only the all-up report"
-        );
+        assert_all_released(&USB_REPORT_CHANNEL);
     }
 
     #[cfg(all(not(feature = "_no_usb"), feature = "_ble"))]
@@ -384,15 +361,7 @@ mod tests {
 
         set_usb_state(UsbState::Configured);
         assert_eq!(super::active_transport(), Some(ConnectionType::Usb));
-        assert_all_up_keyboard_report(
-            BLE_REPORT_CHANNEL
-                .try_receive()
-                .expect("BLE_REPORT_CHANNEL should contain keyboard all-up report"),
-        );
-        assert!(
-            BLE_REPORT_CHANNEL.try_receive().is_err(),
-            "BLE_REPORT_CHANNEL should contain only the all-up report"
-        );
+        assert_all_released(&BLE_REPORT_CHANNEL);
     }
 
     #[cfg(not(feature = "_no_usb"))]

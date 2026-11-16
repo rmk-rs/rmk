@@ -42,6 +42,7 @@ steps = [
 [[test]]
 name = "idle_status_reads_are_served"
 steps = [
+  { rynk = { cmd = "GetBatteryStatus", reply = "Unavailable" } },
   { rynk = { cmd = "GetWpm", reply = 0 } },
   { rynk = { cmd = "GetSleepState", reply = false } },
   { rynk = { cmd = "GetLedIndicator", reply = { num_lock = false, caps_lock = false, scroll_lock = false, compose = false, kana = false } } },
@@ -59,7 +60,6 @@ name = "ble_status_mirrors_the_connection_status"
 features = ["_ble"]
 steps = [
   { rynk = { cmd = "GetBleStatus", reply = { profile = 0, state = "Inactive", bonded = false } } },
-  { rynk = { cmd = "GetBatteryStatus", reply = "Unavailable" } },
 ]
 
 # Slot bounds come from `num_ble_profiles`; a slot past it is refused rather

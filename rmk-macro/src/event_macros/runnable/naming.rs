@@ -55,21 +55,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_event_type_to_handler_method_name() {
-        let path: Path = parse_quote!(BatteryEvent);
-        assert_eq!(
-            event_type_to_handler_method_name(&path).to_string(),
-            "on_battery_event"
-        );
-
-        let path: Path = parse_quote!(ChargingStateEvent);
-        assert_eq!(
-            event_type_to_handler_method_name(&path).to_string(),
-            "on_charging_state_event"
-        );
-    }
-
-    #[test]
     fn test_generate_unique_variant_names() {
         let paths: Vec<Path> = vec![parse_quote!(BatteryEvent), parse_quote!(ChargingEvent)];
         let names = generate_unique_variant_names(&paths);

@@ -365,27 +365,7 @@ struct StateBitsMacro {
 
 impl StateBitsMacro {
     fn is_empty(&self) -> bool {
-        !(self.modifiers_left_ctrl
-            || self.modifiers_left_shift
-            || self.modifiers_left_alt
-            || self.modifiers_left_gui
-            || self.modifiers_right_ctrl
-            || self.modifiers_right_shift
-            || self.modifiers_right_alt
-            || self.modifiers_right_gui
-            || self.leds_num_lock
-            || self.leds_caps_lock
-            || self.leds_scroll_lock
-            || self.leds_compose
-            || self.leds_kana
-            || self.mouse_button1
-            || self.mouse_button2
-            || self.mouse_button3
-            || self.mouse_button4
-            || self.mouse_button5
-            || self.mouse_button6
-            || self.mouse_button7
-            || self.mouse_button8)
+        self == &Self::default()
     }
 }
 // Allows to use `#modifiers` in the quote

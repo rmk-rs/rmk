@@ -109,7 +109,7 @@ The lock is per session and starts locked; `Lock` or the end of the session (unp
 | `0x0705` | `ClearBleProfile`     | `u8`                   | `()`                    | `_ble`  |                                                                                     |
 | `0x0801` | `GetCurrentLayer`     | `()`                   | `u8`                    |         |                                                                                     |
 | `0x0802` | `GetMatrixState`      | `()`                   | `MatrixState`           |         |                                                                                     |
-| `0x0803` | `GetBatteryStatus`    | `()`                   | `BatteryStatus`         | `_ble`  |                                                                                     |
+| `0x0803` | `GetBatteryStatus`    | `()`                   | `BatteryStatus`         |         |                                                                                     |
 | `0x0804` | `GetPeripheralStatus` | `u8`                   | `PeripheralStatus`      | `split` |                                                                                     |
 | `0x0805` | `GetWpm`              | `()`                   | `u16`                   |         | Latest WPM, sourced from the `WpmUpdate` topic snapshot.                            |
 | `0x0806` | `GetSleepState`       | `()`                   | `bool`                  |         | Latest sleep flag, sourced from the `SleepState` topic snapshot.                    |
@@ -126,4 +126,4 @@ Topics are best-effort pushes; the `Get*` endpoints above mirror their payloads 
 | `0x8003` | `ConnectionChange`    | `ConnectionStatus` |         |       |
 | `0x8004` | `SleepState`          | `bool`             |         |       |
 | `0x8005` | `LedIndicatorChange`  | `LedIndicator`     |         |       |
-| `0x8006` | `BatteryStatusChange` | `BatteryStatus`    | `_ble`  |       |
+| `0x8006` | `BatteryStatusChange` | `BatteryStatus`    |         |       |

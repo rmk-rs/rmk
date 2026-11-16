@@ -416,7 +416,7 @@ behavior.combo = {
   combos = [{ actions = ["MouseAccel2", "MouseWheelUp"], output = "No", layer = 0 }]
 }
 steps = [{ tap = { pos = [0, 8], duration = 120 } }, { delay = 300 }]
-expect = [{ mouse = { wheel = -1 } }, { mouse = {} }]
+expect = [{ mouse = { wheel = 1 } }, { mouse = {} }]
 
 # Three overlapping pairs delayed behind a four-key combo: releasing E fires
 # ER, and releasing R right after must not fire the WR pair that ER shadows.

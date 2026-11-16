@@ -535,7 +535,9 @@ Vial does not support fork configuration yet.
 
 When multiple pointing devices are present, set `device_id` on each entry to target the device. An entry without `device_id` acts as a fallback for any device not covered by a more specific entry — leave `device_id` unset on a single entry to use one shared configuration for every device.
 
-Example configuration:
+Choose one of the following configurations. Each has at most one fallback entry.
+
+Use a shared fallback with a device-specific override:
 
 ```toml
 # Default for every pointing device.
@@ -550,15 +552,23 @@ device_id = 1
 target_layer = 4
 timeout = "500ms"
 threshold = 5
+```
 
-# Immediate deactivation on non-mouse key press, but keep the layer while
-# modifiers (Ctrl/Shift/Alt/Gui) are held so users can Ctrl-click, etc.
+To deactivate on non-mouse key presses while allowing modifier keys for Ctrl-click and similar actions:
+
+```toml
 [[behavior.auto_mouse_layer]]
 target_layer = 5
 deactivate_on_key = true
 extra_mouse_keys = ["LCtrl", "LShift", "LAlt", "LGui"]
 
-# Extend the timeout on any non-deactivating key press so users can continue clicking without cursor movement.
+[event.action]
+subs = 1
+```
+
+To also extend the timeout on non-deactivating key presses, allowing repeated clicks without cursor movement:
+
+```toml
 [[behavior.auto_mouse_layer]]
 target_layer = 6
 deactivate_on_key = true

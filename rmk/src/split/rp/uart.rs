@@ -137,7 +137,7 @@ impl<'a, PIO: Instance + UartPioAccess> BufferedUart<'a, PIO> {
         rx_buf: &mut [u8],
         irq: impl Binding<PIO::Interrupt, UartInterruptHandler<PIO>>,
     ) -> Self {
-        Self::new(pio, pin_tx, Some(pin_rx), rx_buf, Some(tx_buf), true, irq)
+        Self::new(pio, pin_rx, Some(pin_tx), rx_buf, Some(tx_buf), true, irq)
     }
 
     fn new(
@@ -307,11 +307,11 @@ impl<'a, PIO: Instance + UartPioAccess> BufferedUart<'a, PIO> {
     }
 
     fn set_pin_tx(&mut self) {
-        self.sm_tx.set_pin_dirs(Direction::Out, &[&self.pin_rx]);
-        // OEOVER set to INVERT, Direction::Out inverted to Direction:In
-        self.sm_tx.set_pins(Level::Low, &[&self.pin_rx]);
-
         let pin_tx = self.pin_tx.as_mut().unwrap_or(&mut self.pin_rx);
+        self.sm_tx.set_pin_dirs(Direction::Out, &[pin_tx]);
+        // OEOVER set to INVERT, Direction::Out inverted to Direction:In
+        self.sm_tx.set_pins(Level::Low, &[pin_tx]);
+
         // unset our fake-pull-up trickery
         pin_tx.set_drive_strength(Drive::_12mA);
     }

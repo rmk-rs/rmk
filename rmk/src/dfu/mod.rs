@@ -282,10 +282,10 @@ pub(crate) static SPLIT_RESPONSE_CHANNEL: Channel<crate::RawMutex, SplitResponse
 /// passthrough slots). Returns `Ok` when a download may proceed; while the
 /// keys are locked it wakes the unlock state machine and rejects the download
 /// with `ErrVendor`.
-pub(crate) fn dfu_lock_check() -> Result<(), embassy_usb::class::dfu::consts::Status> {
+pub(crate) fn dfu_lock_check() -> Result<(), embassy_usb::class::dfu::device::consts::Status> {
     #[cfg(feature = "dfu_lock")]
     {
-        use embassy_usb::class::dfu::consts::Status;
+        use embassy_usb::class::dfu::device::consts::Status;
         if DFU_LOCKED.load(Ordering::Acquire) {
             publish_event(DfuCmdEvent(DfuCmd::UnlockRequest));
             info!("dfu_lock: DFU download rejected — keys not unlocked");

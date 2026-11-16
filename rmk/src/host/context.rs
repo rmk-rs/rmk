@@ -2,7 +2,6 @@
 
 use embassy_time::Duration;
 use rmk_types::action::{EncoderAction, KeyAction};
-#[cfg(feature = "_ble")]
 use rmk_types::battery::BatteryStatus;
 use rmk_types::combo::Combo as ComboConfig;
 use rmk_types::connection::{ConnectionStatus, ConnectionType};
@@ -121,7 +120,6 @@ impl<'a> KeyboardContext<'a> {
 
     /// Replace the combo at `idx` with `config` (or remove it if `config` is
     /// empty) and persist. No-op if `idx` is out of range.
-    /// Returns `false` when `idx` is out of range (no slot written).
     /// `Ok(false)` when `idx` is out of range (no slot written).
     pub async fn set_combo(&self, idx: u8, config: ComboConfig) -> Result<bool, ()> {
         let valid = self.keymap.with_combos_mut(|combos| {
@@ -278,7 +276,6 @@ impl<'a> KeyboardContext<'a> {
         crate::state::current_connection_status()
     }
 
-    #[cfg(feature = "_ble")]
     pub fn battery_status(&self) -> BatteryStatus {
         crate::input_device::battery::current_battery_status()
     }

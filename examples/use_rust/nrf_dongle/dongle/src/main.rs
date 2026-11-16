@@ -5,23 +5,25 @@ use defmt::{info, unwrap};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nrf::config::{ClockSpeed, Config as NrfConfig, HfclkSource, LfclkSource};
+use embassy_nrf::crypto::rng::Rng;
 use embassy_nrf::mode::Blocking;
 use embassy_nrf::peripherals::USBHS;
 use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
 use embassy_nrf::usb::{self, Driver};
-use embassy_nrf::{bind_interrupts, cracen, pac};
+use embassy_nrf::{bind_interrupts, pac};
 use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
 use panic_probe as _;
+use rmk::ble::SDC_PACKET_SIZE;
 use rmk::config::{DeviceConfig, StorageConfig};
 use rmk::dongle::{Dongle, DongleRouter};
+use rmk::run_all;
 use rmk::storage::new_storage_without_keymap;
 use rmk::usb::UsbTransport;
-use rmk::{DefaultPacketPool, PacketPool, run_all};
 use static_cell::StaticCell;
 
-type RandomSource = cracen::Cracen<'static, Blocking>;
+type RandomSource = Rng<'static, Blocking>;
 
 bind_interrupts!(struct Irqs {
     USBHS => usb::InterruptHandler<USBHS>;
@@ -42,8 +44,8 @@ const SDC_MEM_SIZE: usize = 5960;
 const FLASH_START_ADDR: usize = 0x120000;
 const FLASH_SECTORS: u8 = 6;
 
-const L2CAP_TXQ: u8 = 4;
-const L2CAP_RXQ: u8 = 4;
+const SDC_TX_BUFFERS: u8 = 4;
+const SDC_RX_BUFFERS: u8 = 4;
 
 /// Central-only controller: the dongle initiates and scans, never advertises.
 fn build_sdc<'d, const N: usize>(
@@ -61,10 +63,10 @@ fn build_sdc<'d, const N: usize>(
         // One keyboard, one link.
         .central_count(1)?
         .buffer_cfg(
-            DefaultPacketPool::MTU as u16,
-            DefaultPacketPool::MTU as u16,
-            L2CAP_TXQ,
-            L2CAP_RXQ,
+            SDC_PACKET_SIZE as u16,
+            SDC_PACKET_SIZE as u16,
+            SDC_TX_BUFFERS,
+            SDC_RX_BUFFERS,
         )?
         .build(p, rng, mpsl, mem)
 }
@@ -141,7 +143,7 @@ async fn main(spawner: Spawner) {
         p.PPIB10_CH3,
     );
 
-    let mut rng = cracen::Cracen::new_blocking(p.CRACEN);
+    let mut rng = Rng::new_blocking(p.CRYPTO_RNG);
     let mut sdc_mem = sdc::Mem::<SDC_MEM_SIZE>::new();
     let sdc = unwrap!(build_sdc(sdc_p, &mut rng, mpsl, &mut sdc_mem));
     info!("SDC built (central only)");

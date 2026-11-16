@@ -54,7 +54,6 @@ impl SimKeyboard {
             Cmd::ConnectionChange => frame(cmd, 0, &payload::<ConnectionStatus>(json, "topic")),
             Cmd::SleepState => frame(cmd, 0, &payload::<bool>(json, "topic")),
             Cmd::LedIndicatorChange => frame(cmd, 0, &payload::<LedIndicator>(json, "topic")),
-            #[cfg(feature = "_ble")]
             Cmd::BatteryStatusChange => frame(cmd, 0, &payload::<rmk_types::battery::BatteryStatus>(json, "topic")),
             cmd => panic!("{cmd:?} is not a topic"),
         };
@@ -72,7 +71,6 @@ impl SimKeyboard {
             Cmd::ConnectionChange => {
                 self.publish(publish_event_async(ConnectionStatusChangeEvent(payload(json, "topic"))))
             }
-            #[cfg(feature = "_ble")]
             Cmd::BatteryStatusChange => self.publish(publish_event_async(rmk::event::BatteryStatusEvent(payload(
                 json, "topic",
             )))),

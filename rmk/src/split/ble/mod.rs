@@ -44,12 +44,6 @@ impl TryFrom<&SplitMessage> for GattSplitMessage {
 
         let len = encoded.len();
 
-        // Check if slice starts at the beginning of buffer
-        if encoded.as_ptr() != buf.as_ptr() {
-            error!("Postcard serialize split message did not use the buffer correctly!");
-            return Err(SplitDriverError::SerializeError);
-        }
-
         Ok(Self { buf, len })
     }
 }

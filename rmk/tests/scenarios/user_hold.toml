@@ -17,7 +17,7 @@ features = ["_ble"]
 [[test]]
 name = "held_user_key_does_not_stall_mouse_repeats"
 steps = [
-  { press = [0, 8] },   # Wheel down first: initial delta, repeats due at +100/+180ms
+  { press = [0, 8] },   # Wheel up first: initial delta, repeats due at +100/+180ms
   { delay = 20 },
   { press = [0, 13] },  # Hold User0: arms the 5s bond-clear deadline. No events
                         # arrive while it's down, so only repeats fire meanwhile
@@ -26,9 +26,9 @@ steps = [
   { release = [0, 8] },
 ]
 expect = [
-  { mouse = { wheel = -1 } },
-  { mouse = { wheel = -1 } },  # repeat while the user key is held
-  { mouse = { wheel = -1 } },  # repeat
+  { mouse = { wheel = 1 } },
+  { mouse = { wheel = 1 } },  # repeat while the user key is held
+  { mouse = { wheel = 1 } },  # repeat
   { mouse = {} },
 ]
 

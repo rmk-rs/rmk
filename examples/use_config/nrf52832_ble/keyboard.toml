@@ -15,6 +15,9 @@ col_pins = ["P0_11", "P0_27", "P0_07"]
 # Default diode direction is col2row; set `row2col = true` if needed.
 # row2col = true
 
+[host]
+unlock_keys = [[0, 0], [0, 1]]
+
 [layout]
 rows = 4
 cols = 3

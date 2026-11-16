@@ -18,6 +18,22 @@ _Sessile_ is an exploration of "minimal" finger travel. You can also read its ci
 
 ![sessile](../../images/sessile.png)
 
+## [moonlander-rmk-1](https://github.com/MrFixThis/moonlander-rmk-1)
+
+RMK firmware for the ZSA Moonlander MK I.
+
+![zsa-moonlander](../../images/zsa-moonlander.jpg)
+
+## [rmk-zsa-planck-ez](https://github.com/atvari-eu/rmk-zsa-planck-ez)
+
+RMK firmware for the ZSA Planck EZ 40% ortholinear keyboard, with Vial keymap editing and support for the Glow underglow variant.
+
+![zsa-planck-ez](../../images/zsa-planck-ez.webp)
+
+## [rmk-zsa-voyager](https://github.com/jpds/rmk-zsa-voyager)
+
+![zsa-voyager](../../images/zsa-voyager.webp)
+
 ## [Urchin](https://github.com/TimoBbz/urchin-rmk-firmware)
 
 A firmware for the [Urchin Keyboard](https://github.com/duckyb/urchin), to use with the layout [Ergo-L](https://ergol.org/).
@@ -30,15 +46,17 @@ A modular split 66-key keyboard
 
 <img src="https://raw.githubusercontent.com/zongxin1993/zx66-keybord/refs/heads/master/Images/zx66-keybord_03.jpg">
 
-## [rmk-zsa-voyager](https://github.com/jpds/rmk-zsa-voyager)
-
-![zsa-voyager](../../images/zsa-voyager.webp)
-
 ## [Lunakbd](https://github.com/gbPagano/lunakbd)
 
 A split wireless keyboard designed from scratch: schematic and PCB in KiCad, case in FreeCAD, and firmware built on RMK running on nice!nano (nRF52840) controllers. The two halves connect over BLE to a central USB dongle.
 
 ![Lunakbd](https://raw.githubusercontent.com/gbPagano/lunakbd/main/photos/up-down-4-web.jpg)
+
+## [pando-rmk](https://github.com/jyap808/pando-rmk)
+
+RMK firmware for the [Pando](https://github.com/jyap808/pando) split keyboard. An STM32G0B1 scans the left half directly and the right half through a PCA9555 I2C expander, and the left half works standalone. Includes Vial support.
+
+![pando-rmk](../../images/pando.jpg)
 
 ## Show your keyboard!
 

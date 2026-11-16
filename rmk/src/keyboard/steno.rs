@@ -14,7 +14,7 @@ use rmk_types::steno::StenoKey;
 
 use crate::hid::{Report, StenoReport};
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct StenoChord {
     /// Live bitmap of currently-held steno keys. Stored such that
     /// `state.to_be_bytes()` already has the wire-format bit order:
@@ -27,22 +27,18 @@ impl StenoChord {
         Self { state: 0 }
     }
 
-    /// Update live state for a steno key event. Returns a report reflecting
-    /// the new state of all held keys (sent on every change).
-    pub(crate) fn on_event(&mut self, key: StenoKey, pressed: bool) -> Option<Report> {
-        let idx = key.chart_index();
-        if idx >= 64 {
-            return None;
-        }
-        let mask = 1u64 << (63 - idx);
+    /// Update live state for a steno key event. Plover accumulates the bitmap
+    /// itself, so every press and release produces a report.
+    pub(crate) fn on_event(&mut self, key: StenoKey, pressed: bool) -> Report {
+        let mask = 1u64 << (63 - key.chart_index());
         if pressed {
             self.state |= mask;
         } else {
             self.state &= !mask;
         }
-        Some(Report::StenoReport(StenoReport {
+        Report::StenoReport(StenoReport {
             keys: self.state.to_be_bytes(),
-        }))
+        })
     }
 }
 
@@ -50,14 +46,14 @@ impl StenoChord {
 mod tests {
     use super::*;
 
-    fn report_bytes(report: Option<Report>) -> [u8; 8] {
-        match report.expect("expected a report") {
+    fn report_bytes(report: Report) -> [u8; 8] {
+        match report {
             Report::StenoReport(r) => r.keys,
             _ => panic!("expected StenoReport"),
         }
     }
 
-    fn bitmap(report: Option<Report>) -> u64 {
+    fn bitmap(report: Report) -> u64 {
         u64::from_be_bytes(report_bytes(report))
     }
 
@@ -89,15 +85,6 @@ mod tests {
     }
 
     #[test]
-    fn every_event_produces_a_report() {
-        let mut s = StenoChord::new();
-        assert!(s.on_event(StenoKey::S1, true).is_some());
-        assert!(s.on_event(StenoKey::T, true).is_some());
-        assert!(s.on_event(StenoKey::T, false).is_some());
-        assert!(s.on_event(StenoKey::S1, false).is_some());
-    }
-
-    #[test]
     fn s1_is_msb_of_first_byte() {
         let mut s = StenoChord::new();
         let bytes = report_bytes(s.on_event(StenoKey::S1, true));
@@ -114,12 +101,6 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_index_returns_none() {
-        let mut s = StenoChord::new();
-        assert!(s.on_event(StenoKey(64), true).is_none());
-    }
-
-    #[test]
     fn repeated_chord_produces_zero_between() {
         let mut s = StenoChord::new();
         for _ in 0..3 {
@@ -131,8 +112,8 @@ mod tests {
         }
     }
 
-    /// Press all keys, release all keys, return the final all-up bitmap
-    /// (should be zero) and collect the sequence of live-state bitmaps.
+    /// Press every key in turn, then release them all; returns the live-state
+    /// bitmap with every key held.
     fn stroke(s: &mut StenoChord, keys: &[StenoKey]) -> u64 {
         let mut peak = 0u64;
         for &k in keys {

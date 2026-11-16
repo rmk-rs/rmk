@@ -42,7 +42,7 @@ impl<'a> KeyLabelRenderer<'a> {
 }
 
 impl<'a> DisplayRenderer<Rgb565> for KeyLabelRenderer<'a> {
-    fn render<D: DrawTarget<Color = Rgb565>>(&mut self, _ctx: &RenderContext, display: &mut D) {
+    async fn render<D: DrawTarget<Color = Rgb565>>(&mut self, _ctx: &RenderContext, display: &mut D) {
         let layer = self.keymap.active_layer();
         let action = self.keymap.action_at_pos(layer as usize, self.row, self.col);
         let label = action_label(action);
