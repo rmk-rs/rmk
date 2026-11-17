@@ -177,6 +177,7 @@ impl<const PROFILES: usize> ProfileManager<PROFILES> {
     }
 
     /// Whether `identity` is the host of any profile's live bond.
+    #[cfg(not(feature = "ext_adv"))]
     pub(crate) fn is_bonded(&self, identity: &Identity) -> bool {
         (0..PROFILES as u8).any(|profile| {
             self.bond_info(profile)

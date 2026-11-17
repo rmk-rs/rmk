@@ -658,6 +658,7 @@ async fn run_ble_keyboard<
             }
             // Without `ext_adv` every profile shares one address, so a host bonded to another
             // profile reconnects here on its own.
+            #[cfg(not(feature = "ext_adv"))]
             if !own_host && profile_manager.is_bonded(&peer) {
                 warn!("[ble] peer is bonded to another profile");
                 disconnect(&gatt_conn).await;
@@ -1705,6 +1706,7 @@ mod tests {
         });
     }
 
+    #[cfg(not(feature = "ext_adv"))]
     #[test]
     fn a_host_bonded_to_another_profile_is_refused() {
         use crate::ble::profile::BleProfileAction;
@@ -1722,6 +1724,30 @@ mod tests {
                 .expect("profile 1 must turn host A away and keep advertising for host B");
             assert_eq!(hci.sent::<bt_hci::cmd::link_control::Disconnect>().len(), 1);
             assert!(crate::state::current_connection_status().ble[1].bonded);
+        });
+    }
+
+    #[cfg(feature = "ext_adv")]
+    #[test]
+    fn a_host_can_connect_to_another_profile_with_a_distinct_address() {
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
+            advertising(&hci, 0).await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await;
+            advertising(&hci, 1).await;
+            hci.connect(1, HOST_A);
+            embassy_time::Timer::after_millis(10).await;
+            assert!(hci.sent::<bt_hci::cmd::link_control::Disconnect>().is_empty());
+            assert!(crate::state::current_connection_status().ble[0].bonded);
+
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Disconnect(1)).await;
+            embassy_time::with_timeout(Duration::from_millis(100), advertising(&hci, 2))
+                .await
+                .expect("the accepted link must belong to profile 1");
+            assert_eq!(hci.sent::<bt_hci::cmd::link_control::Disconnect>().len(), 1);
         });
     }
 
