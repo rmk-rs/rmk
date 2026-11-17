@@ -208,6 +208,12 @@ subrating = ["split"]
 ## Internal feature that indicates that subrating is not supported, this will be auto-activated for some chips
 _no_subrating = []
 
+## Enable Shorter Connection Intervals (Bluetooth 6.2) on the split and dongle links, which
+## run at 1.25ms instead of 7.5ms. The host link keeps its own parameters.
+shorter_conn_interval = ["trouble-host?/shorter-connection-intervals"]
+## Internal feature that indicates that shorter connection intervals are not supported, this will be auto-activated for some chips
+_no_shorter_conn_interval = []
+
 #! ### nRF hardware feature flags
 #!
 # Select the matching chip in the firmware's embassy-nrf dependency.
@@ -275,13 +281,13 @@ esp32h2_ble = ["esp32h2", "_esp_ble"]
 esp32s3_ble = ["esp32s3", "_esp_ble"]
 ## Enable feature if you want to use ESP32-S31 with BLE and high-speed USB.
 esp32s31_ble = ["esp32s31", "_esp_ble"]
-_esp_ble = ["_esp", "_ble", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
+_esp_ble = ["_esp", "_ble", "_no_shorter_conn_interval", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
 
 ## Enable feature if you want to use RP2040W with BLE.
-pico_w_ble = ["_ble", "_no_subrating", "dep:embassy-rp", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
+pico_w_ble = ["_ble", "_no_subrating", "_no_shorter_conn_interval", "dep:embassy-rp", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
 
 ## Enable feature if you want to use SF32LB52x with BLE.
-sf32lb52x_ble = ["_ble", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
+sf32lb52x_ble = ["_ble", "_no_shorter_conn_interval", "embassy-crypto-rustcrypto/embassy-crypto-p256-ecdh"]
 
 ## Enable passkey entry support for BLE pairing
 passkey_entry = ["_ble", "rmk-types/passkey_entry"]

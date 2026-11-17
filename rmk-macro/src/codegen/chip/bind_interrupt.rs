@@ -288,8 +288,17 @@ pub(crate) fn bind_interrupt_default(
                     } else {
                         quote! { .support_central() }
                     };
-                    let support_subrating = if is_feature_enabled(&get_rmk_features(), "subrating")
-                    {
+                    let features = get_rmk_features();
+                    let support_rate = if is_feature_enabled(&features, "shorter_conn_interval") {
+                        quote! {
+                            .support_extended_feature_set_central()
+                            .support_extended_feature_set_peripheral()
+                            .support_connection_subrating_central()
+                            .support_connection_subrating_peripheral()
+                            .support_shorter_connection_intervals_central()
+                            .support_shorter_connection_intervals_peripheral()
+                        }
+                    } else if is_feature_enabled(&features, "subrating") {
                         quote! { .support_connection_subrating_central() }
                     } else {
                         quote! {}
@@ -303,7 +312,7 @@ pub(crate) fn bind_interrupt_default(
                         .support_dle_central()
                         .support_phy_update_central()
                         .support_phy_update_peripheral()
-                        #support_subrating
+                        #support_rate
                         .support_le_2m_phy()
                         #tx_power
                         .central_count(#num_peri)?
@@ -312,19 +321,32 @@ pub(crate) fn bind_interrupt_default(
                         .build(p, rng, mpsl, mem)
                     }
                 }
-                BoardConfig::UniBody(_) => quote! {
-                    ::nrf_sdc::Builder::new()?
-                    #support_adv
-                    .support_peripheral()
-                    .support_dle_peripheral()
-                    .support_phy_update_peripheral()
-                    .support_le_2m_phy()
-                    #tx_power
-                    #central_count
-                    .peripheral_count(::rmk::ble::NUM_HOST_LINKS as u8)?
-                    .buffer_cfg(SDC_PACKET_SIZE as u16, SDC_PACKET_SIZE as u16, SDC_TX_BUFFERS, SDC_RX_BUFFERS)?
-                    .build(p, rng, mpsl, mem)
-                },
+                BoardConfig::UniBody(_) => {
+                    let support_rate =
+                        if is_feature_enabled(&get_rmk_features(), "shorter_conn_interval") {
+                            quote! {
+                                .support_extended_feature_set_peripheral()
+                                .support_connection_subrating_peripheral()
+                                .support_shorter_connection_intervals_peripheral()
+                            }
+                        } else {
+                            quote! {}
+                        };
+                    quote! {
+                        ::nrf_sdc::Builder::new()?
+                        #support_adv
+                        .support_peripheral()
+                        .support_dle_peripheral()
+                        .support_phy_update_peripheral()
+                        #support_rate
+                        .support_le_2m_phy()
+                        #tx_power
+                        #central_count
+                        .peripheral_count(::rmk::ble::NUM_HOST_LINKS as u8)?
+                        .buffer_cfg(SDC_PACKET_SIZE as u16, SDC_PACKET_SIZE as u16, SDC_TX_BUFFERS, SDC_RX_BUFFERS)?
+                        .build(p, rng, mpsl, mem)
+                    }
+                }
             };
 
             quote! {
