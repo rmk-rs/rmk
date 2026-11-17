@@ -22,7 +22,7 @@ embassy-executor = { version = "0.10", features = [
     "executor-thread",
 ] }
 embassy-stm32 = { version = "0.6", features = [
-    "stm32f103c8",
+    "stm32f103cb",
     "memory-x",
     "time-driver-any",
 ] }
