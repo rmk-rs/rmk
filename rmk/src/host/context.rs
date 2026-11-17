@@ -194,6 +194,17 @@ impl<'a> KeyboardContext<'a> {
         self.keymap.morse_prior_idle_time()
     }
 
+    pub fn auto_shift_config(&self) -> crate::config::AutoShiftConfig {
+        self.keymap.auto_shift_config()
+    }
+
+    pub async fn set_auto_shift(&self, enabled: bool, groups: u8) -> Result<(), ()> {
+        self.keymap.set_auto_shift(enabled, groups);
+        #[cfg(feature = "storage")]
+        store(StorageItem::BehaviorConfig(self.keymap.behavior_snapshot())).await?;
+        Ok(())
+    }
+
     pub async fn set_combo_timeout(&self, ms: u16) -> Result<(), ()> {
         self.keymap.set_combo_timeout(Duration::from_millis(ms as u64));
         #[cfg(feature = "storage")]
@@ -247,6 +258,8 @@ impl<'a> KeyboardContext<'a> {
         self.keymap.set_morse_default_profile(cfg.morse_default_profile);
         self.keymap
             .set_morse_prior_idle_time(Duration::from_millis(cfg.morse_prior_idle_time_ms as u64));
+        self.keymap
+            .set_auto_shift(cfg.auto_shift_enabled, cfg.auto_shift_groups);
         #[cfg(feature = "storage")]
         store(StorageItem::BehaviorConfig(self.keymap.behavior_snapshot())).await?;
         Ok(())

@@ -614,6 +614,7 @@ macro_rules! user {
 /// - ComboOff: Disable combos
 /// - ComboToggle: Toggle combos
 /// - CapsWordToggle: Toggle caps word mode
+/// - AutoShiftOn / AutoShiftOff / AutoShiftToggle: Switch auto shift
 ///
 /// # Example (internal use only)
 /// ```ignore

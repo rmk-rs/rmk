@@ -98,6 +98,8 @@ impl From<u8> for VialCommand {
 pub enum SettingKey {
     None,
     ComboTimeout = 0x02,
+    /// QMK `auto_shift` flags: bit 0 enable, bits 2/3/4 exclude special/numeric/alpha
+    AutoShift = 0x03,
     OneShotTimeout = 0x06,
     MorseTimeout = 0x07,
     TapInterval = 0x12,
