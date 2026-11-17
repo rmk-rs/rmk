@@ -246,19 +246,10 @@ impl<const HAS_KEYMAP: bool> RynkService<'_, HAS_KEYMAP> {
 
             // A half-received frame must be finished first.
             // If the buffer is empty, race a read against the next topic.
-            if df.has_pending() {
-                match rx.read(df.tail(&mut buf)).await {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => df.commit(n),
-                }
-            } else {
-                let next_topic = async {
-                    match &mut topics {
-                        Some(topics) => topics.next_event().await,
-                        None => core::future::pending().await,
-                    }
-                };
-                match select(rx.read(df.tail(&mut buf)), next_topic).await {
+            if !df.has_pending()
+                && let Some(topics) = topics.as_mut()
+            {
+                match select(rx.read(df.tail(&mut buf)), topics.next_event()).await {
                     Either::First(Ok(0)) | Either::First(Err(_)) => return,
                     Either::First(Ok(n)) => df.commit(n),
                     Either::Second(event) => {
@@ -276,6 +267,11 @@ impl<const HAS_KEYMAP: bool> RynkService<'_, HAS_KEYMAP> {
                             Err(e) => warn!("Rynk topic encode failed: {:?}", e),
                         }
                     }
+                }
+            } else {
+                match rx.read(df.tail(&mut buf)).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => df.commit(n),
                 }
             }
         }
