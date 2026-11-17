@@ -21,7 +21,7 @@ unlock_keys = [[0, 1], [0, 2]]
 write_requires_unlock = true
 
 [[test]]
-name = "a_new_session_starts_locked"
+name = "a_new_boot_starts_locked"
 steps = [
   { rynk = { cmd = "GetLockStatus", reply = { locked = true, unlocking = false, remaining_keys = 2, key_positions = [[0, 1], [0, 2]] } } },
 ]
@@ -58,7 +58,7 @@ steps = [
 ]
 
 [[test]]
-name = "unlock_authorizes_one_protected_command"
+name = "unlock_allows_matrix_polling_until_explicit_lock"
 steps = [
   { rynk = { cmd = "GetMatrixState", error = "Locked" } },
   { press = [0, 1] },
@@ -67,6 +67,8 @@ steps = [
   { release = [0, 1] },
   { release = [0, 2] },
   { rynk = { cmd = "GetMatrixState", reply = { pressed_bitmap = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] } } },
+  { rynk = { cmd = "GetMatrixState", reply = { pressed_bitmap = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] } } },
+  { rynk = { cmd = "Lock" } },
   { rynk = { cmd = "GetMatrixState", error = "Locked" } },
 ]
 
@@ -83,10 +85,11 @@ steps = [
   { release = [0, 1] },
   { release = [0, 2] },
   { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 0 }, action = { Single = { Key = { Hid = "B" } } } } } },
-  { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 0 }, action = { Single = { Key = { Hid = "C" } } } }, error = "Locked" } },
+  { tap = { pos = [0, 0], duration = 10 } },
+  { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 0 }, action = { Single = { Key = { Hid = "C" } } } } } },
   { tap = { pos = [0, 0], duration = 10 } },
 ]
-expect = [["A"], [], ["B"], []]
+expect = [["A"], [], ["B"], [], ["C"], []]
 
 # An armed attempt survives only 500 ms without a refreshing poll. While it is
 # armed the status reports live progress; once it lapses the count reverts to the

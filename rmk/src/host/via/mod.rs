@@ -1,3 +1,6 @@
+#[cfg(feature = "host_lock")]
+use core::cell::Cell;
+
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use embassy_time::Instant;
 use embedded_io_async::{Read, Write};
@@ -19,6 +22,8 @@ pub struct VialService<'a, const HAS_KEYMAP: bool = true> {
     ctx: Option<KeyboardContext<'a>>,
     #[cfg(feature = "host_lock")]
     keys: &'a dyn crate::host::lock::UnlockKeyState,
+    #[cfg(feature = "host_lock")]
+    unlocked: Cell<bool>,
     vial_config: VialConfig<'static>,
 }
 
@@ -28,6 +33,8 @@ impl<'a> VialService<'a> {
             ctx: Some(KeyboardContext::new(keymap)),
             #[cfg(feature = "host_lock")]
             keys: keymap,
+            #[cfg(feature = "host_lock")]
+            unlocked: Cell::new(false),
             vial_config: config.vial_config,
         }
     }
@@ -39,6 +46,7 @@ impl<'a> VialService<'a, false> {
         Self {
             ctx: None,
             keys,
+            unlocked: Cell::new(false),
             vial_config: config.vial_config,
         }
     }
@@ -58,7 +66,7 @@ impl<const HAS_KEYMAP: bool> VialService<'_, HAS_KEYMAP> {
             }
             ViaCommand::BootloaderJump => {
                 #[cfg(feature = "host_lock")]
-                if !locker.take_unlock() {
+                if !locker.is_unlocked() {
                     report.input_data[0] = ViaCommand::Unhandled as u8;
                     return;
                 }
@@ -107,7 +115,7 @@ impl<const HAS_KEYMAP: bool> VialService<'_, HAS_KEYMAP> {
                             error!("It is not secure to use matrix tester without vial lock");
                         }
                         #[cfg(feature = "host_lock")]
-                        ViaKeyboardInfo::SwitchMatrixState if locker.take_unlock() => {
+                        ViaKeyboardInfo::SwitchMatrixState if locker.is_unlocked() => {
                             let bitmap = &mut report.input_data[2..];
                             ctx.read_matrix_state(bitmap);
                             // Vial wants each row's bytes big-endian (QMK matrix_row_t order).
@@ -291,6 +299,7 @@ impl<const HAS_KEYMAP: bool> VialService<'_, HAS_KEYMAP> {
     pub async fn run<R: Read, T: Write>(&self, rx: &mut R, tx: &mut T) {
         #[cfg(feature = "host_lock")]
         let locker = crate::host::lock::HostLock::new(
+            &self.unlocked,
             self.vial_config.unlock_keys,
             self.keys,
             self.vial_config.insecure,
@@ -365,10 +374,37 @@ mod tests {
 
     #[cfg(feature = "host_lock")]
     #[test]
-    fn protected_commands_consume_authorization() {
+    fn unlock_survives_sessions_until_explicit_lock() {
         use core::sync::atomic::Ordering;
 
         use crate::event::KeyboardEvent;
+
+        fn exchange<const HAS_KEYMAP: bool, const N: usize>(
+            service: &VialService<'_, HAS_KEYMAP>,
+            commands: [[u8; 2]; N],
+        ) -> [[u8; 32]; N] {
+            let input = commands.map(|cmd| {
+                let mut packet = [0u8; 32];
+                packet[..2].copy_from_slice(&cmd);
+                packet
+            });
+            let mut replies = [[0u8; 32]; N];
+            block_on(service.run(&mut input.as_flattened(), &mut replies.as_flattened_mut()));
+            replies
+        }
+
+        fn check<const HAS_KEYMAP: bool>(service: &VialService<'_, HAS_KEYMAP>) {
+            let before = crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed);
+            let replies = exchange(service, [[0x0b, 0], [0xfe, 7], [0x0b, 0], [0x0b, 0]]);
+            assert_eq!(replies[0][0], 0xff, "a new MCU starts locked");
+            assert_eq!(replies[2][0], 0x0b);
+            assert_eq!(replies[3][0], 0x0b, "protected commands retain authorization");
+            let replies = exchange(service, [[0x0b, 0], [0xfe, 5]]);
+            assert_eq!(replies[0][0], 0x0b, "reconnecting retains authorization");
+            assert_eq!(replies[1][0], 1);
+            assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), before + 3);
+        }
+
         let mut data = KeymapData::new([[[KeyAction::No; 4]; 3]]);
         let mut behavior = BehaviorConfig::default();
         let positional = PositionalConfig::<3, 4>::default();
@@ -377,43 +413,31 @@ mod tests {
         config.vial_config.unlock_keys = &[(2, 3)];
         let service = VialService::new(&keymap, &config);
         keymap.update_matrix_state(&KeyboardEvent::key(2, 3, true));
-        let commands = [
-            [0x0b, 0],
-            [0xfe, 7],
-            [0xfe, 5],
-            [0x02, 0x03],
-            [0x0b, 0],
-            [0xfe, 7],
-            [0x0b, 0],
-            [0x0b, 0],
-            [0xfe, 7],
-            [0xfe, 5],
-        ];
-        let mut input = [0u8; 32 * 10];
-        for (packet, cmd) in input.chunks_mut(32).zip(commands) {
-            packet[..2].copy_from_slice(&cmd);
-        }
-        let mut replies = [0u8; 32 * 10];
-        block_on(service.run(&mut input.as_slice(), &mut replies.as_mut_slice()));
-        assert_eq!(replies[0], 0xff);
-        assert_eq!(replies[2 * 32], 1);
-        assert_eq!(replies[3 * 32 + 4], 8, "matrix read succeeds once");
-        assert_eq!(replies[4 * 32], 0xff, "matrix read consumed the first grant");
-        assert_eq!(replies[7 * 32], 0xff, "jump consumed the second grant");
-        assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 1);
-        assert_eq!(replies[9 * 32], 1, "the session ends with an unused grant");
-        block_on(service.run(&mut &input[..32], &mut replies.as_mut_slice()));
-        assert_eq!(replies[0], 0xff, "a new session must unlock again");
+        check(&service);
+        let replies = exchange(&service, [[0x02, 0x03], [0x02, 0x03]]);
+        assert_eq!(replies[0][4], 8);
+        assert_eq!(replies[1][4], 8, "matrix polling retains authorization");
+        let rebooted = VialService::new(&keymap, &config);
+        assert_eq!(exchange(&rebooted, [[0x0b, 0]])[0][0], 0xff);
+
+        #[cfg(feature = "split")]
+        let keys = crate::host::peripheral::tests::scanned_matrix();
+        #[cfg(feature = "split")]
+        let peripheral = VialService::<false>::new_peripheral(&keys, &config);
+        #[cfg(feature = "split")]
+        check(&peripheral);
+
+        let replies = exchange(&service, [[0xfe, 8], [0x0b, 0], [0xfe, 5]]);
+        assert_eq!(replies[1][0], 0xff, "explicit Lock relocks the MCU");
+        assert_eq!(replies[2][0], 0);
         #[cfg(feature = "split")]
         {
-            let keys = crate::host::peripheral::tests::scanned_matrix();
-            let peripheral = VialService::<false>::new_peripheral(&keys, &config);
-            block_on(peripheral.run(&mut &input[5 * 32..], &mut replies.as_mut_slice()));
-            assert_eq!(replies[2 * 32], 0xff, "peripheral jump consumes authorization");
-            assert_eq!(replies[4 * 32], 1, "peripheral has an unused grant");
-            block_on(peripheral.run(&mut &input[..32], &mut replies.as_mut_slice()));
-            assert_eq!(replies[0], 0xff, "peripheral reconnect must unlock again");
-            assert_eq!(crate::boot::BOOTLOADER_JUMPS.load(Ordering::Relaxed), 2);
+            assert_eq!(
+                exchange(&peripheral, [[0x0b, 0]])[0][0],
+                0x0b,
+                "locking the central does not relock the peripheral"
+            );
+            assert_eq!(exchange(&peripheral, [[0xfe, 8], [0x0b, 0]])[1][0], 0xff);
         }
     }
 

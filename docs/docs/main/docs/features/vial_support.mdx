@@ -90,10 +90,10 @@ unlock_keys = [[0, 0], [0, 1]]  # Keys at (row=0,col=0) and (row=0,col=1)
 
 With the default `host_lock` feature, `unlock_keys` is the only way to unlock: if it's empty, RMK refuses every unlock request, and locked features such as the Matrix Tester stay unavailable unless you set `insecure = true` (see below). At most 4 positions are allowed.
 
-Each unlock permits one bootloader jump or matrix-state read. Host tools must
-repeat the existing `UnlockStart` / `UnlockPoll` sequence for each protected
-request, including each Matrix Tester poll. Identity and lock-status queries do
-not consume authorization.
+After the `UnlockStart` / `UnlockPoll` sequence, the MCU stays unlocked until it
+reboots or the host sends `Lock`. Matrix Tester polling, other protected requests
+and USB/BLE reconnects retain authorization. On a split keyboard, the central
+and each peripheral unlock independently.
 
 ::: tip
 The unlock keys use the physical matrix position (row, column), not the keycode. Make sure to use keys that are easy to press simultaneously but not commonly pressed together accidentally.

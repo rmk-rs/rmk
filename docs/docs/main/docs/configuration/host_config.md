@@ -107,8 +107,9 @@ bootloader feature such as `adafruit_bl` or `rp2040`. It cannot be combined with
 `dfu_nrf` or `dfu_rp`. Omit the table to keep the peripheral's existing behavior.
 
 Unlock the connected side with the existing protocol commands, then send
-`BootloaderJump` on that connection. Each unlock permits one protected request;
-identity and lock-status queries do not consume it. Keymap editing stays on the
-central. Host tools need to support this unlock sequence.
+`BootloaderJump` on that connection. Each side stays unlocked until its MCU
+reboots or the host sends `Lock`. Protected requests and USB/BLE reconnects
+retain authorization; the central and peripheral unlock independently. Keymap
+editing stays on the central. Host tools need to support this unlock sequence.
 
 See `examples/use_config/nrf52840_ble_split` for a complete example.
