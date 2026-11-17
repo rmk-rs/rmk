@@ -4,7 +4,7 @@ use embassy_time::Duration;
 use rmk_types::action::{EncoderAction, KeyAction, TouchAction, TouchGesture};
 use rmk_types::fork::Fork;
 use rmk_types::morse::{Morse, MorseProfile};
-#[cfg(all(feature = "storage", feature = "host"))]
+#[cfg(feature = "storage")]
 use {
     crate::{boot::reboot_keyboard, storage::Storage},
     embedded_storage_async::nor_flash::NorFlash,
@@ -479,7 +479,7 @@ impl<'a> KeyMap<'a> {
         Self::build(data, behavior, positional_config)
     }
 
-    #[cfg(all(feature = "storage", feature = "host"))]
+    #[cfg(feature = "storage")]
     pub async fn new_from_storage<
         F: NorFlash,
         const ROW: usize,

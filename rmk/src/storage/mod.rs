@@ -1,3 +1,5 @@
+mod layout;
+
 use core::fmt::Debug;
 use core::future::{Future, poll_fn};
 
@@ -378,7 +380,6 @@ pub struct Storage<F: AsyncNorFlash> {
         Cache<CalculatedPageStates, ArrayPagePointers<32>, ArrayKeyPointers<StorageKey, 32>, StorageKey>,
     >,
     pub(crate) buffer: [u8; BUFFER_SIZE],
-    #[cfg(feature = "host")]
     pub(crate) clear_layout: bool,
 }
 
@@ -445,7 +446,6 @@ impl<F: AsyncNorFlash> Storage<F> {
         let mut storage = Self {
             flash: MapStorage::new(flash, MapConfig::new(storage_range.clone()), cache()),
             buffer: [0; BUFFER_SIZE],
-            #[cfg(feature = "host")]
             clear_layout: false,
         };
 
@@ -463,18 +463,14 @@ impl<F: AsyncNorFlash> Storage<F> {
             // The erase already handed the compiled-in layout the win: reads miss and the RAM
             // defaults stand, so there is nothing for `clear_layout` to overwrite.
         } else {
-            #[cfg(feature = "host")]
-            {
-                storage.clear_layout = storage_config.clear_layout;
-            }
+            storage.clear_layout = storage_config.clear_layout;
         }
 
         storage
     }
 
-    /// Overwrite every item the layout owns with the compiled-in defaults, so a value a host
-    /// wrote earlier stops shadowing what was flashed. Only `clear_layout` reaches here.
-    #[cfg(feature = "host")]
+    /// Overwrite every item the layout owns with the compiled-in defaults, so a persisted
+    /// change stops shadowing what was flashed. Only `clear_layout` reaches here.
     pub(crate) async fn write_layout<
         const ROW: usize,
         const COL: usize,
@@ -495,63 +491,68 @@ impl<F: AsyncNorFlash> Storage<F> {
         put(StorageItem::DefaultLayer(0)).await;
         put(StorageItem::LayoutOption(0)).await;
 
-        for (layer, layer_data) in data.keymap.iter().enumerate() {
-            for (row, row_data) in layer_data.iter().enumerate() {
-                for (col, action) in row_data.iter().enumerate() {
-                    put(StorageItem::Keymap {
+        #[cfg(feature = "host")]
+        {
+            for (layer, layer_data) in data.keymap.iter().enumerate() {
+                for (row, row_data) in layer_data.iter().enumerate() {
+                    for (col, action) in row_data.iter().enumerate() {
+                        put(StorageItem::Keymap {
+                            layer: layer as u8,
+                            row: row as u8,
+                            col: col as u8,
+                            action: *action,
+                        })
+                        .await;
+                    }
+                }
+            }
+            // `NUM_ENCODER == 0` leaves every inner array empty, so a keyboard without encoders
+            // writes nothing here.
+            for (layer, layer_data) in data.encoder_map.iter().enumerate() {
+                for (idx, action) in layer_data.iter().enumerate() {
+                    put(StorageItem::Encoder {
                         layer: layer as u8,
-                        row: row as u8,
-                        col: col as u8,
+                        idx: idx as u8,
                         action: *action,
                     })
                     .await;
                 }
             }
-        }
-        // `NUM_ENCODER == 0` leaves every inner array empty, so a keyboard without encoders
-        // writes nothing here.
-        for (layer, layer_data) in data.encoder_map.iter().enumerate() {
-            for (idx, action) in layer_data.iter().enumerate() {
-                put(StorageItem::Encoder {
-                    layer: layer as u8,
+            // An empty slot is written as an empty config, so a combo the user added over the host
+            // protocol is cleared, not left behind.
+            for (idx, combo) in behavior.combo.combos.iter().enumerate() {
+                let config = combo.as_ref().map_or_else(ComboConfig::empty, |c| c.config.clone());
+                put(StorageItem::Combo { idx: idx as u8, config }).await;
+            }
+            for (idx, fork) in behavior.fork.forks.iter().enumerate() {
+                put(StorageItem::Fork {
                     idx: idx as u8,
-                    action: *action,
+                    fork: *fork,
                 })
                 .await;
             }
+            for (idx, morse) in behavior.morse.morses.iter().enumerate() {
+                put(StorageItem::Morse {
+                    idx: idx as u8,
+                    morse: morse.clone(),
+                })
+                .await;
+            }
+            // The whole buffer, so a macro the user wrote over the host protocol is
+            // replaced by its default or cleared.
+            crate::keyboard::macros::encode_defaults(&mut data.macros, behavior.keyboard_macros);
+            for (idx, bytes) in data.macros.as_chunks::<MACRO_CHUNK_SIZE>().0.iter().enumerate() {
+                put(StorageItem::MacroChunk {
+                    idx: idx as u8,
+                    bytes: *bytes,
+                })
+                .await;
+            }
+            // Flash now has every chunk, so the next save writes only what changed, zeros included.
+            data.macros_stored = true;
         }
-        // An empty slot is written as an empty config, so a combo the user added over the host
-        // protocol is cleared, not left behind.
-        for (idx, combo) in behavior.combo.combos.iter().enumerate() {
-            let config = combo.as_ref().map_or_else(ComboConfig::empty, |c| c.config.clone());
-            put(StorageItem::Combo { idx: idx as u8, config }).await;
-        }
-        for (idx, fork) in behavior.fork.forks.iter().enumerate() {
-            put(StorageItem::Fork {
-                idx: idx as u8,
-                fork: *fork,
-            })
-            .await;
-        }
-        for (idx, morse) in behavior.morse.morses.iter().enumerate() {
-            put(StorageItem::Morse {
-                idx: idx as u8,
-                morse: morse.clone(),
-            })
-            .await;
-        }
-        // The whole buffer, so a macro the user wrote over the host protocol is
-        // replaced by its default or cleared.
-        crate::keyboard::macros::encode_defaults(&mut data.macros, behavior.keyboard_macros);
-        for (idx, bytes) in data.macros.as_chunks::<MACRO_CHUNK_SIZE>().0.iter().enumerate() {
-            put(StorageItem::MacroChunk {
-                idx: idx as u8,
-                bytes: *bytes,
-            })
-            .await;
-        }
-        // Flash now has every chunk, so the next save writes only what changed, zeros included.
-        data.macros_stored = true;
+        #[cfg(not(feature = "host"))]
+        let _ = data;
     }
 }
 
@@ -868,6 +869,64 @@ mod tests {
             .await;
             let mut storage = new_storage(flash).await;
             assert!(matches!(storage.fetch(StorageKey::ConnectionType).await, Ok(None)));
+        });
+    }
+
+    #[test]
+    fn clear_layout_restores_compiled_behavior_across_restarts() {
+        use crate::config::{AutoShiftConfig, PositionalConfig};
+        use crate::keymap::KeymapData;
+
+        block_on(async {
+            let stored = RuntimeBehaviorConfig::default();
+            let mut flash = seeded(&[
+                (StorageKey::StorageConfig, StorageValue::StorageConfig(SCHEMA_HASH)),
+                (
+                    StorageKey::BehaviorConfig,
+                    StorageValue::BehaviorConfig((&stored).into()),
+                ),
+                (
+                    StorageKey::ConnectionType,
+                    StorageValue::ConnectionType(ConnectionType::Ble),
+                ),
+            ])
+            .await;
+            let positional = PositionalConfig::<1, 1>::default();
+            for (clear_layout, enabled, groups) in [
+                (false, false, 0),
+                (true, true, AutoShiftConfig::ALPHA),
+                (false, true, AutoShiftConfig::ALPHA),
+            ] {
+                let mut data = KeymapData::new([[[rmk_types::action::KeyAction::No]]]);
+                let mut behavior = RuntimeBehaviorConfig {
+                    auto_shift: AutoShiftConfig {
+                        enabled: true,
+                        groups: AutoShiftConfig::ALPHA,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                let config = RuntimeStorageConfig {
+                    clear_layout,
+                    ..Default::default()
+                };
+                let (keymap, mut storage) = Box::pin(crate::initialize_keymap_and_storage(
+                    &mut data,
+                    flash,
+                    &config,
+                    &mut behavior,
+                    &positional,
+                ))
+                .await;
+                let restored = keymap.auto_shift_config();
+                assert_eq!(restored.enabled, enabled);
+                assert_eq!(restored.groups, groups);
+                assert!(matches!(
+                    storage.fetch(StorageKey::ConnectionType).await,
+                    Ok(Some(StorageValue::ConnectionType(ConnectionType::Ble)))
+                ));
+                flash = storage.flash.destroy().0;
+            }
         });
     }
 

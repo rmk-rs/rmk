@@ -1,7 +1,9 @@
 use embassy_time::Duration;
 use embedded_storage_async::nor_flash::NorFlash as AsyncNorFlash;
+#[cfg(feature = "host")]
 use rmk_types::constants::MACRO_CHUNK_SIZE;
 
+#[cfg(feature = "host")]
 use crate::keyboard::combo::Combo;
 use crate::storage::{Storage, StorageKey, StorageValue, print_storage_error};
 
@@ -31,6 +33,7 @@ impl<F: AsyncNorFlash> Storage<F> {
             .map_err(|e| print_storage_error::<F>(e))?
         {
             match (key, value) {
+                #[cfg(feature = "host")]
                 (StorageKey::Keymap { layer, row, col }, StorageValue::KeyAction(action)) => {
                     let layer = layer as usize;
                     let row = row as usize;
@@ -39,6 +42,7 @@ impl<F: AsyncNorFlash> Storage<F> {
                         data.keymap[layer][row][col] = action;
                     }
                 }
+                #[cfg(feature = "host")]
                 (StorageKey::Encoder { layer, idx }, StorageValue::EncoderAction(action)) => {
                     let idx = idx as usize;
                     let layer = layer as usize;
@@ -50,6 +54,7 @@ impl<F: AsyncNorFlash> Storage<F> {
                 (StorageKey::DefaultLayer, StorageValue::DefaultLayer(layer)) => behavior.default_layer = layer,
                 // Restore the VIA/Vial layout options selection
                 (StorageKey::LayoutOption, StorageValue::LayoutOption(option)) => data.layout_option = option,
+                #[cfg(feature = "host")]
                 (StorageKey::MacroChunk(idx), StorageValue::MacroChunk(bytes)) => {
                     if let Some(chunk) = data.macros.as_chunks_mut::<MACRO_CHUNK_SIZE>().0.get_mut(idx as usize) {
                         *chunk = bytes;
@@ -66,16 +71,19 @@ impl<F: AsyncNorFlash> Storage<F> {
                     behavior.auto_shift.enabled = c.auto_shift_enabled;
                     behavior.auto_shift.groups = c.auto_shift_groups;
                 }
+                #[cfg(feature = "host")]
                 (StorageKey::Combo(idx), StorageValue::Combo(config)) => {
                     if let Some(slot) = behavior.combo.combos.get_mut(idx as usize) {
                         *slot = Some(Combo::new(config));
                     }
                 }
+                #[cfg(feature = "host")]
                 (StorageKey::Fork(idx), StorageValue::Fork(fork)) => {
                     if let Some(slot) = behavior.fork.forks.get_mut(idx as usize) {
                         *slot = fork;
                     }
                 }
+                #[cfg(feature = "host")]
                 (StorageKey::Morse(idx), StorageValue::Morse(morse)) => {
                     if let Some(slot) = behavior.morse.morses.get_mut(idx as usize) {
                         *slot = morse;
@@ -89,7 +97,7 @@ impl<F: AsyncNorFlash> Storage<F> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "host"))]
 mod tests {
     use rmk_types::action::Action;
     use rmk_types::keycode::{HidKeyCode, KeyCode};

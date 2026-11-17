@@ -16,6 +16,8 @@ mod simulator;
 mod ble_profile;
 #[cfg(feature = "rynk")]
 mod rynk;
+#[cfg(feature = "storage")]
+mod storage;
 #[cfg(feature = "vial")]
 mod vial;
 
