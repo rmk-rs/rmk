@@ -92,5 +92,5 @@ embedded-io-async = "0.7"
 embedded-io-adapters = "0.7"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 log = "0.4"
-bluest = "0.6"
+bluest = { git = "https://github.com/alexmoon/bluest.git", rev = "11df9e9e1114b97b4b864b9add730ab3e3f2701c" }
 futures-util = "0.3"

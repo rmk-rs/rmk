@@ -118,7 +118,7 @@ impl BleDevice {
     pub async fn discover() -> Result<Vec<Self>, RynkHostError> {
         let adapter = Adapter::default()
             .await
-            .ok_or_else(|| RynkHostError::DeviceNotFound("no BLE adapter".into()))?;
+            .map_err(|e| RynkHostError::DeviceNotFound(format!("no BLE adapter: {e}")))?;
         adapter
             .wait_available()
             .await
