@@ -330,39 +330,8 @@ const fn calc_max_latency(subrate_max: u16) -> u16 {
 mod subrating {
     use bt_hci::cmd::le::{LeSubrateRequest, LeSubrateRequestParams};
     use bt_hci::controller::ControllerCmdAsync;
-    use bt_hci::param::{ConnHandle, Duration, Error as HciError};
+    use bt_hci::param::Error as HciError;
     use trouble_host::prelude::*;
-
-    use super::{SLEEP_CONTINUATION_NUMBER, SLEEP_HOST_CONN_SUBRATE, SLEEP_NO_HOST_SUBRATE, calc_max_latency};
-
-    /// Default subrating params when the central is awake.
-    pub(super) fn default_split_subrating_params(handle: ConnHandle) -> LeSubrateRequestParams {
-        LeSubrateRequestParams {
-            handle,
-            subrate_min: 1,
-            subrate_max: 1,
-            max_latency: 30,
-            continuation_number: 0,
-            supervision_timeout: Duration::from_secs(6),
-        }
-    }
-
-    pub(super) fn sleep_split_subrating_params(handle: ConnHandle) -> LeSubrateRequestParams {
-        let subrate = if crate::state::active_transport().is_some() {
-            SLEEP_HOST_CONN_SUBRATE
-        } else {
-            SLEEP_NO_HOST_SUBRATE
-        };
-
-        LeSubrateRequestParams {
-            handle,
-            subrate_min: subrate,
-            subrate_max: subrate,
-            max_latency: calc_max_latency(subrate), // answers every 3600ms with a host, 3750ms without
-            continuation_number: SLEEP_CONTINUATION_NUMBER,
-            supervision_timeout: Duration::from_millis(15_000),
-        }
-    }
 
     pub(crate) async fn update_subrate_factor<C: Controller + ControllerCmdAsync<LeSubrateRequest>, P: PacketPool>(
         stack: &Stack<'_, C, P>,
@@ -404,60 +373,6 @@ mod subrating {
     }
 }
 
-/// Shorter Connection Intervals (Bluetooth 6.2) run the split link at 1.25ms instead of
-/// 7.5ms, which cuts a peripheral key press's wait for the next connection event from
-/// 3.75ms to 0.6ms on average.
-///
-/// Asleep the link goes back to 7.5ms and the subrate factors above: the spec caps
-/// `subrate_max * (max_latency + 1)` at 500 underlying connection events, so a 1.25ms
-/// link could skip 625ms at most, an eighth of what the sleep parameters ask for. One
-/// Connection Rate Update carries the interval and the subrate factor together, so
-/// either switch is still a single procedure.
-#[cfg(feature = "shorter_conn_interval")]
-mod short_interval {
-    use embassy_time::Duration;
-    use trouble_host::prelude::*;
-
-    use super::{SLEEP_CONTINUATION_NUMBER, SLEEP_HOST_CONN_SUBRATE, SLEEP_NO_HOST_SUBRATE, calc_max_latency};
-
-    /// 180 events of 1.25ms is the same ~225ms idle window the 7.5ms link kept with a
-    /// max latency of 30, which is what holds the peripheral's current down.
-    const AWAKE_MAX_LATENCY: u16 = 180;
-
-    pub(super) fn awake_params() -> ConnectRateParams {
-        ConnectRateParams {
-            min_connection_interval: Duration::from_micros(1250),
-            max_connection_interval: Duration::from_micros(1250),
-            subrate_min: 1,
-            subrate_max: 1,
-            max_latency: AWAKE_MAX_LATENCY,
-            continuation_number: 0,
-            supervision_timeout: Duration::from_secs(6),
-            min_ce_length: Duration::from_secs(0),
-            max_ce_length: Duration::from_secs(0),
-        }
-    }
-
-    pub(super) fn sleep_params() -> ConnectRateParams {
-        let subrate = if crate::state::active_transport().is_some() {
-            SLEEP_HOST_CONN_SUBRATE
-        } else {
-            SLEEP_NO_HOST_SUBRATE
-        };
-        ConnectRateParams {
-            min_connection_interval: Duration::from_micros(7500),
-            max_connection_interval: Duration::from_micros(7500),
-            subrate_min: subrate,
-            subrate_max: subrate,
-            max_latency: calc_max_latency(subrate),
-            continuation_number: SLEEP_CONTINUATION_NUMBER,
-            supervision_timeout: Duration::from_millis(15_000),
-            min_ce_length: Duration::from_secs(0),
-            max_ce_length: Duration::from_secs(0),
-        }
-    }
-}
-
 /// Put one peripheral link on the rate that the given sleep state calls for, using
 /// whichever procedure the enabled features provide.
 ///
@@ -473,37 +388,67 @@ async fn apply_split_rate<
     conn: &Connection<'b, P>,
     sleeping: bool,
 ) -> bool {
-    #[cfg(feature = "shorter_conn_interval")]
-    let sent = {
-        let params = if sleeping {
-            short_interval::sleep_params()
+    #[cfg(any(feature = "subrating", feature = "shorter_conn_interval"))]
+    {
+        let subrate = if !sleeping {
+            1
+        } else if crate::state::active_transport().is_some() {
+            SLEEP_HOST_CONN_SUBRATE
         } else {
-            short_interval::awake_params()
+            SLEEP_NO_HOST_SUBRATE
         };
-        update_conn_rate(stack, conn, &params).await
-    };
+        let max_latency = if sleeping {
+            calc_max_latency(subrate)
+        } else if cfg!(feature = "shorter_conn_interval") {
+            // Keep the ~225ms peripheral idle window at 1.25ms.
+            180
+        } else {
+            30
+        };
+        let continuation_number = if sleeping { SLEEP_CONTINUATION_NUMBER } else { 0 };
+        let supervision_timeout_secs = if sleeping { 15 } else { 6 };
 
-    #[cfg(all(feature = "subrating", not(feature = "shorter_conn_interval")))]
-    let sent = {
-        let params = if sleeping {
-            subrating::sleep_split_subrating_params(conn.handle())
-        } else {
-            subrating::default_split_subrating_params(conn.handle())
-        };
-        subrating::update_subrate_factor(stack, params).await
-    };
+        #[cfg(feature = "shorter_conn_interval")]
+        {
+            // Sleep uses 7.5ms so the subrate event cap still allows the existing idle window.
+            let interval = Duration::from_micros(if sleeping { 7500 } else { 1250 });
+            let params = ConnectRateParams {
+                min_connection_interval: interval,
+                max_connection_interval: interval,
+                subrate_min: subrate,
+                subrate_max: subrate,
+                max_latency,
+                continuation_number,
+                supervision_timeout: Duration::from_secs(supervision_timeout_secs),
+                min_ce_length: Duration::from_secs(0),
+                max_ce_length: Duration::from_secs(0),
+            };
+            update_conn_rate(stack, conn, &params).await
+        }
+
+        #[cfg(all(feature = "subrating", not(feature = "shorter_conn_interval")))]
+        {
+            let params = bt_hci::cmd::le::LeSubrateRequestParams {
+                handle: conn.handle(),
+                subrate_min: subrate,
+                subrate_max: subrate,
+                max_latency,
+                continuation_number,
+                supervision_timeout: bt_hci::param::Duration::from_secs(supervision_timeout_secs),
+            };
+            subrating::update_subrate_factor(stack, params).await
+        }
+    }
 
     #[cfg(not(any(feature = "subrating", feature = "shorter_conn_interval")))]
-    let sent = {
+    {
         let params = if sleeping {
             sleep_split_conn_params()
         } else {
             default_split_conn_params()
         };
         update_conn_params(stack, conn, &params).await
-    };
-
-    sent
+    }
 }
 
 async fn run_central_manager_task<
@@ -734,10 +679,8 @@ async fn update_conn_params_on_sleep_change<
     let mut sleeping_conn_param_applied = false;
 
     loop {
-        if sleeping != sleeping_conn_param_applied {
-            if apply_split_rate(stack, conn, sleeping).await {
-                sleeping_conn_param_applied = sleeping;
-            }
+        if sleeping != sleeping_conn_param_applied && apply_split_rate(stack, conn, sleeping).await {
+            sleeping_conn_param_applied = sleeping;
         }
 
         sleeping = sleep_events.next_event().await.0;
