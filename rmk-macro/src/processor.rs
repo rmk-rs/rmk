@@ -135,14 +135,7 @@ pub fn processor_impl(
 
     // Generate event enum, subscriber, and dispatch body
     let (event_type_tokens, event_enum_def, event_subscriber_impl, process_body) =
-        generate_event_enum_and_dispatch(
-            struct_name,
-            vis,
-            &config.event_types,
-            "Processor",
-            quote! { ::rmk::event::SubscribableEvent },
-            quote! { subscriber },
-        );
+        generate_event_enum_and_dispatch(struct_name, vis, &config.event_types);
 
     let subscriber_body = if config.event_types.is_empty() {
         quote! { ::core::future::pending::<Self::Event>() }

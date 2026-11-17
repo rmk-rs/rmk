@@ -389,6 +389,8 @@ impl<'a> Keyboard<'a> {
 
         // Report activity for sleep management
         report_activity();
+        #[cfg(feature = "_ble")]
+        LAST_KEY_TIMESTAMP.signal(Instant::now().as_secs() as u32);
 
         if let KeyboardEventSource::KeyCode(keycode) = event.source {
             self.process_key_action_normal(Action::Key(KeyCode::Hid(keycode)), event)
@@ -842,9 +844,6 @@ impl<'a> Keyboard<'a> {
         if dropped_modifiers {
             self.send_keyboard_report_with_resolved_modifiers(true).await;
         }
-
-        #[cfg(feature = "_ble")]
-        LAST_KEY_TIMESTAMP.sender().send(Instant::now().as_secs() as u32);
 
         if !key_action.is_morse() {
             match key_action {
@@ -2054,6 +2053,48 @@ mod test {
             actions,
             (BleProfileAction::Switch(1), BleProfileAction::ClearBond(None))
         ));
+    #[cfg(feature = "_ble")]
+    #[test]
+    fn early_tap_hold_and_direct_input_notify_pending_battery_updates() {
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            behavior.morse.enable_flow_tap = true;
+            let mut keyboard = create_test_keyboard_with_config(behavior);
+            keyboard.last_press_time = Instant::now();
+            // Flow-tap resolves before inner action execution, just like direct HID input.
+            for event in [
+                KeyboardEvent::key(2, 2, true),
+                KeyboardEvent::keycode(HidKeyCode::Right, true),
+            ] {
+                LAST_KEY_TIMESTAMP.reset();
+                keyboard.process_inner(event).await;
+                assert!(LAST_KEY_TIMESTAMP.signaled(), "battery activity missing for {event:?}");
+                keyboard
+                    .process_inner(KeyboardEvent {
+                        pressed: false,
+                        ..event
+                    })
+                    .await;
+            }
+        });
+    }
+
+    #[cfg(feature = "_ble")]
+    #[test]
+    fn tap_hold_alone_notifies_pending_battery_updates() {
+        block_on(async {
+            let mut behavior = BehaviorConfig::default();
+            behavior.morse.default_profile = MorseProfile::new(Some(false), Some(MorseMode::Normal), Some(200), None);
+            let mut keyboard = create_test_keyboard_with_config(behavior);
+            for pressed in [true, false] {
+                LAST_KEY_TIMESTAMP.reset();
+                keyboard.process_inner(KeyboardEvent::key(2, 2, pressed)).await;
+                assert!(
+                    LAST_KEY_TIMESTAMP.signaled(),
+                    "battery update still waiting after tap-hold input"
+                );
+            }
+        });
     }
 
     async fn force_timeout_first_hold(keyboard: &mut Keyboard<'static>) {
