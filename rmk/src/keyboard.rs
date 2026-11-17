@@ -411,49 +411,75 @@ impl<'a> Keyboard<'a> {
 
     /// Rewrite a plain key into its auto-shift tap-hold. Decided at press; a release
     /// keeps the press-time action so the pair matches even if the switch or modifiers changed.
-    fn auto_shift(&self, action: KeyAction, event: KeyboardEvent) -> KeyAction {
-        let config = self.keymap.auto_shift_config();
+    fn auto_shift(&self, action: KeyAction, event: KeyboardEvent) -> (KeyAction, bool) {
         if !event.pressed {
             return match self.held_buffer.find_source(event.source) {
-                Some(k) if config.is_tap_hold(&k.action) => k.action,
-                _ => action,
+                Some(k) if k.auto_shift => (k.action, true),
+                _ => (action, false),
             };
         }
+        let config = self.keymap.auto_shift_config();
         if config.enabled
             && let KeyAction::Single(Action::Key(KeyCode::Hid(key))) = action
             && config.contains(key)
             && self.resolve_explicit_modifiers(true).into_bits() == 0
         {
-            return KeyAction::TapHold(
-                Action::Key(KeyCode::Hid(key)),
-                Action::KeyWithModifier(key, ModifierCombination::LSHIFT),
-                config.profile,
+            return (
+                KeyAction::TapHold(
+                    Action::Key(KeyCode::Hid(key)),
+                    Action::KeyWithModifier(key, ModifierCombination::LSHIFT),
+                    config.profile,
+                ),
+                true,
             );
         }
-        action
+        (action, false)
     }
 
-    /// Keymap lookup with auto shift applied, see [`Self::auto_shift`]
-    fn resolve_action(&self, event: KeyboardEvent) -> KeyAction {
-        self.auto_shift(self.keymap.get_action_with_layer_cache(event), event)
-    }
-
-    /// Re-resolve a buffered key; an auto-shifted one keeps its press-time action.
-    fn resolve_held(&self, held: &HeldKey) -> KeyAction {
-        if self.keymap.auto_shift_config().is_tap_hold(&held.action) || !held.event.source.is_physical() {
-            held.action
-        } else {
-            self.resolve_action(held.event)
+    /// Re-resolve pending physical keys after an earlier key may have changed layers.
+    fn resolve_held(&self, held: &mut HeldKey, layer_resolved: bool) -> KeyAction {
+        if held.event.source.is_physical() && (!held.auto_shift || layer_resolved) {
+            let action = self.keymap.get_action_with_layer_cache(held.event);
+            let original = if held.auto_shift {
+                match held.action {
+                    KeyAction::TapHold(tap, _, _) => KeyAction::Single(tap),
+                    _ => unreachable!(),
+                }
+            } else {
+                held.action
+            };
+            // An unchanged mapping keeps both the positive and negative press-time decision.
+            if action != original {
+                (held.action, held.auto_shift) = self.auto_shift(action, held.event);
+            }
         }
+        held.action
+    }
+
+    fn is_layer_action(action: Action) -> bool {
+        matches!(
+            action,
+            Action::LayerOn(_)
+                | Action::LayerOnWithModifier(..)
+                | Action::LayerOff(_)
+                | Action::LayerToggle(_)
+                | Action::LayerToggleOnly(_)
+                | Action::DefaultLayer(_)
+                | Action::PersistentDefaultLayer(_)
+                | Action::OneShotLayer(_)
+                | Action::TriLayerLower
+                | Action::TriLayerUpper
+        )
     }
 
     async fn process_key_action(&mut self, key_action: &KeyAction, event: KeyboardEvent, event_time: Instant) {
         // Combos see keymap actions as written; auto shift applies after combo matching.
-        let key_action = &if matches!(event.source, KeyboardEventSource::Combo(_)) {
-            *key_action
+        let (key_action, auto_shift) = if matches!(event.source, KeyboardEventSource::Combo(_)) {
+            (*key_action, false)
         } else {
             self.auto_shift(*key_action, event)
         };
+        let key_action = &key_action;
 
         // First, make the decision for current key and held keys
         let (decision_for_current_key, decisions) = self.make_decisions_for_keys(key_action, event);
@@ -470,30 +496,33 @@ impl<'a> Keyboard<'a> {
             self.fire_held_keys(decision_for_current_key, decisions).await;
 
         // Process current key action after all held keys are resolved
-        let key_action = if updated_decision_for_cur_key != KeyBehaviorDecision::Buffer
+        let (key_action, auto_shift) = if updated_decision_for_cur_key != KeyBehaviorDecision::Buffer
             && keyboard_state_updated
             && event.source.is_physical()
         {
-            // The key_action needs to be updated due to the morse key might be triggered
-            &self.resolve_action(event)
+            self.auto_shift(self.keymap.get_action_with_layer_cache(event), event)
         } else {
-            key_action
+            (*key_action, auto_shift)
         };
+        let key_action = &key_action;
         match updated_decision_for_cur_key {
             KeyBehaviorDecision::CleanBuffer | KeyBehaviorDecision::Release => {
                 debug!("Clean buffer, then process current key normally");
-                self.process_key_action_inner(key_action, event, event_time).await
+                self.process_key_action_inner(key_action, event, event_time, auto_shift)
+                    .await
             }
             KeyBehaviorDecision::Buffer => {
                 debug!("Current key is buffered");
                 if key_action.is_morse() {
                     // A morse key may already have an entry here, and the morse press path
                     // continues that pattern. Pushing would leave two entries for one key.
-                    self.process_key_action_morse(key_action, event, event_time).await;
+                    self.process_key_action_morse(key_action, event, event_time, auto_shift)
+                        .await;
                 } else {
                     self.held_buffer.push(HeldKey::new(
                         event,
                         *key_action,
+                        false,
                         KeyState::Pressed(MorsePattern::default()),
                         event_time,
                         event_time,
@@ -503,11 +532,13 @@ impl<'a> Keyboard<'a> {
             KeyBehaviorDecision::Ignore => {
                 debug!("Current key is ignored or not buffered, process normally: {:?}", event);
                 // Process current key normally
-                self.process_key_action_inner(key_action, event, event_time).await
+                self.process_key_action_inner(key_action, event, event_time, auto_shift)
+                    .await
             }
             KeyBehaviorDecision::FlowTap => {
                 if !key_action.is_morse() || !Self::is_flow_tap_enabled(self.keymap, key_action) {
-                    self.process_key_action_inner(key_action, event, event_time).await;
+                    self.process_key_action_inner(key_action, event, event_time, auto_shift)
+                        .await;
                     return;
                 }
 
@@ -523,6 +554,7 @@ impl<'a> Keyboard<'a> {
                 self.held_buffer.push(HeldKey::new(
                     event,
                     *key_action,
+                    auto_shift,
                     KeyState::FlowTapped(action),
                     now,
                     time_out,
@@ -542,6 +574,7 @@ impl<'a> Keyboard<'a> {
         decisions: Vec<(KeyboardEventSource, HeldKeyDecision), 16>,
     ) -> (bool, KeyBehaviorDecision) {
         let mut keyboard_state_updated = false;
+        let mut layer_resolved = false;
         // Fire buffered keys
         for (source, decision) in decisions {
             // Some decisions of held keys have been made, fire those keys
@@ -565,6 +598,7 @@ impl<'a> Keyboard<'a> {
                                 };
                                 debug!("Pattern after unilateral tap or flow tap: {:?}", pattern);
                                 let action = Self::action_from_pattern(self.keymap, &held_key.action, pattern);
+                                layer_resolved |= Self::is_layer_action(action);
                                 self.process_key_action_normal(action, held_key.event).await;
                                 held_key.state = KeyState::ProcessedButReleaseNotReportedYet(action);
                                 // Push back after triggered tap
@@ -576,6 +610,7 @@ impl<'a> Keyboard<'a> {
                                 debug!("Pattern after released, unilateral tap or flow tap: {:?}", pattern);
                                 let action = Self::action_from_pattern(self.keymap, &held_key.action, pattern);
                                 held_key.event.pressed = true;
+                                layer_resolved |= Self::is_layer_action(action);
                                 self.process_key_action_tap(action, held_key.event).await;
                                 // The tap is fully fired, don't push it back to buffer again
                                 // Removing from the held buffer is like setting to an idle state
@@ -586,7 +621,7 @@ impl<'a> Keyboard<'a> {
                 }
                 HeldKeyDecision::PermissiveHold | HeldKeyDecision::HoldOnOtherKeyPress => {
                     if let Some(mut held_key) = self.held_buffer.remove_if(|k| k.event.source == source) {
-                        let action = self.resolve_held(&held_key);
+                        let action = self.resolve_held(&mut held_key, layer_resolved);
 
                         if action.is_morse() {
                             // Permissive hold of held key is triggered
@@ -604,6 +639,7 @@ impl<'a> Keyboard<'a> {
                                     keyboard_state_updated = true;
                                     debug!("pattern after permissive hold: {:?}", pattern);
                                     let action = Self::action_from_pattern(self.keymap, &action, pattern);
+                                    layer_resolved |= Self::is_layer_action(action);
                                     self.process_key_action_normal(action, held_key.event).await;
                                     held_key.state = KeyState::ProcessedButReleaseNotReportedYet(action);
                                     // Push back after triggered hold
@@ -613,9 +649,25 @@ impl<'a> Keyboard<'a> {
                                     debug!("pattern after released, permissive hold: {:?}", pattern);
                                     let action = Self::action_from_pattern(self.keymap, &action, pattern);
                                     held_key.event.pressed = true;
+                                    layer_resolved |= Self::is_layer_action(action);
                                     self.process_key_action_tap(action, held_key.event).await;
                                     // The tap is fully fired, don't push it back to buffer again
                                     // Removing from the held buffer is like setting to an idle state
+                                }
+                                _ => (),
+                            }
+                        } else {
+                            keyboard_state_updated = true;
+                            match held_key.state {
+                                KeyState::Pressed(_) | KeyState::Holding(_) => {
+                                    layer_resolved |= Self::is_layer_action(action.to_action());
+                                    self.process_key_action_inner(&action, held_key.event, held_key.press_time, false)
+                                        .await;
+                                }
+                                KeyState::Released(_) => {
+                                    held_key.event.pressed = true;
+                                    layer_resolved |= Self::is_layer_action(action.to_action());
+                                    self.process_key_action_tap(action.to_action(), held_key.event).await;
                                 }
                                 _ => (),
                             }
@@ -629,17 +681,21 @@ impl<'a> Keyboard<'a> {
                         // Always re-evaluate a physical key based on current layer state.
                         // A prior layer change (e.g. permissive hold activating a layer)
                         // may have changed what action this key maps to.
-                        let key_action = self.resolve_held(&held_key);
-                        if key_action != held_key.action {
+                        let previous_action = held_key.action;
+                        let previous_auto_shift = held_key.auto_shift;
+                        let key_action = self.resolve_held(&mut held_key, layer_resolved);
+                        if key_action != previous_action || held_key.auto_shift != previous_auto_shift {
                             keyboard_state_updated = true;
                         }
                         debug!("Processing current key before releasing: {:?}", held_key.event);
                         if !key_action.is_morse() {
                             match key_action {
                                 KeyAction::Single(action) => {
+                                    layer_resolved |= Self::is_layer_action(action);
                                     self.process_key_action_normal(action, held_key.event).await;
                                 }
                                 KeyAction::Tap(action) => {
+                                    layer_resolved |= Self::is_layer_action(action);
                                     self.process_key_action_tap(action, held_key.event).await;
                                 }
                                 KeyAction::No => {
@@ -672,6 +728,7 @@ impl<'a> Keyboard<'a> {
                                         && !defer_for_quick_tap
                                     {
                                         debug!("tap prediction {:?} -> {:?}", pattern, action);
+                                        layer_resolved |= Self::is_layer_action(action);
                                         self.process_key_action_normal(action, held_key.event).await;
                                         held_key.state = KeyState::ProcessedButReleaseNotReportedYet(action);
                                         resolved = true;
@@ -696,17 +753,24 @@ impl<'a> Keyboard<'a> {
                     // Check if the normal keys in the buffer should be triggered.
                     let trigger_normal = matches!(decision_for_current_key, KeyBehaviorDecision::CleanBuffer);
 
-                    if trigger_normal && let Some(held_key) = self.held_buffer.remove_if(|k| k.event.source == source) {
+                    if trigger_normal
+                        && let Some(mut held_key) = self.held_buffer.remove_if(|k| k.event.source == source)
+                    {
                         debug!("Cleaning buffered normal key");
                         let action = if keyboard_state_updated && held_key.event.source.is_physical() {
-                            self.resolve_held(&held_key)
+                            self.resolve_held(&mut held_key, layer_resolved)
                         } else {
                             held_key.action
                         };
 
                         debug!("Tap Key {:?} now press down, action: {:?}", held_key.event, action);
-                        self.process_key_action_inner(&action, held_key.event, held_key.press_time)
-                            .await;
+                        self.process_key_action_inner(
+                            &action,
+                            held_key.event,
+                            held_key.press_time,
+                            held_key.auto_shift,
+                        )
+                        .await;
                     }
                 }
                 _ => (),
@@ -871,6 +935,7 @@ impl<'a> Keyboard<'a> {
         original_key_action: &KeyAction,
         event: KeyboardEvent,
         event_time: Instant,
+        auto_shift: bool,
     ) {
         // Start forks
         let (key_action, dropped_modifiers) = self.try_start_forks(original_key_action, event);
@@ -891,7 +956,13 @@ impl<'a> Keyboard<'a> {
                 _ => unreachable!(),
             }
         } else {
-            self.process_key_action_morse(&key_action, event, event_time).await;
+            self.process_key_action_morse(
+                &key_action,
+                event,
+                event_time,
+                auto_shift && key_action == *original_key_action,
+            )
+            .await;
         }
         // Restore the modifiers the fork suppressed
         if self.try_finish_forks(event) {
@@ -1168,6 +1239,7 @@ impl<'a> Keyboard<'a> {
             self.held_buffer.push(HeldKey::new(
                 event,
                 *key_action,
+                false,
                 KeyState::WaitingCombo,
                 event_time,
                 event_time + self.keymap.combo_timeout(),

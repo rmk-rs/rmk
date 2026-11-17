@@ -112,6 +112,8 @@ pub enum KeyState {
 pub struct HeldKey {
     pub event: KeyboardEvent,
     pub action: KeyAction,
+    /// The action was generated from a plain key by Auto Shift.
+    pub auto_shift: bool,
     /// Current state of the held key
     pub state: KeyState,
     /// The press time for the key
@@ -124,6 +126,7 @@ impl HeldKey {
     pub fn new(
         event: KeyboardEvent,
         action: KeyAction,
+        auto_shift: bool,
         state: KeyState,
         press_time: Instant,
         timeout_time: Instant,
@@ -131,6 +134,7 @@ impl HeldKey {
         Self {
             event,
             action,
+            auto_shift,
             state,
             press_time,
             timeout_time,

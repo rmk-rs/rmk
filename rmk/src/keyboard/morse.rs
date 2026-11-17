@@ -13,6 +13,8 @@ impl<'a> Keyboard<'a> {
     pub(crate) async fn handle_morse_timeout(&mut self, key: &HeldKey) {
         assert!(key.action.is_morse());
 
+        let mut layer_resolved = false;
+
         match key.state {
             KeyState::Pressed(pattern) => {
                 // The time since the key press is longer than the timeout,
@@ -22,6 +24,7 @@ impl<'a> Keyboard<'a> {
                 let final_action = Self::try_predict_final_action(self.keymap, &key.action, pattern);
                 if let Some(action) = final_action {
                     debug!("hold prediction {:?} -> {:?}", pattern, action);
+                    layer_resolved = Self::is_layer_action(action);
                     self.process_key_action_normal(action, key.event).await;
                     if let Some(k) = self.held_buffer.find_source_mut(key.event.source) {
                         k.state = KeyState::ProcessedButReleaseNotReportedYet(action);
@@ -37,6 +40,7 @@ impl<'a> Keyboard<'a> {
             KeyState::Released(pattern) => {
                 // The time since the key release is longer than the timeout, trigger the action
                 let action = Self::action_from_pattern(self.keymap, &key.action, pattern);
+                layer_resolved = Self::is_layer_action(action);
                 self.process_key_action_tap(action, key.event).await;
                 let _ = self.held_buffer.remove_if(|k| k.event.source == key.event.source);
             }
@@ -46,6 +50,19 @@ impl<'a> Keyboard<'a> {
             }
             _ => unreachable!(),
         };
+
+        if layer_resolved {
+            for i in 0..self.held_buffer.keys.len() {
+                let mut held = self.held_buffer.keys[i];
+                if held.auto_shift && held.press_time >= key.press_time && matches!(held.state, KeyState::Pressed(_)) {
+                    self.resolve_held(&mut held, true);
+                    if held.action.is_morse() {
+                        held.timeout_time = held.press_time + Self::morse_timeout(self.keymap, &held.action, true);
+                    }
+                    self.held_buffer.keys[i] = held;
+                }
+            }
+        }
 
         // If there's still an unresolved morse key in the held buffer, don't fire normal keys.
         if self.has_unresolved_morse_key() {
@@ -60,6 +77,7 @@ impl<'a> Keyboard<'a> {
         key_action: &KeyAction,
         event: KeyboardEvent,
         event_time: Instant,
+        auto_shift: bool,
     ) {
         debug!("Processing morse keys: {:?}", event);
         assert!(key_action.is_morse());
@@ -73,6 +91,8 @@ impl<'a> Keyboard<'a> {
                     // The current key is already in the buffer, update its state
                     match k.state {
                         KeyState::Released(pattern) | KeyState::EarlyFired(pattern) => {
+                            k.action = *key_action;
+                            k.auto_shift = auto_shift;
                             // `k.press_time` holds the *release* time while in Released/EarlyFired,
                             // so the subtraction below measures "time since last release".
                             if !pattern.is_empty()
@@ -108,6 +128,7 @@ impl<'a> Keyboard<'a> {
                     self.held_buffer.push(HeldKey::new(
                         event,
                         *key_action,
+                        auto_shift,
                         KeyState::Pressed(MorsePattern::default()),
                         event_time,
                         timeout_time,

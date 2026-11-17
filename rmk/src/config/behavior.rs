@@ -1,10 +1,8 @@
 use embassy_time::Duration;
 use heapless::Vec;
-use rmk_types::action::{Action, KeyAction};
 use rmk_types::fork::Fork;
 use rmk_types::keyboard_macros::MacroOp;
 use rmk_types::keycode::{HidKeyCode, KeyCode};
-use rmk_types::modifier::ModifierCombination;
 use rmk_types::morse::{Morse, MorseMode, MorseProfile};
 
 use crate::keyboard::combo::Combo;
@@ -84,15 +82,6 @@ impl AutoShiftConfig {
             _ => false,
         };
         in_group || self.keys.contains(&key)
-    }
-
-    /// Whether `action` is an auto-shift tap-hold
-    pub fn is_tap_hold(&self, action: &KeyAction) -> bool {
-        matches!(
-            action,
-            KeyAction::TapHold(Action::Key(KeyCode::Hid(tap)), Action::KeyWithModifier(hold, m), profile)
-                if tap == hold && *m == ModifierCombination::LSHIFT && *profile == self.profile
-        )
     }
 }
 
