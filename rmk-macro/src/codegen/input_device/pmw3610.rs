@@ -101,6 +101,21 @@ pub(crate) fn expand_pmw3610_device(
             }
         };
 
+        let device_constructor = quote! {
+            let spi_bus = BitBangSpiBus::new(sck, sdio);
+
+            let config = Pmw3610Config {
+                res_cpi: #res_cpi,
+                invert_x: #invert_x,
+                invert_y: #invert_y,
+                swap_xy: #swap_xy,
+                force_awake: #force_awake,
+                smart_mode: #smart_mode,
+            };
+
+            PointingDevice::<Pmw3610<_, _, _>>::with_report_hz(#sensor_id, spi_bus, cs, motion, config, #report_hz)
+        };
+
         // Generate device initialization based on chip series
         let device_init = match chip.series {
             ChipSeries::Nrf52 => quote! {
@@ -114,18 +129,7 @@ pub(crate) fn expand_pmw3610_device(
                     let cs = Output::new(p.#cs_ident, Level::High, OutputDrive::Standard);
                     let motion = #motion_pin_init;
 
-                    let spi_bus = BitBangSpiBus::new(sck, sdio);
-
-                    let config = Pmw3610Config {
-                        res_cpi: #res_cpi,
-                        invert_x: #invert_x,
-                        invert_y: #invert_y,
-                        swap_xy: #swap_xy,
-                        force_awake: #force_awake,
-                        smart_mode: #smart_mode,
-                    };
-
-                    PointingDevice::<Pmw3610<_, _, _>>::with_report_hz(#sensor_id, spi_bus, cs, motion, config, #report_hz)
+                    #device_constructor
                 };
             },
             ChipSeries::Rp2040 => quote! {
@@ -139,18 +143,7 @@ pub(crate) fn expand_pmw3610_device(
                     let cs = Output::new(p.#cs_ident, Level::High);
                     let motion = #motion_pin_init;
 
-                    let spi_bus = BitBangSpiBus::new(sck, sdio);
-
-                    let config = Pmw3610Config {
-                        res_cpi: #res_cpi,
-                        invert_x: #invert_x,
-                        invert_y: #invert_y,
-                        swap_xy: #swap_xy,
-                        force_awake: #force_awake,
-                        smart_mode: #smart_mode,
-                    };
-
-                    PointingDevice::<Pmw3610<_, _, _>>::with_report_hz(#sensor_id, spi_bus, cs, motion, config, #report_hz)
+                    #device_constructor
                 };
             },
             _ => unreachable!(),
