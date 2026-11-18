@@ -163,10 +163,15 @@ impl<const PROFILES: usize> ProfileManager<PROFILES> {
 
     /// Read the live bond stored in `profile`; `None` while the profile pairs a new host.
     pub(crate) fn bond_info(&self, profile: u8) -> Option<ProfileInfo> {
-        if self.pairing.get() == Some(profile) {
+        if self.is_pairing(profile) {
             return None;
         }
         self.profiles.get(profile as usize)?.try_get_and(|info| !info.removed)
+    }
+
+    /// Whether `profile` waits to pair a new host.
+    pub(crate) fn is_pairing(&self, profile: u8) -> bool {
+        self.pairing.get() == Some(profile)
     }
 
     /// Mark `profile` as awaiting pairing. `None` clears the currently marked profile's pairing state.

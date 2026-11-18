@@ -488,7 +488,8 @@ async fn run_ble_keyboard<
         // Keep host and dongle handles until their GATT workers finish.
         let mut host_connections = LinearMap::<u8, Connection<'_, DefaultPacketPool>, NUM_HOST_LINKS>::new();
         // How long a profile keeps advertising before it sleeps, and how much of
-        // that a bonded host gets fast advertising: it usually reconnects soon.
+        // that is fast when a host should connect soon: a bonded host reconnecting,
+        // or a new host pairing with a profile that waits for one.
         const ADV_PERIOD: Duration = Duration::from_secs(300);
         const FAST_ADV: Duration = Duration::from_secs(30);
         // Start of the current advertising period; `None` while asleep until input.
@@ -528,7 +529,7 @@ async fn run_ble_keyboard<
                     None if profile_id == DONGLE_PROFILE => Adv::DongleSeeking,
                     bond => Adv::Host {
                         name: name.first().map_or(product_name, |name| name.as_str()),
-                        fast: bond.is_some() && Instant::now() < fast_until,
+                        fast: (bond.is_some() || profile_manager.is_pairing(profile_id)) && Instant::now() < fast_until,
                     },
                 };
                 // Fast advertising stops early, so it restarts at the slow interval.
@@ -1791,6 +1792,24 @@ mod tests {
             )
             .await
             .expect("slow advertising must end with its period");
+        });
+    }
+
+    #[test]
+    fn re_pairing_advertises_fast_then_slow() {
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
+            advertising(&hci, 0).await;
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Disconnect(0)).await;
+            advertising(&hci, 1).await;
+            // In 0.625 ms units: 50 ms for the bonded host, then 50 ms for a new one.
+            assert_eq!(hci.advertising_intervals(), [80, 80]);
+            MockDriver::get().advance(Duration::from_secs(31));
+            advertising(&hci, 2).await;
+            assert_eq!(hci.advertising_intervals(), [80, 80, 320]);
         });
     }
 }

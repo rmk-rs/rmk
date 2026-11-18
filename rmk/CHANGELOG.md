@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: Keyboard macros are reworked around `MacroOp` lists.
 - **BREAKING**: Bump Rynk protocol version to 0.3: `GetMacro`/`SetMacro` read and write a whole macro by index, `Fork` gained a `layers` field, and `ConnectionStatus` lists every BLE profile in `ble`, with the selected one in `selected`, replacing `GetBleStatus`. `ConnectionStatus` is no longer `Copy`, `BleStatus` drops `profile`, and the display's `RenderContext.ble_status` becomes `connection`.
 - **BREAKING**: Serial numbers no longer contain the RMK version, so they stay the same across upgrades. USB, BLE, and Rynk report a protocol marker followed by a configured device serial ID or one derived from the hardware UID. `DeviceConfig.serial_number` now owns the complete string built by `build_serial_number`; `DeviceConfig` is `Clone` rather than `Copy`. `RMK_BUILD_INFO` is removed. See [serial number migration](https://rmk.rs/docs/migration/v09_v10#serial-numbers).
-- A new host can pair with the selected BLE profile while its bonded host is away, replacing the old bond. Bonded profiles advertise at 50 ms for the first 30 s, then at 200 ms.
+- A new host can pair with the selected BLE profile while its bonded host is away, replacing the old bond. Bonded and re-pairing profiles advertise at 50 ms for the first 30 s, then at 200 ms.
 - Holding a BLE profile key or the dongle key for 5 seconds keeps the old bond until a new host or dongle pairs, instead of erasing it at once. Tapping the key again, or selecting that profile through Rynk, cancels the re-pairing and restores the bond. Profile and dongle keys now switch on press instead of release.
 
 ### Added
