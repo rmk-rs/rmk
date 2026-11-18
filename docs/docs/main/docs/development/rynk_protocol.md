@@ -62,7 +62,7 @@ The transport that carries input follows one rule: USB is ready when `usb` is `C
 
 These commands answer `Ok` once the keyboard accepts the action, before it takes effect; watch `ConnectionChange` for the result. `NotReady` means earlier profile actions are still pending; retry. If the action closes the link the request arrived on, the link can drop before the reply arrives, but the action still runs.
 
-Disconnecting or clearing the selected profile starts a new advertising period for a new host, the same as holding its profile key; `bonded` is false meanwhile. A disconnected profile keeps its bond as a fallback: the old host can't reconnect while the profile waits, and the bond comes back if no new host pairs before advertising ends or another profile is selected. A profile that isn't selected stays offline until it is, and other profiles keep their connections.
+Disconnecting or clearing the selected profile starts a new advertising period for a new host, the same as holding its profile key; `bonded` is false meanwhile. A disconnected profile keeps its bond as a fallback: the old host can't reconnect while the profile waits, and the bond comes back if no new host pairs before advertising ends or a profile is selected, the same one included. A profile that isn't selected stays offline until it is, and other profiles keep their connections.
 
 ## Errors
 

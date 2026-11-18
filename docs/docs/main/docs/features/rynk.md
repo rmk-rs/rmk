@@ -125,9 +125,10 @@ paired with a host. For any profile, the tool can:
 If you disconnect or forget the profile you type on, the keyboard advertises so
 a new host can pair with it, the same as holding its profile key. A disconnected
 host can't reconnect meanwhile, and its pairing comes back if no new host pairs
-before advertising stops or you switch profiles. Typing doesn't move to another
-profile; switch to the one you want. A profile you aren't typing on stays offline
-until you switch to it, and your other profiles stay connected.
+before advertising stops or you select a profile, the same one included. Typing
+doesn't move to another profile; switch to the one you want. A profile you
+aren't typing on stays offline until you switch to it, and your other profiles
+stay connected.
 
 If the host tool reaches the keyboard over the profile you disconnect or forget,
 the tool loses its connection and may report that the request failed. The

@@ -1659,14 +1659,23 @@ impl<'a> Keyboard<'a> {
                 // Start the 5s hold gesture for any user key. `fire_user_hold` decides
                 // which ids actually do something, so the id list lives in one place.
                 self.user_hold = Some((Instant::now() + Duration::from_secs(5), id));
+                // Profile keys select on press, so a hold only has to start re-pairing.
+                if id < NUM_BLE_PROFILES as u8 {
+                    info!("Switch to profile: {}", id);
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
+                }
+                #[cfg(feature = "dongle")]
+                if id == NUM_BLE_PROFILES as u8 + 5 {
+                    info!("Switch to dongle profile");
+                    BLE_PROFILE_CHANNEL
+                        .send(BleProfileAction::Switch(crate::ble::profile::DONGLE_PROFILE))
+                        .await;
+                }
             } else {
                 // A tap sends press and release back to back, so cancel what the press started.
                 self.user_hold = None;
                 // Other user keys are processed when released.
-                if id < NUM_BLE_PROFILES as u8 {
-                    info!("Switch to profile: {}", id);
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
-                } else if id == NUM_BLE_PROFILES as u8 {
+                if id == NUM_BLE_PROFILES as u8 {
                     // Next profile
                     BLE_PROFILE_CHANNEL.send(BleProfileAction::Next).await;
                 } else if id == NUM_BLE_PROFILES as u8 + 1 {
@@ -1680,14 +1689,6 @@ impl<'a> Keyboard<'a> {
                     // only meaningful when both transports exist in this build.
                     #[cfg(not(feature = "_no_usb"))]
                     crate::state::toggle_preferred().await;
-                }
-                // Switch to the dongle profile.
-                #[cfg(feature = "dongle")]
-                if id == NUM_BLE_PROFILES as u8 + 5 {
-                    info!("Switch to dongle profile");
-                    BLE_PROFILE_CHANNEL
-                        .send(BleProfileAction::Switch(crate::ble::profile::DONGLE_PROFILE))
-                        .await;
                 }
             }
         }
@@ -1709,7 +1710,6 @@ impl<'a> Keyboard<'a> {
         // Keep the old bond until a replacement pairing succeeds.
         if id < NUM_BLE_PROFILES as u8 {
             info!("Profile key held: re-pairing profile {}", id);
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
             BLE_PROFILE_CHANNEL.send(BleProfileAction::Disconnect(id)).await;
         }
         #[cfg(feature = "split")]
@@ -1721,7 +1721,6 @@ impl<'a> Keyboard<'a> {
         if id == NUM_BLE_PROFILES as u8 + 5 {
             use crate::ble::profile::DONGLE_PROFILE;
             info!("Dongle key held: re-pairing dongle profile");
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(DONGLE_PROFILE)).await;
             BLE_PROFILE_CHANNEL
                 .send(BleProfileAction::Disconnect(DONGLE_PROFILE))
                 .await;

@@ -604,6 +604,8 @@ async fn run_ble_keyboard<
                         continue;
                     }
                     if target == profile_id {
+                        // Selecting the profile again brings back the bond that re-pairing hid.
+                        profile_manager.set_pairing(None);
                         continue;
                     }
                     // End re-pairing before a switch leaves this profile's status behind.
@@ -1393,7 +1395,7 @@ mod tests {
     }
 
     #[test]
-    fn pairing_current_profile_survives_key_release_and_restores_bond_on_timeout() {
+    fn pairing_current_profile_restores_bond_when_reselected_or_on_timeout() {
         use crate::ble::profile::{BleProfileAction, ProfileInfo};
         use crate::channel::BLE_PROFILE_CHANNEL;
         use crate::state::wait_for_connection_status;
@@ -1417,10 +1419,16 @@ mod tests {
             .await
             .expect("holding the current profile key must start re-pairing");
 
-            // Releasing the profile key sends a switch to the same profile.
             BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(0)).await;
-            embassy_time::Timer::after_millis(1).await;
-            assert!(!current_ble_status().bonded);
+            embassy_time::with_timeout(
+                Duration::from_millis(20),
+                wait_for_connection_status(|s| s.selected_profile().bonded),
+            )
+            .await
+            .expect("selecting the profile again must cancel re-pairing");
+
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Disconnect(0)).await;
+            wait_for_connection_status(|s| !s.selected_profile().bonded).await;
 
             MockDriver::get().advance(Duration::from_secs(300));
             let expired = wait_for_connection_status(|s| s.selected_profile().state == BleState::Inactive).await;
