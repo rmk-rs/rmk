@@ -1,10 +1,11 @@
-use core::fmt::Write;
+use core::fmt::NumBuffer;
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use postcard::experimental::max_size::MaxSize;
 use rmk_types::battery::BatteryStatus;
 use rmk_types::ble::BLE_ADV_NAME_MAX_LEN;
+use trouble_host::att::{AttClient, AttReq};
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
@@ -35,7 +36,7 @@ use rmk_types::protocol::rynk::{
 /// Keep GAP/GATT first and append other services to preserve bonded hosts' cached handles.
 #[gatt_server(mutex_type = NoopRawMutex, connections_max = crate::ble::NUM_HOST_LINKS)]
 pub(crate) struct Server {
-    profile_name_services: ProfileNameServices,
+    profile_name: ProfileName,
     pub(crate) battery_service: BatteryService,
     #[cfg(feature = "split")]
     pub(crate) peripheral_battery_services: PeripheralBatteryServices,
@@ -51,21 +52,23 @@ pub(crate) struct Server {
     pub(crate) dongle_event_service: DongleEventService,
 }
 
-struct ProfileNameServices {
-    gap: [GapService; BLE_PROFILE_NAME_SUFFIX as usize],
+struct ProfileName {
+    characteristic: [Characteristic<heapless::String<BLE_ADV_NAME_MAX_LEN>>; BLE_PROFILE_NAME_SUFFIX as usize],
+    product_name: &'static str,
 }
 
-impl ProfileNameServices {
+impl ProfileName {
     const ATTRIBUTE_COUNT: usize = trouble_host::gap::GAP_SERVICE_ATTRIBUTE_COUNT * BLE_PROFILE_NAME_SUFFIX as usize;
     const CCCD_COUNT: usize = 0;
 
     fn new<const MAX: usize>(table: &mut AttributeTable<'_, NoopRawMutex, MAX>) -> Self {
         Self {
-            gap: core::array::from_fn(|_| {
+            characteristic: core::array::from_fn(|_| {
                 let gap = GapService::new(table);
                 GenericAttributeService::new(table);
-                gap
+                gap.device_name
             }),
+            product_name: "",
         }
     }
 }
@@ -87,7 +90,9 @@ struct GenericAttributeService {}
 impl Server<'_> {
     pub(crate) fn new_keyboard(product_name: &'static str) -> Result<Self, &'static str> {
         if BLE_PROFILE_NAME_SUFFIX {
-            return Ok(Self::new(AttributeTable::new()));
+            let mut server = Self::new(AttributeTable::new());
+            server.profile_name.product_name = product_name;
+            return Ok(server);
         }
         Self::new_with_config(GapConfig::Peripheral(PeripheralConfig {
             name: product_name,
@@ -96,20 +101,48 @@ impl Server<'_> {
     }
 
     /// The empty return array avoids a name buffer in disabled builds.
-    pub(crate) fn set_profile_name(
+    pub(crate) fn profile_name(
         &self,
-        product_name: &str,
         slot: u8,
     ) -> [heapless::String<BLE_ADV_NAME_MAX_LEN>; BLE_PROFILE_NAME_SUFFIX as usize] {
-        self.profile_name_services.gap.each_ref().map(|gap| {
-            let mut name = heapless::String::try_from(product_name).expect("product name is too long for BLE");
+        core::array::from_fn(|_| {
+            let mut name =
+                heapless::String::try_from(self.profile_name.product_name).expect("product name is too long for BLE");
             if (slot as usize) < crate::NUM_BLE_PROFILES {
-                write!(name, "_{}", usize::from(slot) + 1)
+                name.push('_')
+                    .and_then(|()| name.push_str((slot + 1).format_into(&mut NumBuffer::new())))
                     .expect("product name including BLE profile suffix exceeds 16 bytes");
             }
-            unwrap!(self.set(&gap.device_name, &name));
             name
         })
+    }
+
+    pub(crate) fn prepare_name_read(&self, event: &GattEvent<'_, '_, DefaultPacketPool>, slot: u8) {
+        let [name] = self.profile_name.characteristic.as_slice() else {
+            return;
+        };
+        let uuid = Uuid::from(characteristic::DEVICE_NAME);
+        let reads_name = match event {
+            GattEvent::Read(read) => read.handle() == name.handle,
+            GattEvent::Other(other) => match other.payload().incoming() {
+                AttClient::Request(AttReq::ReadByType {
+                    attribute_type,
+                    start,
+                    end,
+                }) => attribute_type == uuid && (start..=end).contains(&name.handle),
+                AttClient::Request(AttReq::FindByTypeValue {
+                    att_type,
+                    start_handle,
+                    end_handle,
+                    ..
+                }) => Uuid::from(att_type) == uuid && (start_handle..=end_handle).contains(&name.handle),
+                _ => false,
+            },
+            _ => false,
+        };
+        if reads_name && let Some(value) = self.profile_name(slot).first() {
+            unwrap!(self.set(name, value));
+        }
     }
 
     pub(crate) fn refresh_battery_level(&self, handle: u16) {

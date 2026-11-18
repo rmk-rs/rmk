@@ -498,7 +498,7 @@ async fn run_ble_keyboard<
 
         loop {
             let profile_id = crate::state::current_profile();
-            let name = server.set_profile_name(product_name, profile_id);
+            let name = server.profile_name(profile_id);
             let local_address = cfg!(feature = "ext_adv")
                 .then(|| BdAddr::new(crate::ble::profile::profile_address(address, profile_id)));
             let bond = profile_manager.bond_info(profile_id);
@@ -936,6 +936,7 @@ async fn gatt_events_task(
                 let result = if let Some(code) = result {
                     gatt_event.reject(code)
                 } else {
+                    server.prepare_name_read(&gatt_event, profile_id);
                     gatt_event.accept()
                 };
                 // Update CCCD table after processing the event
