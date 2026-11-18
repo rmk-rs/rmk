@@ -1,4 +1,4 @@
-use core::fmt::NumBuffer;
+use core::fmt::Write as _;
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
@@ -109,9 +109,7 @@ impl Server<'_> {
             let mut name =
                 heapless::String::try_from(self.profile_name.product_name).expect("product name is too long for BLE");
             if (slot as usize) < crate::NUM_BLE_PROFILES {
-                name.push('_')
-                    .and_then(|()| name.push_str((slot + 1).format_into(&mut NumBuffer::new())))
-                    .expect("product name including BLE profile suffix exceeds 16 bytes");
+                write!(name, "_{}", slot + 1).expect("product name including BLE profile suffix exceeds 16 bytes");
             }
             name
         })
