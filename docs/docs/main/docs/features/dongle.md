@@ -103,7 +103,8 @@ stores which keyboard it is bonded to.
 builds with the `dongle` feature.
 
 To move the keyboard to a different dongle, **hold `SwitchToDongle` for 5
-seconds**. That clears the keyboard's dongle bond and sends it seeking again.
+seconds**. The keyboard seeks a new dongle and keeps its current dongle bond
+until the new one pairs.
 
 The pairing window length is configurable:
 

@@ -297,7 +297,7 @@ pub(crate) fn dfu_lock_check() -> Result<(), embassy_usb::class::dfu::device::co
 
 /// Max DFU alternate settings on a single DFU interface.
 /// Alt 0 is always the central; the remaining slots are split peripherals.
-pub(crate) const MAX_DFU_ALTS: usize = crate::SPLIT_PERIPHERALS_NUM + 1;
+pub(crate) const MAX_DFU_ALTS: usize = crate::NUM_SPLIT_PERIPHERALS + 1;
 
 /// Flash-side DFU updater.
 ///

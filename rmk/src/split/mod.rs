@@ -34,7 +34,7 @@ pub struct PeripheralMatrixConfig {
 
 /// Message used from central & peripheral communication
 #[repr(u8)]
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, MaxSize)]
+#[derive(Serialize, Deserialize, Debug, Clone, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub(crate) enum SplitMessage {
     /// Keyboard event, from peripheral to central

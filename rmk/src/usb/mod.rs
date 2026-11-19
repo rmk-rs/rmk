@@ -312,7 +312,7 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
             device_config,
             &mut CONFIG_DESC.init([0; SIZE])[..],
             #[cfg(feature = "dfu_split")]
-            crate::SPLIT_PERIPHERALS_NUM,
+            crate::NUM_SPLIT_PERIPHERALS,
         )
     }
 }

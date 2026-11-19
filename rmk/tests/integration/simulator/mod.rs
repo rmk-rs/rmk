@@ -67,7 +67,7 @@ fn reset() {
     #[cfg(not(feature = "_no_usb"))]
     rmk::state::set_usb_state(rmk_types::connection::UsbState::Configured);
     #[cfg(feature = "_no_usb")]
-    rmk::test_support::set_ble_state(rmk_types::ble::BleState::Connected);
+    rmk::test_support::set_ble_state(0, rmk_types::ble::BleState::Connected);
 
     #[cfg(not(feature = "_no_usb"))]
     rmk::channel::USB_REPORT_CHANNEL.clear();
@@ -377,7 +377,7 @@ impl SimKeyboard {
             }
             let service = rmk::host::HostService::new(keymap, rmk_config);
             let (mut rx, mut tx): (&Link, &Link) = (&to_device, &from_device);
-            service.run_session(&mut rx, &mut tx).await;
+            service.run(&mut rx, &mut tx).await;
         };
         #[cfg(not(feature = "host"))]
         let session = core::future::pending::<()>();

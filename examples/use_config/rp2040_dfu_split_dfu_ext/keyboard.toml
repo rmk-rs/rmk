@@ -7,7 +7,7 @@ manufacturer = "RMK"
 chip = "rp2040"
 
 [rmk]
-split_peripherals_num = 1
+num_split_peripherals = 1
 
 [split]
 connection = "serial"

@@ -87,8 +87,8 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         bc.flash_channel_size
     ));
     lines.push(format!(
-        "pub const SPLIT_PERIPHERALS_NUM: usize = {};",
-        bc.split_peripherals_num
+        "pub const NUM_SPLIT_PERIPHERALS: usize = {};",
+        bc.num_split_peripherals
     ));
     lines.push(format!(
         "pub const CENTRAL_BATTERY_USER_DESCRIPTION: &str = {:?};",
@@ -106,8 +106,12 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         "pub const SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS: [&str; SPLIT_BATTERY_PERIPHERALS_NUM] = {:?};",
         bc.split_battery_peripheral_user_descriptions
     ));
-    lines.push(format!("pub const NUM_BLE_PROFILE: usize = {};", bc.ble_profiles_num));
+    lines.push(format!("pub const NUM_BLE_PROFILES: usize = {};", bc.num_ble_profiles));
     lines.push(format!("pub const BLE_USE_2M_PHY: bool = {};", bc.ble_use_2m_phy));
+    lines.push(format!(
+        "pub const BLE_PROFILE_NAME_SUFFIX: bool = {};",
+        bc.ble_profile_name_suffix
+    ));
     lines.push(format!(
         "pub const SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS: u32 = {};",
         bc.split_central_sleep_timeout_seconds
@@ -128,6 +132,15 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
 
     // Host uses protocol ceilings; firmware uses keyboard.toml/default capacities.
     let is_host = env::var("CARGO_FEATURE_HOST").is_ok();
+
+    // A host takes every u8 profile index, so it decodes the profile list of any firmware.
+    let total_ble_profiles = if is_host {
+        u8::MAX as usize + 1
+    } else {
+        bc.total_ble_profiles
+    };
+    lines.push(format!("pub const TOTAL_BLE_PROFILES: usize = {total_ble_profiles};"));
+    lines.push(format!("pub const NUM_HOST_LINKS: usize = {};", bc.num_host_links));
 
     // Protocol ceilings — always emitted so rmk-types source code can reference them.
     lines.push(format!(

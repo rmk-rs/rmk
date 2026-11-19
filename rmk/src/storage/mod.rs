@@ -243,7 +243,7 @@ impl StorageItem {
             #[cfg(all(feature = "_ble", feature = "split"))]
             Self::PeerAddress(v) => (StorageKey::PeerAddress(v.peer_id), StorageValue::PeerAddress(v)),
             #[cfg(feature = "_ble")]
-            Self::BondInfo(v) => (StorageKey::BondInfo(v.slot_num), StorageValue::BondInfo(v)),
+            Self::BondInfo(v) => (StorageKey::BondInfo(v.profile), StorageValue::BondInfo(v)),
             #[cfg(feature = "_ble")]
             Self::ActiveBleProfile(v) => (StorageKey::ActiveBleProfile, StorageValue::ActiveBleProfile(v)),
             Self::UserData { slot, data } => (StorageKey::UserData(slot), StorageValue::UserData(data)),

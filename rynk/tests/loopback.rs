@@ -216,7 +216,7 @@ async fn client_against_run_session() {
     });
 
     // Run the real flash task so reads observe acknowledged writes.
-    let device = select(service.run_session(&mut dev_rx, &mut dev_tx), storage.run());
+    let device = select(service.run(&mut dev_rx, &mut dev_tx), storage.run());
     match select(device, script).await {
         Either::First(_) => panic!("run_session ended before the client script finished"),
         Either::Second(()) => {}
@@ -274,7 +274,7 @@ async fn lock_gate_rejects_and_reports() {
     });
 
     let device = select(
-        service.run_session(&mut dev_rx, &mut dev_tx),
+        service.run(&mut dev_rx, &mut dev_tx),
         rmk::test_support::drain_flash_channel(),
     );
     match select(device, script).await {

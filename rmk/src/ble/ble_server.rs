@@ -1,6 +1,11 @@
+use core::fmt::Write as _;
+
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use postcard::experimental::max_size::MaxSize;
 use rmk_types::battery::BatteryStatus;
+use rmk_types::ble::BLE_ADV_NAME_MAX_LEN;
+use trouble_host::att::{AttClient, AttReq};
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
@@ -8,6 +13,7 @@ use super::battery_service::BatteryService;
 #[cfg(feature = "split")]
 use super::battery_service::PeripheralBatteryServices;
 use super::device_info::DeviceConfigurationService;
+use crate::BLE_PROFILE_NAME_SUFFIX;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use crate::dongle::event::{CUSTOM_TO_DONGLE_UUID, CUSTOM_TO_KEYBOARD_UUID};
 #[cfg(feature = "dongle")]
@@ -27,10 +33,10 @@ use rmk_types::protocol::rynk::{
     RYNK_BLE_CHUNK_SIZE, RYNK_HID_REPORT_SIZE, RYNK_INPUT_CHAR_UUID, RYNK_OUTPUT_CHAR_UUID, RYNK_SERVICE_UUID,
 };
 
-/// Field order is the attribute order: append, never insert, so a bonded host's
-/// cached GATT table survives a firmware update that adds a service.
-#[gatt_server]
+/// Keep GAP/GATT first and append other services to preserve bonded hosts' cached handles.
+#[gatt_server(mutex_type = NoopRawMutex, connections_max = crate::ble::NUM_HOST_LINKS)]
 pub(crate) struct Server {
+    profile_name: ProfileName,
     pub(crate) battery_service: BatteryService,
     #[cfg(feature = "split")]
     pub(crate) peripheral_battery_services: PeripheralBatteryServices,
@@ -46,7 +52,97 @@ pub(crate) struct Server {
     pub(crate) dongle_event_service: DongleEventService,
 }
 
+struct ProfileName {
+    characteristic: [Characteristic<heapless::String<BLE_ADV_NAME_MAX_LEN>>; BLE_PROFILE_NAME_SUFFIX as usize],
+    product_name: &'static str,
+}
+
+impl ProfileName {
+    const ATTRIBUTE_COUNT: usize = trouble_host::gap::GAP_SERVICE_ATTRIBUTE_COUNT * BLE_PROFILE_NAME_SUFFIX as usize;
+    const CCCD_COUNT: usize = 0;
+
+    fn new<const MAX: usize>(table: &mut AttributeTable<'_, NoopRawMutex, MAX>) -> Self {
+        Self {
+            characteristic: core::array::from_fn(|_| {
+                let gap = GapService::new(table);
+                GenericAttributeService::new(table);
+                gap.device_name
+            }),
+            product_name: "",
+        }
+    }
+}
+
+#[gatt_service(uuid = service::GAP)]
+struct GapService {
+    #[characteristic(uuid = characteristic::DEVICE_NAME, read)]
+    device_name: heapless::String<BLE_ADV_NAME_MAX_LEN>,
+    #[characteristic(uuid = characteristic::APPEARANCE, read, value = appearance::human_interface_device::KEYBOARD)]
+    appearance: BluetoothUuid16,
+    #[cfg(any(feature = "split", feature = "dongle"))]
+    #[characteristic(uuid = characteristic::CENTRAL_ADDRESS_RESOLUTION, read, value = 1)]
+    address_resolution: u8,
+}
+
+#[gatt_service(uuid = service::GATT)]
+struct GenericAttributeService {}
+
 impl Server<'_> {
+    pub(crate) fn new_keyboard(product_name: &'static str) -> Result<Self, &'static str> {
+        if BLE_PROFILE_NAME_SUFFIX {
+            let mut server = Self::new(AttributeTable::new());
+            server.profile_name.product_name = product_name;
+            return Ok(server);
+        }
+        Self::new_with_config(GapConfig::Peripheral(PeripheralConfig {
+            name: product_name,
+            appearance: &appearance::human_interface_device::KEYBOARD,
+        }))
+    }
+
+    /// The empty return array avoids a name buffer in disabled builds.
+    pub(crate) fn profile_name(
+        &self,
+        slot: u8,
+    ) -> [heapless::String<BLE_ADV_NAME_MAX_LEN>; BLE_PROFILE_NAME_SUFFIX as usize] {
+        core::array::from_fn(|_| {
+            let mut name =
+                heapless::String::try_from(self.profile_name.product_name).expect("product name is too long for BLE");
+            if (slot as usize) < crate::NUM_BLE_PROFILES {
+                write!(name, "_{}", slot + 1).expect("product name including BLE profile suffix exceeds 16 bytes");
+            }
+            name
+        })
+    }
+
+    pub(crate) fn prepare_name_read(&self, event: &GattEvent<'_, '_, DefaultPacketPool>, slot: u8) {
+        let [name] = self.profile_name.characteristic.as_slice() else {
+            return;
+        };
+        let uuid = Uuid::from(characteristic::DEVICE_NAME);
+        let reads_name = match event {
+            GattEvent::Read(read) => read.handle() == name.handle,
+            GattEvent::Other(other) => match other.payload().incoming() {
+                AttClient::Request(AttReq::ReadByType {
+                    attribute_type,
+                    start,
+                    end,
+                }) => attribute_type == uuid && (start..=end).contains(&name.handle),
+                AttClient::Request(AttReq::FindByTypeValue {
+                    att_type,
+                    start_handle,
+                    end_handle,
+                    ..
+                }) => Uuid::from(att_type) == uuid && (start_handle..=end_handle).contains(&name.handle),
+                _ => false,
+            },
+            _ => false,
+        };
+        if reads_name && let Some(value) = self.profile_name(slot).first() {
+            unwrap!(self.set(name, value));
+        }
+    }
+
     pub(crate) fn refresh_battery_level(&self, handle: u16) {
         let (attribute, status) = if handle == self.battery_service.level.handle {
             (
@@ -100,8 +196,7 @@ pub(crate) struct DongleEventService {
 /// `heapless::Vec` so each notify only spends MTU − 3 bytes for the bytes it
 /// actually carries (a fixed `[u8; N]` would always send N).
 ///
-/// `gatt_events_task` forwards `output_data` writes into
-/// [`crate::channel::RYNK_BLE_RX_PIPE`] for [`crate::ble::host::HostGattHandler::run`] to drain.
+/// `gatt_events_task` feeds `output_data` writes to the connection's Rynk pipe.
 #[cfg(feature = "rynk")]
 #[gatt_service(uuid = RYNK_SERVICE_UUID)]
 pub(crate) struct RynkGattService {
@@ -114,8 +209,7 @@ pub(crate) struct RynkGattService {
 }
 
 /// Rynk HID-over-GATT service.
-/// `gatt_events_task` feeds the payload into [`crate::channel::RYNK_BLE_RX_PIPE`],
-/// [`crate::ble::host::HostGattHandler::run`] drains the pipe to get data.
+/// `gatt_events_task` feeds the payload to the same connection's Rynk pipe.
 #[cfg(feature = "rynk")]
 #[gatt_service(uuid = service::HUMAN_INTERFACE_DEVICE)]
 pub(crate) struct RynkHidService {
@@ -139,8 +233,7 @@ pub(crate) struct RynkHidService {
 
 /// GATT service exposing the Vial-over-HID protocol. The keyboard writes replies via
 /// `input_data` notify; hosts push requests through `output_data`. `gatt_events_task`
-/// forwards `output_data` writes into [`crate::channel::VIAL_BLE_RX_CHANNEL`] for
-/// [`crate::ble::host::HostGattHandler::run`] to drain.
+/// forwards `output_data` writes to the connection's Vial queue.
 #[cfg(feature = "vial")]
 #[gatt_service(uuid = service::HUMAN_INTERFACE_DEVICE)]
 pub(crate) struct VialGattService {
