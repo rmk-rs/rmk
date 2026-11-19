@@ -48,8 +48,8 @@ shared behavior for that test only. Tables merge key by key; arrays such as
 `morses` replace wholesale. A `[[test]]` accepts only `name`, `steps`, `expect`,
 `behavior`, and `features`.
 
-`features` adds `#[cfg(feature = "...")]` gates; file and test features are
-combined. Cases explicitly tagged with `storage` use simulated flash, including
+`features` adds `#[cfg(feature = "...")]` gates, and a leading `!` excludes a
+feature; file and test features are combined. Cases explicitly tagged with `storage` use simulated flash, including
 persistence replies, instead of the discard-only storage task. Test IDs are `<file>::<name>`, where `<file>` is the file stem with
 `-` replaced by `_`.
 
@@ -142,7 +142,7 @@ type.
 
 ```toml
 { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 0 }, action = { Single = { Key = { Hid = "B" } } } } } },
-{ rynk = { cmd = "GetVersion", reply = { major = 0, minor = 2 } } },
+{ rynk = { cmd = "GetVersion", reply = { major = 0, minor = 3 } } },
 { rynk = { cmd = "GetMatrixState", error = "Locked" } },
 ```
 

@@ -1,85 +1,68 @@
-//! Vial over BLE GATT.
-//!
-//! [`HostGattHandler::run`] owns the per-connection lifecycle: clear the
-//! inbound chunk channel, construct 32-byte HID-report Rx/Tx adapters around
-//! the GATT plumbing, and call [`VialService::run_session`] once.
+//! Vial over BLE GATT, with one incoming queue per connection.
 
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::channel::Channel;
 use embedded_io_async::{ErrorType, Read, Write};
 use trouble_host::prelude::*;
 
-use super::HostWriteOutcome;
-use crate::ble::ble_server::Server;
-use crate::channel::VIAL_BLE_RX_CHANNEL;
+use super::GattWriteResult;
+use crate::ble::ble_server::{Server, VialGattService};
 use crate::host::transport::HostTransportError;
 use crate::host::via::VialService;
 
 /// Per-connection GATT write dispatcher for Vial over HID.
-pub(crate) struct HostGattHandler {
-    output_handle: u16,
-    input_cccd_handle: u16,
-    control_point_handle: u16,
+pub(crate) struct HostConnection<'a> {
+    hid: &'a VialGattService,
+    incoming: Channel<NoopRawMutex, [u8; 32], { crate::VIAL_CHANNEL_SIZE }>,
 }
 
-impl HostGattHandler {
-    pub(crate) fn new(server: &Server<'_>) -> Self {
+impl<'a> HostConnection<'a> {
+    pub(crate) fn new(server: &'a Server<'_>) -> Self {
         Self {
-            output_handle: server.vial_service.output_data.handle,
-            input_cccd_handle: server
-                .vial_service
-                .input_data
-                .cccd_handle
-                .expect("No CCCD for Vial input"),
-            control_point_handle: server.vial_service.hid_control_point.handle,
+            hid: &server.vial_service,
+            incoming: Channel::new(),
         }
     }
 
-    pub(crate) async fn handle_write(&mut self, handle: u16, data: &[u8], _encrypted: bool) -> HostWriteOutcome {
-        if handle == self.output_handle {
-            if data.len() == 32 {
+    pub(crate) async fn handle_write(&self, handle: u16, data: &[u8], encrypted: bool) -> GattWriteResult {
+        if handle == self.hid.output_data.handle {
+            if !encrypted {
+                return GattWriteResult::Handled;
+            }
+            if let Ok(message) = data.try_into() {
                 debug!("Got Vial packet: {:?}", data);
-                let mut message = [0u8; 32];
-                message.copy_from_slice(data);
-                VIAL_BLE_RX_CHANNEL.send(message).await;
+                self.incoming.send(message).await;
             } else {
                 warn!("Wrong Vial packet data: {:?}", data);
             }
-            HostWriteOutcome::Handled
-        } else if handle == self.input_cccd_handle {
-            HostWriteOutcome::CccdUpdated
-        } else if handle == self.control_point_handle {
-            HostWriteOutcome::ControlPoint
+            GattWriteResult::Handled
+        } else if self.hid.input_data.cccd_handle == Some(handle) {
+            GattWriteResult::CccdWrite
+        } else if handle == self.hid.hid_control_point.handle {
+            GattWriteResult::HidControlPoint
         } else {
-            HostWriteOutcome::Unhandled
+            GattWriteResult::Unhandled
         }
     }
 
-    /// Run one Vial session over `conn`, clearing stale RX chunks first.
-    pub(crate) async fn run<'stack, 'server, P: PacketPool>(
-        server: &'server Server<'_>,
-        conn: &GattConnection<'stack, 'server, P>,
-        service: &VialService<'_>,
-    ) {
-        VIAL_BLE_RX_CHANNEL.clear();
-        let mut rx = VialBleRx;
-        let mut tx = VialBleTx {
-            input_data: server.vial_service.input_data,
-            conn,
-        };
-        service.run_session(&mut rx, &mut tx).await;
+    pub(crate) async fn run<P: PacketPool>(&self, conn: &GattConnection<'_, '_, P>, service: &VialService<'_>) {
+        let mut rx = VialBleRx(&self.incoming);
+        let mut tx = VialBleTx { hid: self.hid, conn };
+        service.run(&mut rx, &mut tx).await;
     }
 }
 
-struct VialBleRx;
+struct VialBleRx<'a>(&'a Channel<NoopRawMutex, [u8; 32], { crate::VIAL_CHANNEL_SIZE }>);
 
-impl ErrorType for VialBleRx {
+impl ErrorType for VialBleRx<'_> {
     type Error = HostTransportError;
 }
 
-impl Read for VialBleRx {
+impl Read for VialBleRx<'_> {
     /// Vial chunks are always 32 bytes. Callers drive this via
     /// `read_exact(&mut [u8; 32])`; smaller buffers are rejected.
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        let chunk = VIAL_BLE_RX_CHANNEL.receive().await;
+        let chunk = self.0.receive().await;
         if buf.len() < chunk.len() {
             error!(
                 "VialBleRx::read called with buf.len() = {} < chunk.len() = {}",
@@ -94,7 +77,7 @@ impl Read for VialBleRx {
 }
 
 struct VialBleTx<'a, 'b, 'c, P: PacketPool> {
-    input_data: Characteristic<[u8; 32]>,
+    hid: &'a VialGattService,
     conn: &'a GattConnection<'b, 'c, P>,
 }
 
@@ -110,7 +93,7 @@ impl<P: PacketPool> Write for VialBleTx<'_, '_, '_, P> {
             error!("Vial reply must be exactly 32 bytes, got {}", buf.len());
             HostTransportError
         })?;
-        if let Err(e) = self.input_data.notify(self.conn, arr, true).await {
+        if let Err(e) = self.hid.input_data.notify(self.conn, arr, true).await {
             error!("Failed to notify Vial reply: {:?}", e);
             return Err(HostTransportError);
         }
@@ -131,23 +114,23 @@ mod tests {
         use crate::test_support::test_block_on as block_on;
 
         let server = Server::new_default("rmk").unwrap();
-        let mut handler = HostGattHandler::new(&server);
+        let handler = HostConnection::new(&server);
 
         assert_eq!(
             block_on(handler.handle_write(server.vial_service.output_data.handle, &[], true)),
-            HostWriteOutcome::Handled
+            GattWriteResult::Handled
         );
         assert_eq!(
             block_on(handler.handle_write(server.vial_service.input_data.cccd_handle.unwrap(), &[], true,)),
-            HostWriteOutcome::CccdUpdated
+            GattWriteResult::CccdWrite
         );
         assert_eq!(
             block_on(handler.handle_write(server.vial_service.hid_control_point.handle, &[0], true,)),
-            HostWriteOutcome::ControlPoint
+            GattWriteResult::HidControlPoint
         );
         assert_eq!(
             block_on(handler.handle_write(u16::MAX, &[], true)),
-            HostWriteOutcome::Unhandled
+            GattWriteResult::Unhandled
         );
     }
 }

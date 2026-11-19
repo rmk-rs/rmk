@@ -2,7 +2,7 @@ use core::fmt::Debug;
 
 use embassy_futures::yield_now;
 #[cfg(feature = "_ble")]
-use embassy_sync::signal::Signal;
+use embassy_sync::watch::Watch;
 use embassy_time::{Duration, Instant, Timer, with_deadline};
 use heapless::Vec;
 use rmk_types::action::{Action, KeyAction, KeyboardAction};
@@ -48,7 +48,7 @@ use crate::keymap::HOLD_BUFFER_SIZE;
 
 // Timestamp of the last key action, the value is the number of seconds since the boot
 #[cfg(feature = "_ble")]
-pub(crate) static LAST_KEY_TIMESTAMP: Signal<crate::RawMutex, u32> = Signal::new();
+pub(crate) static LAST_KEY_TIMESTAMP: Watch<crate::RawMutex, u32, { crate::ble::NUM_HOST_LINKS }> = Watch::new();
 
 /// Led states for the keyboard hid report (its value is received by by the light service in a hid report)
 /// LedIndicator type would be nicer, but that does not have const expr constructor
@@ -227,9 +227,6 @@ pub struct Keyboard<'a> {
     /// Internal media report buf
     media_report: MediaKeyboardReport,
 
-    /// Internal system control report buf
-    system_control_report: SystemControlReport,
-
     /// Used for temporarily disabling combos
     combo_on: bool,
 
@@ -262,7 +259,6 @@ impl<'a> Keyboard<'a> {
             registered: Vec::new(),
             mouse: MouseState::new(),
             media_report: MediaKeyboardReport { usage_id: 0 },
-            system_control_report: SystemControlReport { usage_id: 0 },
             last_key_code: HidKeyCode::No,
             combo_on: true,
             #[cfg(feature = "steno")]
@@ -390,7 +386,7 @@ impl<'a> Keyboard<'a> {
         // Report activity for sleep management
         report_activity();
         #[cfg(feature = "_ble")]
-        LAST_KEY_TIMESTAMP.signal(Instant::now().as_secs() as u32);
+        LAST_KEY_TIMESTAMP.sender().send(Instant::now().as_secs() as u32);
 
         if let KeyboardEventSource::KeyCode(keycode) = event.source {
             self.process_key_action_normal(Action::Key(KeyCode::Hid(keycode)), event)
@@ -1608,13 +1604,11 @@ impl<'a> Keyboard<'a> {
 
     /// Process system control action. System control keys are keys in system page, such as power key.
     async fn process_action_system_control(&mut self, key: SystemControlKey, event: KeyboardEvent) {
-        if event.pressed {
-            self.system_control_report.usage_id = key as u8;
-            self.send_system_control_report().await;
-        } else {
-            self.system_control_report.usage_id = 0;
-            self.send_system_control_report().await;
-        }
+        self.send_report(Report::SystemControlReport(SystemControlReport {
+            usage_id: if event.pressed { key as u8 } else { 0 },
+        }))
+        .await;
+        yield_now().await;
     }
 
     /// Process mouse key action with acceleration support.
@@ -1652,42 +1646,43 @@ impl<'a> Keyboard<'a> {
 
         #[cfg(feature = "_ble")]
         {
-            use crate::NUM_BLE_PROFILE;
+            use crate::NUM_BLE_PROFILES;
             use crate::ble::profile::BleProfileAction;
             use crate::channel::BLE_PROFILE_CHANNEL;
             if event.pressed {
                 // Start the 5s hold gesture for any user key. `fire_user_hold` decides
                 // which ids actually do something, so the id list lives in one place.
                 self.user_hold = Some((Instant::now() + Duration::from_secs(5), id));
-            } else {
-                // A tap sends press and release back to back, so cancel what the press started.
-                self.user_hold = None;
-                // Other user keys are processed when released.
-                if id < NUM_BLE_PROFILE as u8 {
+                // Profile keys select on press, so a hold only has to start re-pairing.
+                if id < NUM_BLE_PROFILES as u8 {
                     info!("Switch to profile: {}", id);
                     BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
-                } else if id == NUM_BLE_PROFILE as u8 {
-                    // Next profile
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Next).await;
-                } else if id == NUM_BLE_PROFILE as u8 + 1 {
-                    // Previous profile
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Previous).await;
-                } else if id == NUM_BLE_PROFILE as u8 + 2 {
-                    // Clear bond on current profile
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond).await;
-                } else if id == NUM_BLE_PROFILE as u8 + 3 {
-                    // Toggle preferred transport (USB <-> BLE);
-                    // only meaningful when both transports exist in this build.
-                    #[cfg(not(feature = "_no_usb"))]
-                    crate::state::toggle_preferred().await;
                 }
-                // Switch to the dongle slot.
                 #[cfg(feature = "dongle")]
-                if id == NUM_BLE_PROFILE as u8 + 5 {
+                if id == NUM_BLE_PROFILES as u8 + 5 {
                     info!("Switch to dongle profile");
                     BLE_PROFILE_CHANNEL
                         .send(BleProfileAction::Switch(crate::ble::profile::DONGLE_PROFILE))
                         .await;
+                }
+            } else {
+                // A tap sends press and release back to back, so cancel what the press started.
+                self.user_hold = None;
+                // Other user keys are processed when released.
+                if id == NUM_BLE_PROFILES as u8 {
+                    // Next profile
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Next).await;
+                } else if id == NUM_BLE_PROFILES as u8 + 1 {
+                    // Previous profile
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Previous).await;
+                } else if id == NUM_BLE_PROFILES as u8 + 2 {
+                    // Clear bond on the profile selected when the BLE task applies it
+                    BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearBond(None)).await;
+                } else if id == NUM_BLE_PROFILES as u8 + 3 {
+                    // Toggle preferred transport (USB <-> BLE);
+                    // only meaningful when both transports exist in this build.
+                    #[cfg(not(feature = "_no_usb"))]
+                    crate::state::toggle_preferred().await;
                 }
             }
         }
@@ -1698,7 +1693,7 @@ impl<'a> Keyboard<'a> {
     /// the hold.
     #[cfg(feature = "_ble")]
     async fn fire_user_hold(&mut self) {
-        use crate::NUM_BLE_PROFILE;
+        use crate::NUM_BLE_PROFILES;
         use crate::ble::profile::BleProfileAction;
         use crate::channel::BLE_PROFILE_CHANNEL;
 
@@ -1706,25 +1701,23 @@ impl<'a> Keyboard<'a> {
             return;
         };
 
-        // Tapping a bond slot switches to it; holding it forgets the bond, switches, then re-pairs.
-        if id < NUM_BLE_PROFILE as u8 {
-            info!("Profile key held: clearing bond on profile {}", id);
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::ClearSlot(id)).await;
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(id)).await;
+        // Keep the old bond until a replacement pairing succeeds.
+        if id < NUM_BLE_PROFILES as u8 {
+            info!("Profile key held: re-pairing profile {}", id);
+            BLE_PROFILE_CHANNEL.send(BleProfileAction::Disconnect(id)).await;
         }
         #[cfg(feature = "split")]
-        if id == NUM_BLE_PROFILE as u8 + 4 {
+        if id == NUM_BLE_PROFILES as u8 + 4 {
             info!("Clear peer");
             publish_event(ClearPeerEvent);
         }
         #[cfg(feature = "dongle")]
-        if id == NUM_BLE_PROFILE as u8 + 5 {
+        if id == NUM_BLE_PROFILES as u8 + 5 {
             use crate::ble::profile::DONGLE_PROFILE;
-            info!("Dongle key held: clearing dongle bond, seeking a dongle");
+            info!("Dongle key held: re-pairing dongle profile");
             BLE_PROFILE_CHANNEL
-                .send(BleProfileAction::ClearSlot(DONGLE_PROFILE))
+                .send(BleProfileAction::Disconnect(DONGLE_PROFILE))
                 .await;
-            BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(DONGLE_PROFILE)).await;
         }
     }
 
@@ -1811,14 +1804,6 @@ impl<'a> Keyboard<'a> {
         self.send_report(Report::KeyboardReport(report)).await;
 
         // Yield once after sending the report to channel
-        yield_now().await;
-    }
-
-    /// Send system control report if needed
-    pub(crate) async fn send_system_control_report(&mut self) {
-        self.send_report(Report::SystemControlReport(self.system_control_report))
-            .await;
-        self.system_control_report.usage_id = 0;
         yield_now().await;
     }
 
@@ -2026,6 +2011,35 @@ mod test {
         create_test_keyboard_with_config(BehaviorConfig::default())
     }
 
+    /// The clear key must not snapshot the selected profile: a queued profile action makes that
+    /// snapshot stale. It sends a clear that names no profile instead, resolved when the BLE task
+    /// applies it.
+    #[cfg(feature = "_ble")]
+    #[test]
+    fn clear_profile_key_defers_the_target_to_the_ble_task() {
+        use crate::ble::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+
+        let mut keyboard = create_test_keyboard();
+        crate::state::update_status(|status| status.selected = 0);
+        BLE_PROFILE_CHANNEL.clear();
+        // A profile switch is still queued when the clear key is tapped.
+        BLE_PROFILE_CHANNEL.try_send(BleProfileAction::Switch(1)).unwrap();
+        let (_, actions) = block_on(embassy_futures::join::join(
+            keyboard.process_user(crate::NUM_BLE_PROFILES as u8 + 2, KeyboardEvent::key(0, 0, false)),
+            async {
+                let switched = BLE_PROFILE_CHANNEL.receive().await;
+                // The BLE task applies the queued switch before the clear action lands.
+                crate::state::update_status(|status| status.selected = 1);
+                (switched, BLE_PROFILE_CHANNEL.receive().await)
+            },
+        ));
+        assert!(matches!(
+            actions,
+            (BleProfileAction::Switch(1), BleProfileAction::ClearBond(None))
+        ));
+    }
+
     #[cfg(feature = "_ble")]
     #[test]
     fn early_tap_hold_and_direct_input_notify_pending_battery_updates() {
@@ -2034,14 +2048,18 @@ mod test {
             behavior.morse.enable_flow_tap = true;
             let mut keyboard = create_test_keyboard_with_config(behavior);
             keyboard.last_press_time = Instant::now();
+            let mut last_key = LAST_KEY_TIMESTAMP.receiver().unwrap();
             // Flow-tap resolves before inner action execution, just like direct HID input.
             for event in [
                 KeyboardEvent::key(2, 2, true),
                 KeyboardEvent::keycode(HidKeyCode::Right, true),
             ] {
-                LAST_KEY_TIMESTAMP.reset();
+                last_key.try_get();
                 keyboard.process_inner(event).await;
-                assert!(LAST_KEY_TIMESTAMP.signaled(), "battery activity missing for {event:?}");
+                assert!(
+                    last_key.try_changed().is_some(),
+                    "battery activity missing for {event:?}"
+                );
                 keyboard
                     .process_inner(KeyboardEvent {
                         pressed: false,
@@ -2059,11 +2077,12 @@ mod test {
             let mut behavior = BehaviorConfig::default();
             behavior.morse.default_profile = MorseProfile::new(Some(false), Some(MorseMode::Normal), Some(200), None);
             let mut keyboard = create_test_keyboard_with_config(behavior);
+            let mut last_key = LAST_KEY_TIMESTAMP.receiver().unwrap();
             for pressed in [true, false] {
-                LAST_KEY_TIMESTAMP.reset();
+                last_key.try_get();
                 keyboard.process_inner(KeyboardEvent::key(2, 2, pressed)).await;
                 assert!(
-                    LAST_KEY_TIMESTAMP.signaled(),
+                    last_key.try_changed().is_some(),
                     "battery update still waiting after tap-hold input"
                 );
             }

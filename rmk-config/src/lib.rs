@@ -236,14 +236,14 @@ impl KeyboardTomlConfig {
     pub(crate) fn auto_calculate_parameters(&mut self) {
         // Update the number of peripherals
         if let Some(split) = &self.split
-            && split.peripheral.len() > self.rmk.split_peripherals_num
+            && split.peripheral.len() > self.rmk.num_split_peripherals
         {
             // eprintln!(
             //     "The number of split peripherals is updated to {} from {}",
             //     split.peripheral.len(),
-            //     self.rmk.split_peripherals_num
+            //     self.rmk.num_split_peripherals
             // );
-            self.rmk.split_peripherals_num = split.peripheral.len();
+            self.rmk.num_split_peripherals = split.peripheral.len();
         }
 
         if let Some(behavior) = &self.behavior {
@@ -340,10 +340,10 @@ pub(crate) struct RmkConstantsConfig {
     pub flash_channel_size: usize,
     /// The number of the split peripherals
     #[serde_inline_default(0)]
-    pub split_peripherals_num: usize,
+    pub num_split_peripherals: usize,
     /// The number of available BLE profiles
     #[serde_inline_default(3)]
-    pub ble_profiles_num: usize,
+    pub num_ble_profiles: usize,
     /// Unibody/split central sleep timeout in seconds, independent of transport (0 = disabled).
     #[serde_inline_default(0)]
     pub split_central_sleep_timeout_seconds: u32,
@@ -472,8 +472,8 @@ impl Default for RmkConstantsConfig {
             report_channel_size: 16,
             vial_channel_size: 4,
             flash_channel_size: 4,
-            split_peripherals_num: 0,
-            ble_profiles_num: 3,
+            num_split_peripherals: 0,
+            num_ble_profiles: 3,
             split_central_sleep_timeout_seconds: 0,
             max_auto_mouse_layers: None,
             rynk_buffer_size: 488,
@@ -770,6 +770,11 @@ pub struct BleConfig {
     pub enabled: bool,
     pub default_tx_power: Option<i8>,
     pub use_2m_phy: Option<bool>,
+    /// Append each host profile's number to its advertising and GATT names; requires `ext_adv`.
+    #[serde(default)]
+    pub profile_name_suffix: bool,
+    /// Simultaneous BLE host and dongle connections; 1 by default.
+    pub max_connections: Option<usize>,
     pub passkey_entry: Option<bool>,
     pub passkey_entry_timeout: Option<u32>,
 }

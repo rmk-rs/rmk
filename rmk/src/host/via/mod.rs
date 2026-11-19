@@ -17,8 +17,6 @@ mod vial;
 pub struct VialService<'a> {
     ctx: KeyboardContext<'a>,
     vial_config: VialConfig<'static>,
-    #[cfg(feature = "host_lock")]
-    locker: crate::host::lock::HostLock<'a>,
 }
 
 impl<'a> VialService<'a> {
@@ -26,18 +24,14 @@ impl<'a> VialService<'a> {
         Self {
             ctx: KeyboardContext::new(keymap),
             vial_config: config.vial_config,
-            // Vial's poll cadence is ~100 ms (`VialCommand::UnlockPoll`).
-            #[cfg(feature = "host_lock")]
-            locker: crate::host::lock::HostLock::new(
-                config.vial_config.unlock_keys,
-                keymap,
-                config.vial_config.insecure,
-                embassy_time::Duration::from_millis(100),
-            ),
         }
     }
 
-    async fn process_via_packet(&self, report: &mut ViaReport) {
+    async fn process_via_packet(
+        &self,
+        report: &mut ViaReport,
+        #[cfg(feature = "host_lock")] locker: &crate::host::lock::HostLock<'_>,
+    ) {
         let command_id = report.output_data[0];
 
         // Caller pre-fills `input_data` from `output_data`, so individual arms
@@ -63,7 +57,7 @@ impl<'a> VialService<'a> {
                             error!("It is not secure to use matrix tester without vial lock");
                         }
                         #[cfg(feature = "host_lock")]
-                        ViaKeyboardInfo::SwitchMatrixState if self.locker.is_unlocked() => {
+                        ViaKeyboardInfo::SwitchMatrixState if locker.is_unlocked() => {
                             let bitmap = &mut report.input_data[2..];
                             self.ctx.read_matrix_state(bitmap);
                             // Vial wants each row's bytes big-endian (QMK matrix_row_t order).
@@ -253,7 +247,7 @@ impl<'a> VialService<'a> {
                     report,
                     &self.vial_config,
                     #[cfg(feature = "host_lock")]
-                    &self.locker,
+                    locker,
                     &self.ctx,
                 )
                 .await
@@ -267,10 +261,15 @@ impl<'a> VialService<'a> {
 }
 
 impl VialService<'_> {
-    /// Drive one Vial session against `rx`/`tx` (32-byte request → 32-byte
-    /// response, processed in place). Returns on any read/write error;
-    /// transport-specific reconnect lives in the caller.
-    pub async fn run_session<R: Read, T: Write>(&self, rx: &mut R, tx: &mut T) {
+    /// Serve 32-byte requests until the connection ends.
+    pub async fn run<R: Read, T: Write>(&self, rx: &mut R, tx: &mut T) {
+        #[cfg(feature = "host_lock")]
+        let locker = crate::host::lock::HostLock::new(
+            self.vial_config.unlock_keys,
+            self.ctx.keymap,
+            self.vial_config.insecure,
+            embassy_time::Duration::from_millis(100),
+        );
         let mut buf = [0u8; 32];
         loop {
             if rx.read_exact(&mut buf).await.is_err() {
@@ -280,7 +279,12 @@ impl VialService<'_> {
                 input_data: buf,
                 output_data: buf,
             };
-            self.process_via_packet(&mut report).await;
+            self.process_via_packet(
+                &mut report,
+                #[cfg(feature = "host_lock")]
+                &locker,
+            )
+            .await;
             if tx.write_all(&report.input_data).await.is_err() {
                 return;
             }
@@ -311,8 +315,19 @@ mod tests {
     /// These tests run no storage task, so writes that wait for one would never be
     /// answered; the stand-in answers them.
     fn process(service: &mut VialService, report: &mut ViaReport) {
+        #[cfg(feature = "host_lock")]
+        let locker = crate::host::lock::HostLock::new(
+            service.vial_config.unlock_keys,
+            service.ctx.keymap,
+            service.vial_config.insecure,
+            embassy_time::Duration::from_millis(100),
+        );
         block_on(embassy_futures::select::select(
-            service.process_via_packet(report),
+            service.process_via_packet(
+                report,
+                #[cfg(feature = "host_lock")]
+                &locker,
+            ),
             crate::test_support::drain_flash_channel(),
         ));
     }

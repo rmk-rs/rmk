@@ -1,7 +1,7 @@
 [keyboard]
 # Replace with your keyboard identity.
 name = "RMK Keyboard"
-product_name = "My RMK Keyboard"
+product_name = "RMK Keyboard"
 vendor_id = 0x4c4b
 product_id = 0x4643
 manufacturer = "haobo"

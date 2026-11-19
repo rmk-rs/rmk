@@ -15,7 +15,7 @@ keys = "A  MO(1)  No"
 [[keymap.layer]]
 keys = "B  _  No"
 
-# `GetMatrixState` and `ClearBleProfile` are gated unconditionally.
+# `GetMatrixState`, `ClearBleProfile` and `DisconnectBleProfile` are gated unconditionally.
 [host]
 unlock_keys = [[0, 2]]
 
@@ -48,24 +48,19 @@ steps = [
   { rynk = { cmd = "GetLedIndicator", reply = { num_lock = false, caps_lock = false, scroll_lock = false, compose = false, kana = false } } },
 ]
 
+# `ble` lists every profile, and a dongle adds one.
 [[test]]
 name = "connection_reads_agree_with_each_other"
+features = ["!dongle"]
 steps = [
   { rynk = { cmd = "GetConnectionType", reply = "Usb" } },
-  { rynk = { cmd = "GetConnectionStatus", reply = { usb = "Configured", ble = { profile = 0, state = "Inactive", bonded = false }, preferred = "Usb" } } },
+  { rynk = { cmd = "GetConnectionStatus", reply = { usb = "Configured", ble = [{ state = "Inactive", bonded = false }, { state = "Inactive", bonded = false }, { state = "Inactive", bonded = false }], selected = 0, preferred = "Usb" } } },
 ]
 
+# Profile bounds come from `num_ble_profiles`; a profile past them is refused
+# rather than queued.
 [[test]]
-name = "ble_status_mirrors_the_connection_status"
-features = ["_ble"]
-steps = [
-  { rynk = { cmd = "GetBleStatus", reply = { profile = 0, state = "Inactive", bonded = false } } },
-]
-
-# Slot bounds come from `num_ble_profiles`; a slot past it is refused rather
-# than queued.
-[[test]]
-name = "ble_profile_switch_checks_the_slot"
+name = "ble_profile_switch_refuses_an_out_of_range_profile"
 features = ["_ble"]
 steps = [
   { rynk = { cmd = "SwitchBleProfile", payload = 0 } },
@@ -73,13 +68,15 @@ steps = [
 ]
 
 [[test]]
-name = "clearing_a_ble_profile_needs_an_unlock"
+name = "disconnecting_or_clearing_a_ble_profile_needs_an_unlock"
 features = ["_ble"]
 steps = [
+  { rynk = { cmd = "DisconnectBleProfile", payload = 0, error = "Locked" } },
   { rynk = { cmd = "ClearBleProfile", payload = 0, error = "Locked" } },
   { press = [0, 2] },
   { rynk = { cmd = "UnlockPoll", reply = { locked = false, unlocking = false, remaining_keys = 0, key_positions = [[0, 2]] } } },
   { release = [0, 2] },
+  { rynk = { cmd = "DisconnectBleProfile", payload = 0 } },
   { rynk = { cmd = "ClearBleProfile", payload = 0 } },
 ]
 
