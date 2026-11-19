@@ -10,8 +10,6 @@ use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use embassy_time::{Duration, MockDriver};
 
-pub const COMBO_MAX_LENGTH: usize = crate::COMBO_MAX_LENGTH;
-
 #[cfg(feature = "vial")]
 pub fn to_via_keycode(action: rmk_types::action::KeyAction) -> u16 {
     crate::host::via::keycode_convert::to_via_keycode(action)
