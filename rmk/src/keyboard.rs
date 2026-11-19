@@ -227,9 +227,6 @@ pub struct Keyboard<'a> {
     /// Internal media report buf
     media_report: MediaKeyboardReport,
 
-    /// Internal system control report buf
-    system_control_report: SystemControlReport,
-
     /// Used for temporarily disabling combos
     combo_on: bool,
 
@@ -262,7 +259,6 @@ impl<'a> Keyboard<'a> {
             registered: Vec::new(),
             mouse: MouseState::new(),
             media_report: MediaKeyboardReport { usage_id: 0 },
-            system_control_report: SystemControlReport { usage_id: 0 },
             last_key_code: HidKeyCode::No,
             combo_on: true,
             #[cfg(feature = "steno")]
@@ -1608,13 +1604,11 @@ impl<'a> Keyboard<'a> {
 
     /// Process system control action. System control keys are keys in system page, such as power key.
     async fn process_action_system_control(&mut self, key: SystemControlKey, event: KeyboardEvent) {
-        if event.pressed {
-            self.system_control_report.usage_id = key as u8;
-            self.send_system_control_report().await;
-        } else {
-            self.system_control_report.usage_id = 0;
-            self.send_system_control_report().await;
-        }
+        self.send_report(Report::SystemControlReport(SystemControlReport {
+            usage_id: if event.pressed { key as u8 } else { 0 },
+        }))
+        .await;
+        yield_now().await;
     }
 
     /// Process mouse key action with acceleration support.
@@ -1810,14 +1804,6 @@ impl<'a> Keyboard<'a> {
         self.send_report(Report::KeyboardReport(report)).await;
 
         // Yield once after sending the report to channel
-        yield_now().await;
-    }
-
-    /// Send system control report if needed
-    pub(crate) async fn send_system_control_report(&mut self) {
-        self.send_report(Report::SystemControlReport(self.system_control_report))
-            .await;
-        self.system_control_report.usage_id = 0;
         yield_now().await;
     }
 
