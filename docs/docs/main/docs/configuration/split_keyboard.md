@@ -177,7 +177,7 @@ col_offset = 2
 [split.peripheral.dfu]
 ```
 
-The empty `[split.peripheral.dfu]` above disables all DFU behaviour for the peripheral (no external flash, no LED); use `[split.peripheral.dfu.external_flash]` to give the peripheral its own external flash instead. A peripheral without a `dfu` section simply uses the global `[dfu]`.
+The empty `[split.peripheral.dfu]` above uses an internal DFU partition for the peripheral, with no external flash or DFU LED; use `[split.peripheral.dfu.external_flash]` to give the peripheral its own external flash instead. A peripheral without a `dfu` section simply uses the global `[dfu]`.
 
 See `examples/use_config/rp2040_dfu_split_dfu_ext` for a complete example (central with external flash DFU, peripheral with internal DFU).
 
