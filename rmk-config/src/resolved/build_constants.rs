@@ -47,6 +47,9 @@ pub struct BuildConstants {
     pub vial_channel_size: usize,
     pub flash_channel_size: usize,
     pub num_split_peripherals: usize,
+    pub split_battery_hand_pair: bool,
+    pub central_battery_presentation: [u8; 7],
+    pub split_battery_peripheral_presentations: Vec<[u8; 7]>,
     pub central_battery_user_description: String,
     pub split_battery_peripheral_ids: Vec<usize>,
     pub split_battery_peripheral_user_descriptions: Vec<String>,
@@ -112,27 +115,12 @@ impl crate::KeyboardTomlConfig {
         } else {
             rmk.num_split_peripherals
         };
-        let central_battery_user_description = self
-            .resolve_battery_config(None)?
-            .battery_user_description
-            .unwrap_or_else(|| "Central".into());
-        let mut split_battery_peripheral_ids = Vec::new();
-        let mut split_battery_peripheral_user_descriptions = Vec::new();
-        if active_features.contains(&"split")
-            && let Some(split) = &self.split
-        {
-            for id in 0..split.peripheral.len() {
-                let battery = self.resolve_battery_config(Some(id))?;
-                if battery.battery_adc_pin.is_some() {
-                    split_battery_peripheral_ids.push(id);
-                    split_battery_peripheral_user_descriptions.push(
-                        battery
-                            .battery_user_description
-                            .unwrap_or_else(|| format!("Peripheral {id}")),
-                    );
-                }
-            }
-        }
+        let (central_battery, peripherals) = self.battery_descriptors(active_features.contains(&"split"))?;
+        let split_battery_peripheral_ids: Vec<_> = peripherals.iter().map(|(id, _)| *id).collect();
+        let (split_battery_peripheral_presentations, split_battery_peripheral_user_descriptions) = peripherals
+            .into_iter()
+            .map(|(_, battery)| (battery.format(), battery.name))
+            .unzip();
         let total_ble_profiles = rmk.num_ble_profiles + usize::from(active_features.contains(&"dongle"));
         if total_ble_profiles == 0 && active_features.contains(&"_ble") {
             return Err("BLE requires at least one BLE profile; set num_ble_profiles > 0 or enable dongle".to_string());
@@ -317,7 +305,10 @@ impl crate::KeyboardTomlConfig {
             vial_channel_size: rmk.vial_channel_size,
             flash_channel_size: rmk.flash_channel_size,
             num_split_peripherals,
-            central_battery_user_description,
+            split_battery_hand_pair: central_battery.is_hand(),
+            central_battery_presentation: central_battery.format(),
+            central_battery_user_description: central_battery.name,
+            split_battery_peripheral_presentations,
             split_battery_peripheral_ids,
             split_battery_peripheral_user_descriptions,
             num_ble_profiles: rmk.num_ble_profiles,

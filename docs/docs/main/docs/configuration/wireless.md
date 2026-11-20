@@ -86,7 +86,7 @@ All three tables accept the same fields. Omit inputs and outputs that your board
 | `adc_divider_total`        | Total resistance of the voltage divider. Requires `battery_adc_pin`.                                                                                                    | `1`                                                      |
 | `charge_state`             | Charging-status input as `{ pin, low_active }`. Set `low_active = true` if the charger drives the pin low while charging.                                               | No charging-status input                                 |
 | `charge_led`               | Indicator output as `{ pin, low_active }`. Set `low_active = true` if driving the pin low turns the LED on. Requires an ADC or charging-status input on the same board. | No indicator LED                                         |
-| `battery_user_description` | Battery name exposed over BLE. A peripheral requires `battery_adc_pin` to expose its battery service.                                                                   | `"Central"` or `"Peripheral N"`, where `N` starts at `0` |
+| `battery_user_description` | Battery name exposed over BLE. A peripheral requires `battery_adc_pin` to expose its battery service.                                                                   | `"Left"` and `"Right"` for side-by-side pairs, otherwise `"Central"` or `"Peripheral N"` (zero-based) |
 
 For unibody keyboards, omitted fields use the board preset; an empty `[battery]` table keeps those defaults.
 
@@ -170,12 +170,11 @@ Battery measurement reserves ADC1. This configuration requires RMK's ESP32 BLE i
 
 ### Peripheral battery reporting over BLE GATT
 
-When peripherals are configured to sample their batteries (see above), their levels are forwarded to the central over the split BLE links and re-exposed to the host through standard Battery Service instances (UUID `0x180F`) on the central's GATT server. The host sees one Battery Service instance for:
+The central exposes its own battery first using the standard Battery Service (`0x180F`) and Battery Level (`0x2A19`). A two-board keyboard that measures both batteries exposes two standard services labeled **Left** and **Right** when the boards share matrix rows and occupy separate column ranges. Hosts that display both sides can show both percentages. A host that uses the first discovered service sees the central, including on right-central keyboards.
 
-- the central's own battery level, and
-- each peripheral with `battery_adc_pin` set by its own table or the board preset.
+All other layouts, including keyboards with three or more boards, expose **Main** as the sole standard battery. Each peripheral with a configured battery ADC exposes one top-level RMK Peripheral Battery service (`061686b6-6a06-4d02-8a8f-c514225bbdb3`). Read or subscribe to its level characteristic (`cd3259e5-a755-4bf0-9f36-690cddccdb51`) for that board's unsigned 8-bit percentage. For peripheral `N` (zero-based), the description field of its presentation descriptor (`0x2904`) is `N + 1`. Its user description (`0x2901`) defaults to `Peripheral N`.
 
-Set `battery_user_description` in each board's battery table to give its battery a name such as `"Left"` or `"Right"`. The host determines whether these names and separate battery levels appear in its interface.
+The layout is fixed at build time and shared by all BLE profiles. When the central measures a new battery level, every subscribed profile receives the latest percentage, even while the keyboard is idle. After upgrading a previously paired multi-board keyboard, a host that cached the old battery services may need to rediscover them.
 
 The split feature uses trouble-host's default client ATT table size. To reserve more space for client-specific attributes such as CCCDs, set `TROUBLE_HOST_CLIENT_ATT_TABLE_SIZE` in the project environment, for example in `.cargo/config.toml`:
 

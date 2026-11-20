@@ -15,8 +15,8 @@ use bt_hci::cmd::le::{
 use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeReadPhy, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
-use embassy_futures::join::join5;
-use embassy_futures::select::{Either, Either3, select, select_slice, select3, select6};
+use embassy_futures::join::{join, join5};
+use embassy_futures::select::{Either, Either3, select, select_slice, select3, select5};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
@@ -30,9 +30,6 @@ use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 
 use crate::TOTAL_BLE_PROFILES;
 use crate::ble::adv::{Adv, advertise};
-use crate::ble::battery_service::BleBatteryServer;
-#[cfg(feature = "split")]
-use crate::ble::battery_service::BlePeripheralBatteryServer;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
 #[cfg(feature = "host")]
@@ -414,9 +411,10 @@ async fn run_ble_keyboard<
     let product_name = device_config.product_name;
 
     info!("Starting advertising and GATT service");
-    let Ok(server) = &Server::new_keyboard(product_name) else {
+    let Ok(server) = &mut Server::new_keyboard(product_name) else {
         panic!("product name is too long for BLE");
     };
+    server.batteries.central_notifications = config.enabled;
 
     unwrap!(
         server
@@ -473,7 +471,6 @@ async fn run_ble_keyboard<
                 stack,
                 profile_id,
                 &profile_manager,
-                config,
                 #[cfg(feature = "host")]
                 host_service,
             )
@@ -744,9 +741,6 @@ async fn gatt_events_task(
     led: &Cell<LedIndicator>,
     #[cfg(feature = "host")] host: Option<&HostConnection<'_>>,
 ) {
-    let level = &server.battery_service.level;
-    #[cfg(feature = "split")]
-    let peripheral_levels = &server.peripheral_battery_services.levels;
     let output_keyboard = &server.hid_service.output_keyboard;
     let hid_control_point = &server.hid_service.hid_control_point;
     let input_keyboard = &server.hid_service.input_keyboard;
@@ -811,19 +805,8 @@ async fn gatt_events_task(
             }
             GattConnectionEvent::Gatt { event: gatt_event } => {
                 let mut cccd_updated = false;
+                let mut subscribed_battery = None;
                 let result = match &gatt_event {
-                    GattEvent::Read(event) => {
-                        debug!("Read GATT Event: {:?}", event.handle());
-                        let Ok(security_level) = conn.raw().security_level() else {
-                            continue;
-                        };
-                        if security_level.encrypted() {
-                            server.refresh_battery_level(event.handle());
-                            None
-                        } else {
-                            Some(AttErrorCode::INSUFFICIENT_ENCRYPTION)
-                        }
-                    }
                     GattEvent::Write(event) => {
                         #[cfg(all(feature = "dongle", feature = "custom_message"))]
                         let is_custom_message = event.handle() == server.dongle_event_service.custom_to_keyboard.handle;
@@ -856,26 +839,20 @@ async fn gatt_events_task(
                             } else {
                                 warn!("Wrong keyboard state data: {:?}", data);
                             }
-                        } else if event.handle() == input_keyboard.cccd_handle.expect("No CCCD for input keyboard")
-                            || event.handle() == mouse.cccd_handle.expect("No CCCD for mouse report")
-                            || event.handle() == media.cccd_handle.expect("No CCCD for media report")
-                            || event.handle() == system_control.cccd_handle.expect("No CCCD for system report")
-                            || event.handle() == level.cccd_handle.expect("No CCCD for battery level")
-                            || {
-                                #[cfg(feature = "split")]
-                                {
-                                    peripheral_levels.iter().any(|level| {
-                                        event.handle()
-                                            == level.cccd_handle.expect("No CCCD for peripheral battery level")
-                                    })
-                                }
-                                #[cfg(not(feature = "split"))]
-                                {
-                                    false
-                                }
-                            }
+                        } else if [
+                            input_keyboard.cccd_handle,
+                            mouse.cccd_handle,
+                            media.cccd_handle,
+                            system_control.cccd_handle,
+                        ]
+                        .contains(&Some(event.handle()))
                         {
                             cccd_updated = true;
+                        } else if let Some(battery) = server.batteries.by_cccd(event.handle()) {
+                            cccd_updated = true;
+                            if encrypted && data == [1, 0] {
+                                subscribed_battery = Some(battery);
+                            }
                         } else if event.handle() == hid_control_point.handle {
                             control_point_write = true;
                         } else if is_custom_message {
@@ -930,8 +907,7 @@ async fn gatt_events_task(
                             Some(AttErrorCode::INSUFFICIENT_ENCRYPTION)
                         }
                     }
-                    GattEvent::Other(_) => None,
-                    GattEvent::NotAllowed(_) => None,
+                    event => server.prepare_read(event, conn, profile_id).err(),
                 };
 
                 // This step is also performed at drop(), but writing it explicitly is necessary
@@ -939,7 +915,6 @@ async fn gatt_events_task(
                 let result = if let Some(code) = result {
                     gatt_event.reject(code)
                 } else {
-                    server.prepare_name_read(&gatt_event, profile_id);
                     gatt_event.accept()
                 };
                 // Update CCCD table after processing the event
@@ -955,7 +930,12 @@ async fn gatt_events_task(
                     }
                 }
                 match result {
-                    Ok(reply) => reply.send().await,
+                    Ok(reply) => {
+                        reply.send().await;
+                        if let Some(battery) = subscribed_battery {
+                            server.batteries.notify(conn, battery).await;
+                        }
+                    }
                     Err(e) => warn!("[gatt] error sending response: {:?}", e),
                 }
             }
@@ -1118,15 +1098,11 @@ async fn serve_keyboard_connection<
     stack: &Stack<'_, C, DefaultPacketPool>,
     profile_id: u8,
     profile_manager: &ProfileManager<TOTAL_BLE_PROFILES>,
-    config: &BleBatteryConfig,
     #[cfg(feature = "host")] host_service: Option<&crate::host::HostService<'_>>,
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);
-    let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
     #[cfg(feature = "split")]
-    let mut ble_peripheral_battery_server = crate::SPLIT_BATTERY_PERIPHERAL_IDS
-        .first()
-        .map(|_| BlePeripheralBatteryServer::new(server, conn));
+    server.batteries.initialize_peripheral_levels(conn);
 
     // `use_1m_phy` exists for legacy host adapters that cannot do 2M.
     // Always use 2M for the dongle link.
@@ -1139,17 +1115,10 @@ async fn serve_keyboard_connection<
     } else {
         PhyKind::Le2M
     };
-    #[cfg(not(feature = "split"))]
-    let battery_task = ble_battery_server.run();
-    #[cfg(feature = "split")]
-    let battery_task = embassy_futures::join::join(ble_battery_server.run(), ble_peripheral_battery_server.run());
-
-    // A PHY request sent while the link is still being set up races the controller's own
-    // link-layer setup, so wait until the connection reports itself ready.
-    let phy_task = async {
+    // Restored subscriptions and PHY negotiation both need an encrypted link.
+    let connected_tasks = async {
         wait_for_connection_status(|s| s.ble[profile_id as usize].state == BleState::Connected).await;
-        update_ble_phy(stack, conn.raw(), host_phy).await;
-        core::future::pending::<()>().await;
+        join(update_ble_phy(stack, conn.raw(), host_phy), server.batteries.run(conn)).await;
     };
 
     // PHY negotiation must not delay GATT disconnection or input routing.
@@ -1212,11 +1181,10 @@ async fn serve_keyboard_connection<
     #[cfg(not(feature = "dongle"))]
     let dongle_event_task = core::future::pending::<()>();
 
-    select6(
+    select5(
         gatt_task,
         connection_params,
-        phy_task,
-        battery_task,
+        connected_tasks,
         writer_task,
         dongle_event_task,
     )
@@ -1352,8 +1320,17 @@ mod tests {
     }
 
     fn with_keyboard(hci: FakeController, bonds: &[super::ProfileInfo], test: impl core::future::Future<Output = ()>) {
+        with_keyboard_battery(hci, bonds, crate::config::BleBatteryConfig::disabled(), test);
+    }
+
+    fn with_keyboard_battery(
+        hci: FakeController,
+        bonds: &[super::ProfileInfo],
+        battery: crate::config::BleBatteryConfig,
+        test: impl core::future::Future<Output = ()>,
+    ) {
         use super::{CONNECTIONS_MAX, DefaultPacketPool, HostResources, L2CAP_CHANNELS_MAX, TOTAL_BLE_PROFILES};
-        use crate::config::{BleBatteryConfig, DeviceConfig};
+        use crate::config::DeviceConfig;
         use crate::core_traits::Runnable;
         use crate::storage::{Storage, StorageKey, StorageValue, async_flash_wrapper};
         use crate::test_support::InMemoryFlash;
@@ -1371,7 +1348,7 @@ mod tests {
                 &stack,
                 [1, 2, 3, 4, 5, 0xC6],
                 &DeviceConfig::default(),
-                &BleBatteryConfig::disabled(),
+                &battery,
                 #[cfg(feature = "host")]
                 None,
             ),
@@ -1625,6 +1602,88 @@ mod tests {
         hci.connect(handle, peer);
         hci.encrypt(handle);
         crate::state::wait_for_connection_status(|s| s.selected_profile().state == BleState::Connected).await;
+    }
+
+    #[test]
+    fn subscribed_profiles_receive_the_latest_central_battery_level_while_idle() {
+        use embassy_time::Timer;
+        use rmk_types::battery::{BatteryStatus, ChargeState};
+
+        use super::profile::BleProfileAction;
+        use crate::channel::BLE_PROFILE_CHANNEL;
+        use crate::event::BatteryStatusEvent;
+
+        let status = |level| BatteryStatus::Available {
+            charge_state: ChargeState::Discharging,
+            level: Some(level),
+        };
+        let set_level = |level| {
+            let status = status(level);
+            crate::input_device::battery::BATTERY_STATUS.lock(|cache| cache.set(status));
+            publish_event(BatteryStatusEvent(status));
+        };
+        let hci = FakeController::default();
+        let mut peers = [bond(0, HOST_A), bond(1, HOST_A)];
+        for peer in &mut peers {
+            peer.info.is_bonded = true;
+        }
+        let two_profiles = cfg!(feature = "ext_adv") && crate::NUM_BLE_PROFILES >= 2 && crate::NUM_HOST_LINKS >= 2;
+        let peers = if two_profiles { &peers[..] } else { &peers[..1] };
+        let battery = crate::config::BleBatteryConfig { enabled: true };
+        with_keyboard_battery(hci.clone(), peers, battery, async {
+            set_level(81);
+            #[cfg(feature = "split")]
+            if let Some(&id) = crate::SPLIT_BATTERY_PERIPHERAL_IDS.first() {
+                crate::split::driver::set_peripheral_battery(id, status(35));
+            }
+            reconnect(&hci, 1, HOST_A).await;
+            Timer::after_millis(1).await;
+            set_level(80);
+
+            // Read By Type finds the current central value before the host subscribes.
+            hci.att_request(1, &[0x08, 1, 0, 0xFF, 0xFF, 0x19, 0x2A]);
+            Timer::after_millis(1).await;
+            let response = hci.att_response(1, 0x09).unwrap();
+            let [3, lo, hi, 80, ..] = response[..] else {
+                panic!("unexpected Battery Level response: {response:?}")
+            };
+            if cfg!(feature = "split") && crate::SPLIT_BATTERY_HAND_PAIR {
+                assert!(matches!(response[4..], [_, _, 35]));
+            } else {
+                assert!(response[4..].is_empty(), "unexpected standard batteries: {response:?}");
+            }
+            let level = u16::from_le_bytes([lo, hi]);
+            assert!(hci.notifications(1, level).is_empty());
+
+            // Discover the CCCD, then subscribe without another battery event.
+            let [start_lo, start_hi] = (level + 1).to_le_bytes();
+            hci.att_request(1, &[0x08, start_lo, start_hi, 0xFF, 0xFF, 0x02, 0x29]);
+            Timer::after_millis(1).await;
+            let response = hci.att_response(1, 0x09).unwrap();
+            let [4, lo, hi, 0, 0, ..] = response[..] else {
+                panic!("unexpected CCCD response: {response:?}")
+            };
+            hci.att_request(1, &[0x12, lo, hi, 1, 0]);
+            Timer::after_millis(1).await;
+            assert_eq!(hci.notifications(1, level), [[80]]);
+
+            if two_profiles {
+                BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await;
+                advertising(&hci, 1).await;
+                reconnect(&hci, 2, HOST_A).await;
+                hci.att_request(2, &[0x12, lo, hi, 1, 0]);
+                Timer::after_millis(1).await;
+                assert_eq!(hci.notifications(2, level), [[80]]);
+            }
+
+            MockDriver::get().advance(Duration::from_secs(75));
+            set_level(79);
+            set_level(78);
+            Timer::after_millis(1).await;
+            for link in 1..=peers.len() as u16 {
+                assert_eq!(hci.notifications(link, level), [[80], [78]]);
+            }
+        });
     }
 
     #[test]

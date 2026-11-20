@@ -3,15 +3,12 @@ use core::fmt::Write as _;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use postcard::experimental::max_size::MaxSize;
-use rmk_types::battery::BatteryStatus;
 use rmk_types::ble::BLE_ADV_NAME_MAX_LEN;
 use trouble_host::att::{AttClient, AttReq};
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
-use super::battery_service::BatteryService;
-#[cfg(feature = "split")]
-use super::battery_service::PeripheralBatteryServices;
+use super::battery_service::BatteryServices;
 use super::device_info::DeviceConfigurationService;
 use crate::BLE_PROFILE_NAME_SUFFIX;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
@@ -37,9 +34,7 @@ use rmk_types::protocol::rynk::{
 #[gatt_server(mutex_type = NoopRawMutex, connections_max = crate::ble::NUM_HOST_LINKS)]
 pub(crate) struct Server {
     profile_name: ProfileName,
-    pub(crate) battery_service: BatteryService,
-    #[cfg(feature = "split")]
-    pub(crate) peripheral_battery_services: PeripheralBatteryServices,
+    pub(super) batteries: BatteryServices,
     pub(crate) hid_service: HidService,
     #[cfg(feature = "vial")]
     pub(crate) vial_service: VialGattService,
@@ -115,65 +110,56 @@ impl Server<'_> {
         })
     }
 
-    pub(crate) fn prepare_name_read(&self, event: &GattEvent<'_, '_, DefaultPacketPool>, slot: u8) {
-        let [name] = self.profile_name.characteristic.as_slice() else {
-            return;
+    /// Prepare dynamic values before TrouBLE constructs the ATT read response.
+    pub(super) fn prepare_read(
+        &self,
+        event: &GattEvent<'_, '_, DefaultPacketPool>,
+        conn: &GattConnection<'_, '_, DefaultPacketPool>,
+        slot: u8,
+    ) -> Result<(), AttErrorCode> {
+        let refresh = |handles| {
+            if !conn.raw().security_level().is_ok_and(|level| level.encrypted()) {
+                return Err(AttErrorCode::INSUFFICIENT_ENCRYPTION);
+            }
+            self.batteries.refresh(conn, handles);
+            Ok(())
         };
-        let uuid = Uuid::from(characteristic::DEVICE_NAME);
-        let reads_name = match event {
-            GattEvent::Read(read) => read.handle() == name.handle,
+        let name_uuid = Uuid::from(characteristic::DEVICE_NAME);
+        let name_range = match event {
+            GattEvent::Read(read) => {
+                let handle = read.handle();
+                debug!("Read GATT Event: {:?}", handle);
+                refresh(handle..=handle)?;
+                handle..=handle
+            }
             GattEvent::Other(other) => match other.payload().incoming() {
                 AttClient::Request(AttReq::ReadByType {
-                    attribute_type,
                     start,
                     end,
-                }) => attribute_type == uuid && (start..=end).contains(&name.handle),
+                    attribute_type,
+                }) if self.batteries.has_level_uuid(attribute_type) => return refresh(start..=end),
+                AttClient::Request(AttReq::ReadByType {
+                    start,
+                    end,
+                    attribute_type,
+                }) if attribute_type == name_uuid => start..=end,
                 AttClient::Request(AttReq::FindByTypeValue {
                     att_type,
                     start_handle,
                     end_handle,
                     ..
-                }) => Uuid::from(att_type) == uuid && (start_handle..=end_handle).contains(&name.handle),
-                _ => false,
+                }) if Uuid::from(att_type) == name_uuid => start_handle..=end_handle,
+                _ => return Ok(()),
             },
-            _ => false,
+            _ => return Ok(()),
         };
-        if reads_name && let Some(value) = self.profile_name(slot).first() {
+        if let [name] = self.profile_name.characteristic.as_slice()
+            && name_range.contains(&name.handle)
+            && let Some(value) = self.profile_name(slot).first()
+        {
             unwrap!(self.set(name, value));
         }
-    }
-
-    pub(crate) fn refresh_battery_level(&self, handle: u16) {
-        let (attribute, status) = if handle == self.battery_service.level.handle {
-            (
-                self.battery_service.level,
-                crate::input_device::battery::current_battery_status(),
-            )
-        } else {
-            #[cfg(feature = "split")]
-            {
-                let Some(slot) = self
-                    .peripheral_battery_services
-                    .levels
-                    .iter()
-                    .position(|level| level.handle == handle)
-                else {
-                    return;
-                };
-                (
-                    self.peripheral_battery_services.levels[slot],
-                    crate::split::driver::current_peripheral_battery_status(crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot])
-                        .unwrap_or(BatteryStatus::Unavailable),
-                )
-            }
-            #[cfg(not(feature = "split"))]
-            return;
-        };
-        if let BatteryStatus::Available { level: Some(level), .. } = status
-            && let Err(e) = self.set(&attribute, &level)
-        {
-            warn!("Failed to refresh battery level: {:?}", e);
-        }
+        Ok(())
     }
 }
 
