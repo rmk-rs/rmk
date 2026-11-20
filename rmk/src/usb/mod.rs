@@ -229,15 +229,15 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(
     #[cfg(not(feature = "_dfu"))]
     const CONTROL_BUF_SIZE: usize = DEFAULT_CONFIG_DESC_SIZE;
 
-    // The MS OS 2.0 descriptor set is an 18-byte set and configuration header
-    // plus 160 bytes for each WinUSB function (Rynk, and the dongle's DFU
-    // runtime): function header, compatible ID and interface GUID. The BOS
-    // platform capability takes 28 bytes on top of the 5-byte BOS header.
-    const WINUSB_FUNCTIONS: usize = cfg!(feature = "dongle") as usize
-        + cfg!(any(feature = "rynk", all(feature = "dongle", not(feature = "vial")))) as usize;
-    const WINUSB: bool = WINUSB_FUNCTIONS != 0;
+    const WINUSB: bool = cfg!(any(feature = "rynk", feature = "dongle"));
     const BOS_BUF_SIZE: usize = if WINUSB { 64 } else { 16 };
-    const MSOS_BUF_SIZE: usize = if WINUSB { 18 + 160 * WINUSB_FUNCTIONS } else { 16 };
+    // Preserve space for custom MS OS descriptors. The DFU runtime's
+    // DeviceInterfaceGUIDs property adds 132 bytes on dongle builds.
+    const MSOS_BUF_SIZE: usize = if WINUSB {
+        256 + 132 * cfg!(feature = "dongle") as usize
+    } else {
+        16
+    };
 
     static BOS_DESC: StaticCell<[u8; BOS_BUF_SIZE]> = StaticCell::new();
     static MSOS_DESC: StaticCell<[u8; MSOS_BUF_SIZE]> = StaticCell::new();
