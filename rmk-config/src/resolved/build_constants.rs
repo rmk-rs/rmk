@@ -131,7 +131,7 @@ impl crate::KeyboardTomlConfig {
                             .unwrap_or_else(|| format!("Peripheral {id}")),
                     );
                     if split.peripheral.len() == 1 && central_battery.battery_adc_pin.is_some() {
-                        central_battery_is_left = central_on_left(&split.central, board);
+                        central_battery_is_left = split.central.is_left_of(board);
                     }
                 }
             }
@@ -382,24 +382,6 @@ fn apply_feature_subscriber_bumps(events: &mut [EventChannel], active_features: 
                 }
             }
         }
-    }
-}
-
-fn central_on_left(central: &crate::SplitBoardConfig, peripheral: &crate::SplitBoardConfig) -> Option<bool> {
-    let first_row = central.row_offset.max(peripheral.row_offset);
-    let end_row = central
-        .row_offset
-        .saturating_add(central.rows)
-        .min(peripheral.row_offset.saturating_add(peripheral.rows));
-    if first_row >= end_row || central.cols == 0 || peripheral.cols == 0 {
-        return None;
-    }
-    if central.col_offset.saturating_add(central.cols) <= peripheral.col_offset {
-        Some(true)
-    } else if peripheral.col_offset.saturating_add(peripheral.cols) <= central.col_offset {
-        Some(false)
-    } else {
-        None
     }
 }
 
