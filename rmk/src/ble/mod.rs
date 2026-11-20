@@ -1,4 +1,3 @@
-use core::cell::Cell;
 #[cfg(feature = "split")]
 use core::pin::Pin;
 use core::pin::pin;
@@ -15,7 +14,7 @@ use bt_hci::cmd::le::{
 use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeReadPhy, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
-use embassy_futures::join::{join, join4, join5};
+use embassy_futures::join::{join, join5};
 use embassy_futures::select::{Either, Either3, select, select_slice, select3};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
@@ -30,7 +29,7 @@ use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 
 use crate::TOTAL_BLE_PROFILES;
 use crate::ble::adv::{Adv, advertise};
-use crate::ble::ble_server::{BleHidServer, Server};
+use crate::ble::ble_server::{HidConnection, Server};
 #[cfg(feature = "host")]
 use crate::ble::host::{GattWriteResult, HOST_WRITE_BUFFER_SIZE, HostConnection};
 use crate::ble::led::BleLedReader;
@@ -705,21 +704,18 @@ pub(crate) async fn ble_task<C: Controller, P: PacketPool, E: EventHandler>(mut 
 /// This is how we interact with read and write requests.
 async fn gatt_events_task(
     server: &Server<'_>,
-    hid: &BleHidServer<'_, '_, '_>,
+    hid: &HidConnection<'_, '_, '_>,
     profile_id: u8,
     profile_manager: &ProfileManager<TOTAL_BLE_PROFILES>,
-    led: &Cell<LedIndicator>,
     #[cfg(feature = "host")] host: Option<&HostConnection<'_>>,
 ) {
     let conn = hid.conn;
-    let output_keyboard = &server.hid_service.output_keyboard;
-    let hid_control_point = &server.hid_service.hid_control_point;
-    let input_keyboard = &server.hid_service.input_keyboard;
+    let input_keyboard = &hid.service.input_keyboard;
     let report_cccds = [
         input_keyboard.cccd_handle,
-        server.hid_service.mouse_report.cccd_handle,
-        server.hid_service.media_report.cccd_handle,
-        server.hid_service.system_report.cccd_handle,
+        hid.service.mouse_report.cccd_handle,
+        hid.service.media_report.cccd_handle,
+        hid.service.system_report.cccd_handle,
     ];
 
     #[cfg(feature = "passkey_entry")]
@@ -804,11 +800,11 @@ async fn gatt_events_task(
                         let mut control_point_write = false;
                         let valid_cccd = encrypted && data_len == size_of::<u16>();
 
-                        if handle == output_keyboard.handle {
+                        if handle == hid.service.output_keyboard.handle {
                             if data_len == 1 {
                                 let led_indicator = LedIndicator::from_bits(data[0]);
                                 debug!("Got keyboard state: {:?}", led_indicator);
-                                led.set(led_indicator);
+                                hid.leds.set(led_indicator);
                                 if profile_id == crate::state::current_profile() {
                                     LED_SIGNAL.signal(led_indicator);
                                 }
@@ -822,7 +818,7 @@ async fn gatt_events_task(
                                 written_cccd = Some(handle);
                                 battery_to_notify = Some(battery);
                             }
-                        } else if handle == hid_control_point.handle {
+                        } else if handle == hid.service.hid_control_point.handle {
                             control_point_write = true;
                         } else if is_custom_message {
                             #[cfg(all(feature = "dongle", feature = "custom_message"))]
@@ -1060,7 +1056,7 @@ async fn serve_keyboard_connection<
     profile_manager: &ProfileManager<TOTAL_BLE_PROFILES>,
     #[cfg(feature = "host")] host_service: Option<&crate::host::HostService<'_>>,
 ) {
-    let ble_hid_server = &BleHidServer::new(server, conn);
+    let hid = &HidConnection::new(server, conn);
 
     // `use_1m_phy` exists for legacy host adapters that cannot do 2M.
     // Always use 2M for the dongle link.
@@ -1078,21 +1074,20 @@ async fn serve_keyboard_connection<
         wait_for_connection_status(|s| s.ble[profile_id as usize].state == BleState::Connected).await;
         join(
             update_ble_phy(stack, conn.raw(), host_phy),
-            server.batteries.report_changes(conn, &ble_hid_server.suspended),
+            server.batteries.report_changes(conn, &hid.suspended),
         )
         .await;
     };
 
-    // The host only reports its lock LEDs when they change, so a switch back to this link replays them.
-    let led = Cell::new(LedIndicator::default());
     let writer_task = async {
         loop {
             wait_for_connection_status(|s| s.selected == profile_id).await;
-            LED_SIGNAL.signal(led.get());
+            // The host sends lock LEDs only when they change. Restore its state on selection.
+            LED_SIGNAL.signal(hid.leds.get());
             // One wait spans every report of this selection, so a report costs no subscriber.
             let mut deselected = pin!(wait_for_connection_status(|s| s.selected != profile_id));
             while let Either::Second(report) = select(deselected.as_mut(), BLE_REPORT_CHANNEL.receive()).await {
-                if let Err(e) = ble_hid_server.write_report(&report).await {
+                if let Err(e) = hid.write_report(&report).await {
                     error!("Failed to send report: {:?}", e);
                 }
             }
@@ -1104,31 +1099,22 @@ async fn serve_keyboard_connection<
                 #[cfg(feature = "steno")]
                 Report::StenoReport(Default::default()),
             ] {
-                let _ = ble_hid_server.write_report(&report).await;
+                let _ = hid.write_report(&report).await;
             }
         }
     };
 
     #[cfg(feature = "host")]
-    let gatt_task = async {
-        match host_service {
-            Some(service) => {
-                let host = HostConnection::new(server);
-                let events = gatt_events_task(server, ble_hid_server, profile_id, profile_manager, &led, Some(&host));
-                // Restart after a session-fatal TX error so the host service survives the rest of the connection.
-                let sessions = async {
-                    loop {
-                        host.run(conn, service).await;
-                    }
-                };
-                select(events, sessions).await;
+    let protocol = host_service.map(|service| (HostConnection::new(server), service));
+    let host_sessions = async {
+        #[cfg(feature = "host")]
+        if let Some((host, service)) = &protocol {
+            // A session-fatal TX error restarts the protocol on the same connection.
+            loop {
+                host.run(conn, service).await;
             }
-            None => gatt_events_task(server, ble_hid_server, profile_id, profile_manager, &led, None).await,
         }
     };
-    #[cfg(not(feature = "host"))]
-    let gatt_task = gatt_events_task(server, ble_hid_server, profile_id, profile_manager, &led);
-
     let dongle_events = async {
         #[cfg(feature = "dongle")]
         if dongle_link {
@@ -1137,8 +1123,16 @@ async fn serve_keyboard_connection<
     };
 
     select(
-        gatt_task,
-        join4(
+        gatt_events_task(
+            server,
+            hid,
+            profile_id,
+            profile_manager,
+            #[cfg(feature = "host")]
+            protocol.as_ref().map(|(host, _)| host),
+        ),
+        join5(
+            host_sessions,
             set_conn_params(stack, conn),
             encrypted_tasks,
             writer_task,

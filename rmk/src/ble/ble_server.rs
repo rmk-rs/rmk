@@ -5,6 +5,7 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use postcard::experimental::max_size::MaxSize;
 use rmk_types::ble::BLE_ADV_NAME_MAX_LEN;
+use rmk_types::led_indicator::LedIndicator;
 use trouble_host::att::{AttClient, AttReq};
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
@@ -37,7 +38,7 @@ use rmk_types::protocol::rynk::{
 pub(crate) struct Server {
     profile_name: ProfileName,
     pub(super) batteries: BatteryServices,
-    pub(crate) hid_service: HidService,
+    hid_service: HidService,
     #[cfg(feature = "vial")]
     pub(crate) vial_service: VialGattService,
     #[cfg(feature = "rynk")]
@@ -262,17 +263,19 @@ pub(crate) struct HidService {
     pub(crate) system_report: [u8; 1],
 }
 
-pub(crate) struct BleHidServer<'stack, 'server, 'conn, P: PacketPool = DefaultPacketPool> {
-    hid: &'conn HidService,
-    pub(super) conn: &'conn GattConnection<'stack, 'server, P>,
+pub(super) struct HidConnection<'stack, 'server, 'conn> {
+    pub(super) service: &'conn HidService,
+    pub(super) conn: &'conn GattConnection<'stack, 'server, DefaultPacketPool>,
+    pub(super) leds: Cell<LedIndicator>,
     pub(super) suspended: Cell<bool>,
 }
 
-impl<'stack, 'server, 'conn, P: PacketPool> BleHidServer<'stack, 'server, 'conn, P> {
-    pub(crate) fn new(server: &'conn Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
+impl<'stack, 'server, 'conn> HidConnection<'stack, 'server, 'conn> {
+    pub(super) fn new(server: &'conn Server, conn: &'conn GattConnection<'stack, 'server, DefaultPacketPool>) -> Self {
         Self {
-            hid: &server.hid_service,
+            service: &server.hid_service,
             conn,
+            leds: Cell::new(LedIndicator::default()),
             suspended: Cell::new(false),
         }
     }
@@ -293,10 +296,10 @@ impl<'stack, 'server, 'conn, P: PacketPool> BleHidServer<'stack, 'server, 'conn,
 
     pub(super) async fn write_report(&self, report: &Report) -> Result<usize, HidError> {
         match report {
-            Report::KeyboardReport(r) => self.notify_report(&self.hid.input_keyboard, r).await,
-            Report::MouseReport(r) => self.notify_report(&self.hid.mouse_report, r).await,
-            Report::MediaKeyboardReport(r) => self.notify_report(&self.hid.media_report, r).await,
-            Report::SystemControlReport(r) => self.notify_report(&self.hid.system_report, r).await,
+            Report::KeyboardReport(r) => self.notify_report(&self.service.input_keyboard, r).await,
+            Report::MouseReport(r) => self.notify_report(&self.service.mouse_report, r).await,
+            Report::MediaKeyboardReport(r) => self.notify_report(&self.service.media_report, r).await,
+            Report::SystemControlReport(r) => self.notify_report(&self.service.system_report, r).await,
             // Plover HID over BLE is not supported: the stock HID-over-GATT service
             // has no stenography characteristic. Drop silently at the writer.
             #[cfg(feature = "steno")]
