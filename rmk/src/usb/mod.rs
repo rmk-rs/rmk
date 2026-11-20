@@ -229,12 +229,15 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(
     #[cfg(not(feature = "_dfu"))]
     const CONTROL_BUF_SIZE: usize = DEFAULT_CONFIG_DESC_SIZE;
 
-    // The rynk MS OS 2.0 descriptor set (WinUSB binding) takes ~178 bytes, the
-    // dongle's DFU runtime interface another 28, and the BOS platform
-    // capability 28 on top of the 5-byte BOS header.
     const WINUSB: bool = cfg!(any(feature = "rynk", feature = "dongle"));
     const BOS_BUF_SIZE: usize = if WINUSB { 64 } else { 16 };
-    const MSOS_BUF_SIZE: usize = if WINUSB { 256 } else { 16 };
+    // Preserve space for custom MS OS descriptors. The DFU runtime's
+    // DeviceInterfaceGUIDs property adds 132 bytes on dongle builds.
+    const MSOS_BUF_SIZE: usize = if WINUSB {
+        256 + 132 * cfg!(feature = "dongle") as usize
+    } else {
+        16
+    };
 
     static BOS_DESC: StaticCell<[u8; BOS_BUF_SIZE]> = StaticCell::new();
     static MSOS_DESC: StaticCell<[u8; MSOS_BUF_SIZE]> = StaticCell::new();

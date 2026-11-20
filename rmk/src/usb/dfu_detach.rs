@@ -14,6 +14,11 @@ use static_cell::StaticCell;
 /// Bus-powered, so boot time is plug-in time.
 const PLUG_WINDOW: Duration = Duration::from_secs(30);
 
+/// GUID WinUSB registers the DFU runtime interface under. Chrome (WebUSB) and
+/// nusb find a WinUSB function's device path through it; without one,
+/// WebUSB's `claimInterface` never completes on Windows.
+const DEVICE_INTERFACE_GUID: &str = "{289C94D7-FCC4-4C54-87E1-1E92C7A17CFE}";
+
 struct Detach;
 
 impl app_mode::Handler for Detach {
@@ -41,5 +46,9 @@ pub(crate) fn register<D: Driver<'static>>(builder: &mut Builder<'static, D>) {
     // WinUSB, so a browser or libusb can send the DETACH on Windows.
     app_mode::usb_dfu(builder, state, |func| {
         func.msos_feature(msos::CompatibleIdFeatureDescriptor::new("WINUSB", ""));
+        func.msos_feature(msos::RegistryPropertyFeatureDescriptor::new(
+            "DeviceInterfaceGUIDs",
+            msos::PropertyData::RegMultiSz(&[DEVICE_INTERFACE_GUID]),
+        ));
     });
 }
