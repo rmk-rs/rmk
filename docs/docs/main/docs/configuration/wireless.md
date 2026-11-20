@@ -174,7 +174,7 @@ The central exposes its own battery first using the standard Battery Service (`0
 
 All other layouts, including keyboards with three or more boards, expose **Main** as the sole standard battery. Each peripheral with a configured battery ADC exposes one top-level RMK Peripheral Battery service (`061686b6-6a06-4d02-8a8f-c514225bbdb3`). Read or subscribe to its level characteristic (`cd3259e5-a755-4bf0-9f36-690cddccdb51`) for that board's unsigned 8-bit percentage. For peripheral `N` (zero-based), the description field of its presentation descriptor (`0x2904`) is `N + 1`. Its user description (`0x2901`) defaults to `Peripheral N`.
 
-The layout is fixed at build time and shared by all BLE profiles. When the central measures a new battery level, every subscribed profile receives the latest percentage, even while the keyboard is idle. After upgrading a previously paired multi-board keyboard, a host that cached the old battery services may need to rediscover them.
+The layout is fixed at build time and shared by all BLE profiles. When the central measures a new battery level, subscribed hosts receive the latest percentage, even while the keyboard is idle. A host that sends HID Suspend can still read fresh levels. Its battery notifications resume with the latest values when it sends Exit Suspend or re-enables keyboard input notifications. Other hosts continue to receive updates. After upgrading a previously paired multi-board keyboard, a host that cached the old battery services may need to rediscover them.
 
 The split feature uses trouble-host's default client ATT table size. To reserve more space for client-specific attributes such as CCCDs, set `TROUBLE_HOST_CLIENT_ATT_TABLE_SIZE` in the project environment, for example in `.cargo/config.toml`:
 

@@ -110,56 +110,32 @@ impl Server<'_> {
         })
     }
 
-    /// Prepare dynamic values before TrouBLE constructs the ATT read response.
-    pub(super) fn prepare_read(
-        &self,
-        event: &GattEvent<'_, '_, DefaultPacketPool>,
-        conn: &GattConnection<'_, '_, DefaultPacketPool>,
-        slot: u8,
-    ) -> Result<(), AttErrorCode> {
-        let refresh = |handles| {
-            if !conn.raw().security_level().is_ok_and(|level| level.encrypted()) {
-                return Err(AttErrorCode::INSUFFICIENT_ENCRYPTION);
-            }
-            self.batteries.refresh(conn, handles);
-            Ok(())
+    pub(super) fn prepare_name_read(&self, event: &GattEvent<'_, '_, DefaultPacketPool>, slot: u8) {
+        let [name] = self.profile_name.characteristic.as_slice() else {
+            return;
         };
-        let name_uuid = Uuid::from(characteristic::DEVICE_NAME);
-        let name_range = match event {
-            GattEvent::Read(read) => {
-                let handle = read.handle();
-                debug!("Read GATT Event: {:?}", handle);
-                refresh(handle..=handle)?;
-                handle..=handle
-            }
+        let uuid = Uuid::from(characteristic::DEVICE_NAME);
+        let reads_name = match event {
+            GattEvent::Read(read) => read.handle() == name.handle,
             GattEvent::Other(other) => match other.payload().incoming() {
                 AttClient::Request(AttReq::ReadByType {
+                    attribute_type,
                     start,
                     end,
-                    attribute_type,
-                }) if self.batteries.has_level_uuid(attribute_type) => return refresh(start..=end),
-                AttClient::Request(AttReq::ReadByType {
-                    start,
-                    end,
-                    attribute_type,
-                }) if attribute_type == name_uuid => start..=end,
+                }) => attribute_type == uuid && (start..=end).contains(&name.handle),
                 AttClient::Request(AttReq::FindByTypeValue {
                     att_type,
                     start_handle,
                     end_handle,
                     ..
-                }) if Uuid::from(att_type) == name_uuid => start_handle..=end_handle,
-                _ => return Ok(()),
+                }) => Uuid::from(att_type) == uuid && (start_handle..=end_handle).contains(&name.handle),
+                _ => false,
             },
-            _ => return Ok(()),
+            _ => false,
         };
-        if let [name] = self.profile_name.characteristic.as_slice()
-            && name_range.contains(&name.handle)
-            && let Some(value) = self.profile_name(slot).first()
-        {
+        if reads_name && let Some(value) = self.profile_name(slot).first() {
             unwrap!(self.set(name, value));
         }
-        Ok(())
     }
 }
 

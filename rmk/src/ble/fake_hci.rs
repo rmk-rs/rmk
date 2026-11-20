@@ -91,13 +91,46 @@ impl FakeController {
         self.state.events.try_send((PacketKind::AclData, packet)).unwrap();
     }
 
-    /// Payload of the latest ATT response with this opcode.
-    pub(crate) fn att_response(&self, handle: u16, opcode: u8) -> Option<Vec<u8>> {
-        let acl = self.state.acl.lock().unwrap();
-        acl.iter().rev().find_map(|(link, frame)| match frame.as_slice() {
-            [_, _, 4, 0, op, payload @ ..] if *link == handle && *op == opcode => Some(payload.to_vec()),
-            _ => None,
-        })
+    pub(crate) async fn att_exchange(&self, link: u16, request: &[u8], response_opcode: u8) -> Vec<u8> {
+        let start = self.state.acl.lock().unwrap().len();
+        self.att_request(link, request);
+        embassy_time::Timer::after_millis(1).await;
+        self.state.acl.lock().unwrap()[start..]
+            .iter()
+            .find_map(|(handle, frame)| match frame.as_slice() {
+                [_, _, 4, 0, op, payload @ ..] if *handle == link && *op == response_opcode => Some(payload.to_vec()),
+                _ => None,
+            })
+            .expect("missing ATT response to this request")
+    }
+
+    pub(crate) async fn read_by_type(&self, link: u16, start_handle: u16, uuid: u16) -> Vec<u8> {
+        let [lo, hi] = start_handle.to_le_bytes();
+        let [uuid_lo, uuid_hi] = uuid.to_le_bytes();
+        self.att_exchange(link, &[0x08, lo, hi, 0xff, 0xff, uuid_lo, uuid_hi], 0x09)
+            .await
+    }
+
+    pub(crate) async fn set_notifications(&self, link: u16, value_handle: u16, enabled: bool) {
+        let reply = self.read_by_type(link, value_handle + 1, 0x2902).await;
+        let [4, lo, hi, _, _, ..] = reply[..] else {
+            panic!("unexpected CCCD response: {reply:?}")
+        };
+        self.att_exchange(link, &[0x12, lo, hi, u8::from(enabled), 0], 0x13)
+            .await;
+    }
+
+    pub(crate) async fn characteristic_handle(&self, link: u16, uuid: u16) -> u16 {
+        let mut start = 1;
+        loop {
+            let reply = self.read_by_type(link, start, 0x2803).await;
+            for entry in reply[1..].chunks_exact(usize::from(reply[0])) {
+                if entry[5..] == uuid.to_le_bytes() {
+                    return u16::from_le_bytes([entry[3], entry[4]]);
+                }
+                start = u16::from_le_bytes([entry[0], entry[1]]) + 1;
+            }
+        }
     }
 
     /// The minimum interval of every advertising setup, in 0.625 ms units.

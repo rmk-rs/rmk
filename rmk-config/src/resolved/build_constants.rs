@@ -146,13 +146,15 @@ impl crate::KeyboardTomlConfig {
         };
 
         let mut event_config = self.event.clone();
-        // ble/mod.rs: each host link runs a battery service. Its HID writer waits
-        // for the link's profile to be selected, and until the link encrypts its
-        // PHY task waits too.
-        event_config.battery_status.subs += num_host_links;
-        event_config.connection_status_change.subs += 2 * num_host_links;
-        if !split_battery_peripheral_ids.is_empty() {
-            event_config.peripheral_battery.subs += num_host_links;
+        if num_host_links > 0 {
+            // One subscriber maintains the GATT values; each link has its own notification task.
+            let battery_subscribers = 1 + num_host_links;
+            event_config.battery_status.subs += battery_subscribers;
+            if !split_battery_peripheral_ids.is_empty() {
+                event_config.peripheral_battery.subs += battery_subscribers;
+            }
+            // Both the HID writer and the PHY task wait for connection status.
+            event_config.connection_status_change.subs += 2 * num_host_links;
         }
         // host/rynk/topics.rs: each host link opens its own Rynk session.
         if active_features.contains(&"rynk") {
@@ -398,7 +400,7 @@ mod tests {
             (vec!["split"], 2),
             (vec!["rynk"], 2),
             (vec!["split", "rynk"], 3),
-            (vec!["split", "rynk", "_ble"], 5),
+            (vec!["split", "rynk", "_ble"], 6),
         ] {
             let constants = config.build_constants(&features).unwrap();
             let event = constants.events.iter().find(|e| e.name == "battery_status").unwrap();
@@ -490,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn ble_battery_subscribers_cover_each_host_link() {
+    fn ble_battery_subscribers_cover_the_server_and_each_host_link() {
         let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
         config.rmk.num_ble_profiles = 5;
         config.event.battery_status.subs = 2;
@@ -509,11 +511,11 @@ mod tests {
 
         let cases: &[(&[&str], Option<usize>, usize, usize)] = &[
             (&[], None, 3, 3),
-            (&["_ble"], None, 4, 3),
-            (&["_ble", "_ext_adv"], Some(5), 8, 3),
-            (&["split", "_ble"], None, 5, 4),
-            (&["split", "_ble", "_ext_adv"], Some(5), 9, 8),
-            (&["split", "_ble", "_ext_adv", "dongle"], Some(6), 11, 9),
+            (&["_ble"], None, 5, 3),
+            (&["_ble", "_ext_adv"], Some(5), 9, 3),
+            (&["split", "_ble"], None, 6, 5),
+            (&["split", "_ble", "_ext_adv"], Some(5), 10, 9),
+            (&["split", "_ble", "_ext_adv", "dongle"], Some(6), 12, 10),
         ];
         for &(features, max_connections, battery_status_subs, peripheral_battery_subs) in cases {
             config.ble = Some(BleConfig {

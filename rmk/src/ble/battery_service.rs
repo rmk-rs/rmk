@@ -1,10 +1,13 @@
-use core::ops::RangeInclusive;
+use core::cell::Cell;
 
+#[cfg(feature = "split")]
+use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::Timer;
 use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
 
+use super::ble_server::Server;
 #[cfg(feature = "split")]
 use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
@@ -50,8 +53,9 @@ impl BatteryLevel {
             _ => (service::BATTERY.into(), characteristic::BATTERY_LEVEL.into()),
         };
         let mut service = table.add_service(Service::new(service_uuid));
-        let mut level =
-            service.add_characteristic_small(level_uuid, [CharacteristicProp::Read, CharacteristicProp::Notify], 0u8);
+        let mut level = service
+            .add_characteristic_small(level_uuid, [CharacteristicProp::Read, CharacteristicProp::Notify], 0u8)
+            .read_permission(PermissionLevel::EncryptionRequired);
         level.add_descriptor_ro(
             descriptors::CHARACTERISTIC_PRESENTATION_FORMAT,
             PermissionLevel::Allowed,
@@ -78,14 +82,6 @@ impl BatteryLevel {
         match status {
             BatteryStatus::Available { level, .. } => level,
             BatteryStatus::Unavailable => None,
-        }
-    }
-
-    fn refresh(&self, conn: &GattConnection<'_, '_, impl PacketPool>) {
-        if let Some(level) = self.percent()
-            && let Err(e) = conn.set(&self.value, &level)
-        {
-            warn!("Failed to refresh battery handle {}: {:?}", self.value.handle, e);
         }
     }
 }
@@ -130,50 +126,66 @@ impl BatteryServices {
         self.levels().find(|battery| battery.value.cccd_handle == Some(handle))
     }
 
-    pub(super) fn has_level_uuid(&self, uuid: Uuid) -> bool {
-        self.levels().any(|battery| battery.value.uuid == uuid)
+    /// Keep one readable value per battery, including while notifications are disabled.
+    pub(super) async fn update_values(&self, server: &Server<'_>) -> ! {
+        let mut central = BatteryStatusEvent::subscriber();
+        #[cfg(feature = "split")]
+        let mut peripherals = (!self.peripherals.is_empty()).then(PeripheralBatteryEvent::subscriber);
+        loop {
+            while central.try_next_message_pure().is_some() {}
+            #[cfg(feature = "split")]
+            if let Some(changes) = &mut peripherals {
+                while changes.try_next_message_pure().is_some() {}
+            }
+            for battery in self.levels() {
+                if let Some(level) = battery.percent()
+                    && let Err(e) = server.set(&battery.value, &level)
+                {
+                    warn!("Failed to update battery handle {}: {:?}", battery.value.handle, e);
+                }
+            }
+            #[cfg(feature = "split")]
+            if let Some(changes) = &mut peripherals {
+                select(central.next_message_pure(), changes.next_message_pure()).await;
+                continue;
+            }
+            central.next_message_pure().await;
+        }
     }
 
     pub(super) async fn notify(&self, conn: &GattConnection<'_, '_, impl PacketPool>, battery: &BatteryLevel) {
         if (self.central_notifications || battery.source != Source::Central)
             && let Some(level) = battery.percent()
-            && let Err(e) = battery.value.notify(conn, &level, true).await
+            && let Err(e) = battery.value.notify(conn, &level, false).await
         {
             warn!("Failed to notify battery handle {}: {:?}", battery.value.handle, e);
         }
     }
 
-    pub(super) fn refresh(&self, conn: &GattConnection<'_, '_, impl PacketPool>, handles: RangeInclusive<u16>) {
-        for battery in self.levels().filter(|battery| handles.contains(&battery.value.handle)) {
-            battery.refresh(conn);
-        }
-    }
-
-    #[cfg(feature = "split")]
-    pub(super) fn initialize_peripheral_levels(&self, conn: &GattConnection<'_, '_, impl PacketPool>) {
-        for battery in &self.peripherals {
-            battery.refresh(conn);
+    pub(super) async fn replay(&self, conn: &GattConnection<'_, '_, impl PacketPool>) {
+        for battery in self.levels() {
+            self.notify(conn, battery).await;
         }
     }
 
     /// Starts once this connection is encrypted and its subscriptions have been restored.
-    pub(super) async fn run(&self, conn: &GattConnection<'_, '_, impl PacketPool>) {
-        let reports = self.report_central(conn);
+    pub(super) async fn run(&self, conn: &GattConnection<'_, '_, impl PacketPool>, suspended: &Cell<bool>) {
+        let reports = self.report_central(conn, suspended);
         #[cfg(feature = "split")]
-        let reports = embassy_futures::join::join(reports, self.report_peripherals(conn));
+        let reports = embassy_futures::join::join(reports, self.report_peripherals(conn, suspended));
         reports.await;
     }
 
-    async fn report_central(&self, conn: &GattConnection<'_, '_, impl PacketPool>) {
+    async fn report_central(&self, conn: &GattConnection<'_, '_, impl PacketPool>, suspended: &Cell<bool>) {
         if !self.central_notifications {
             return core::future::pending().await;
         }
         let mut changes = BatteryStatusEvent::subscriber();
-        // A restored subscription needs the cached level before the next measurement.
         loop {
             while changes.try_next_message_pure().is_some() {}
-            if let Some(level) = self.central.percent()
-                && let Err(e) = self.central.value.notify(conn, &level, true).await
+            if !suspended.get()
+                && let Some(level) = self.central.percent()
+                && let Err(e) = self.central.value.notify(conn, &level, false).await
             {
                 warn!("Failed to notify central battery level: {:?}", e);
                 Timer::after_secs(2).await;
@@ -184,20 +196,23 @@ impl BatteryServices {
     }
 
     #[cfg(feature = "split")]
-    async fn report_peripherals(&self, conn: &GattConnection<'_, '_, impl PacketPool>) {
+    async fn report_peripherals(&self, conn: &GattConnection<'_, '_, impl PacketPool>, suspended: &Cell<bool>) {
         if self.peripherals.is_empty() {
             return;
         }
         let mut changes = PeripheralBatteryEvent::subscriber();
         for battery in &self.peripherals {
-            self.notify(conn, battery).await;
+            if !suspended.get() {
+                self.notify(conn, battery).await;
+            }
         }
         loop {
             let event = changes.next_message_pure().await;
-            if let Some(battery) = self
-                .peripherals
-                .iter()
-                .find(|battery| battery.source == Source::Peripheral(event.id))
+            if !suspended.get()
+                && let Some(battery) = self
+                    .peripherals
+                    .iter()
+                    .find(|battery| battery.source == Source::Peripheral(event.id))
             {
                 self.notify(conn, battery).await;
             }
@@ -233,6 +248,10 @@ mod tests {
             let len = table.read(service_handle, 0, &mut bytes).unwrap();
             assert_eq!(bytes[..len] == service::BATTERY.to_le_bytes(), standard);
             assert_eq!(value.uuid == Uuid::from(characteristic::BATTERY_LEVEL), standard);
+            assert_eq!(
+                table.permissions(value.handle).unwrap().read,
+                PermissionLevel::EncryptionRequired
+            );
             assert!(value.props.any(&[CharacteristicProp::Read]));
             assert!(value.props.any(&[CharacteristicProp::Notify]));
             for (uuid, expected) in [
