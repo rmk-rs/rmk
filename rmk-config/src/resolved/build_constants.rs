@@ -614,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn battery_descriptors_follow_the_matrix_only_for_a_two_board_pair() {
+    fn battery_layout_uses_sides_for_a_measured_pair_and_keeps_peripheral_ids_otherwise() {
         let board = |row_offset, col_offset| SplitBoardConfig {
             rows: 3,
             cols: 4,
@@ -633,17 +633,24 @@ mod tests {
                 peripheral,
                 ..Default::default()
             });
-            config.build_constants(&["split"]).unwrap()
+            config.auto_calculate_parameters();
+            config.build_constants(&["split", "_ble"]).unwrap()
         };
-        for (central_col, peripheral_col, side) in [(0, 4, Some(true)), (4, 0, Some(false)), (0, 2, None)] {
-            let constants = resolve(board(0, central_col), vec![board(0, peripheral_col)]);
-            assert_eq!(constants.central_battery_is_left, side);
-            assert_eq!(constants.central_battery_user_description, "Central");
-            assert_eq!(constants.split_battery_peripheral_user_descriptions, ["Peripheral 0"]);
+        for (central_col, peripheral, side) in [
+            (0, board(0, 4), Some(true)),
+            (4, board(0, 0), Some(false)),
+            (0, board(0, 2), None),
+            (0, board(3, 4), None),
+        ] {
+            let pair = resolve(board(0, central_col), vec![peripheral]);
+            assert_eq!(pair.central_battery_is_left, side);
+            assert_eq!(pair.central_battery_user_description, "Central");
+            assert_eq!(pair.split_battery_peripheral_user_descriptions, ["Peripheral 0"]);
         }
-        assert_eq!(resolve(board(0, 0), vec![board(3, 4)]).central_battery_is_left, None);
-        let mut unmeasured = board(0, 0);
-        unmeasured.battery = None;
+        let unmeasured = SplitBoardConfig {
+            battery: None,
+            ..board(0, 0)
+        };
         assert_eq!(
             resolve(unmeasured.clone(), vec![board(0, 4)]).central_battery_is_left,
             None
@@ -652,60 +659,16 @@ mod tests {
         assert_eq!(multi.central_battery_is_left, None);
         assert_eq!(multi.split_battery_peripheral_ids, [1]);
         assert_eq!(multi.split_battery_peripheral_user_descriptions, ["Peripheral 1"]);
-    }
 
-    #[test]
-    fn resolves_split_battery_peripheral_ids() {
-        let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
-        config.split = Some(SplitConfig {
-            peripheral: vec![
-                SplitBoardConfig {
-                    battery: Some(BatteryTomlConfig {
-                        battery_adc_pin: Some("P0_02".to_string()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                SplitBoardConfig::default(),
-                SplitBoardConfig {
-                    battery: Some(BatteryTomlConfig {
-                        battery_adc_pin: Some("P0_04".to_string()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
-        config.auto_calculate_parameters();
-
-        let constants = config.build_constants(&["split", "_ble"]).unwrap();
-
-        assert_eq!(constants.split_battery_peripheral_ids, [0, 2]);
-    }
-
-    #[test]
-    fn split_with_battery_ids_uses_zero_based_peripheral_ids() {
-        let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
-        config.split = Some(SplitConfig {
-            peripheral: vec![
-                SplitBoardConfig::default(),
-                SplitBoardConfig {
-                    battery: Some(BatteryTomlConfig {
-                        battery_adc_pin: Some("P0_02".to_string()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
-        config.auto_calculate_parameters();
-
-        let constants = config.build_constants(&["split"]).unwrap();
-
-        assert_eq!(constants.split_battery_peripheral_ids, [1]);
-        assert_eq!(constants.split_battery_peripheral_user_descriptions, ["Peripheral 1"]);
+        let sparse = resolve(
+            board(0, 0),
+            vec![board(0, 4), SplitBoardConfig::default(), board(0, 12)],
+        );
+        assert_eq!(sparse.split_battery_peripheral_ids, [0, 2]);
+        assert_eq!(
+            sparse.split_battery_peripheral_user_descriptions,
+            ["Peripheral 0", "Peripheral 2"]
+        );
     }
 
     #[test]

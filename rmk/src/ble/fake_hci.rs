@@ -12,6 +12,7 @@ use bt_hci::data::{AclPacket, IsoPacket, SyncPacket};
 use bt_hci::{ControllerToHostPacket, FromHciBytes, PacketKind, WriteHci};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
+use trouble_host::prelude::{Uuid, declarations, descriptors};
 
 #[derive(Clone, Default)]
 pub(crate) struct FakeController {
@@ -104,15 +105,34 @@ impl FakeController {
             .expect("missing ATT response to this request")
     }
 
-    pub(crate) async fn read_by_type(&self, link: u16, start_handle: u16, uuid: u16) -> Vec<u8> {
+    pub(super) async fn read_by_type(&self, link: u16, start_handle: u16, uuid: Uuid) -> Vec<u8> {
         let [lo, hi] = start_handle.to_le_bytes();
-        let [uuid_lo, uuid_hi] = uuid.to_le_bytes();
-        self.att_exchange(link, &[0x08, lo, hi, 0xff, 0xff, uuid_lo, uuid_hi], 0x09)
-            .await
+        let mut request = vec![0x08, lo, hi, 0xff, 0xff];
+        request.extend_from_slice(uuid.as_raw());
+        self.att_exchange(link, &request, 0x09).await
+    }
+
+    pub(crate) async fn read_u8_by_type(&self, link: u16, start: u16, uuid: Uuid) -> Vec<(u16, u8)> {
+        let reply = self.read_by_type(link, start, uuid).await;
+        let [3, entries @ ..] = reply.as_slice() else {
+            panic!("unexpected Read By Type response for a u8: {reply:?}")
+        };
+        let (levels, trailing) = entries.as_chunks::<3>();
+        assert!(trailing.is_empty() && !levels.is_empty());
+        levels
+            .iter()
+            .map(|&[lo, hi, level]| (u16::from_le_bytes([lo, hi]), level))
+            .collect()
     }
 
     pub(crate) async fn set_notifications(&self, link: u16, value_handle: u16, enabled: bool) {
-        let reply = self.read_by_type(link, value_handle + 1, 0x2902).await;
+        let reply = self
+            .read_by_type(
+                link,
+                value_handle + 1,
+                descriptors::CLIENT_CHARACTERISTIC_CONFIGURATION.into(),
+            )
+            .await;
         let [4, lo, hi, _, _, ..] = reply[..] else {
             panic!("unexpected CCCD response: {reply:?}")
         };
@@ -123,7 +143,9 @@ impl FakeController {
     pub(crate) async fn characteristic_handle(&self, link: u16, uuid: u16) -> u16 {
         let mut start = 1;
         loop {
-            let reply = self.read_by_type(link, start, 0x2803).await;
+            let reply = self
+                .read_by_type(link, start, declarations::CHARACTERISTIC.into())
+                .await;
             for entry in reply[1..].chunks_exact(usize::from(reply[0])) {
                 if entry[5..] == uuid.to_le_bytes() {
                     return u16::from_le_bytes([entry[3], entry[4]]);

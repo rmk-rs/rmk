@@ -7,7 +7,6 @@ use embassy_time::Timer;
 use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
 
-use super::ble_server::Server;
 #[cfg(feature = "split")]
 use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
@@ -28,6 +27,7 @@ pub(super) struct BatteryServices {
 pub(super) struct BatteryLevel {
     value: Characteristic<u8>,
     source: Source,
+    last_percent: Cell<Option<u8>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -83,11 +83,14 @@ impl BatteryLevel {
         Self {
             value: level.build(),
             source,
+            last_percent: Cell::new(None),
         }
     }
+}
 
-    fn percent(&self) -> Option<u8> {
-        let status = match self.source {
+impl Source {
+    fn percent(self) -> Option<u8> {
+        let status = match self {
             Source::Central => crate::input_device::battery::current_battery_status(),
             #[cfg(feature = "split")]
             Source::Peripheral(id) => crate::split::driver::current_peripheral_battery_status(id)?,
@@ -140,7 +143,7 @@ impl BatteryServices {
     }
 
     /// Keep one readable value per battery, including while notifications are disabled.
-    pub(super) async fn update_values(&self, server: &Server<'_>) -> ! {
+    pub(super) async fn update_values<const MAX: usize>(&self, table: &AttributeTable<'_, NoopRawMutex, MAX>) -> ! {
         let mut central = BatteryStatusEvent::subscriber();
         #[cfg(feature = "split")]
         let mut peripherals = (!self.peripherals.is_empty()).then(PeripheralBatteryEvent::subscriber);
@@ -151,10 +154,13 @@ impl BatteryServices {
                 while changes.try_next_message_pure().is_some() {}
             }
             for battery in self.levels() {
-                if let Some(level) = battery.percent()
-                    && let Err(e) = server.set(&battery.value, &level)
+                if let Some(level) = battery.source.percent()
+                    && battery.last_percent.get() != Some(level)
                 {
-                    warn!("Failed to update battery handle {}: {:?}", battery.value.handle, e);
+                    match table.set(&battery.value, &level) {
+                        Ok(()) => battery.last_percent.set(Some(level)),
+                        Err(e) => warn!("Failed to update battery handle {}: {:?}", battery.value.handle, e),
+                    }
                 }
             }
             #[cfg(feature = "split")]
@@ -168,7 +174,7 @@ impl BatteryServices {
 
     pub(super) async fn notify(&self, conn: &GattConnection<'_, '_, impl PacketPool>, battery: &BatteryLevel) {
         if (self.central_notifications || battery.source != Source::Central)
-            && let Some(level) = battery.percent()
+            && let Some(level) = battery.last_percent.get()
             && let Err(e) = battery.value.notify(conn, &level, false).await
         {
             warn!("Failed to notify battery handle {}: {:?}", battery.value.handle, e);
@@ -191,20 +197,23 @@ impl BatteryServices {
 
     async fn report_central(&self, conn: &GattConnection<'_, '_, impl PacketPool>, suspended: &Cell<bool>) {
         if !self.central_notifications {
-            return core::future::pending().await;
+            return;
         }
         let mut changes = BatteryStatusEvent::subscriber();
         loop {
             while changes.try_next_message_pure().is_some() {}
             if !suspended.get()
-                && let Some(level) = self.central.percent()
+                && let Some(level) = self.central.last_percent.get()
                 && let Err(e) = self.central.value.notify(conn, &level, false).await
             {
                 warn!("Failed to notify central battery level: {:?}", e);
                 Timer::after_secs(2).await;
                 continue;
             }
-            changes.next_message_pure().await;
+            while !matches!(
+                changes.next_message_pure().await.0,
+                BatteryStatus::Available { level: Some(_), .. }
+            ) {}
         }
     }
 
@@ -222,6 +231,7 @@ impl BatteryServices {
         loop {
             let event = changes.next_message_pure().await;
             if !suspended.get()
+                && matches!(event.state.0, BatteryStatus::Available { level: Some(_), .. })
                 && let Some(battery) = self
                     .peripherals
                     .iter()
@@ -256,13 +266,20 @@ mod tests {
         assert_eq!(table.len(), 7 * boards.len());
         for (level, (source, side, description, name)) in levels.iter().zip(boards) {
             let value = level.value;
-            let standard = source == Source::Central || side.is_some();
+            let (service_uuid, level_uuid): (Uuid, Uuid) = if source == Source::Central || side.is_some() {
+                (service::BATTERY.into(), characteristic::BATTERY_LEVEL.into())
+            } else {
+                (
+                    0x061686b6_6a06_4d02_8a8f_c514225bbdb3u128.into(),
+                    0xcd3259e5_a755_4bf0_9f36_690cddccdb51u128.into(),
+                )
+            };
             let mut bytes = [0; 32];
             let service_handle = value.handle - 2;
             assert_eq!(table.uuid(service_handle), Some(declarations::PRIMARY_SERVICE.into()));
             let len = table.read(service_handle, 0, &mut bytes).unwrap();
-            assert_eq!(bytes[..len] == service::BATTERY.to_le_bytes(), standard);
-            assert_eq!(value.uuid == Uuid::from(characteristic::BATTERY_LEVEL), standard);
+            assert_eq!(&bytes[..len], service_uuid.as_raw());
+            assert_eq!(table.uuid(value.handle), Some(level_uuid));
             assert_eq!(
                 table.permissions(value.handle).unwrap().read,
                 PermissionLevel::EncryptionRequired

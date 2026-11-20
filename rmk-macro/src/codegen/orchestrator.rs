@@ -348,36 +348,16 @@ fn expand_main(
         watchdog_task,
     );
 
-    let vial_config = if host.vial_enabled {
-        quote! { vial_config: VIAL_CONFIG,}
-    } else {
-        quote! {}
-    };
-
-    let rmk_config = if hardware.storage.is_some() {
-        quote! {
-            #[allow(clippy::needless_update)]
-            let rmk_config = ::rmk::config::RmkConfig {
-                device_config: keyboard_device_config,
-                #vial_config
-                #lock_config
-                #rynk_layout_field
-                storage_config,
-                ..Default::default()
-            };
-        }
-    } else {
-        quote! {
-            #[allow(clippy::needless_update)]
-            let rmk_config = ::rmk::config::RmkConfig {
-                device_config: keyboard_device_config,
-                #vial_config
-                #lock_config
-                #rynk_layout_field
-                ..Default::default()
-            };
-        }
-    };
+    let vial_config = host
+        .vial_enabled
+        .then(|| quote! { vial_config: VIAL_CONFIG, });
+    let storage_config = hardware
+        .storage
+        .is_some()
+        .then(|| quote! { storage_config, });
+    let ble_battery_config = (hardware.communication.ble_enabled()
+        && hardware.battery.adc.is_some())
+    .then(|| quote! { ble_battery_config: ::rmk::config::BleBatteryConfig { enabled: true }, });
 
     let main_function_sig = if hardware.chip.series == ChipSeries::Esp32 {
         quote! {
@@ -420,8 +400,16 @@ fn expand_main(
             // Bake the physical-layout blob (rynk) as a compile-time const
             #layout_blob_static
 
-            // Set all keyboard config
-            #rmk_config
+            #[allow(clippy::needless_update)]
+            let rmk_config = ::rmk::config::RmkConfig {
+                device_config: keyboard_device_config,
+                #vial_config
+                #lock_config
+                #rynk_layout_field
+                #storage_config
+                #ble_battery_config
+                ..Default::default()
+            };
 
             // Initialize the registered processors
             #registered_processor_initializers

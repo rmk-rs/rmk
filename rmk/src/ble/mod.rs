@@ -15,8 +15,8 @@ use bt_hci::cmd::le::{
 use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeReadPhy, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
-use embassy_futures::join::{join, join5};
-use embassy_futures::select::{Either, Either3, select, select_slice, select3, select5};
+use embassy_futures::join::{join, join4, join5};
+use embassy_futures::select::{Either, Either3, select, select_slice, select3};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
@@ -693,7 +693,7 @@ async fn run_ble_keyboard<
         ble_task(runner, &event_handler),
         connection_loop,
         // Apply pending measurements before workers answer GATT requests in the same poll.
-        select(server.batteries.update_values(server), select_slice(workers)),
+        select(server.batteries.update_values(server.table()), select_slice(workers)),
         run_led_reader(&mut ble_led_reader, ConnectionType::Ble),
         profile_manager.run(),
     )
@@ -1050,14 +1050,9 @@ async fn disconnect(conn: &GattConnection<'_, '_, DefaultPacketPool>) {
 }
 
 /// Set keyboard <-> host connection parameters
-pub(crate) async fn set_conn_params<
-    'a,
-    'b,
-    C: Controller + ControllerCmdSync<LeReadLocalSupportedFeatures>,
-    P: PacketPool,
->(
-    stack: &Stack<'_, C, P>,
-    conn: &GattConnection<'a, 'b, P>,
+async fn set_conn_params<P: PacketPool>(
+    stack: &Stack<'_, impl Controller + ControllerCmdSync<LeReadLocalSupportedFeatures>, P>,
+    conn: &GattConnection<'_, '_, P>,
 ) {
     let requests = [
         // The first request is what Apple devices accept:
@@ -1084,10 +1079,6 @@ pub(crate) async fn set_conn_params<
         )
         .await;
     }
-
-    // Wait forever. This is because we want the conn params setting can be interrupted when the connection is lost.
-    // So this task shouldn't quit after setting the conn params.
-    core::future::pending::<()>().await;
 }
 
 /// Serve one host connection until its GATT Disconnected event.
@@ -1119,7 +1110,7 @@ async fn serve_keyboard_connection<
         PhyKind::Le2M
     };
     // Restored subscriptions and PHY negotiation both need an encrypted link.
-    let connected_tasks = async {
+    let encrypted_tasks = async {
         wait_for_connection_status(|s| s.ble[profile_id as usize].state == BleState::Connected).await;
         join(
             update_ble_phy(stack, conn.raw(), host_phy),
@@ -1127,9 +1118,6 @@ async fn serve_keyboard_connection<
         )
         .await;
     };
-
-    // PHY negotiation must not delay GATT disconnection or input routing.
-    let connection_params = set_conn_params(stack, conn);
 
     // The host only reports its lock LEDs when they change, so a switch back to this link replays them.
     let led = Cell::new(LedIndicator::default());
@@ -1177,26 +1165,23 @@ async fn serve_keyboard_connection<
     #[cfg(not(feature = "host"))]
     let gatt_task = gatt_events_task(server, conn, profile_id, profile_manager, &led, &suspended);
 
-    // When dongle feature is enabled, send `DongleEvent` to the dongle.
-    #[cfg(feature = "dongle")]
-    let dongle_event_task = async {
-        if !dongle_link {
-            core::future::pending::<()>().await;
+    let dongle_events = async {
+        #[cfg(feature = "dongle")]
+        if dongle_link {
+            crate::dongle::event::run(server, conn).await;
         }
-        crate::dongle::event::run(server, conn).await;
     };
-    #[cfg(not(feature = "dongle"))]
-    let dongle_event_task = core::future::pending::<()>();
 
-    select5(
+    select(
         gatt_task,
-        connection_params,
-        connected_tasks,
-        writer_task,
-        dongle_event_task,
+        join4(
+            set_conn_params(stack, conn),
+            encrypted_tasks,
+            writer_task,
+            dongle_events,
+        ),
     )
     .await;
-    disconnect(conn).await;
 }
 
 // Set the connection PHY.
@@ -1281,8 +1266,10 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     use embassy_futures::select::select3;
-    use embassy_time::{Duration, MockDriver};
+    use embassy_time::{Duration, MockDriver, Timer};
+    use rmk_types::battery::{BatteryStatus, ChargeState};
     use rmk_types::ble::{BleState, BleStatus};
+    use trouble_host::prelude::{characteristic, descriptors};
 
     use super::fake_hci::FakeController;
     use crate::event::{Axis, AxisEvent, AxisValType, KeyboardEvent, PointingEvent, publish_event};
@@ -1611,87 +1598,93 @@ mod tests {
         crate::state::wait_for_connection_status(|s| s.selected_profile().state == BleState::Connected).await;
     }
 
-    fn set_battery_levels(central: u8, _peripheral: u8) {
-        use rmk_types::battery::{BatteryStatus, ChargeState};
+    fn battery_profiles(second_peer: [u8; 6]) -> Vec<super::ProfileInfo> {
+        let mut peers = vec![bond(0, HOST_A)];
+        if crate::NUM_HOST_LINKS > 1 && crate::NUM_BLE_PROFILES > 1 {
+            peers.push(bond(1, second_peer));
+        }
+        for peer in &mut peers {
+            peer.info.is_bonded = true;
+        }
+        peers
+    }
 
-        use crate::event::BatteryStatusEvent;
+    async fn reconnect_second_profile(hci: &FakeController, peer: [u8; 6]) {
+        crate::channel::BLE_PROFILE_CHANNEL
+            .send(super::profile::BleProfileAction::Switch(1))
+            .await;
+        advertising(hci, 1).await;
+        reconnect(hci, 2, peer).await;
+    }
 
-        let status = |level| BatteryStatus::Available {
+    fn set_central_level(level: Option<u8>) {
+        let status = BatteryStatus::Available {
             charge_state: ChargeState::Discharging,
-            level: Some(level),
+            level,
         };
-        let central = status(central);
-        crate::input_device::battery::BATTERY_STATUS.lock(|cache| cache.set(central));
-        publish_event(BatteryStatusEvent(central));
+        crate::input_device::battery::BATTERY_STATUS.lock(|cache| cache.set(status));
+        publish_event(crate::event::BatteryStatusEvent(status));
+    }
+
+    async fn set_peripheral_levels(_percent: u8) {
         #[cfg(feature = "split")]
-        if let Some(&id) = crate::SPLIT_BATTERY_PERIPHERAL_IDS.first() {
-            crate::split::driver::set_peripheral_battery(id, status(_peripheral));
+        for (slot, &id) in crate::SPLIT_BATTERY_PERIPHERAL_IDS.iter().enumerate() {
+            let status = BatteryStatus::Available {
+                charge_state: ChargeState::Discharging,
+                level: Some(_percent.saturating_sub(slot as u8)),
+            };
+            crate::split::driver::set_peripheral_battery(id, status);
+            Timer::after_millis(1).await;
         }
     }
 
     #[test]
     fn subscribed_profiles_receive_the_latest_central_battery_level_while_idle() {
-        use embassy_time::Timer;
-
-        use super::profile::BleProfileAction;
-        use crate::channel::BLE_PROFILE_CHANNEL;
-
         let hci = FakeController::default();
-        let mut peers = [bond(0, HOST_A), bond(1, HOST_A)];
-        for peer in &mut peers {
-            peer.info.is_bonded = true;
-        }
-        let two_profiles = cfg!(feature = "ext_adv") && crate::NUM_BLE_PROFILES >= 2 && crate::NUM_HOST_LINKS >= 2;
-        let peers = if two_profiles { &peers[..] } else { &peers[..1] };
+        let peers = battery_profiles(HOST_A);
         let battery = crate::config::BleBatteryConfig { enabled: true };
-        with_keyboard_battery(hci.clone(), peers, battery, async {
-            set_battery_levels(81, 35);
+        with_keyboard_battery(hci.clone(), &peers, battery, async {
+            set_central_level(None);
             reconnect(&hci, 1, HOST_A).await;
-            Timer::after_millis(1).await;
-            set_battery_levels(80, 35);
-            let response = hci.read_by_type(1, 1, 0x2a19).await;
-            let [3, lo, hi, 80, ..] = response[..] else {
-                panic!("unexpected Battery Level response: {response:?}")
-            };
-            if cfg!(feature = "split") && crate::CENTRAL_BATTERY_IS_LEFT.is_some() {
-                assert!(matches!(response[4..], [_, _, 35]));
-            } else {
-                assert!(response[4..].is_empty(), "unexpected standard batteries: {response:?}");
-            }
-            let level = u16::from_le_bytes([lo, hi]);
-            assert!(hci.notifications(1, level).is_empty());
-
+            let level = hci.characteristic_handle(1, 0x2a19).await;
             hci.set_notifications(1, level, true).await;
-            assert_eq!(hci.notifications(1, level), [[80]]);
+            assert!(hci.notifications(1, level).is_empty());
+            set_central_level(Some(0));
+            Timer::after_millis(1).await;
+            assert_eq!(hci.notifications(1, level), [[0]]);
 
-            if two_profiles {
-                BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await;
-                advertising(&hci, 1).await;
-                reconnect(&hci, 2, HOST_A).await;
+            if peers.len() == 2 {
+                reconnect_second_profile(&hci, HOST_A).await;
                 hci.set_notifications(2, level, true).await;
-                assert_eq!(hci.notifications(2, level), [[80]]);
+                assert_eq!(hci.notifications(2, level), [[0]]);
             }
 
             MockDriver::get().advance(Duration::from_secs(75));
-            set_battery_levels(79, 35);
-            set_battery_levels(78, 35);
+            set_central_level(Some(79));
+            set_central_level(Some(78));
             Timer::after_millis(1).await;
-            for link in 1..=peers.len() as u16 {
-                assert_eq!(hci.notifications(link, level), [[80], [78]]);
+            let selected = peers.len() as u16;
+            for link in 1..=selected {
+                assert_eq!(hci.notifications(link, level), [[0], [78]]);
             }
 
-            let selected_link = peers.len() as u16;
-            hci.set_notifications(selected_link, level, false).await;
-            set_battery_levels(77, 35);
+            hci.set_notifications(selected, level, false).await;
+            set_central_level(Some(77));
             Timer::after_millis(1).await;
-            assert_eq!(hci.notifications(selected_link, level), [[80], [78]]);
-            hci.set_notifications(selected_link, level, true).await;
-            assert_eq!(hci.notifications(selected_link, level), [[80], [78], [77]]);
+            assert_eq!(hci.notifications(selected, level), [[0], [78]]);
+            set_central_level(None);
+            hci.set_notifications(selected, level, true).await;
+            assert_eq!(hci.notifications(selected, level), [[0], [78], [77]]);
+            if peers.len() == 2 {
+                assert_eq!(hci.notifications(1, level), [[0], [78], [77]]);
+            }
 
             let starts = hci.advertising_starts();
-            hci.drop_link(selected_link);
+            hci.drop_link(selected);
             advertising(&hci, starts).await;
-            set_battery_levels(76, 35);
+            set_central_level(Some(76));
+            Timer::after_millis(1).await;
+            set_central_level(None);
             reconnect(&hci, 3, HOST_A).await;
             Timer::after_millis(1).await;
             assert_eq!(hci.notifications(3, level), [[76]]);
@@ -1702,104 +1695,102 @@ mod tests {
     fn battery_reads_are_current_with_central_notifications_disabled() {
         let hci = FakeController::default();
         with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
+            set_central_level(Some(73));
             reconnect(&hci, 1, HOST_A).await;
-            set_battery_levels(73, 45);
-            let response = hci.read_by_type(1, 1, 0x2a19).await;
-            let [3, lo, hi, 73, ..] = response[..] else {
-                panic!("unexpected Battery Level response: {response:?}")
-            };
-            assert_eq!(hci.att_exchange(1, &[0x0a, lo, hi], 0x0b).await, [73]);
-            let level = u16::from_le_bytes([lo, hi]);
+            // Unplugging clears the processor's estimate until the next ADC sample.
+            set_central_level(None);
+            Timer::after_millis(10).await;
+            let (level, percent) = hci.read_u8_by_type(1, 1, characteristic::BATTERY_LEVEL.into()).await[0];
+            assert_eq!(percent, 73);
+            let [lo, hi] = level.to_le_bytes();
             hci.set_notifications(1, level, true).await;
+            set_central_level(Some(72));
+            assert_eq!(hci.att_exchange(1, &[0x0a, lo, hi], 0x0b).await, [72]);
             assert!(hci.notifications(1, level).is_empty());
-        });
-    }
-
-    #[test]
-    fn battery_notifications_wait_for_a_measurement_and_deliver_zero() {
-        let hci = FakeController::default();
-        let battery = crate::config::BleBatteryConfig { enabled: true };
-        with_keyboard_battery(hci.clone(), &[bond(0, HOST_A)], battery, async {
-            reconnect(&hci, 1, HOST_A).await;
-            let level = hci.characteristic_handle(1, 0x2a19).await;
-            hci.set_notifications(1, level, true).await;
-            assert!(hci.notifications(1, level).is_empty());
-            set_battery_levels(0, 0);
-            embassy_time::Timer::after_millis(1).await;
-            assert_eq!(hci.notifications(1, level), [[0]]);
         });
     }
 
     #[test]
     fn hid_suspend_pauses_battery_notifications_only_for_that_host() {
-        use embassy_time::Timer;
-
-        use super::profile::BleProfileAction;
-        use crate::channel::BLE_PROFILE_CHANNEL;
-
         let hci = FakeController::default();
-        let peers = [bond(0, HOST_A), bond(1, HOST_B)];
-        let two_hosts = cfg!(feature = "ext_adv") && crate::NUM_BLE_PROFILES >= 2 && crate::NUM_HOST_LINKS >= 2;
-        let peers = if two_hosts { &peers[..] } else { &peers[..1] };
-        with_keyboard_battery(
-            hci.clone(),
-            peers,
-            crate::config::BleBatteryConfig { enabled: true },
-            async {
-                set_battery_levels(80, 60);
-                reconnect(&hci, 1, HOST_A).await;
-                let response = hci.read_by_type(1, 1, 0x2a19).await;
-                assert_eq!(response[0], 3);
-                let (entries, trailing) = response[1..].as_chunks::<3>();
-                assert!(trailing.is_empty());
-                let levels: Vec<_> = entries
-                    .iter()
-                    .map(|&[lo, hi, _]| u16::from_le_bytes([lo, hi]))
-                    .collect();
-                assert_eq!(levels.len(), 1 + usize::from(crate::CENTRAL_BATTERY_IS_LEFT.is_some()));
-                let [lo, hi] = hci.characteristic_handle(1, 0x2a4c).await.to_le_bytes();
-                let keyboard_input = hci.characteristic_handle(1, 0x2a4d).await;
-                hci.set_notifications(1, keyboard_input, true).await;
-                for &level in &levels {
-                    hci.set_notifications(1, level, true).await;
+        let peers = battery_profiles(HOST_B);
+        let battery = crate::config::BleBatteryConfig { enabled: true };
+        with_keyboard_battery(hci.clone(), &peers, battery, async {
+            set_central_level(Some(80));
+            set_peripheral_levels(60).await;
+            reconnect(&hci, 1, HOST_A).await;
+            let mut levels = hci.read_u8_by_type(1, 1, characteristic::BATTERY_LEVEL.into()).await;
+            assert_eq!(levels.len(), 1 + usize::from(crate::CENTRAL_BATTERY_IS_LEFT.is_some()));
+            if let Some(central_left) = crate::CENTRAL_BATTERY_IS_LEFT {
+                for (&(handle, _), left) in levels.iter().zip([central_left, !central_left]) {
+                    let format = hci
+                        .read_by_type(1, handle + 1, descriptors::CHARACTERISTIC_PRESENTATION_FORMAT.into())
+                        .await;
+                    assert_eq!(
+                        u16::from_le_bytes([format[8], format[9]]),
+                        if left { 0x010D } else { 0x010E }
+                    );
                 }
-                if two_hosts {
-                    BLE_PROFILE_CHANNEL.send(BleProfileAction::Switch(1)).await;
-                    advertising(&hci, 1).await;
-                    reconnect(&hci, 2, HOST_B).await;
-                    for &level in &levels {
-                        hci.set_notifications(2, level, true).await;
-                    }
+            } else {
+                let peripheral_uuid = 0xcd3259e5_a755_4bf0_9f36_690cddccdb51u128.into();
+                while levels.len() < 1 + crate::NUM_SPLIT_BATTERY_PERIPHERALS {
+                    let next = levels.last().unwrap().0 + 1;
+                    levels.extend(hci.read_u8_by_type(1, next, peripheral_uuid).await);
                 }
-
-                for (step, resume_with_input) in [false, true].into_iter().enumerate() {
-                    hci.att_request(1, &[0x52, lo, hi, 0]); // HID Suspend
-                    Timer::after_millis(1).await;
-                    hci.set_notifications(1, keyboard_input, false).await;
-                    let charge = [79 - step as u8, 59 - step as u8];
-                    set_battery_levels(charge[0], charge[1]);
-                    let response = hci.read_by_type(1, 1, 0x2a19).await;
-                    for (index, &level) in levels.iter().enumerate() {
-                        assert_eq!(response[3 + 3 * index], charge[index]);
-                        assert_eq!(hci.notifications(1, level).len(), 1 + step);
-                        if two_hosts {
-                            assert_eq!(hci.notifications(2, level).last().unwrap().as_slice(), [charge[index]]);
-                        }
-                    }
-                    if resume_with_input {
-                        hci.set_notifications(1, keyboard_input, true).await;
+            }
+            for (index, &(level, percent)) in levels.iter().enumerate() {
+                assert_eq!(
+                    percent,
+                    if index == 0 {
+                        80
                     } else {
-                        hci.att_request(1, &[0x52, lo, hi, 1]); // Exit Suspend
-                        Timer::after_millis(1).await;
+                        61u8.saturating_sub(index as u8)
                     }
-                    for (index, &level) in levels.iter().enumerate() {
-                        let reports = hci.notifications(1, level);
+                );
+                hci.set_notifications(1, level, true).await;
+            }
+            let [lo, hi] = hci.characteristic_handle(1, 0x2a4c).await.to_le_bytes();
+            let input = hci.characteristic_handle(1, 0x2a4d).await;
+            hci.set_notifications(1, input, true).await;
+            if peers.len() == 2 {
+                reconnect_second_profile(&hci, HOST_B).await;
+                for &(level, _) in &levels {
+                    hci.set_notifications(2, level, true).await;
+                }
+            }
+
+            for (step, resume_with_input) in [false, true].into_iter().enumerate() {
+                hci.att_request(1, &[0x52, lo, hi, 0]); // HID Suspend
+                Timer::after_millis(1).await;
+                hci.set_notifications(1, input, false).await;
+                let delta = 1 + step as u8;
+                set_central_level(Some(80 - delta));
+                set_peripheral_levels(60 - delta).await;
+                for &(level, initial) in &levels {
+                    let expected = initial.saturating_sub(delta);
+                    let [lo, hi] = level.to_le_bytes();
+                    assert_eq!(hci.att_exchange(1, &[0x0a, lo, hi], 0x0b).await, [expected]);
+                    assert_eq!(hci.notifications(1, level).len(), 1 + step);
+                    if peers.len() == 2 {
+                        let reports = hci.notifications(2, level);
                         assert_eq!(reports.len(), 2 + step);
-                        assert_eq!(reports.last().unwrap().as_slice(), [charge[index]]);
+                        assert_eq!(reports.last().unwrap(), &[expected]);
                     }
                 }
-            },
-        );
+                set_central_level(None);
+                if resume_with_input {
+                    hci.set_notifications(1, input, true).await;
+                } else {
+                    hci.att_request(1, &[0x52, lo, hi, 1]); // Exit Suspend
+                    Timer::after_millis(1).await;
+                }
+                for &(level, initial) in &levels {
+                    let reports = hci.notifications(1, level);
+                    assert_eq!(reports.len(), 2 + step);
+                    assert_eq!(reports.last().unwrap(), &[initial.saturating_sub(delta)]);
+                }
+            }
+        });
     }
 
     #[test]
