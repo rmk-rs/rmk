@@ -746,9 +746,12 @@ async fn gatt_events_task(
     let output_keyboard = &server.hid_service.output_keyboard;
     let hid_control_point = &server.hid_service.hid_control_point;
     let input_keyboard = &server.hid_service.input_keyboard;
-    let mouse = &server.hid_service.mouse_report;
-    let media = &server.hid_service.media_report;
-    let system_control = &server.hid_service.system_report;
+    let report_cccds = [
+        input_keyboard.cccd_handle,
+        server.hid_service.mouse_report.cccd_handle,
+        server.hid_service.media_report.cccd_handle,
+        server.hid_service.system_report.cccd_handle,
+    ];
 
     #[cfg(feature = "passkey_entry")]
     let mut passkey_state = PasskeyInputState::new();
@@ -807,15 +810,17 @@ async fn gatt_events_task(
             }
             GattConnectionEvent::Gatt { event: gatt_event } => {
                 let mut written_cccd = None;
-                let mut resume_batteries = false;
-                let result = match &gatt_event {
+                let mut battery_to_notify = None;
+                let was_suspended = suspended.get();
+                let reject_unencrypted = match &gatt_event {
                     GattEvent::Write(event) => {
                         let Ok(security_level) = conn.raw().security_level() else {
                             continue;
                         };
                         let encrypted = security_level.encrypted();
+                        let handle = event.handle();
                         #[cfg(all(feature = "dongle", feature = "custom_message"))]
-                        let is_custom_message = event.handle() == server.dongle_event_service.custom_to_keyboard.handle;
+                        let is_custom_message = handle == server.dongle_event_service.custom_to_keyboard.handle;
                         #[cfg(not(all(feature = "dongle", feature = "custom_message")))]
                         let is_custom_message = false;
                         // trouble-host 0.7 exposes written bytes via a closure; copy them out
@@ -828,9 +833,9 @@ async fn gatt_events_task(
                         });
                         let data = &data_buf[..data_len.min(data_buf.len())];
                         let mut control_point_write = false;
-                        let mut cccd_updated = false;
+                        let valid_cccd = encrypted && data_len == size_of::<u16>();
 
-                        if event.handle() == output_keyboard.handle {
+                        if handle == output_keyboard.handle {
                             if data_len == 1 {
                                 let led_indicator = LedIndicator::from_bits(data[0]);
                                 debug!("Got keyboard state: {:?}", led_indicator);
@@ -841,17 +846,14 @@ async fn gatt_events_task(
                             } else {
                                 warn!("Wrong keyboard state data: {:?}", data);
                             }
-                        } else if [
-                            input_keyboard.cccd_handle,
-                            mouse.cccd_handle,
-                            media.cccd_handle,
-                            system_control.cccd_handle,
-                        ]
-                        .contains(&Some(event.handle()))
-                            || server.batteries.by_cccd(event.handle()).is_some()
-                        {
-                            cccd_updated = true;
-                        } else if event.handle() == hid_control_point.handle {
+                        } else if report_cccds.contains(&Some(handle)) {
+                            written_cccd = valid_cccd.then_some(handle);
+                        } else if let Some(battery) = server.batteries.by_cccd(handle) {
+                            if valid_cccd {
+                                written_cccd = Some(handle);
+                                battery_to_notify = Some(battery);
+                            }
+                        } else if handle == hid_control_point.handle {
                             control_point_write = true;
                         } else if is_custom_message {
                             #[cfg(all(feature = "dongle", feature = "custom_message"))]
@@ -871,17 +873,17 @@ async fn gatt_events_task(
                         } else {
                             #[cfg(feature = "host")]
                             if let Some(host) = host {
-                                match host.handle_write(event.handle(), data, encrypted).await {
+                                match host.handle_write(handle, data, encrypted).await {
                                     GattWriteResult::Handled => {}
-                                    GattWriteResult::CccdWrite => cccd_updated = true,
+                                    GattWriteResult::CccdWrite => written_cccd = valid_cccd.then_some(handle),
                                     GattWriteResult::HidControlPoint => control_point_write = true,
                                     GattWriteResult::Unhandled => {
-                                        debug!("Write GATT Event to Unknown: {:?}", event.handle())
+                                        debug!("Write GATT Event to Unknown: {:?}", handle)
                                     }
                                 }
                             }
                             #[cfg(not(feature = "host"))]
-                            debug!("Write GATT Event to Unknown: {:?}", event.handle());
+                            debug!("Write GATT Event to Unknown: {:?}", handle);
                         }
 
                         if encrypted && control_point_write {
@@ -894,7 +896,7 @@ async fn gatt_events_task(
                                     }
                                 }
                                 [1] => {
-                                    resume_batteries = suspended.replace(false);
+                                    suspended.set(false);
                                     if selected {
                                         report_activity();
                                     }
@@ -902,54 +904,43 @@ async fn gatt_events_task(
                                 _ => {}
                             }
                         }
-                        if encrypted {
-                            if cccd_updated && data_len == size_of::<u16>() {
-                                written_cccd = Some(event.handle());
-                            }
-                            gatt_event.accept()
-                        } else {
-                            gatt_event.reject(AttErrorCode::INSUFFICIENT_ENCRYPTION)
-                        }
+                        !encrypted
                     }
-                    GattEvent::Read(_) if !conn.raw().security_level().is_ok_and(|level| level.encrypted()) => {
-                        gatt_event.reject(AttErrorCode::INSUFFICIENT_ENCRYPTION)
-                    }
-                    _ => {
-                        server.prepare_name_read(&gatt_event, profile_id);
-                        gatt_event.accept()
+                    GattEvent::Read(_) => !conn.raw().security_level().is_ok_and(|level| level.encrypted()),
+                    _ => false,
+                };
+                let result = if reject_unencrypted {
+                    gatt_event.reject(AttErrorCode::INSUFFICIENT_ENCRYPTION)
+                } else {
+                    server.prepare_name_read(&gatt_event, profile_id);
+                    gatt_event.accept()
+                };
+                let reply = match result {
+                    Ok(reply) => reply,
+                    Err(e) => {
+                        warn!("[gatt] error sending response: {:?}", e);
+                        continue;
                     }
                 };
-
-                match result {
-                    Ok(reply) => {
-                        if let Some(handle) = written_cccd {
-                            // macOS can re-enable keyboard input on wake without sending Exit Suspend.
-                            if input_keyboard.cccd_handle == Some(handle) && input_keyboard.should_notify(conn) {
-                                resume_batteries = suspended.replace(false);
-                            }
-                            if profile_id == crate::state::current_profile() && !suspended.get() {
-                                report_activity();
-                            }
-                            if let Some(table) = server.get_client_att_table(conn.raw())
-                                && let Ok(bytes) = heapless::Vec::from_slice(table.raw())
-                            {
-                                profile_manager.update_profile_cccd_table(
-                                    profile_id,
-                                    &conn.raw().peer_identity(),
-                                    bytes,
-                                );
-                            }
-                        }
-                        reply.send().await;
-                        if resume_batteries {
-                            server.batteries.replay(conn).await;
-                        } else if !suspended.get()
-                            && let Some(battery) = written_cccd.and_then(|handle| server.batteries.by_cccd(handle))
-                        {
-                            server.batteries.notify(conn, battery).await;
-                        }
+                if let Some(handle) = written_cccd {
+                    // macOS can re-enable keyboard input on wake without sending Exit Suspend.
+                    if input_keyboard.cccd_handle == Some(handle) && input_keyboard.should_notify(conn) {
+                        suspended.set(false);
                     }
-                    Err(e) => warn!("[gatt] error sending response: {:?}", e),
+                    report_activity();
+                    if let Some(table) = server.get_client_att_table(conn.raw())
+                        && let Ok(bytes) = heapless::Vec::from_slice(table.raw())
+                    {
+                        profile_manager.update_profile_cccd_table(profile_id, &conn.raw().peer_identity(), bytes);
+                    }
+                }
+                reply.send().await;
+                if !suspended.get() {
+                    if was_suspended {
+                        server.batteries.replay(conn).await;
+                    } else if let Some(battery) = battery_to_notify {
+                        server.batteries.notify(conn, battery).await;
+                    }
                 }
             }
             GattConnectionEvent::PhyUpdated { tx_phy, rx_phy } => {
