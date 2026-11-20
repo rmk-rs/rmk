@@ -1,5 +1,6 @@
 use crate::{
-    InputDeviceConfig, KeyboardTomlConfig, LayoutTomlConfig, MatrixConfig, MatrixType, SplitConfig, SplitConnection,
+    EncoderPhase, InputDeviceConfig, KeyboardTomlConfig, LayoutTomlConfig, MatrixConfig, MatrixType, SplitConfig,
+    SplitConnection,
 };
 
 #[derive(Clone, Debug)]
@@ -145,6 +146,21 @@ fn validate_matrix_dims(matrix: &MatrixConfig, rows: usize, cols: usize, ctx: &s
     Ok(())
 }
 
+/// Check that every resolution-mode encoder resolves to a usable pulse count.
+fn validate_encoders(input_device: Option<&InputDeviceConfig>, ctx: &str) -> Result<(), String> {
+    let encoders = input_device.and_then(|d| d.encoder.as_deref()).unwrap_or_default();
+    for (i, encoder) in encoders.iter().enumerate() {
+        if encoder.phase == EncoderPhase::Resolution
+            && let Some(resolution) = &encoder.resolution
+        {
+            resolution
+                .value()
+                .map_err(|e| format!("keyboard.toml: {ctx} encoder #{i}: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 /// Split invariants that per-board dimension checks don't cover: the transport
 /// fields must be consistent with `split.connection`, and every board's region
 /// of the unified matrix must fit `[layout]` without overlapping another board.
@@ -238,8 +254,11 @@ impl KeyboardTomlConfig {
             (None, Some(s)) => {
                 validate_split_config(&s, self.layout.as_ref())?;
                 validate_matrix_dims(&s.central.matrix, s.central.rows, s.central.cols, "[split.central]")?;
+                validate_encoders(s.central.input_device.as_ref(), "[split.central]")?;
                 for (i, peri) in s.peripheral.iter().enumerate() {
-                    validate_matrix_dims(&peri.matrix, peri.rows, peri.cols, &format!("[[split.peripheral]] #{i}"))?;
+                    let ctx = format!("[[split.peripheral]] #{i}");
+                    validate_matrix_dims(&peri.matrix, peri.rows, peri.cols, &ctx)?;
+                    validate_encoders(peri.input_device.as_ref(), &ctx)?;
                 }
                 Ok(BoardConfig::Split(s))
             },
@@ -259,6 +278,7 @@ impl KeyboardTomlConfig {
                 if let Some(layout) = &self.layout {
                     validate_matrix_dims(&m, layout.rows as usize, layout.cols as usize, "[matrix]")?;
                 }
+                validate_encoders(input_device.as_ref(), "[input_device]")?;
                 // Top-level input_device applies only to unibody configs.
                 Ok(BoardConfig::UniBody(UniBodyConfig{matrix: m, input_device: input_device.unwrap_or_default()}))
             },
@@ -270,9 +290,10 @@ impl KeyboardTomlConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_matrix_dims, validate_split_config};
+    use super::{validate_encoders, validate_matrix_dims, validate_split_config};
     use crate::{
-        LayoutTomlConfig, MatrixConfig, MatrixType, SerialConfig, SplitBoardConfig, SplitConfig, SplitConnection,
+        EncoderConfig, EncoderPhase, EncoderResolution, InputDeviceConfig, LayoutTomlConfig, MatrixConfig, MatrixType,
+        SerialConfig, SplitBoardConfig, SplitConfig, SplitConnection,
     };
 
     fn normal(rows: &[&str], cols: &[&str]) -> MatrixConfig {
@@ -326,6 +347,27 @@ mod tests {
             ..Default::default()
         };
         assert!(validate_matrix_dims(&m, 2, 2, "[matrix]").is_err());
+    }
+
+    #[test]
+    fn encoder_resolution_must_fit_a_nonzero_u8() {
+        let check = |resolution| {
+            let input_device = InputDeviceConfig {
+                encoder: Some(vec![EncoderConfig {
+                    phase: EncoderPhase::Resolution,
+                    resolution: Some(resolution),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            };
+            validate_encoders(Some(&input_device), "[input_device]")
+        };
+        assert!(check(EncoderResolution::Value(255)).is_ok());
+        assert!(check(EncoderResolution::Value(0)).is_err());
+        assert!(check(EncoderResolution::Derived { detent: 2, pulse: 64 }).is_ok()); // 128
+        assert!(check(EncoderResolution::Derived { detent: 1, pulse: 64 }).is_err()); // 256
+        assert!(check(EncoderResolution::Derived { detent: 30, pulse: 7 }).is_err()); // 0
+        assert!(check(EncoderResolution::Derived { detent: 0, pulse: 15 }).is_err());
     }
 
     fn board(rows: usize, cols: usize, row_offset: usize, col_offset: usize) -> SplitBoardConfig {
