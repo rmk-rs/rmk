@@ -156,8 +156,8 @@ forks = [
 ]
 
 [rmk]
-combo_max_num = 128
-fork_max_num = 16
+max_combos = 128
+max_forks = 16
 
 # IGNORE/DONT-INCLUDE THIS SECTION Unless you're using custom nRF52840 based board (Eg not a nice!nano)
 [chip.nrf52840]

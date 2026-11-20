@@ -168,7 +168,7 @@ fn caps() -> DeviceCapabilities {
         max_macros: 32,
         macro_space_size: 256,
         macros_writable: true,
-        max_morse: 4,
+        max_morses: 4,
         max_patterns_per_key: 4,
         max_forks: 4,
         storage_enabled: true,

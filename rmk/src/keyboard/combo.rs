@@ -1,5 +1,5 @@
 use rmk_types::action::KeyAction;
-use rmk_types::constants::COMBO_MAX_LENGTH;
+use rmk_types::constants::MAX_COMBO_KEYS;
 
 /// Combo config instantiated with firmware's combo Vec capacity.
 pub type ComboConfig = rmk_types::combo::Combo;
@@ -10,8 +10,8 @@ use crate::event::KeyboardEvent;
 // Use core::assert! explicitly — the crate-level `assert!` macro dispatches to
 // defmt::assert! which is not const-compatible.
 const _: () = core::assert!(
-    COMBO_MAX_LENGTH <= 16,
-    "COMBO_MAX_LENGTH exceeds 16 — Combo.state is u16 and cannot track more than 16 keys"
+    MAX_COMBO_KEYS <= 16,
+    "MAX_COMBO_KEYS exceeds 16 — Combo.state is u16 and cannot track more than 16 keys"
 );
 
 /// Runtime combo instance (config + runtime state)

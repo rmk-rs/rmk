@@ -135,7 +135,7 @@ async fn run_all(client: &Client, over_ble: bool) -> Result<(), Box<dyn std::err
         caps.num_cols,
         caps.max_combos,
         caps.max_forks,
-        caps.max_morse,
+        caps.max_morses,
         caps.ble_enabled,
     );
 
@@ -330,7 +330,7 @@ async fn run_all(client: &Client, over_ble: bool) -> Result<(), Box<dyn std::err
 
     info!("── morse ──");
     // Morse: mutate hold timeout, verify, restore.
-    if caps.max_morse > 0 {
+    if caps.max_morses > 0 {
         match client.get_morse(0).await {
             Ok(orig) => {
                 info!("  ✓ {:<22} {orig:?}", "get morse 0");

@@ -431,7 +431,7 @@ impl Client {
 
     /// Read every morse slot with concurrent paged reads. A short page ends the read early.
     pub async fn read_all_morses(&self) -> Result<Vec<Morse>, RynkHostError> {
-        let total = self.capabilities.max_morse as usize;
+        let total = self.capabilities.max_morses as usize;
         self.read_all(total, self.capabilities.max_bulk_items.into(), async |c, start| {
             c.get_morse_bulk(start as u8).await.map(|r| r.configs)
         })

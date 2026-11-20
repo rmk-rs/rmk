@@ -7,7 +7,7 @@ use rmk_types::morse::{Morse, MorseMode, MorseProfile};
 
 use crate::keyboard::combo::Combo;
 use crate::{
-    AUTO_MOUSE_LAYER_MAX_NUM, COMBO_MAX_NUM, FORK_MAX_NUM, MORSE_MAX_NUM, MORSE_PROFILE_MAX_NUM, MOUSE_KEY_INTERVAL,
+    MAX_AUTO_MOUSE_LAYERS, MAX_COMBOS, MAX_FORKS, MAX_MORSE_PROFILES, MAX_MORSES, MOUSE_KEY_INTERVAL,
     MOUSE_WHEEL_INTERVAL,
 };
 
@@ -28,7 +28,7 @@ pub struct BehaviorConfig {
     /// `const _: () = assert!(validate_default_macros(MACROS));`.
     pub keyboard_macros: &'static [&'static [MacroOp]],
     pub mouse_key: MouseKeyConfig,
-    pub auto_mouse_layer: Vec<AutoMouseLayerConfig, AUTO_MOUSE_LAYER_MAX_NUM>,
+    pub auto_mouse_layer: Vec<AutoMouseLayerConfig, MAX_AUTO_MOUSE_LAYERS>,
 }
 
 /// Config for auto mouse layer behavior
@@ -135,9 +135,9 @@ pub struct MorsesConfig {
     /// Named morse profiles (`[behavior.morse.profiles]`), indexed by
     /// `KeyAction::TapHold(_, _, idx)`. A missing index resolves to the
     /// default profile.
-    pub profiles: Vec<MorseProfile, MORSE_PROFILE_MAX_NUM>,
+    pub profiles: Vec<MorseProfile, MAX_MORSE_PROFILES>,
 
-    pub morses: Vec<Morse, MORSE_MAX_NUM>,
+    pub morses: Vec<Morse, MAX_MORSES>,
 }
 
 impl Default for MorsesConfig {
@@ -178,7 +178,7 @@ pub struct OneShotModifiersConfig {
 /// Config for combo behavior
 #[derive(Clone, Debug)]
 pub struct CombosConfig {
-    pub combos: [Option<Combo>; COMBO_MAX_NUM],
+    pub combos: [Option<Combo>; MAX_COMBOS],
     pub timeout: Duration,
     /// Cooldown after any key press before a combo can start recording.
     /// `None` = no idle check (backward compatible). Equivalent to ZMK `require-prior-idle-ms`.
@@ -198,7 +198,7 @@ impl Default for CombosConfig {
 /// Config for fork behavior
 #[derive(Clone, Debug)]
 pub struct ForksConfig {
-    pub forks: Vec<Fork, FORK_MAX_NUM>,
+    pub forks: Vec<Fork, MAX_FORKS>,
 }
 
 impl Default for ForksConfig {

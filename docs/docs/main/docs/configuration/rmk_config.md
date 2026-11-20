@@ -11,19 +11,19 @@ mouse_key_interval = 20
 # Mouse wheel interval (ms) - controls scrolling speed
 mouse_wheel_interval = 80
 # Maximum number of combos keyboard can store
-combo_max_num = 8
+max_combos = 8
 # Maximum number of keys pressed simultaneously in a combo
-combo_max_length = 4
+max_combo_keys = 4
 # Maximum number of forks for conditional key actions
-fork_max_num = 8
+max_forks = 8
 # Maximum number of morse keys keyboard can store (max 255)
-morse_max_num = 8
+max_morses = 8
 # Maximum number of named morse profiles, shared by morse and tap-hold keys (max 255)
-morse_profile_max_num = 16
+max_morse_profiles = 16
 # Maximum number of patterns a morse key can handle (default: 8, min: 4, max: 32)
 max_patterns_per_key = 8
 # Maximum number of macros
-macro_max_num = 32
+max_macros = 32
 # Bytes of macro memory shared by all macros
 macro_space_size = 256
 # Default debounce time in ms
@@ -41,7 +41,7 @@ num_ble_profiles = 3
 # BLE Split Central sleep timeout in seconds (0 = disabled)
 split_central_sleep_timeout_seconds = 0
 # Maximum number of auto mouse layer entries (auto-derived from [[behavior.auto_mouse_layer]] if unset)
-auto_mouse_layer_max_num = 2
+max_auto_mouse_layers = 2
 # Rynk RX/TX buffer size in bytes. 488 bytes = 2*BLE maximum packet size
 # rynk_buffer_size = 488
 # Length of one dongle pairing window in seconds (dongle builds only)
@@ -63,13 +63,13 @@ Increasing the number of combos, forks, morses (tap dances), and macros will inc
 
 :::
 
-- `combo_max_num`: Maximum number of combos that the keyboard can store, default value is 8. This value must be between 0 and 255.
-- `combo_max_length`: Maximum number of keys that can be pressed simultaneously in a combo, default value is 4. This value must be between 0 and 16.
-- `fork_max_num`: Maximum number of forks for conditional key actions, default value is 8. This value must be between 0 and 255.
-- `morse_max_num`: Maximum number of morses that can be stored, default value is 8. This value must be between 0 and 255.
-- `morse_profile_max_num`: Capacity of the morse profile table (the named profiles in `[behavior.morse.profiles]`, referenced by morse and tap-hold keys), default value is 16. This value must be between 0 and 255.
+- `max_combos`: Maximum number of combos that the keyboard can store, default value is 8. This value must be between 0 and 255.
+- `max_combo_keys`: Maximum number of keys that can be pressed simultaneously in a combo, default value is 4. This value must be between 0 and 16.
+- `max_forks`: Maximum number of forks for conditional key actions, default value is 8. This value must be between 0 and 255.
+- `max_morses`: Maximum number of morses that can be stored, default value is 8. This value must be between 0 and 255.
+- `max_morse_profiles`: Capacity of the morse profile table (the named profiles in `[behavior.morse.profiles]`, referenced by morse and tap-hold keys), default value is 16. This value must be between 0 and 255.
 - `max_patterns_per_key` : Maximum number of tap/hold patterns a morse key can handle, default value is 8. This value must be between 4 and 32. (Automatically raised to fit the largest `tap_actions` + `hold_actions` + `morse_actions` count among the configured morse keys.)
-- `macro_max_num`: Maximum number of macros, default value is 32. This value must be between 0 and 255.
+- `max_macros`: Maximum number of macros, default value is 32. This value must be between 0 and 255.
 - `macro_space_size`: Bytes of memory all macros share, default value is 256. This value must be a multiple of 32 between 32 and 8192, and costs as many bytes of RAM. Saved macros take flash too, so a large value may need more [storage sectors](./storage). See [Keyboard macros](./keymap_configuration/keyboard_macros#limits) for how much a macro takes.
 
 ### Matrix Configuration
@@ -104,4 +104,4 @@ These tune the [Rynk](../features/rynk) protocol and rarely need changing.
 
 ### Auto Mouse Layer Configuration
 
-- `auto_mouse_layer_max_num`: Maximum number of `[[behavior.auto_mouse_layer]]` entries. Auto-derived from your config if unset; set explicitly to override (e.g. when using the Rust API without `keyboard.toml`).
+- `max_auto_mouse_layers`: Maximum number of `[[behavior.auto_mouse_layer]]` entries. Auto-derived from your config if unset; set explicitly to override (e.g. when using the Rust API without `keyboard.toml`).

@@ -98,7 +98,7 @@ impl<'a> Macros<'a> {
     /// queue is full.
     pub(crate) fn queue(&mut self, slot: u8, pressed: bool) -> bool {
         // Past the last slot the buffer holds whatever a longer save left behind.
-        if slot as usize >= crate::MACRO_MAX_NUM {
+        if slot as usize >= crate::MAX_MACROS {
             return true;
         }
         let buf = &*self.buf;
@@ -231,7 +231,7 @@ impl<'a> Macros<'a> {
 pub(crate) fn encode_defaults(buf: &mut [u8], defaults: &[&[MacroOp]]) {
     buf.fill(0);
     let mut pos = 0;
-    for slot in 0..crate::MACRO_MAX_NUM {
+    for slot in 0..crate::MAX_MACROS {
         let ops = defaults.get(slot).copied().unwrap_or(&[]);
         pos += codec::encode_slot(&mut buf[pos..], ops);
     }
@@ -565,7 +565,7 @@ pub(crate) mod codec {
     /// Replace slot `k`'s ops with `bytes`, moving the slots after it; `None`
     /// when the buffer cannot hold the result. Returns the changed byte range.
     pub(crate) fn splice(buf: &mut [u8], k: usize, bytes: &[u8]) -> Option<Range<usize>> {
-        let last = crate::MACRO_MAX_NUM.checked_sub(1)?;
+        let last = crate::MAX_MACROS.checked_sub(1)?;
         let old = segment(buf, k);
         let start = if k == 0 { 0 } else { segment(buf, k - 1).end };
         let used = segment(buf, last).end;
@@ -593,8 +593,8 @@ pub(crate) mod codec {
 
         #[test]
         fn slots_are_length_prefixed_and_splice_moves_the_rest() {
-            // Room for the three slots and the empty ones up to `MACRO_MAX_NUM`.
-            let mut buf = [0u8; 16 + crate::MACRO_MAX_NUM];
+            // Room for the three slots and the empty ones up to `MAX_MACROS`.
+            let mut buf = [0u8; 16 + crate::MAX_MACROS];
             let mut pos = encode_slot(&mut buf, &[CHAR_A, CHAR_A]);
             pos += encode_slot(&mut buf[pos..], &[]);
             pos += encode_slot(&mut buf[pos..], &[CHAR_A]);
@@ -605,7 +605,7 @@ pub(crate) mod codec {
             assert_eq!(segment(&buf, 2), 7..9);
             assert_eq!(decode(&buf[7..9]), Some((CHAR_A, 2)));
             // The last slot: its prefix sits behind the 28 empty ones before it.
-            const LAST: usize = crate::MACRO_MAX_NUM - 1;
+            const LAST: usize = crate::MAX_MACROS - 1;
             assert_eq!(splice(&mut buf, LAST, &[4, b'b']), Some(9 + LAST - 3..12 + LAST - 3));
 
             // The tail moves down behind a shorter slot 0 and up behind a longer one.

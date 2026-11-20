@@ -311,7 +311,7 @@
           const caps = await client.get_capabilities();
           connected = true;
           log(`✓ connected via ${label} (${l.label}) — ${caps.num_layers}×${caps.num_rows}×${caps.num_cols} keymap, `
-            + `${caps.max_combos} combos, ${caps.max_forks} forks, ${caps.max_morse} morse, `
+            + `${caps.max_combos} combos, ${caps.max_forks} forks, ${caps.max_morses} morse, `
             + `${caps.max_macros} macros in ${caps.macro_space_size} bytes, ble=${caps.ble_enabled}\n`);
 
           pumpTopics(client);
@@ -327,7 +327,7 @@
           await show("behavior",        () => client.get_behavior());
           if (caps.max_combos > 0) await show("combo 0", () => client.get_combo(0));
           if (caps.max_forks  > 0) await show("fork 0",  () => client.get_fork(0));
-          if (caps.max_morse  > 0) await show("morse 0", () => client.get_morse(0));
+          if (caps.max_morses  > 0) await show("morse 0", () => client.get_morse(0));
           await show("wpm",             () => client.get_wpm());
           await show("sleep state",     () => client.get_sleep_state());
           await show("led indicator",   () => client.get_led_indicator());

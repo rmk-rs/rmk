@@ -610,7 +610,7 @@ impl<'a> KeyMap<'a> {
 
     pub(crate) fn auto_mouse_layer_configs(
         &self,
-    ) -> heapless::Vec<crate::config::AutoMouseLayerConfig, { crate::AUTO_MOUSE_LAYER_MAX_NUM }> {
+    ) -> heapless::Vec<crate::config::AutoMouseLayerConfig, { crate::MAX_AUTO_MOUSE_LAYERS }> {
         self.inner.borrow().behavior.auto_mouse_layer.clone()
     }
 

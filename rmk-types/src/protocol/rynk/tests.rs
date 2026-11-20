@@ -236,7 +236,7 @@ fn exemplars() -> Exemplars {
         max_macros: 7,
         macro_space_size: 8,
         macros_writable: true,
-        max_morse: 9,
+        max_morses: 9,
         max_patterns_per_key: 10,
         max_forks: 11,
         storage_enabled: true,

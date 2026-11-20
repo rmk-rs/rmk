@@ -9,7 +9,7 @@ use crate::hid::ViaReport;
 use crate::host::context::KeyboardContext;
 use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
 use crate::keymap::KeyMap;
-use crate::{MACRO_MAX_NUM, MACRO_SPACE_SIZE, boot};
+use crate::{MACRO_SPACE_SIZE, MAX_MACROS, boot};
 
 pub(crate) mod keycode_convert;
 mod vial;
@@ -141,7 +141,7 @@ impl<'a> VialService<'a> {
                 boot::jump_to_bootloader();
             }
             ViaCommand::DynamicKeymapMacroGetCount => {
-                report.input_data[1] = MACRO_MAX_NUM as u8;
+                report.input_data[1] = MAX_MACROS as u8;
             }
             ViaCommand::DynamicKeymapMacroGetBufferSize => {
                 BigEndian::write_u16(&mut report.input_data[1..3], MACRO_SPACE_SIZE as u16);

@@ -54,5 +54,5 @@ _  _      _
 # enabled = false
 
 [rmk]
-morse_max_num = 8
+max_morses = 8
 max_patterns_per_key = 8

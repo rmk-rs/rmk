@@ -57,13 +57,13 @@ pub(crate) struct BatteryService {
 
 #[cfg(feature = "split")]
 pub(crate) struct PeripheralBatteryServices {
-    pub(crate) levels: [Characteristic<u8>; crate::SPLIT_BATTERY_PERIPHERALS_NUM],
+    pub(crate) levels: [Characteristic<u8>; crate::NUM_SPLIT_BATTERY_PERIPHERALS],
 }
 
 #[cfg(feature = "split")]
 impl PeripheralBatteryServices {
-    pub(crate) const ATTRIBUTE_COUNT: usize = 7 * crate::SPLIT_BATTERY_PERIPHERALS_NUM;
-    pub(crate) const CCCD_COUNT: usize = crate::SPLIT_BATTERY_PERIPHERALS_NUM;
+    pub(crate) const ATTRIBUTE_COUNT: usize = 7 * crate::NUM_SPLIT_BATTERY_PERIPHERALS;
+    pub(crate) const CCCD_COUNT: usize = crate::NUM_SPLIT_BATTERY_PERIPHERALS;
 
     pub(crate) fn new<M: embassy_sync::blocking_mutex::raw::RawMutex, const MAX: usize>(
         table: &mut AttributeTable<'_, M, MAX>,
@@ -210,7 +210,7 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
 /// read it the same way it reads the central's level.
 #[cfg(feature = "split")]
 pub(crate) struct BlePeripheralBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
-    battery_levels: [Characteristic<u8>; crate::SPLIT_BATTERY_PERIPHERALS_NUM],
+    battery_levels: [Characteristic<u8>; crate::NUM_SPLIT_BATTERY_PERIPHERALS],
     conn: &'conn GattConnection<'stack, 'server, P>,
     sub: <PeripheralBatteryEvent as SubscribableEvent>::Subscriber,
 }

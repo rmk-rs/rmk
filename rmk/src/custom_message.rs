@@ -24,12 +24,12 @@ pub enum CustomMessageTarget {
 )]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CustomMessage {
-    pub data: heapless::Vec<u8, { crate::CUSTOM_MESSAGE_MAX_SIZE }>,
+    pub data: heapless::Vec<u8, { crate::MAX_CUSTOM_MESSAGE_SIZE }>,
     pub target: CustomMessageTarget,
 }
 
 impl CustomMessage {
-    /// `Err` when `data` is longer than `custom_message_max_size`.
+    /// `Err` when `data` is longer than `max_custom_message_size`.
     pub fn new(data: &[u8], target: CustomMessageTarget) -> Result<Self, heapless::CapacityError> {
         Ok(Self {
             data: heapless::Vec::from_slice(data)?,
@@ -39,7 +39,7 @@ impl CustomMessage {
 }
 
 impl MaxSize for CustomMessage {
-    const POSTCARD_MAX_SIZE: usize = crate::CUSTOM_MESSAGE_MAX_SIZE + 3;
+    const POSTCARD_MAX_SIZE: usize = crate::MAX_CUSTOM_MESSAGE_SIZE + 3;
 }
 
 /// A custom message on its way out.
