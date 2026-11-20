@@ -1,25 +1,49 @@
 //! Vial over USB HID (32-byte IN/OUT reports).
 
 use embassy_usb::Builder;
-use embassy_usb::class::hid::device::{HidReader, HidWriter};
+use embassy_usb::class::hid::device::HidWriter;
+#[cfg(not(feature = "vial_kvm"))]
+use embassy_usb::class::hid::device::{HidReader, HidReaderWriter};
+use embassy_usb::class::hid::{HidBootProtocol, HidSubclass};
 use embassy_usb::driver::Driver;
 use embedded_io_async::{ErrorType, Read, Write};
+use rmk_types::protocol::vial::VIAL_EP_SIZE;
 
+#[cfg(feature = "vial_kvm")]
+use self::control::Reports as ControlHandler;
+#[cfg(not(feature = "vial_kvm"))]
+use super::UsbRequestHandler as ControlHandler;
 use crate::hid::ViaReport;
 use crate::host::transport::HostTransportError;
 use crate::host::via::VialService;
-use crate::usb::add_usb_reader_writer;
 
-/// Reader/writer halves of the Vial USB transport (32-byte HID reports).
-pub(crate) type HostUsbReader<D> = HidReader<'static, D, 32>;
-pub(crate) type HostUsbWriter<D> = HidWriter<'static, D, 32>;
+#[cfg(feature = "vial_kvm")]
+pub(super) mod control;
 
-/// Build the Vial HID interface (32-byte input + 32-byte output reports).
-pub(crate) fn build_host_usb<D: Driver<'static>>(
-    builder: &mut Builder<'static, D>,
-) -> (HostUsbReader<D>, HostUsbWriter<D>) {
-    let rw = add_usb_reader_writer!(builder, ViaReport, 32, 32, 32);
-    rw.split()
+pub(crate) struct HostUsb<D: Driver<'static>> {
+    #[cfg(not(feature = "vial_kvm"))]
+    reader: HidReader<'static, D, VIAL_EP_SIZE>,
+    writer: HidWriter<'static, D, VIAL_EP_SIZE>,
+}
+
+pub(crate) fn build_host_usb<D: Driver<'static>>(builder: &mut Builder<'static, D>) -> HostUsb<D> {
+    static HANDLER: static_cell::StaticCell<ControlHandler> = static_cell::StaticCell::new();
+    let (state, config) = super::usb_hid_state_and_config!(
+        ViaReport,
+        VIAL_EP_SIZE as u16,
+        HidSubclass::No,
+        HidBootProtocol::None,
+        HANDLER.init_with(Default::default)
+    );
+    #[cfg(not(feature = "vial_kvm"))]
+    let (reader, writer) = HidReaderWriter::new(builder, state, config).split();
+    #[cfg(feature = "vial_kvm")]
+    let writer = HidWriter::new(builder, state, config);
+    HostUsb {
+        #[cfg(not(feature = "vial_kvm"))]
+        reader,
+        writer,
+    }
 }
 
 impl super::HostSession for VialService<'_> {
@@ -36,28 +60,38 @@ impl super::HostSession for crate::dongle::DongleRouter {
 }
 
 /// Vial session loop.
-pub(crate) async fn run_host_usb<D: Driver<'static>, S: super::HostSession>(
-    reader: &mut HostUsbReader<D>,
-    writer: &mut HostUsbWriter<D>,
-    session: &S,
-) -> ! {
+pub(crate) async fn run_host_usb<D: Driver<'static>, S: super::HostSession>(usb: &mut HostUsb<D>, session: &S) -> ! {
+    let mut tx = VialUsbTx {
+        writer: &mut usb.writer,
+    };
     loop {
-        reader.ready().await;
-        let mut rx = VialUsbRx { reader: &mut *reader };
-        let mut tx = VialUsbTx { writer: &mut *writer };
-        session.serve(&mut rx, &mut tx).await;
+        tx.writer.ready().await;
+        #[cfg(not(feature = "vial_kvm"))]
+        let mut rx = VialUsbRx {
+            reader: &mut usb.reader,
+        };
+        #[cfg(feature = "vial_kvm")]
+        let mut rx = control::Reports;
+        let serve = session.serve(&mut rx, &mut tx);
+        #[cfg(not(feature = "vial_kvm"))]
+        serve.await;
+        #[cfg(feature = "vial_kvm")]
+        embassy_futures::select::select(control::SESSION_ENDED.wait(), serve).await;
     }
 }
 
 /// Vial USB reader, implements embedded-io `Read` trait.
+#[cfg(not(feature = "vial_kvm"))]
 struct VialUsbRx<'a, D: Driver<'static>> {
     reader: &'a mut HidReader<'static, D, 32>,
 }
 
+#[cfg(not(feature = "vial_kvm"))]
 impl<D: Driver<'static>> ErrorType for VialUsbRx<'_, D> {
     type Error = HostTransportError;
 }
 
+#[cfg(not(feature = "vial_kvm"))]
 impl<D: Driver<'static>> Read for VialUsbRx<'_, D> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         if buf.len() < 32 {

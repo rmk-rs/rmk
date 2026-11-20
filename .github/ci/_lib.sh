@@ -65,6 +65,7 @@ RMK_FEATURESETS=(
 # Behavioral coverage only; RMK_FEATURESETS remains the compile/clippy matrix.
 RMK_TEST_FEATURESETS=(
     ""
+    "vial_kvm,host_lock,storage"
     "split,_dfu,dfu_split,storage,async_matrix"
     "vial,host_lock,_no_usb,steno,passkey_entry"
     "rynk,_ble,split,async_matrix,storage"

@@ -29,6 +29,9 @@ host = ["dep:byteorder"]
 ## Enable vial support
 vial = ["host", "rmk-types/vial"]
 
+## Use HID control writes for keyboard LEDs and Vial on KVMs with limited USB endpoints.
+vial_kvm = ["vial"]
+
 ## **Experimental.** Enable DFU lock feature — physical key unlock for DFU firmware download
 dfu_lock = ["host_lock", "rmk-types/dfu_lock"]
 

@@ -18,6 +18,8 @@ fn main() {
 
     let mut features: Vec<String> = std::env::vars()
         .filter_map(|(key, _)| key.strip_prefix("CARGO_FEATURE_").map(str::to_lowercase))
+        // Selecting the USB transport for Vial does not change stored data.
+        .filter(|feature| feature != "vial_kvm")
         .collect();
     features.sort();
     println!("cargo:rustc-env=RMK_FEATURES={}", features.join(","));

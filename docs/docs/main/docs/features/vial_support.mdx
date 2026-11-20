@@ -28,6 +28,12 @@ rmk = { version = "0.9", features = ["rp2040"] }
 
 Add any chip, BLE, split, display, or other features your board needs.
 
+## USB KVM compatibility
+
+For a KVM with limited HID endpoint support, add `vial_kvm` to the RMK Cargo features.
+The USB interfaces appear in keyboard, Vial, then mouse/media order. Each uses one interrupt IN endpoint.
+The host sends lock LEDs and 32-byte Vial commands over endpoint zero. Optional USB classes can add more endpoints.
+
 ## Port Vial
 
 To use Vial with RMK, you need a keyboard definition file named `vial.json`. Vial provides detailed documentation on how to generate this file: https://get.vial.today/docs/porting-to-via.html.

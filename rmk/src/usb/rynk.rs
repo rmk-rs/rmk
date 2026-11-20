@@ -42,10 +42,10 @@ pub(crate) struct HostUsbWriter<D: Driver<'static>> {
     ep: D::EndpointIn,
 }
 
+pub(crate) type HostUsb<D> = (HostUsbReader<D>, HostUsbWriter<D>);
+
 /// Build the Rynk vendor bulk interface and its WinUSB binding.
-pub(crate) fn build_host_usb<D: Driver<'static>>(
-    builder: &mut Builder<'static, D>,
-) -> (HostUsbReader<D>, HostUsbWriter<D>) {
+pub(crate) fn build_host_usb<D: Driver<'static>>(builder: &mut Builder<'static, D>) -> HostUsb<D> {
     builder.msos_descriptor(msos::windows_version::WIN8_1, super::MSOS_VENDOR_CODE);
     let mut function = builder.function(
         RYNK_USB_INTERFACE_CLASS,
@@ -79,8 +79,7 @@ pub(crate) fn build_host_usb<D: Driver<'static>>(
 
 /// Rynk session loop
 pub(crate) async fn run_host_usb<D: Driver<'static>, S: HostSession>(
-    receiver: &mut HostUsbReader<D>,
-    sender: &mut HostUsbWriter<D>,
+    (receiver, sender): &mut HostUsb<D>,
     service: &S,
 ) -> ! {
     loop {
