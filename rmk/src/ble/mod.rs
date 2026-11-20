@@ -1662,7 +1662,7 @@ mod tests {
             let [3, lo, hi, 80, ..] = response[..] else {
                 panic!("unexpected Battery Level response: {response:?}")
             };
-            if cfg!(feature = "split") && crate::SPLIT_BATTERY_HAND_PAIR {
+            if cfg!(feature = "split") && crate::CENTRAL_BATTERY_IS_LEFT.is_some() {
                 assert!(matches!(response[4..], [_, _, 35]));
             } else {
                 assert!(response[4..].is_empty(), "unexpected standard batteries: {response:?}");
@@ -1765,7 +1765,7 @@ mod tests {
                     .iter()
                     .map(|&[lo, hi, _]| u16::from_le_bytes([lo, hi]))
                     .collect();
-                assert_eq!(levels.len(), 1 + usize::from(crate::SPLIT_BATTERY_HAND_PAIR));
+                assert_eq!(levels.len(), 1 + usize::from(crate::CENTRAL_BATTERY_IS_LEFT.is_some()));
                 let [lo, hi] = hci.characteristic_handle(1, 0x2a4c).await.to_le_bytes();
                 let keyboard_input = hci.characteristic_handle(1, 0x2a4d).await;
                 hci.set_notifications(1, keyboard_input, true).await;

@@ -47,9 +47,8 @@ pub struct BuildConstants {
     pub vial_channel_size: usize,
     pub flash_channel_size: usize,
     pub num_split_peripherals: usize,
-    pub split_battery_hand_pair: bool,
-    pub central_battery_presentation: [u8; 7],
-    pub split_battery_peripheral_presentations: Vec<[u8; 7]>,
+    /// Central side for a measured horizontal pair. Other layouts use the main battery.
+    pub central_battery_is_left: Option<bool>,
     pub central_battery_user_description: String,
     pub split_battery_peripheral_ids: Vec<usize>,
     pub split_battery_peripheral_user_descriptions: Vec<String>,
@@ -115,12 +114,28 @@ impl crate::KeyboardTomlConfig {
         } else {
             rmk.num_split_peripherals
         };
-        let (central_battery, peripherals) = self.battery_descriptors(active_features.contains(&"split"))?;
-        let split_battery_peripheral_ids: Vec<_> = peripherals.iter().map(|(id, _)| *id).collect();
-        let (split_battery_peripheral_presentations, split_battery_peripheral_user_descriptions) = peripherals
-            .into_iter()
-            .map(|(_, battery)| (battery.format(), battery.name))
-            .unzip();
+        let central_battery = self.resolve_battery_config(None)?;
+        let mut central_battery_is_left = None;
+        let mut split_battery_peripheral_ids = Vec::new();
+        let mut split_battery_peripheral_user_descriptions = Vec::new();
+        if active_features.contains(&"split")
+            && let Some(split) = &self.split
+        {
+            for (id, board) in split.peripheral.iter().enumerate() {
+                let battery = self.resolve_battery_config(Some(id))?;
+                if battery.battery_adc_pin.is_some() {
+                    split_battery_peripheral_ids.push(id);
+                    split_battery_peripheral_user_descriptions.push(
+                        battery
+                            .battery_user_description
+                            .unwrap_or_else(|| format!("Peripheral {id}")),
+                    );
+                    if split.peripheral.len() == 1 && central_battery.battery_adc_pin.is_some() {
+                        central_battery_is_left = central_on_left(&split.central, board);
+                    }
+                }
+            }
+        }
         let total_ble_profiles = rmk.num_ble_profiles + usize::from(active_features.contains(&"dongle"));
         if total_ble_profiles == 0 && active_features.contains(&"_ble") {
             return Err("BLE requires at least one BLE profile; set num_ble_profiles > 0 or enable dongle".to_string());
@@ -307,10 +322,10 @@ impl crate::KeyboardTomlConfig {
             vial_channel_size: rmk.vial_channel_size,
             flash_channel_size: rmk.flash_channel_size,
             num_split_peripherals,
-            split_battery_hand_pair: central_battery.is_hand(),
-            central_battery_presentation: central_battery.format(),
-            central_battery_user_description: central_battery.name,
-            split_battery_peripheral_presentations,
+            central_battery_is_left,
+            central_battery_user_description: central_battery
+                .battery_user_description
+                .unwrap_or_else(|| "Central".into()),
             split_battery_peripheral_ids,
             split_battery_peripheral_user_descriptions,
             num_ble_profiles: rmk.num_ble_profiles,
@@ -367,6 +382,24 @@ fn apply_feature_subscriber_bumps(events: &mut [EventChannel], active_features: 
                 }
             }
         }
+    }
+}
+
+fn central_on_left(central: &crate::SplitBoardConfig, peripheral: &crate::SplitBoardConfig) -> Option<bool> {
+    let first_row = central.row_offset.max(peripheral.row_offset);
+    let end_row = central
+        .row_offset
+        .saturating_add(central.rows)
+        .min(peripheral.row_offset.saturating_add(peripheral.rows));
+    if first_row >= end_row || central.cols == 0 || peripheral.cols == 0 {
+        return None;
+    }
+    if central.col_offset.saturating_add(central.cols) <= peripheral.col_offset {
+        Some(true)
+    } else if peripheral.col_offset.saturating_add(peripheral.cols) <= central.col_offset {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -578,6 +611,47 @@ mod tests {
                 .map(|constants| constants.num_host_links);
             assert_eq!(resolved, links, "{max_connections} links with {features:?}");
         }
+    }
+
+    #[test]
+    fn battery_descriptors_follow_the_matrix_only_for_a_two_board_pair() {
+        let board = |row_offset, col_offset| SplitBoardConfig {
+            rows: 3,
+            cols: 4,
+            row_offset,
+            col_offset,
+            battery: Some(BatteryTomlConfig {
+                battery_adc_pin: Some("vddh".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let resolve = |central, peripheral| {
+            let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
+            config.split = Some(SplitConfig {
+                central,
+                peripheral,
+                ..Default::default()
+            });
+            config.build_constants(&["split"]).unwrap()
+        };
+        for (central_col, peripheral_col, side) in [(0, 4, Some(true)), (4, 0, Some(false)), (0, 2, None)] {
+            let constants = resolve(board(0, central_col), vec![board(0, peripheral_col)]);
+            assert_eq!(constants.central_battery_is_left, side);
+            assert_eq!(constants.central_battery_user_description, "Central");
+            assert_eq!(constants.split_battery_peripheral_user_descriptions, ["Peripheral 0"]);
+        }
+        assert_eq!(resolve(board(0, 0), vec![board(3, 4)]).central_battery_is_left, None);
+        let mut unmeasured = board(0, 0);
+        unmeasured.battery = None;
+        assert_eq!(
+            resolve(unmeasured.clone(), vec![board(0, 4)]).central_battery_is_left,
+            None
+        );
+        let multi = resolve(board(0, 0), vec![unmeasured, board(0, 4)]);
+        assert_eq!(multi.central_battery_is_left, None);
+        assert_eq!(multi.split_battery_peripheral_ids, [1]);
+        assert_eq!(multi.split_battery_peripheral_user_descriptions, ["Peripheral 1"]);
     }
 
     #[test]

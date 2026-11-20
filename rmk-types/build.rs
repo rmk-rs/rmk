@@ -95,12 +95,8 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         bc.central_battery_user_description
     ));
     lines.push(format!(
-        "pub const SPLIT_BATTERY_HAND_PAIR: bool = {};",
-        bc.split_battery_hand_pair
-    ));
-    lines.push(format!(
-        "pub const CENTRAL_BATTERY_PRESENTATION: [u8; 7] = {:?};",
-        bc.central_battery_presentation
+        "pub const CENTRAL_BATTERY_IS_LEFT: Option<bool> = {:?};",
+        bc.central_battery_is_left
     ));
     lines.push(format!(
         "pub const NUM_SPLIT_BATTERY_PERIPHERALS: usize = {};",
@@ -109,10 +105,6 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     lines.push(format!(
         "pub const SPLIT_BATTERY_PERIPHERAL_IDS: [usize; NUM_SPLIT_BATTERY_PERIPHERALS] = {:?};",
         bc.split_battery_peripheral_ids
-    ));
-    lines.push(format!(
-        "pub const SPLIT_BATTERY_PERIPHERAL_PRESENTATIONS: [[u8; 7]; NUM_SPLIT_BATTERY_PERIPHERALS] = {:?};",
-        bc.split_battery_peripheral_presentations
     ));
     lines.push(format!(
         "pub const SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS: [&str; NUM_SPLIT_BATTERY_PERIPHERALS] = {:?};",

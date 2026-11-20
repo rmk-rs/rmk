@@ -41,25 +41,38 @@ impl BatteryLevel {
     fn new<const MAX: usize>(
         table: &mut AttributeTable<'_, NoopRawMutex, MAX>,
         source: Source,
-        presentation: &'static [u8; 7],
+        is_left: Option<bool>,
         name: &'static str,
     ) -> Self {
-        let (service_uuid, level_uuid): (Uuid, Uuid) = match source {
+        let (service_uuid, level_uuid, description): (Uuid, Uuid, u16) = match (source, is_left) {
             #[cfg(feature = "split")]
-            Source::Peripheral(_) if !crate::SPLIT_BATTERY_HAND_PAIR => (
+            (Source::Peripheral(id), None) => (
                 PERIPHERAL_BATTERY_SERVICE_UUID.into(),
                 PERIPHERAL_BATTERY_LEVEL_UUID.into(),
+                (id + 1) as u16,
             ),
-            _ => (service::BATTERY.into(), characteristic::BATTERY_LEVEL.into()),
+            (_, side) => (
+                service::BATTERY.into(),
+                characteristic::BATTERY_LEVEL.into(),
+                match side {
+                    Some(true) => 0x010D,  // Left
+                    Some(false) => 0x010E, // Right
+                    None => 0x0106,        // Main
+                },
+            ),
         };
         let mut service = table.add_service(Service::new(service_uuid));
         let mut level = service
             .add_characteristic_small(level_uuid, [CharacteristicProp::Read, CharacteristicProp::Notify], 0u8)
             .read_permission(PermissionLevel::EncryptionRequired);
-        level.add_descriptor_ro(
+        let [lo, hi] = description.to_le_bytes();
+        level.add_descriptor_small(
             descriptors::CHARACTERISTIC_PRESENTATION_FORMAT,
-            PermissionLevel::Allowed,
-            presentation,
+            AttPermissions {
+                write: PermissionLevel::NotAllowed,
+                ..Default::default()
+            },
+            [0x04, 0, 0xAD, 0x27, 1, lo, hi], // uint8 percentage, Bluetooth SIG namespace
         );
         level.add_descriptor_ro(
             descriptors::CHARACTERISTIC_USER_DESCRIPTION,
@@ -100,7 +113,7 @@ impl BatteryServices {
             central: BatteryLevel::new(
                 table,
                 Source::Central,
-                &crate::CENTRAL_BATTERY_PRESENTATION,
+                crate::CENTRAL_BATTERY_IS_LEFT,
                 crate::CENTRAL_BATTERY_USER_DESCRIPTION,
             ),
             #[cfg(feature = "split")]
@@ -108,7 +121,7 @@ impl BatteryServices {
                 BatteryLevel::new(
                     table,
                     Source::Peripheral(crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot]),
-                    &crate::SPLIT_BATTERY_PERIPHERAL_PRESENTATIONS[slot],
+                    crate::CENTRAL_BATTERY_IS_LEFT.map(|left| !left),
                     crate::SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS[slot],
                 )
             }),
@@ -229,19 +242,21 @@ mod tests {
 
     #[test]
     fn each_battery_has_its_own_percentage_descriptors_and_subscription() {
-        let mut table: AttributeTable<'_, NoopRawMutex, 21> = AttributeTable::new();
+        let mut table: AttributeTable<'_, NoopRawMutex, 28> = AttributeTable::new();
         let boards = [
-            (Source::Central, &[4, 0, 0xAD, 0x27, 1, 6, 1], "Central"),
+            (Source::Central, None, 0x0106u16, "Central"),
             #[cfg(feature = "split")]
-            (Source::Peripheral(0), &[4, 0, 0xAD, 0x27, 1, 1, 0], "Left"),
+            (Source::Peripheral(0), Some(true), 0x010D, "Peripheral 0"),
             #[cfg(feature = "split")]
-            (Source::Peripheral(254), &[4, 0, 0xAD, 0x27, 1, 255, 0], "Right"),
+            (Source::Peripheral(1), Some(false), 0x010E, "Peripheral 1"),
+            #[cfg(feature = "split")]
+            (Source::Peripheral(254), None, 255, "Peripheral 254"),
         ];
-        let levels = boards.map(|(source, description, name)| BatteryLevel::new(&mut table, source, description, name));
+        let levels = boards.map(|(source, side, _, name)| BatteryLevel::new(&mut table, source, side, name));
         assert_eq!(table.len(), 7 * boards.len());
-        for (level, (source, description, name)) in levels.iter().zip(boards) {
+        for (level, (source, side, description, name)) in levels.iter().zip(boards) {
             let value = level.value;
-            let standard = source == Source::Central || crate::SPLIT_BATTERY_HAND_PAIR;
+            let standard = source == Source::Central || side.is_some();
             let mut bytes = [0; 32];
             let service_handle = value.handle - 2;
             assert_eq!(table.uuid(service_handle), Some(declarations::PRIMARY_SERVICE.into()));
@@ -254,14 +269,19 @@ mod tests {
             );
             assert!(value.props.any(&[CharacteristicProp::Read]));
             assert!(value.props.any(&[CharacteristicProp::Notify]));
+            let [lo, hi] = description.to_le_bytes();
+            let presentation = [4, 0, 0xAD, 0x27, 1, lo, hi];
             for (uuid, expected) in [
-                (descriptors::CHARACTERISTIC_PRESENTATION_FORMAT, &description[..]),
+                (descriptors::CHARACTERISTIC_PRESENTATION_FORMAT, &presentation[..]),
                 (descriptors::CHARACTERISTIC_USER_DESCRIPTION, name.as_bytes()),
                 (descriptors::VALID_RANGE, &[0, 100][..]),
             ] {
                 let handle = (value.handle + 1..=value.end_handle)
                     .find(|&h| table.uuid(h) == Some(uuid.into()))
                     .unwrap();
+                let permissions = table.permissions(handle).unwrap();
+                assert_eq!(permissions.read, PermissionLevel::Allowed);
+                assert_eq!(permissions.write, PermissionLevel::NotAllowed);
                 let len = table.read(handle, 0, &mut bytes).unwrap();
                 assert_eq!(&bytes[..len], expected);
             }
