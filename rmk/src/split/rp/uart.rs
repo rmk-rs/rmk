@@ -364,9 +364,13 @@ impl<'a, PIO: Instance + UartPioAccess> BufferedUart<'a, PIO> {
             return Ok(0);
         }
         if self.full_duplex {
-            let result = self.write_ring(buf);
-            PIO::regs().irqs(0).inte().modify(|i| i.set_sm0_txnfull(true));
-            return result;
+            return poll_fn(|cx| {
+                PIO::uart_buffer().waker_tx.register(cx.waker());
+                let result = self.write_ring(buf);
+                PIO::regs().irqs(0).inte().modify(|i| i.set_sm0_txnfull(true));
+                result
+            })
+            .await;
         } else {
             if !self.sm_tx.is_enabled() {
                 self.enable_sm_tx().await;
@@ -377,13 +381,16 @@ impl<'a, PIO: Instance + UartPioAccess> BufferedUart<'a, PIO> {
         }
     }
 
-    fn write_ring(&self, buf: &[u8]) -> Result<usize, Error> {
+    fn write_ring(&self, buf: &[u8]) -> Poll<Result<usize, Error>> {
         let mut writer = unsafe { PIO::uart_buffer().buf_tx.writer() };
         let data = writer.push_slice();
+        if data.is_empty() {
+            return Poll::Pending;
+        }
         let n = data.len().min(buf.len());
         data[..n].copy_from_slice(&buf[..n]);
         writer.push_done(n);
-        Ok(n)
+        Poll::Ready(Ok(n))
     }
 
     async fn write_fifo(&mut self, buf: &[u8]) -> Result<usize, Error> {
@@ -468,6 +475,7 @@ impl<PIO: Instance + UartPioAccess> Handler<PIO::Interrupt> for UartInterruptHan
                     n += push;
                 }
                 reader.pop_done(n);
+                PIO::uart_buffer().waker_tx.wake();
                 if PIO::uart_buffer().buf_tx.is_empty() {
                     pio.irqs(0).inte().modify(|i| i.set_sm0_txnfull(false));
                 }
