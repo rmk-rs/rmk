@@ -405,6 +405,34 @@ fn macro_reset_clears_the_macros() {
     });
 }
 
+/// A reset ends the macro playing but lets go of the Ctrl it holds, so B types
+/// alone. Regression: the reset dropped `up LCtrl` with the rest of the macro,
+/// and Ctrl stayed down.
+#[test]
+fn macro_reset_releases_what_the_macro_holds() {
+    const CTRL: Action = Action::Key(KeyCode::Hid(HidKeyCode::LCtrl));
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[macros!(0), k!(B)]]])
+            .behavior_config(BehaviorConfig {
+                keyboard_macros: &[&[MacroOp::Press(CTRL), MacroOp::Delay(1000), MacroOp::Release(CTRL)]],
+                ..Default::default()
+            })
+            .build()
+            .await;
+        keyboard.tap(0, 0, 10);
+        keyboard.echo(via(ViaCommand::DynamicKeymapMacroReset));
+        keyboard
+            .delay(1100)
+            .tap(0, 1, 10)
+            .expect_keys_with_mods(1, [])
+            .expect_keys([])
+            .expect_keys([HidKeyCode::B])
+            .expect_keys([])
+            .run()
+            .await;
+    });
+}
+
 /// vial-gui lets a save spend the whole buffer but one byte a macro, and one
 /// macro that long is kept whole.
 #[cfg(feature = "storage")]

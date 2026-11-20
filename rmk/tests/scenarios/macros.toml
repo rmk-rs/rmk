@@ -277,6 +277,31 @@ steps = [
 ]
 expect = [["B"], []]
 
+# A held macro keeps a place in the queue for the ops after its pause, so the
+# fourth trigger behind it is the one dropped. Regression: four triggers filled
+# the queue, the release dropped `up LCtrl`, and Ctrl stayed down.
+[[test]]
+name = "macro_release_half_is_never_dropped"
+behavior.macro = { macros = [
+  { operations = [
+    { operation = "down", keycode = "LCtrl" },
+    { operation = "pause_for_release" },
+    { operation = "up", keycode = "LCtrl" },
+  ] },
+  { operations = [{ operation = "delay", duration = "100ms" }, { operation = "tap", keycode = "A" }] },
+] }
+steps = [
+  { press = [0, 6] },
+  { tap = { pos = [0, 7], duration = 10 } },
+  { tap = { pos = [0, 7], duration = 10 } },
+  { tap = { pos = [0, 7], duration = 10 } },
+  { tap = { pos = [0, 7], duration = 10 } },
+  { release = [0, 6] },
+  { delay = 500 },
+  { tap = { pos = [1, 3], duration = 10 } },
+]
+expect = [["LCtrl"], ["LCtrl", "A"], ["LCtrl"], ["LCtrl", "A"], ["LCtrl"], ["LCtrl", "A"], ["LCtrl"], [], ["W"], []]
+
 # Without a pause, releasing the macro key changes nothing.
 [[test]]
 name = "macro_without_pause_ignores_release"
