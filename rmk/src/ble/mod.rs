@@ -292,8 +292,12 @@ where
     }
 }
 
-#[cfg(not(feature = "split"))]
-impl<'a, C> Runnable for BleTransport<'a, C>
+impl<
+    'a,
+    #[cfg(not(feature = "split"))] C,
+    #[cfg(all(feature = "split", not(feature = "subrating")))] C: CentralCmds,
+    #[cfg(feature = "subrating")] C: CentralCmds + ControllerCmdAsync<LeSubrateRequest>,
+> Runnable for BleTransport<'a, C>
 where
     C: Controller
         + ExtAdvCmds
@@ -306,66 +310,8 @@ where
         let controller = self.controller.take().expect("BleTransport::run called twice");
         rng::init(&controller).await;
 
-        // Host connections share the stack resources.
-        let mut resources: HostResources<
-            DefaultPacketPool,
-            CONNECTIONS_MAX,
-            L2CAP_CHANNELS_MAX,
-            1,
-            TOTAL_BLE_PROFILES,
-        > = HostResources::new();
+        let mut resources = HostResources::new();
         let stack = build_ble_stack(controller, &mut resources, self.address);
-        run_ble_keyboard(
-            &stack,
-            self.address,
-            &self.device_config,
-            &self.battery_config,
-            #[cfg(feature = "host")]
-            self.host_service,
-        )
-        .await
-    }
-}
-
-#[cfg(feature = "split")]
-impl<
-    'a,
-    #[cfg(not(feature = "subrating"))] C: Controller
-        + CentralCmds
-        + ExtAdvCmds
-        + ControllerCmdAsync<LeSetPhy>
-        + ControllerCmdSync<LeReadPhy>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeRand>,
-    #[cfg(feature = "subrating")] C: Controller
-        + CentralCmds
-        + ExtAdvCmds
-        + ControllerCmdAsync<LeSetPhy>
-        + ControllerCmdSync<LeReadPhy>
-        + ControllerCmdSync<LeReadLocalSupportedFeatures>
-        + ControllerCmdSync<LeRand>
-        + ControllerCmdAsync<LeSubrateRequest>,
-> Runnable for BleTransport<'a, C>
-{
-    async fn run(&mut self) -> ! {
-        let controller = self.controller.take().expect("BleTransport::run called twice");
-        rng::init(&controller).await;
-
-        let mut resources: HostResources<
-            DefaultPacketPool,
-            CONNECTIONS_MAX,
-            L2CAP_CHANNELS_MAX,
-            1,
-            TOTAL_BLE_PROFILES,
-        > = HostResources::new();
-        let stack = build_ble_stack(controller, &mut resources, self.address);
-
-        // `scan_and_connect_peripherals` task sends each established connection to its session task via `conn_channels`
-        let conn_channels: [Channel<NoopRawMutex, Connection<'_, DefaultPacketPool>, 1>; crate::NUM_SPLIT_PERIPHERALS] =
-            core::array::from_fn(|_| Channel::new());
-        // A session task reports back when its session ends via `ended`
-        let ended: Channel<NoopRawMutex, usize, { crate::NUM_SPLIT_PERIPHERALS }> = Channel::new();
-
         let keyboard = pin!(run_ble_keyboard(
             &stack,
             self.address,
@@ -374,19 +320,31 @@ impl<
             #[cfg(feature = "host")]
             self.host_service,
         ));
-        let sessions = pin!(run_peripheral_sessions(
-            &conn_channels,
-            &ended,
-            &stack,
-            &self.peripheral_matrices
-        ));
-        embassy_futures::join::join3(
-            poll_separately(keyboard),
-            poll_separately(sessions),
-            scan_and_connect_peripherals(&stack, &conn_channels, &ended),
-        )
-        .await;
-        unreachable!("BleTransport sub-tasks must run forever")
+
+        #[cfg(not(feature = "split"))]
+        {
+            keyboard.await
+        }
+        #[cfg(feature = "split")]
+        {
+            // Sessions receive a connection per slot and send the slot ID back for reconnection.
+            let conn_channels = core::array::from_fn(|_| Channel::new());
+            let ended = Channel::new();
+            let sessions = pin!(run_peripheral_sessions(
+                &conn_channels,
+                &ended,
+                &stack,
+                &self.peripheral_matrices
+            ));
+
+            embassy_futures::join::join3(
+                poll_separately(keyboard),
+                poll_separately(sessions),
+                scan_and_connect_peripherals(&stack, &conn_channels, &ended),
+            )
+            .await;
+            unreachable!("BleTransport sub-tasks must run forever")
+        }
     }
 }
 
