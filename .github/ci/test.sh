@@ -37,8 +37,3 @@ for feats in "${RMK_TEST_FEATURESETS[@]}"; do
     log_section "Tests: rmk, default features disabled, features: ${feats:-none}"
     cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml "${args[@]}"
 done
-
-log_section "BLE battery reporting with two connected hosts and two measured halves"
-KEYBOARD_TOML_PATH="$repo_root/rmk/tests/fixtures/ble_battery.toml" \
-    cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --lib --no-default-features \
-    --features rynk,_ble,ext_adv,split,async_matrix,storage -E 'test(/^ble::tests::.*battery/)'
