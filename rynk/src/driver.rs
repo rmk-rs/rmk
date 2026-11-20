@@ -27,6 +27,7 @@
 
 #[cfg(feature = "alloc")]
 use alloc::{string::String, vec, vec::Vec};
+use core::future::poll_fn;
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use embassy_futures::select::{Either, select};
@@ -167,7 +168,8 @@ impl Drop for SlotGuard<'_> {
 /// concurrently; replies are matched back by SEQ, so they may complete in
 /// any order. Moving the actual bytes is [`Driver::run`]'s job.
 pub struct Client {
-    /// Client → Driver: request frames waiting to be written.
+    /// Client → Driver: request frames waiting to be written. The driver
+    /// takes a frame out only once all of it is written.
     message: Channel<CS, FrameBytes, 1>,
     /// In-flight requests; the driver delivers each reply here by SEQ.
     slots: [Slot; MAX_IN_FLIGHT],
@@ -253,12 +255,14 @@ impl Client {
     }
 
     /// Send one request without waiting for a reply — for commands whose
-    /// effect prevents one (reboot, bootloader jump). `Ok` only means the
-    /// frame is queued for the writer; keep the driver running long enough to
-    /// write it out. If the device does not actually reset, its reply matches
-    /// no slot and is dropped.
+    /// effect prevents one (reboot, bootloader jump). Resolves once the frame
+    /// is written out. If the device does not actually reset, its reply
+    /// matches no slot and is dropped.
     pub(crate) async fn send_no_reply<E: Endpoint>(&self, req: &E::Request) -> Result<(), RynkHostError> {
-        self.send_frame(E::CMD, self.alloc_seq(), req).await
+        self.send_frame(E::CMD, self.alloc_seq(), req).await?;
+        // The queue frees up only once the driver has written the frame.
+        poll_fn(|cx| self.message.poll_ready_to_send(cx)).await;
+        Ok(())
     }
 
     /// Return the next request SEQ, cycling through `1..=255`. 0 marks a free
@@ -301,9 +305,10 @@ impl Client {
 const RX_BUFFER_SIZE: usize = 128 * 1024;
 
 /// Moves the bytes for one session. Owns the transport's read and write
-/// halves plus the receive state: incoming bytes land in the tail of `buf`,
-/// and the [`Deframer`] cuts whole COBS frames back out of it in place.
-/// No-alloc builds size `buf` to the firmware's frame buffer.
+/// halves plus the receive and send state: incoming bytes land in the tail
+/// of `buf`, and the [`Deframer`] cuts whole COBS frames back out of it in
+/// place; `tx` holds the frame being written and `tx_pos` how much of it is
+/// out. No-alloc builds size `buf` to the firmware's frame buffer.
 pub struct Driver<R: Read, W: Write> {
     reader: R,
     writer: W,
@@ -312,6 +317,9 @@ pub struct Driver<R: Read, W: Write> {
     #[cfg(not(feature = "alloc"))]
     buf: [u8; rmk_types::constants::RYNK_BUFFER_SIZE],
     df: Deframer,
+    synced: bool,
+    tx: FrameBytes,
+    tx_pos: usize,
 }
 
 impl<R: Read, W: Write> Driver<R, W> {
@@ -324,6 +332,9 @@ impl<R: Read, W: Write> Driver<R, W> {
             #[cfg(not(feature = "alloc"))]
             buf: [0; rmk_types::constants::RYNK_BUFFER_SIZE],
             df: Deframer::new(),
+            synced: false,
+            tx: FrameBytes::new(),
+            tx_pos: 0,
         }
     }
 
@@ -331,14 +342,18 @@ impl<R: Read, W: Write> Driver<R, W> {
     /// error that ended it.
     ///
     /// Takes `&mut self` so it can be called again after being cancelled: the
-    /// receive state lives in the struct, so a cancelled run (a `select`
-    /// exit, wasm's call-at-a-time pumping) loses no bytes.
+    /// receive and send state live in the struct, so a cancelled run (a
+    /// `select` exit, wasm's call-at-a-time pumping) loses no bytes, and the
+    /// next run finishes a half-written frame.
     pub async fn run(&mut self, client: &Client) -> RynkHostError {
         let Self {
             reader,
             writer,
             buf,
             df,
+            synced,
+            tx,
+            tx_pos,
         } = self;
 
         let rx_loop = async {
@@ -402,13 +417,25 @@ impl<R: Read, W: Write> Driver<R, W> {
             // Send a lone `0x00` first so stale bytes in the peer's receive
             // buffer (an OS port probe, a prior session's half-frame) end as
             // garbage instead of merging with our first request.
-            if let Err(e) = writer.write_all(&[0]).await {
-                return RynkHostError::Io(e.kind());
+            if !*synced {
+                if let Err(e) = writer.write_all(&[0]).await {
+                    return RynkHostError::Io(e.kind());
+                }
+                *synced = true;
             }
             loop {
-                let frame = client.message.receive().await;
-                if let Err(e) = writer.write_all(&frame).await {
-                    break RynkHostError::Io(e.kind());
+                if *tx_pos == tx.len() {
+                    client.message.ready_to_receive().await;
+                    // Only the driver takes frames out, so this one is still queued.
+                    *tx = client.message.try_peek().unwrap();
+                    *tx_pos = 0;
+                }
+                match writer.write(&tx[*tx_pos..]).await {
+                    Ok(n) => *tx_pos += n,
+                    Err(e) => break RynkHostError::Io(e.kind()),
+                }
+                if *tx_pos == tx.len() {
+                    let _ = client.message.try_receive();
                 }
             }
         };
