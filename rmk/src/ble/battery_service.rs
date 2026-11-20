@@ -91,20 +91,6 @@ impl BatteryServices {
         }
     }
 
-    fn percent(slot: usize) -> Option<u8> {
-        let status = match slot {
-            #[cfg(feature = "split")]
-            1.. => {
-                crate::split::driver::current_peripheral_battery_status(crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot - 1])?
-            }
-            _ => crate::input_device::battery::current_battery_status(),
-        };
-        match status {
-            BatteryStatus::Available { level, .. } => level,
-            BatteryStatus::Unavailable => None,
-        }
-    }
-
     pub(super) fn by_cccd(&self, handle: u16) -> Option<usize> {
         self.levels
             .iter()
@@ -113,29 +99,33 @@ impl BatteryServices {
 
     /// Keep one readable value per battery, including while notifications are disabled.
     pub(super) async fn update_values<const MAX: usize>(&self, table: &AttributeTable<'_, NoopRawMutex, MAX>) -> ! {
+        let update = |slot: usize, status| {
+            let value = &self.levels[slot];
+            let cached = &self.last_percent[slot];
+            if let BatteryStatus::Available { level: Some(level), .. } = status
+                && cached.get() != Some(level)
+            {
+                match table.set(value, &level) {
+                    Ok(()) => cached.set(Some(level)),
+                    Err(e) => warn!("Failed to update battery handle {}: {:?}", value.handle, e),
+                }
+            }
+        };
         let mut central = BatteryStatusEvent::subscriber();
         #[cfg(feature = "split")]
         let mut peripherals =
             (!crate::SPLIT_BATTERY_PERIPHERAL_IDS.is_empty()).then(PeripheralBatteryEvent::subscriber);
         loop {
             while central.try_next_message_pure().is_some() {}
+            update(0, crate::input_device::battery::current_battery_status());
             #[cfg(feature = "split")]
             if let Some(changes) = &mut peripherals {
                 while changes.try_next_message_pure().is_some() {}
-            }
-            for (slot, value) in self.levels.iter().enumerate() {
-                let cached = &self.last_percent[slot];
-                if let Some(level) = Self::percent(slot)
-                    && cached.get() != Some(level)
-                {
-                    match table.set(value, &level) {
-                        Ok(()) => cached.set(Some(level)),
-                        Err(e) => warn!("Failed to update battery handle {}: {:?}", value.handle, e),
+                for (slot, &id) in crate::SPLIT_BATTERY_PERIPHERAL_IDS.iter().enumerate() {
+                    if let Some(status) = crate::split::driver::current_peripheral_battery_status(id) {
+                        update(slot + 1, status);
                     }
                 }
-            }
-            #[cfg(feature = "split")]
-            if let Some(changes) = &mut peripherals {
                 select(central.next_message_pure(), changes.next_message_pure()).await;
                 continue;
             }
