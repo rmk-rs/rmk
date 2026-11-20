@@ -233,8 +233,9 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(
     // plus 160 bytes for each WinUSB function (Rynk, and the dongle's DFU
     // runtime): function header, compatible ID and interface GUID. The BOS
     // platform capability takes 28 bytes on top of the 5-byte BOS header.
-    const WINUSB: bool = cfg!(any(feature = "rynk", feature = "dongle"));
-    const WINUSB_FUNCTIONS: usize = cfg!(feature = "rynk") as usize + cfg!(feature = "dongle") as usize;
+    const WINUSB_FUNCTIONS: usize = cfg!(feature = "dongle") as usize
+        + cfg!(any(feature = "rynk", all(feature = "dongle", not(feature = "vial")))) as usize;
+    const WINUSB: bool = WINUSB_FUNCTIONS != 0;
     const BOS_BUF_SIZE: usize = if WINUSB { 64 } else { 16 };
     const MSOS_BUF_SIZE: usize = if WINUSB { 18 + 160 * WINUSB_FUNCTIONS } else { 16 };
 
