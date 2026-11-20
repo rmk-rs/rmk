@@ -10,8 +10,9 @@ use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
 use super::battery_service::BatteryServices;
-use super::device_info::DeviceConfigurationService;
+use super::device_info::{DeviceConfigurationService, PnPID};
 use crate::BLE_PROFILE_NAME_SUFFIX;
+use crate::config::{BleBatteryConfig, DeviceConfig};
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use crate::dongle::event::{CUSTOM_TO_DONGLE_UUID, CUSTOM_TO_KEYBOARD_UUID};
 #[cfg(feature = "dongle")]
@@ -43,7 +44,7 @@ pub(crate) struct Server {
     pub(crate) rynk_service: RynkGattService,
     #[cfg(feature = "rynk")]
     pub(crate) rynk_hid_service: RynkHidService,
-    pub(crate) device_config_service: DeviceConfigurationService,
+    device_config_service: DeviceConfigurationService,
     #[cfg(feature = "dongle")]
     pub(crate) dongle_event_service: DongleEventService,
 }
@@ -84,7 +85,7 @@ struct GapService {
 struct GenericAttributeService {}
 
 impl Server<'_> {
-    pub(crate) fn new_keyboard(product_name: &'static str) -> Result<Self, &'static str> {
+    pub(super) fn new_keyboard(product_name: &'static str) -> Result<Self, &'static str> {
         if BLE_PROFILE_NAME_SUFFIX {
             let mut server = Self::new(AttributeTable::new());
             server.profile_name.product_name = product_name;
@@ -94,6 +95,20 @@ impl Server<'_> {
             name: product_name,
             appearance: &appearance::human_interface_device::KEYBOARD,
         }))
+    }
+
+    pub(super) fn configure(&mut self, device: &DeviceConfig<'_>, battery: &BleBatteryConfig) {
+        self.batteries.central_notifications = battery.enabled;
+        let info = &self.device_config_service;
+        let pnp_id = PnPID {
+            vendor_id: device.vid,
+            product_id: device.pid,
+            ..Default::default()
+        };
+        let manufacturer = heapless::String::try_from(device.manufacturer).expect("manufacturer is too long for BLE");
+        unwrap!(self.set(&info.pnp_id, &pnp_id));
+        unwrap!(self.set(&info.serial_number, &device.serial_number));
+        unwrap!(self.set(&info.manufacturer_name, &manufacturer));
     }
 
     /// The empty return array avoids a name buffer in disabled builds.

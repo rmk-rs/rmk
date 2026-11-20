@@ -7,7 +7,6 @@ use embassy_time::Timer;
 use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
 
-use super::ble_server::BleHidServer;
 #[cfg(feature = "split")]
 use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
@@ -144,12 +143,11 @@ impl BatteryServices {
         }
     }
 
-    async fn notify(&self, hid: &BleHidServer<'_, '_, '_>, slot: usize) -> bool {
+    pub(super) async fn notify(&self, conn: &GattConnection<'_, '_, impl PacketPool>, slot: usize) -> bool {
         let value = &self.levels[slot];
-        if !hid.suspended.get()
-            && (slot != 0 || self.central_notifications)
+        if (slot != 0 || self.central_notifications)
             && let Some(level) = self.last_percent[slot].get()
-            && let Err(e) = value.notify(hid.conn, &level, false).await
+            && let Err(e) = value.notify(conn, &level, false).await
         {
             warn!("Failed to notify battery handle {}: {:?}", value.handle, e);
             return false;
@@ -157,22 +155,13 @@ impl BatteryServices {
         true
     }
 
-    pub(super) async fn notify_after_reply(
-        &self,
-        hid: &BleHidServer<'_, '_, '_>,
-        was_suspended: bool,
-        battery_cccd: Option<usize>,
-    ) {
-        if was_suspended && !hid.suspended.get() {
-            for slot in 0..self.levels.len() {
-                self.notify(hid, slot).await;
-            }
-        } else if let Some(slot) = battery_cccd {
-            self.notify(hid, slot).await;
+    pub(super) async fn replay(&self, conn: &GattConnection<'_, '_, impl PacketPool>) {
+        for slot in 0..self.levels.len() {
+            self.notify(conn, slot).await;
         }
     }
 
-    pub(super) async fn report_changes(&self, hid: &BleHidServer<'_, '_, '_>) {
+    pub(super) async fn report_changes(&self, conn: &GattConnection<'_, '_, impl PacketPool>, suspended: &Cell<bool>) {
         let central = async {
             if !self.central_notifications {
                 return;
@@ -180,7 +169,7 @@ impl BatteryServices {
             let mut changes = BatteryStatusEvent::subscriber();
             loop {
                 while changes.try_next_message_pure().is_some() {}
-                if !self.notify(hid, 0).await {
+                if !suspended.get() && !self.notify(conn, 0).await {
                     Timer::after_secs(2).await;
                     continue;
                 }
@@ -198,14 +187,17 @@ impl BatteryServices {
             }
             let mut changes = PeripheralBatteryEvent::subscriber();
             for slot in 1..self.levels.len() {
-                self.notify(hid, slot).await;
+                if !suspended.get() {
+                    self.notify(conn, slot).await;
+                }
             }
             loop {
                 let event = changes.next_message_pure().await;
-                if matches!(event.state.0, BatteryStatus::Available { level: Some(_), .. })
+                if !suspended.get()
+                    && matches!(event.state.0, BatteryStatus::Available { level: Some(_), .. })
                     && let Some(slot) = ids.iter().position(|&id| id == event.id)
                 {
-                    self.notify(hid, slot + 1).await;
+                    self.notify(conn, slot + 1).await;
                 }
             }
         });

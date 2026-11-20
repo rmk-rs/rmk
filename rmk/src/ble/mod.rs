@@ -31,7 +31,6 @@ use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 use crate::TOTAL_BLE_PROFILES;
 use crate::ble::adv::{Adv, advertise};
 use crate::ble::ble_server::{BleHidServer, Server};
-use crate::ble::device_info::{PnPID, VidSource};
 #[cfg(feature = "host")]
 use crate::ble::host::{GattWriteResult, HOST_WRITE_BUFFER_SIZE, HostConnection};
 use crate::ble::led::BleLedReader;
@@ -53,9 +52,9 @@ use crate::split::ble::central::{run_peripheral_sessions, scan_and_connect_perip
 use crate::state::{set_ble_state, wait_for_connection_status};
 
 pub(crate) mod adv;
-pub(crate) mod battery_service;
+mod battery_service;
 pub(crate) mod ble_server;
-pub(crate) mod device_info;
+mod device_info;
 #[cfg(test)]
 mod fake_hci;
 #[cfg(feature = "host")]
@@ -249,7 +248,7 @@ where
     controller: Option<C>,
     address: [u8; 6],
     device_config: DeviceConfig<'static>,
-    config: BleBatteryConfig,
+    battery_config: BleBatteryConfig,
     /// One matrix region per split peripheral.
     #[cfg(feature = "split")]
     peripheral_matrices: [PeripheralMatrixConfig; crate::NUM_SPLIT_PERIPHERALS],
@@ -274,7 +273,7 @@ where
             controller: Some(controller),
             address,
             device_config: rmk_config.device_config,
-            config: rmk_config.ble_battery_config,
+            battery_config: rmk_config.ble_battery_config,
             #[cfg(feature = "split")]
             peripheral_matrices,
             #[cfg(feature = "host")]
@@ -321,7 +320,7 @@ where
             &stack,
             self.address,
             &self.device_config,
-            &self.config,
+            &self.battery_config,
             #[cfg(feature = "host")]
             self.host_service,
         )
@@ -372,7 +371,7 @@ impl<
             &stack,
             self.address,
             &self.device_config,
-            &self.config,
+            &self.battery_config,
             #[cfg(feature = "host")]
             self.host_service,
         ));
@@ -405,7 +404,7 @@ async fn run_ble_keyboard<
     stack: &Stack<'_, C, DefaultPacketPool>,
     address: [u8; 6],
     device_config: &DeviceConfig<'static>,
-    config: &BleBatteryConfig,
+    battery_config: &BleBatteryConfig,
     #[cfg(feature = "host")] host_service: Option<&'r crate::host::HostService<'r>>,
 ) -> ! {
     let product_name = device_config.product_name;
@@ -414,37 +413,7 @@ async fn run_ble_keyboard<
     let Ok(server) = &mut Server::new_keyboard(product_name) else {
         panic!("product name is too long for BLE");
     };
-    server.batteries.central_notifications = config.enabled;
-
-    unwrap!(
-        server
-            .set(
-                &server.device_config_service.pnp_id,
-                &PnPID {
-                    vid_source: VidSource::UsbIF,
-                    vendor_id: device_config.vid,
-                    product_id: device_config.pid,
-                    product_version: 0x0001,
-                },
-            )
-            .as_ref()
-    );
-    unwrap!(
-        server
-            .set(
-                &server.device_config_service.serial_number,
-                &device_config.serial_number,
-            )
-            .as_ref()
-    );
-    unwrap!(
-        server
-            .set(
-                &server.device_config_service.manufacturer_name,
-                &heapless::String::try_from(device_config.manufacturer).expect("manufacturer is too long for BLE"),
-            )
-            .as_ref()
-    );
+    server.configure(device_config, battery_config);
 
     if crate::ble::passkey::passkey_entry_enabled() {
         stack.set_io_capabilities(IoCapabilities::KeyboardOnly);
@@ -931,10 +900,13 @@ async fn gatt_events_task(
                     }
                 }
                 reply.send().await;
-                server
-                    .batteries
-                    .notify_after_reply(hid, was_suspended, battery_to_notify)
-                    .await;
+                if !hid.suspended.get() {
+                    if was_suspended {
+                        server.batteries.replay(conn).await;
+                    } else if let Some(slot) = battery_to_notify {
+                        server.batteries.notify(conn, slot).await;
+                    }
+                }
             }
             GattConnectionEvent::PhyUpdated { tx_phy, rx_phy } => {
                 info!("[gatt] PhyUpdated: {:?}, {:?}", tx_phy, rx_phy)
@@ -1106,7 +1078,7 @@ async fn serve_keyboard_connection<
         wait_for_connection_status(|s| s.ble[profile_id as usize].state == BleState::Connected).await;
         join(
             update_ble_phy(stack, conn.raw(), host_phy),
-            server.batteries.report_changes(ble_hid_server),
+            server.batteries.report_changes(conn, &ble_hid_server.suspended),
         )
         .await;
     };
