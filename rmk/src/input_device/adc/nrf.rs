@@ -103,7 +103,7 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
             match self.event_type[self.event_index as usize] {
                 AnalogEventType::Joystick(axis_count) => {
                     let mut axes = [Axis::X, Axis::Y, Axis::Z].map(|axis| AxisEvent {
-                        typ: AxisValType::Rel,
+                        typ: AxisValType::Abs,
                         axis,
                         value: 0,
                     });
@@ -178,6 +178,7 @@ mod tests {
                 panic!("joystick event")
             };
             assert_eq!(event.device_id, 7);
+            assert!(event.axes.iter().all(|axis| matches!(axis.typ, AxisValType::Abs)));
             assert_eq!(event.axes[0].value, -30768);
             assert_eq!(event.axes[1].value, -30768);
             assert_eq!(Instant::now(), first);
