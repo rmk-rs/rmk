@@ -44,7 +44,7 @@ use crate::channel::{BLE_PROFILE_CHANNEL, BLE_REPORT_CHANNEL, LED_SIGNAL};
 use crate::config::{BleBatteryConfig, DeviceConfig, RmkConfig};
 use crate::core_traits::Runnable;
 use crate::event::SubscribableEvent;
-use crate::hid::{HidWriterTrait, Report, run_led_reader};
+use crate::hid::{Report, run_led_reader};
 use crate::sleep::{report_activity, request_sleep};
 #[cfg(feature = "split")]
 use crate::split::PeripheralMatrixConfig;
@@ -736,13 +736,13 @@ pub(crate) async fn ble_task<C: Controller, P: PacketPool, E: EventHandler>(mut 
 /// This is how we interact with read and write requests.
 async fn gatt_events_task(
     server: &Server<'_>,
-    conn: &GattConnection<'_, '_, DefaultPacketPool>,
+    hid: &BleHidServer<'_, '_, '_>,
     profile_id: u8,
     profile_manager: &ProfileManager<TOTAL_BLE_PROFILES>,
     led: &Cell<LedIndicator>,
-    suspended: &Cell<bool>,
     #[cfg(feature = "host")] host: Option<&HostConnection<'_>>,
 ) {
+    let conn = hid.conn;
     let output_keyboard = &server.hid_service.output_keyboard;
     let hid_control_point = &server.hid_service.hid_control_point;
     let input_keyboard = &server.hid_service.input_keyboard;
@@ -811,7 +811,7 @@ async fn gatt_events_task(
             GattConnectionEvent::Gatt { event: gatt_event } => {
                 let mut written_cccd = None;
                 let mut battery_to_notify = None;
-                let was_suspended = suspended.get();
+                let was_suspended = hid.suspended.get();
                 let reject_unencrypted = match &gatt_event {
                     GattEvent::Write(event) => {
                         let Ok(security_level) = conn.raw().security_level() else {
@@ -886,22 +886,18 @@ async fn gatt_events_task(
                             debug!("Write GATT Event to Unknown: {:?}", handle);
                         }
 
-                        if encrypted && control_point_write {
-                            let selected = profile_id == crate::state::current_profile();
-                            match data {
-                                [0] => {
-                                    suspended.set(true);
-                                    if selected {
-                                        request_sleep();
-                                    }
+                        if encrypted
+                            && control_point_write
+                            && let [opcode @ 0..=1] = data
+                        {
+                            let suspend = *opcode == 0;
+                            hid.suspended.set(suspend);
+                            if profile_id == crate::state::current_profile() {
+                                if suspend {
+                                    request_sleep();
+                                } else {
+                                    report_activity();
                                 }
-                                [1] => {
-                                    suspended.set(false);
-                                    if selected {
-                                        report_activity();
-                                    }
-                                }
-                                _ => {}
                             }
                         }
                         !encrypted
@@ -925,7 +921,7 @@ async fn gatt_events_task(
                 if let Some(handle) = written_cccd {
                     // macOS can re-enable keyboard input on wake without sending Exit Suspend.
                     if input_keyboard.cccd_handle == Some(handle) && input_keyboard.should_notify(conn) {
-                        suspended.set(false);
+                        hid.suspended.set(false);
                     }
                     report_activity();
                     if let Some(table) = server.get_client_att_table(conn.raw())
@@ -935,13 +931,10 @@ async fn gatt_events_task(
                     }
                 }
                 reply.send().await;
-                if !suspended.get() {
-                    if was_suspended {
-                        server.batteries.replay(conn).await;
-                    } else if let Some(battery) = battery_to_notify {
-                        server.batteries.notify(conn, battery).await;
-                    }
-                }
+                server
+                    .batteries
+                    .notify_after_reply(hid, was_suspended, battery_to_notify)
+                    .await;
             }
             GattConnectionEvent::PhyUpdated { tx_phy, rx_phy } => {
                 info!("[gatt] PhyUpdated: {:?}, {:?}", tx_phy, rx_phy)
@@ -1095,8 +1088,7 @@ async fn serve_keyboard_connection<
     profile_manager: &ProfileManager<TOTAL_BLE_PROFILES>,
     #[cfg(feature = "host")] host_service: Option<&crate::host::HostService<'_>>,
 ) {
-    let mut ble_hid_server = BleHidServer::new(server, conn);
-    let suspended = Cell::new(false);
+    let ble_hid_server = &BleHidServer::new(server, conn);
 
     // `use_1m_phy` exists for legacy host adapters that cannot do 2M.
     // Always use 2M for the dongle link.
@@ -1114,7 +1106,7 @@ async fn serve_keyboard_connection<
         wait_for_connection_status(|s| s.ble[profile_id as usize].state == BleState::Connected).await;
         join(
             update_ble_phy(stack, conn.raw(), host_phy),
-            server.batteries.run(conn, &suspended),
+            server.batteries.report_changes(ble_hid_server),
         )
         .await;
     };
@@ -1150,7 +1142,7 @@ async fn serve_keyboard_connection<
         match host_service {
             Some(service) => {
                 let host = HostConnection::new(server);
-                let events = gatt_events_task(server, conn, profile_id, profile_manager, &led, &suspended, Some(&host));
+                let events = gatt_events_task(server, ble_hid_server, profile_id, profile_manager, &led, Some(&host));
                 // Restart after a session-fatal TX error so the host service survives the rest of the connection.
                 let sessions = async {
                     loop {
@@ -1159,11 +1151,11 @@ async fn serve_keyboard_connection<
                 };
                 select(events, sessions).await;
             }
-            None => gatt_events_task(server, conn, profile_id, profile_manager, &led, &suspended, None).await,
+            None => gatt_events_task(server, ble_hid_server, profile_id, profile_manager, &led, None).await,
         }
     };
     #[cfg(not(feature = "host"))]
-    let gatt_task = gatt_events_task(server, conn, profile_id, profile_manager, &led, &suspended);
+    let gatt_task = gatt_events_task(server, ble_hid_server, profile_id, profile_manager, &led);
 
     let dongle_events = async {
         #[cfg(feature = "dongle")]

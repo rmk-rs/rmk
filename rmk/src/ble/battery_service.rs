@@ -7,99 +7,63 @@ use embassy_time::Timer;
 use rmk_types::battery::BatteryStatus;
 use trouble_host::prelude::*;
 
+use super::ble_server::BleHidServer;
 #[cfg(feature = "split")]
 use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
 
-#[cfg(feature = "split")]
 const PERIPHERAL_BATTERY_SERVICE_UUID: u128 = 0x061686b6_6a06_4d02_8a8f_c514225bbdb3;
-#[cfg(feature = "split")]
 const PERIPHERAL_BATTERY_LEVEL_UUID: u128 = 0xcd3259e5_a755_4bf0_9f36_690cddccdb51;
 
 /// Battery services in handle order, starting with the central on every profile.
 pub(super) struct BatteryServices {
     pub(super) central_notifications: bool,
-    central: BatteryLevel,
-    #[cfg(feature = "split")]
-    peripherals: [BatteryLevel; crate::NUM_SPLIT_BATTERY_PERIPHERALS],
+    levels: [Characteristic<u8>; BatteryServices::CCCD_COUNT],
+    last_percent: [Cell<Option<u8>>; BatteryServices::CCCD_COUNT],
 }
 
-pub(super) struct BatteryLevel {
-    value: Characteristic<u8>,
-    source: Source,
-    last_percent: Cell<Option<u8>>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Source {
-    Central,
-    #[cfg(feature = "split")]
-    Peripheral(usize),
-}
-
-impl BatteryLevel {
-    fn new<const MAX: usize>(
-        table: &mut AttributeTable<'_, NoopRawMutex, MAX>,
-        source: Source,
-        is_left: Option<bool>,
-        name: &'static str,
-    ) -> Self {
-        let (service_uuid, level_uuid, description): (Uuid, Uuid, u16) = match (source, is_left) {
-            #[cfg(feature = "split")]
-            (Source::Peripheral(id), None) => (
-                PERIPHERAL_BATTERY_SERVICE_UUID.into(),
-                PERIPHERAL_BATTERY_LEVEL_UUID.into(),
-                (id + 1) as u16,
-            ),
-            (_, side) => (
-                service::BATTERY.into(),
-                characteristic::BATTERY_LEVEL.into(),
-                match side {
-                    Some(true) => 0x010D,  // Left
-                    Some(false) => 0x010E, // Right
-                    None => 0x0106,        // Main
-                },
-            ),
-        };
-        let mut service = table.add_service(Service::new(service_uuid));
-        let mut level = service
-            .add_characteristic_small(level_uuid, [CharacteristicProp::Read, CharacteristicProp::Notify], 0u8)
-            .read_permission(PermissionLevel::EncryptionRequired);
-        let [lo, hi] = description.to_le_bytes();
-        level.add_descriptor_small(
-            descriptors::CHARACTERISTIC_PRESENTATION_FORMAT,
-            AttPermissions {
-                write: PermissionLevel::NotAllowed,
-                ..Default::default()
+fn add_battery<const MAX: usize>(
+    table: &mut AttributeTable<'_, NoopRawMutex, MAX>,
+    peripheral_id: Option<usize>,
+    is_left: Option<bool>,
+    name: &'static str,
+) -> Characteristic<u8> {
+    let (service_uuid, level_uuid, description): (Uuid, Uuid, u16) = match (peripheral_id, is_left) {
+        (Some(id), None) => (
+            PERIPHERAL_BATTERY_SERVICE_UUID.into(),
+            PERIPHERAL_BATTERY_LEVEL_UUID.into(),
+            (id + 1) as u16,
+        ),
+        (_, side) => (
+            service::BATTERY.into(),
+            characteristic::BATTERY_LEVEL.into(),
+            match side {
+                Some(true) => 0x010D,  // Left
+                Some(false) => 0x010E, // Right
+                None => 0x0106,        // Main
             },
-            [0x04, 0, 0xAD, 0x27, 1, lo, hi], // uint8 percentage, Bluetooth SIG namespace
-        );
-        level.add_descriptor_ro(
-            descriptors::CHARACTERISTIC_USER_DESCRIPTION,
-            PermissionLevel::Allowed,
-            name,
-        );
-        level.add_descriptor_ro(descriptors::VALID_RANGE, PermissionLevel::Allowed, &[0u8, 100]);
-        Self {
-            value: level.build(),
-            source,
-            last_percent: Cell::new(None),
-        }
-    }
-}
-
-impl Source {
-    fn percent(self) -> Option<u8> {
-        let status = match self {
-            Source::Central => crate::input_device::battery::current_battery_status(),
-            #[cfg(feature = "split")]
-            Source::Peripheral(id) => crate::split::driver::current_peripheral_battery_status(id)?,
-        };
-        match status {
-            BatteryStatus::Available { level, .. } => level,
-            BatteryStatus::Unavailable => None,
-        }
-    }
+        ),
+    };
+    let mut service = table.add_service(Service::new(service_uuid));
+    let mut level = service
+        .add_characteristic_small(level_uuid, [CharacteristicProp::Read, CharacteristicProp::Notify], 0u8)
+        .read_permission(PermissionLevel::EncryptionRequired);
+    let [lo, hi] = description.to_le_bytes();
+    level.add_descriptor_small(
+        descriptors::CHARACTERISTIC_PRESENTATION_FORMAT,
+        AttPermissions {
+            write: PermissionLevel::NotAllowed,
+            ..Default::default()
+        },
+        [0x04, 0, 0xAD, 0x27, 1, lo, hi], // uint8 percentage, Bluetooth SIG namespace
+    );
+    level.add_descriptor_ro(
+        descriptors::CHARACTERISTIC_USER_DESCRIPTION,
+        PermissionLevel::Allowed,
+        name,
+    );
+    level.add_descriptor_ro(descriptors::VALID_RANGE, PermissionLevel::Allowed, &[0u8, 100]);
+    level.build()
 }
 
 impl BatteryServices {
@@ -111,55 +75,63 @@ impl BatteryServices {
     pub(super) const ATTRIBUTE_COUNT: usize = 7 * Self::CCCD_COUNT;
 
     pub(super) fn new<const MAX: usize>(table: &mut AttributeTable<'_, NoopRawMutex, MAX>) -> Self {
-        Self {
-            central_notifications: true,
-            central: BatteryLevel::new(
+        let left = crate::CENTRAL_BATTERY_IS_LEFT;
+        let levels = core::array::from_fn(|slot| match slot.checked_sub(1) {
+            None => add_battery(table, None, left, crate::CENTRAL_BATTERY_USER_DESCRIPTION),
+            Some(peripheral) => add_battery(
                 table,
-                Source::Central,
-                crate::CENTRAL_BATTERY_IS_LEFT,
-                crate::CENTRAL_BATTERY_USER_DESCRIPTION,
+                Some(crate::SPLIT_BATTERY_PERIPHERAL_IDS[peripheral]),
+                left.map(|left| !left),
+                crate::SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS[peripheral],
             ),
-            #[cfg(feature = "split")]
-            peripherals: core::array::from_fn(|slot| {
-                BatteryLevel::new(
-                    table,
-                    Source::Peripheral(crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot]),
-                    crate::CENTRAL_BATTERY_IS_LEFT.map(|left| !left),
-                    crate::SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS[slot],
-                )
-            }),
+        });
+        Self {
+            levels,
+            last_percent: [const { Cell::new(None) }; Self::CCCD_COUNT],
+            central_notifications: true,
         }
     }
 
-    fn levels(&self) -> impl Iterator<Item = &BatteryLevel> {
-        let levels = core::iter::once(&self.central);
-        #[cfg(feature = "split")]
-        let levels = levels.chain(&self.peripherals);
-        levels
+    fn percent(slot: usize) -> Option<u8> {
+        let status = match slot {
+            #[cfg(feature = "split")]
+            1.. => {
+                crate::split::driver::current_peripheral_battery_status(crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot - 1])?
+            }
+            _ => crate::input_device::battery::current_battery_status(),
+        };
+        match status {
+            BatteryStatus::Available { level, .. } => level,
+            BatteryStatus::Unavailable => None,
+        }
     }
 
-    pub(super) fn by_cccd(&self, handle: u16) -> Option<&BatteryLevel> {
-        self.levels().find(|battery| battery.value.cccd_handle == Some(handle))
+    pub(super) fn by_cccd(&self, handle: u16) -> Option<usize> {
+        self.levels
+            .iter()
+            .position(|battery| battery.cccd_handle == Some(handle))
     }
 
     /// Keep one readable value per battery, including while notifications are disabled.
     pub(super) async fn update_values<const MAX: usize>(&self, table: &AttributeTable<'_, NoopRawMutex, MAX>) -> ! {
         let mut central = BatteryStatusEvent::subscriber();
         #[cfg(feature = "split")]
-        let mut peripherals = (!self.peripherals.is_empty()).then(PeripheralBatteryEvent::subscriber);
+        let mut peripherals =
+            (!crate::SPLIT_BATTERY_PERIPHERAL_IDS.is_empty()).then(PeripheralBatteryEvent::subscriber);
         loop {
             while central.try_next_message_pure().is_some() {}
             #[cfg(feature = "split")]
             if let Some(changes) = &mut peripherals {
                 while changes.try_next_message_pure().is_some() {}
             }
-            for battery in self.levels() {
-                if let Some(level) = battery.source.percent()
-                    && battery.last_percent.get() != Some(level)
+            for (slot, value) in self.levels.iter().enumerate() {
+                let cached = &self.last_percent[slot];
+                if let Some(level) = Self::percent(slot)
+                    && cached.get() != Some(level)
                 {
-                    match table.set(&battery.value, &level) {
-                        Ok(()) => battery.last_percent.set(Some(level)),
-                        Err(e) => warn!("Failed to update battery handle {}: {:?}", battery.value.handle, e),
+                    match table.set(value, &level) {
+                        Ok(()) => cached.set(Some(level)),
+                        Err(e) => warn!("Failed to update battery handle {}: {:?}", value.handle, e),
                     }
                 }
             }
@@ -172,74 +144,72 @@ impl BatteryServices {
         }
     }
 
-    pub(super) async fn notify(&self, conn: &GattConnection<'_, '_, impl PacketPool>, battery: &BatteryLevel) {
-        if (self.central_notifications || battery.source != Source::Central)
-            && let Some(level) = battery.last_percent.get()
-            && let Err(e) = battery.value.notify(conn, &level, false).await
+    async fn notify(&self, hid: &BleHidServer<'_, '_, '_>, slot: usize) -> bool {
+        let value = &self.levels[slot];
+        if !hid.suspended.get()
+            && (slot != 0 || self.central_notifications)
+            && let Some(level) = self.last_percent[slot].get()
+            && let Err(e) = value.notify(hid.conn, &level, false).await
         {
-            warn!("Failed to notify battery handle {}: {:?}", battery.value.handle, e);
+            warn!("Failed to notify battery handle {}: {:?}", value.handle, e);
+            return false;
+        }
+        true
+    }
+
+    pub(super) async fn notify_after_reply(
+        &self,
+        hid: &BleHidServer<'_, '_, '_>,
+        was_suspended: bool,
+        battery_cccd: Option<usize>,
+    ) {
+        if was_suspended && !hid.suspended.get() {
+            for slot in 0..self.levels.len() {
+                self.notify(hid, slot).await;
+            }
+        } else if let Some(slot) = battery_cccd {
+            self.notify(hid, slot).await;
         }
     }
 
-    pub(super) async fn replay(&self, conn: &GattConnection<'_, '_, impl PacketPool>) {
-        for battery in self.levels() {
-            self.notify(conn, battery).await;
-        }
-    }
-
-    /// Starts once this connection is encrypted and its subscriptions have been restored.
-    pub(super) async fn run(&self, conn: &GattConnection<'_, '_, impl PacketPool>, suspended: &Cell<bool>) {
-        let reports = self.report_central(conn, suspended);
+    pub(super) async fn report_changes(&self, hid: &BleHidServer<'_, '_, '_>) {
+        let central = async {
+            if !self.central_notifications {
+                return;
+            }
+            let mut changes = BatteryStatusEvent::subscriber();
+            loop {
+                while changes.try_next_message_pure().is_some() {}
+                if !self.notify(hid, 0).await {
+                    Timer::after_secs(2).await;
+                    continue;
+                }
+                while !matches!(
+                    changes.next_message_pure().await.0,
+                    BatteryStatus::Available { level: Some(_), .. }
+                ) {}
+            }
+        };
         #[cfg(feature = "split")]
-        let reports = embassy_futures::join::join(reports, self.report_peripherals(conn, suspended));
-        reports.await;
-    }
-
-    async fn report_central(&self, conn: &GattConnection<'_, '_, impl PacketPool>, suspended: &Cell<bool>) {
-        if !self.central_notifications {
-            return;
-        }
-        let mut changes = BatteryStatusEvent::subscriber();
-        loop {
-            while changes.try_next_message_pure().is_some() {}
-            if !suspended.get()
-                && let Some(level) = self.central.last_percent.get()
-                && let Err(e) = self.central.value.notify(conn, &level, false).await
-            {
-                warn!("Failed to notify central battery level: {:?}", e);
-                Timer::after_secs(2).await;
-                continue;
+        let central = embassy_futures::join::join(central, async {
+            let ids = &crate::SPLIT_BATTERY_PERIPHERAL_IDS;
+            if ids.is_empty() {
+                return;
             }
-            while !matches!(
-                changes.next_message_pure().await.0,
-                BatteryStatus::Available { level: Some(_), .. }
-            ) {}
-        }
-    }
-
-    #[cfg(feature = "split")]
-    async fn report_peripherals(&self, conn: &GattConnection<'_, '_, impl PacketPool>, suspended: &Cell<bool>) {
-        if self.peripherals.is_empty() {
-            return;
-        }
-        let mut changes = PeripheralBatteryEvent::subscriber();
-        for battery in &self.peripherals {
-            if !suspended.get() {
-                self.notify(conn, battery).await;
+            let mut changes = PeripheralBatteryEvent::subscriber();
+            for slot in 1..self.levels.len() {
+                self.notify(hid, slot).await;
             }
-        }
-        loop {
-            let event = changes.next_message_pure().await;
-            if !suspended.get()
-                && matches!(event.state.0, BatteryStatus::Available { level: Some(_), .. })
-                && let Some(battery) = self
-                    .peripherals
-                    .iter()
-                    .find(|battery| battery.source == Source::Peripheral(event.id))
-            {
-                self.notify(conn, battery).await;
+            loop {
+                let event = changes.next_message_pure().await;
+                if matches!(event.state.0, BatteryStatus::Available { level: Some(_), .. })
+                    && let Some(slot) = ids.iter().position(|&id| id == event.id)
+                {
+                    self.notify(hid, slot + 1).await;
+                }
             }
-        }
+        });
+        central.await;
     }
 }
 
@@ -248,25 +218,24 @@ mod tests {
     use embassy_sync::blocking_mutex::raw::NoopRawMutex;
     use trouble_host::prelude::*;
 
-    use super::{BatteryLevel, Source};
+    use super::add_battery;
 
     #[test]
     fn each_battery_has_its_own_percentage_descriptors_and_subscription() {
         let mut table: AttributeTable<'_, NoopRawMutex, 28> = AttributeTable::new();
         let boards = [
-            (Source::Central, None, 0x0106u16, "Central"),
+            (None, None, 0x0106u16, "Central"),
             #[cfg(feature = "split")]
-            (Source::Peripheral(0), Some(true), 0x010D, "Peripheral 0"),
+            (Some(0), Some(true), 0x010D, "Peripheral 0"),
             #[cfg(feature = "split")]
-            (Source::Peripheral(1), Some(false), 0x010E, "Peripheral 1"),
+            (Some(1), Some(false), 0x010E, "Peripheral 1"),
             #[cfg(feature = "split")]
-            (Source::Peripheral(254), None, 255, "Peripheral 254"),
+            (Some(254), None, 255, "Peripheral 254"),
         ];
-        let levels = boards.map(|(source, side, _, name)| BatteryLevel::new(&mut table, source, side, name));
+        let levels = boards.map(|(peripheral, side, _, name)| add_battery(&mut table, peripheral, side, name));
         assert_eq!(table.len(), 7 * boards.len());
-        for (level, (source, side, description, name)) in levels.iter().zip(boards) {
-            let value = level.value;
-            let (service_uuid, level_uuid): (Uuid, Uuid) = if source == Source::Central || side.is_some() {
+        for (value, (peripheral, side, description, name)) in levels.iter().zip(boards) {
+            let (service_uuid, level_uuid): (Uuid, Uuid) = if peripheral.is_none() || side.is_some() {
                 (service::BATTERY.into(), characteristic::BATTERY_LEVEL.into())
             } else {
                 (

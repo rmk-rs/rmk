@@ -1,3 +1,4 @@
+use core::cell::Cell;
 use core::fmt::Write as _;
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -19,7 +20,7 @@ use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_MAX, DONGLE_EVEN
 use crate::hid::RynkHidReport;
 #[cfg(feature = "vial")]
 use crate::hid::ViaReport;
-use crate::hid::{BleCompositeReport, CompositeReportType, HidError, HidWriterTrait, MOUSE_REPORT_SIZE, Report};
+use crate::hid::{BleCompositeReport, CompositeReportType, HidError, MOUSE_REPORT_SIZE, Report};
 
 // Used for saving the client attribute (CCCD) table. Tracks the trouble-host
 // per-connection client-specific attribute buffer size.
@@ -246,9 +247,10 @@ pub(crate) struct HidService {
     pub(crate) system_report: [u8; 1],
 }
 
-pub(crate) struct BleHidServer<'stack, 'server, 'conn, P: PacketPool> {
+pub(crate) struct BleHidServer<'stack, 'server, 'conn, P: PacketPool = DefaultPacketPool> {
     hid: &'conn HidService,
-    conn: &'conn GattConnection<'stack, 'server, P>,
+    pub(super) conn: &'conn GattConnection<'stack, 'server, P>,
+    pub(super) suspended: Cell<bool>,
 }
 
 impl<'stack, 'server, 'conn, P: PacketPool> BleHidServer<'stack, 'server, 'conn, P> {
@@ -256,6 +258,7 @@ impl<'stack, 'server, 'conn, P: PacketPool> BleHidServer<'stack, 'server, 'conn,
         Self {
             hid: &server.hid_service,
             conn,
+            suspended: Cell::new(false),
         }
     }
 
@@ -272,12 +275,8 @@ impl<'stack, 'server, 'conn, P: PacketPool> BleHidServer<'stack, 'server, 'conn,
         })?;
         Ok(n)
     }
-}
 
-impl<P: PacketPool> HidWriterTrait for BleHidServer<'_, '_, '_, P> {
-    type ReportType = Report;
-
-    async fn write_report(&mut self, report: &Self::ReportType) -> Result<usize, HidError> {
+    pub(super) async fn write_report(&self, report: &Report) -> Result<usize, HidError> {
         match report {
             Report::KeyboardReport(r) => self.notify_report(&self.hid.input_keyboard, r).await,
             Report::MouseReport(r) => self.notify_report(&self.hid.mouse_report, r).await,
