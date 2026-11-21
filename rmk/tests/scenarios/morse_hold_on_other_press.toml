@@ -99,7 +99,7 @@ steps = [
   { delay = 60 },
   { release = [1, 7] },
 ]
-expect = [["A"], [], ["LShift"], [], ["C"], []]
+expect = [["A"], [], ["LShift"], ["LShift", "C"], ["C"], []]
 
 [[test]]
 name = "layer_tap"
