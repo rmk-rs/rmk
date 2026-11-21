@@ -286,12 +286,6 @@ impl KeyboardTomlConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RmkConstantsConfig {
-    /// Mouse key interval (ms) - controls mouse movement speed
-    #[serde_inline_default(20)]
-    pub mouse_key_interval: u16,
-    /// Mouse wheel interval (ms) - controls scrolling speed
-    #[serde_inline_default(80)]
-    pub mouse_wheel_interval: u16,
     /// The size of the largest custom message.
     #[serde_inline_default(241)]
     pub max_custom_message_size: usize,
@@ -457,8 +451,6 @@ where
 impl Default for RmkConstantsConfig {
     fn default() -> Self {
         Self {
-            mouse_key_interval: 20,
-            mouse_wheel_interval: 80,
             max_custom_message_size: 241,
             max_combos: 8,
             max_combo_keys: 4,
@@ -858,6 +850,7 @@ pub struct KeyInfo {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BehaviorConfig {
+    pub mouse_key: Option<resolved::behavior::MouseKey>,
     pub tri_layer: Option<TriLayerConfig>,
     pub one_shot: Option<OneShotConfig>,
     pub one_shot_modifiers: Option<OneShotModifiersConfig>,
@@ -1217,7 +1210,9 @@ fn parse_duration_millis<'de, D: de::Deserializer<'de>>(deserializer: D) -> Resu
     })?;
 
     match unit {
-        "s" => Ok(num * 1000),
+        "s" => num
+            .checked_mul(1000)
+            .ok_or_else(|| de::Error::custom("duration in milliseconds is too large")),
         "ms" => Ok(num),
         other => Err(de::Error::custom(format!(
             "Invalid duration unit \"{other}\": unit part must be either \"s\" or \"ms\""
