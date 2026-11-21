@@ -25,3 +25,6 @@ pub(crate) mod via;
 pub use rynk::RynkService as HostService;
 #[cfg(feature = "vial")]
 pub use via::VialService as HostService;
+
+#[cfg(all(feature = "split", any(feature = "vial", feature = "rynk"), feature = "host_lock"))]
+pub mod peripheral;

@@ -59,6 +59,14 @@ pub(crate) fn parse_keyboard_mod(item_mod: syn::ItemMod) -> TokenStream2 {
         .layout()
         .expect("failed to resolve layout config");
 
+    if let BoardConfig::Split(split) = &hardware.board
+        && split.central.host.is_some()
+        && !is_feature_enabled(&rmk_features, "host_lock")
+        && !is_feature_enabled(&rmk_features, "rynk")
+    {
+        panic!("[split.central.host] requires the host_lock Cargo feature");
+    }
+
     validate_feature_config_parity(
         &rmk_features,
         hardware.storage.is_some(),

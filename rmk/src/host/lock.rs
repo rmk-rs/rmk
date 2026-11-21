@@ -8,10 +8,19 @@ use rmk_types::protocol::rynk::LockStatus;
 
 use crate::keymap::KeyMap;
 
-/// Unlock gate. Interior mutability lets protocol handlers update it through a
-/// shared reference without holding a borrow across an `.await` point.
+pub(crate) trait UnlockKeyState {
+    fn is_pressed(&self, row: u8, col: u8) -> bool;
+}
+
+impl UnlockKeyState for KeyMap<'_> {
+    fn is_pressed(&self, row: u8, col: u8) -> bool {
+        self.read_matrix_key(row, col)
+    }
+}
+
+/// Per-session unlock attempt backed by the service's boot-lifetime authorization.
 pub(crate) struct HostLock<'a> {
-    unlocked: Cell<bool>,
+    unlocked: &'a Cell<bool>,
     unlocking: Cell<bool>,
     last_poll: Cell<Instant>,
     /// Start (and stay) unlocked — development escape hatch.
@@ -20,19 +29,25 @@ pub(crate) struct HostLock<'a> {
     /// passes 100 ms; Rynk passes 500 ms to tolerate a BLE WebHID round trip.
     window: Duration,
     unlock_keys: &'a [(u8, u8)],
-    keymap: &'a KeyMap<'a>,
+    keys: &'a dyn UnlockKeyState,
 }
 
 impl<'a> HostLock<'a> {
-    pub fn new(unlock_keys: &'a [(u8, u8)], keymap: &'a KeyMap<'a>, insecure: bool, window: Duration) -> Self {
+    pub fn new(
+        unlocked: &'a Cell<bool>,
+        unlock_keys: &'a [(u8, u8)],
+        keys: &'a dyn UnlockKeyState,
+        insecure: bool,
+        window: Duration,
+    ) -> Self {
         Self {
-            unlocked: Cell::new(insecure),
+            unlocked,
             unlocking: Cell::new(false),
             last_poll: Cell::new(Instant::MIN),
             insecure,
             window,
             unlock_keys,
-            keymap,
+            keys,
         }
     }
 
@@ -74,13 +89,14 @@ impl<'a> HostLock<'a> {
 
     pub fn lock(&self) {
         self.unlocked.set(false);
+        self.unlocking.set(false);
     }
 
     /// Challenge keys not currently held — no arm, no commit.
     fn remaining_held(&self) -> u8 {
         let mut counter = self.unlock_keys.len() as u8;
         for (row, col) in self.unlock_keys {
-            if self.keymap.read_matrix_key(*row, *col) {
+            if self.keys.is_pressed(*row, *col) {
                 counter -= 1;
             }
         }
@@ -164,7 +180,8 @@ mod tests {
     fn window_arms_refreshes_and_expires() {
         keymap!(keymap);
         let keys = [(0u8, 0u8)];
-        let lock = HostLock::new(&keys, &keymap, false, WINDOW);
+        let unlocked = Cell::new(false);
+        let lock = HostLock::new(&unlocked, &keys, &keymap, false, WINDOW);
 
         MockDriver::get().reset();
         assert!(!lock.is_unlocking(), "no attempt armed initially");
@@ -182,10 +199,11 @@ mod tests {
     }
 
     #[test]
-    fn partial_then_full_hold_unlocks() {
+    fn partial_then_full_hold_unlocks_independently() {
         keymap!(keymap);
         let keys = [(0u8, 0u8), (1u8, 1u8)];
-        let lock = HostLock::new(&keys, &keymap, false, WINDOW);
+        let unlocked = Cell::new(false);
+        let lock = HostLock::new(&unlocked, &keys, &keymap, false, WINDOW);
 
         lock.unlocking();
         keymap.update_matrix_state(&KeyboardEvent::key(0, 0, true));
@@ -195,13 +213,44 @@ mod tests {
         keymap.update_matrix_state(&KeyboardEvent::key(1, 1, true));
         assert_eq!(lock.check_unlock(), 0, "all held");
         assert!(lock.is_unlocked(), "unlocked once all keys held");
+        #[cfg(all(feature = "split", any(feature = "vial", feature = "rynk")))]
+        {
+            let keys = crate::host::peripheral::tests::scanned_matrix();
+            let peripheral_unlocked = Cell::new(false);
+            let peripheral = HostLock::new(&peripheral_unlocked, &[(2, 3)], &keys, false, WINDOW);
+            assert!(lock.is_unlocked() && !peripheral.is_unlocked());
+            peripheral.unlocking();
+            assert_eq!(peripheral.check_unlock(), 0);
+            lock.lock();
+            assert!(
+                peripheral.is_unlocked(),
+                "locking the central must not relock its peripheral"
+            );
+        }
+    }
+
+    #[test]
+    fn sessions_share_authorization_but_not_unlock_attempts() {
+        keymap!(keymap);
+        let unlocked = Cell::new(false);
+        let first = HostLock::new(&unlocked, &[(0, 0)], &keymap, false, WINDOW);
+        let second = HostLock::new(&unlocked, &[(0, 0)], &keymap, false, WINDOW);
+
+        first.unlocking();
+        assert!(!second.is_unlocking(), "unlock attempts belong to each session");
+        keymap.update_matrix_state(&KeyboardEvent::key(0, 0, true));
+        assert_eq!(first.check_unlock(), 0);
+        assert!(first.is_unlocked() && second.is_unlocked());
+        second.lock();
+        assert!(!first.is_unlocked() && !second.is_unlocked());
     }
 
     #[test]
     fn empty_unlock_keys_never_unlocks() {
         keymap!(keymap);
         let keys: [(u8, u8); 0] = [];
-        let lock = HostLock::new(&keys, &keymap, false, WINDOW);
+        let unlocked = Cell::new(false);
+        let lock = HostLock::new(&unlocked, &keys, &keymap, false, WINDOW);
 
         lock.unlocking();
         assert_ne!(lock.check_unlock(), 0, "empty challenge refuses");
@@ -212,7 +261,8 @@ mod tests {
     fn insecure_starts_and_stays_unlocked() {
         keymap!(keymap);
         let keys = [(0u8, 0u8)];
-        let lock = HostLock::new(&keys, &keymap, true, WINDOW);
+        let unlocked = Cell::new(false);
+        let lock = HostLock::new(&unlocked, &keys, &keymap, true, WINDOW);
 
         assert!(lock.is_unlocked(), "insecure starts unlocked");
         lock.lock();
@@ -224,7 +274,8 @@ mod tests {
     fn poll_reports_progress_then_unlocks() {
         keymap!(keymap);
         let keys = [(0u8, 0u8), (1u8, 1u8)];
-        let lock = HostLock::new(&keys, &keymap, false, WINDOW);
+        let unlocked = Cell::new(false);
+        let lock = HostLock::new(&unlocked, &keys, &keymap, false, WINDOW);
 
         let s = lock.poll();
         assert!(s.locked && s.unlocking);
@@ -246,7 +297,8 @@ mod tests {
     fn status_is_side_effect_free() {
         keymap!(keymap);
         let keys = [(0u8, 0u8)];
-        let lock = HostLock::new(&keys, &keymap, false, WINDOW);
+        let unlocked = Cell::new(false);
+        let lock = HostLock::new(&unlocked, &keys, &keymap, false, WINDOW);
 
         let s = lock.status();
         assert!(s.locked);

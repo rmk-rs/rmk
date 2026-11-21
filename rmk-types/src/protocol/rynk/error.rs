@@ -24,7 +24,7 @@ pub enum RynkError {
     Invalid,
     /// The frame is well-formed but its CMD is unknown.
     UnknownCmd,
-    /// The command is gated by the lock and this session is locked.
+    /// The command is gated by the lock and the device is locked.
     /// The host must complete the unlock ceremony (see `UnlockPoll`) first.
     Locked,
     /// Transient backpressure: the reply did not fit the buffer space left

@@ -58,6 +58,9 @@ static BOOT_MODE: AtomicBool = AtomicBool::new(false);
 /// Which one is a type parameter of [`UsbTransport`], so only the attached one
 /// reaches the image.
 pub(crate) trait HostSession {
+    #[cfg(feature = "dongle")]
+    const IS_DONGLE: bool = false;
+
     async fn serve<R: embedded_io_async::Read, W: embedded_io_async::Write>(&self, rx: &mut R, tx: &mut W);
 }
 
@@ -463,6 +466,9 @@ impl<'a, D: Driver<'static>, S> UsbTransport<'a, D, S> {
 
 impl<D: Driver<'static>, S: HostSession> Runnable for UsbTransport<'_, D, S> {
     async fn run(&mut self) -> ! {
+        // Keyboard firmware also enables the dongle feature; the attached service determines its role.
+        #[cfg(feature = "dongle")]
+        dfu_detach::ENABLED.store(S::IS_DONGLE, core::sync::atomic::Ordering::Relaxed);
         let Self {
             device,
             keyboard_reader,
@@ -559,6 +565,32 @@ pub async fn run_peripheral_usb<D: Driver<'static>>(driver: D, config: DeviceCon
     let mut usb_device = builder.build();
 
     ::embassy_futures::join::join(usb_device.run(), logger_fut).await;
+}
+
+/// Run the peripheral's update-only host interface alongside optional USB logging.
+#[cfg(all(feature = "split", any(feature = "vial", feature = "rynk"), feature = "host_lock"))]
+pub async fn run_peripheral_usb_with_host<D: Driver<'static>>(
+    driver: D,
+    config: crate::config::RmkConfig<'static>,
+    matrix: &crate::host::peripheral::PeripheralMatrix,
+) {
+    #[cfg(feature = "vial")]
+    let service = crate::host::via::VialService::<false>::new_peripheral(matrix, &config);
+    #[cfg(feature = "rynk")]
+    let service = crate::host::rynk::RynkService::<false>::new_peripheral(matrix, &config);
+    let mut builder = new_usb_builder(driver, config.device_config, default_config_descriptor());
+    let (mut reader, mut writer) = host_usb::build_host_usb(&mut builder);
+    #[cfg(feature = "usb_log")]
+    let logger = run_usb_logger(add_usb_logger!(&mut builder));
+    #[cfg(not(feature = "usb_log"))]
+    let logger = core::future::pending::<()>();
+    let mut device = builder.build();
+    embassy_futures::join::join3(
+        device.run(),
+        host_usb::run_host_usb(&mut reader, &mut writer, &service),
+        logger,
+    )
+    .await;
 }
 
 #[cfg(feature = "usb_log")]

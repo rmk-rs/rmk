@@ -6,20 +6,20 @@ use rmk_types::protocol::rynk::RynkError;
 use rmk_types::protocol::rynk::command::{ClearBleProfile, DisconnectBleProfile, SwitchBleProfile};
 use rmk_types::protocol::rynk::command::{GetConnectionStatus, GetConnectionType};
 
-use super::super::RynkService;
 use super::Handle;
+use crate::host::context::KeyboardContext;
 
-impl Handle<GetConnectionType> for RynkService<'_> {
+impl Handle<GetConnectionType> for KeyboardContext<'_> {
     async fn handle(&self, _: ()) -> Result<ConnectionType, RynkError> {
-        Ok(self.ctx.preferred_connection())
+        Ok(self.preferred_connection())
     }
 }
 
 /// `Cmd::GetConnectionStatus` — the same payload the `ConnectionChange`
 /// topic pushes, so a host can recover a missed push.
-impl Handle<GetConnectionStatus> for RynkService<'_> {
+impl Handle<GetConnectionStatus> for KeyboardContext<'_> {
     async fn handle(&self, _: ()) -> Result<ConnectionStatus, RynkError> {
-        Ok(self.ctx.connection_status())
+        Ok(self.connection_status())
     }
 }
 
@@ -28,7 +28,7 @@ impl Handle<GetConnectionStatus> for RynkService<'_> {
 /// running observes the queue-full error rather than blocking the
 /// dispatch loop.
 #[cfg(feature = "_ble")]
-impl Handle<SwitchBleProfile> for RynkService<'_> {
+impl Handle<SwitchBleProfile> for KeyboardContext<'_> {
     async fn handle(&self, profile: u8) -> Result<(), RynkError> {
         Self::check_ble_profile(profile)?;
         crate::channel::BLE_PROFILE_CHANNEL
@@ -40,7 +40,7 @@ impl Handle<SwitchBleProfile> for RynkService<'_> {
 /// `Cmd::ClearBleProfile` — disconnects the given profile and wipes its bond
 /// without requiring a prior switch.
 #[cfg(feature = "_ble")]
-impl Handle<ClearBleProfile> for RynkService<'_> {
+impl Handle<ClearBleProfile> for KeyboardContext<'_> {
     async fn handle(&self, profile: u8) -> Result<(), RynkError> {
         Self::check_ble_profile(profile)?;
         crate::channel::BLE_PROFILE_CHANNEL
@@ -52,7 +52,7 @@ impl Handle<ClearBleProfile> for RynkService<'_> {
 /// `Cmd::DisconnectBleProfile` — disconnects the given profile and keeps its bond;
 /// the selected profile then waits for a new host.
 #[cfg(feature = "_ble")]
-impl Handle<DisconnectBleProfile> for RynkService<'_> {
+impl Handle<DisconnectBleProfile> for KeyboardContext<'_> {
     async fn handle(&self, profile: u8) -> Result<(), RynkError> {
         Self::check_ble_profile(profile)?;
         crate::channel::BLE_PROFILE_CHANNEL
@@ -62,7 +62,7 @@ impl Handle<DisconnectBleProfile> for RynkService<'_> {
 }
 
 #[cfg(feature = "_ble")]
-impl RynkService<'_> {
+impl KeyboardContext<'_> {
     /// `Invalid` for a profile past the host and dongle profiles.
     fn check_ble_profile(profile: u8) -> Result<(), RynkError> {
         if (profile as usize) >= crate::TOTAL_BLE_PROFILES {
