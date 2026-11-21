@@ -1,5 +1,8 @@
+use std::ops::Range;
+
 use crate::{
-    InputDeviceConfig, KeyboardTomlConfig, LayoutTomlConfig, MatrixConfig, MatrixType, SplitConfig, SplitConnection,
+    InputDeviceConfig, KeyboardTomlConfig, LayoutTomlConfig, MatrixConfig, MatrixType, SplitBoardConfig, SplitConfig,
+    SplitConnection,
 };
 
 #[derive(Clone, Debug)]
@@ -82,6 +85,25 @@ impl BoardConfig {
                 .collect(),
             BoardConfig::UniBody(board) => vec![board.input_device.encoder.as_ref().map_or(0, Vec::len)],
         }
+    }
+}
+
+impl SplitBoardConfig {
+    fn matrix_ranges(&self) -> [Range<usize>; 2] {
+        [
+            self.row_offset..self.row_offset.saturating_add(self.rows),
+            self.col_offset..self.col_offset.saturating_add(self.cols),
+        ]
+    }
+
+    /// Returns a side only when the boards share rows and have disjoint, nonempty columns.
+    pub(crate) fn is_left_of(&self, other: &Self) -> Option<bool> {
+        let [rows, cols] = self.matrix_ranges();
+        let [other_rows, other_cols] = other.matrix_ranges();
+        let shared_rows = rows.start.max(other_rows.start) < rows.end.min(other_rows.end);
+        let left = cols.end <= other_cols.start;
+        let right = other_cols.end <= cols.start;
+        (shared_rows && self.cols > 0 && other.cols > 0 && (left || right)).then_some(left)
     }
 }
 
@@ -195,33 +217,26 @@ fn validate_split_config(split: &SplitConfig, layout: Option<&LayoutTomlConfig>)
         }
     }
 
-    let regions: Vec<_> = boards()
-        .map(|(b, ctx)| {
-            (
-                b.row_offset,
-                b.row_offset + b.rows,
-                b.col_offset,
-                b.col_offset + b.cols,
-                ctx,
-            )
-        })
-        .collect();
+    let regions: Vec<_> = boards().map(|(board, ctx)| (board.matrix_ranges(), ctx)).collect();
     if let Some(layout) = layout {
         let (rows, cols) = (layout.rows as usize, layout.cols as usize);
-        for (r0, r1, c0, c1, ctx) in &regions {
-            if *r1 > rows || *c1 > cols {
+        for ([board_rows, board_cols], ctx) in &regions {
+            if board_rows.end > rows || board_cols.end > cols {
                 return Err(format!(
-                    "keyboard.toml: {ctx} occupies rows {r0}..{r1}, cols {c0}..{c1}, which exceeds [layout] ({rows} rows x {cols} cols)"
+                    "keyboard.toml: {ctx} occupies rows {board_rows:?}, cols {board_cols:?}, which exceeds [layout] ({rows} rows x {cols} cols)"
                 ));
             }
         }
     }
-    for (i, a) in regions.iter().enumerate() {
-        for b in &regions[i + 1..] {
-            if a.0 < b.1 && b.0 < a.1 && a.2 < b.3 && b.2 < a.3 {
+    for (i, (region, ctx)) in regions.iter().enumerate() {
+        for (other, other_ctx) in &regions[i + 1..] {
+            if region
+                .iter()
+                .zip(other)
+                .all(|(a, b)| a.start < b.end && b.start < a.end)
+            {
                 return Err(format!(
-                    "keyboard.toml: {} and {} overlap in the unified matrix — adjust row_offset/col_offset",
-                    a.4, b.4
+                    "keyboard.toml: {ctx} and {other_ctx} overlap in the unified matrix — adjust row_offset/col_offset"
                 ));
             }
         }

@@ -1,19 +1,19 @@
+use core::cell::Cell;
 use core::fmt::Write as _;
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use postcard::experimental::max_size::MaxSize;
-use rmk_types::battery::BatteryStatus;
 use rmk_types::ble::BLE_ADV_NAME_MAX_LEN;
+use rmk_types::led_indicator::LedIndicator;
 use trouble_host::att::{AttClient, AttReq};
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
-use super::battery_service::BatteryService;
-#[cfg(feature = "split")]
-use super::battery_service::PeripheralBatteryServices;
-use super::device_info::DeviceConfigurationService;
+use super::battery_service::BatteryServices;
+use super::device_info::{DeviceConfigurationService, PnPID};
 use crate::BLE_PROFILE_NAME_SUFFIX;
+use crate::config::{BleBatteryConfig, DeviceConfig};
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use crate::dongle::event::{CUSTOM_TO_DONGLE_UUID, CUSTOM_TO_KEYBOARD_UUID};
 #[cfg(feature = "dongle")]
@@ -22,7 +22,7 @@ use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_MAX, DONGLE_EVEN
 use crate::hid::RynkHidReport;
 #[cfg(feature = "vial")]
 use crate::hid::ViaReport;
-use crate::hid::{BleCompositeReport, CompositeReportType, HidError, HidWriterTrait, MOUSE_REPORT_SIZE, Report};
+use crate::hid::{BleCompositeReport, CompositeReportType, HidError, MOUSE_REPORT_SIZE, Report};
 
 // Used for saving the client attribute (CCCD) table. Tracks the trouble-host
 // per-connection client-specific attribute buffer size.
@@ -37,17 +37,15 @@ use rmk_types::protocol::rynk::{
 #[gatt_server(mutex_type = NoopRawMutex, connections_max = crate::ble::NUM_HOST_LINKS)]
 pub(crate) struct Server {
     profile_name: ProfileName,
-    pub(crate) battery_service: BatteryService,
-    #[cfg(feature = "split")]
-    pub(crate) peripheral_battery_services: PeripheralBatteryServices,
-    pub(crate) hid_service: HidService,
+    pub(super) batteries: BatteryServices,
+    hid_service: HidService,
     #[cfg(feature = "vial")]
     pub(crate) vial_service: VialGattService,
     #[cfg(feature = "rynk")]
     pub(crate) rynk_service: RynkGattService,
     #[cfg(feature = "rynk")]
     pub(crate) rynk_hid_service: RynkHidService,
-    pub(crate) device_config_service: DeviceConfigurationService,
+    device_config_service: DeviceConfigurationService,
     #[cfg(feature = "dongle")]
     pub(crate) dongle_event_service: DongleEventService,
 }
@@ -88,7 +86,7 @@ struct GapService {
 struct GenericAttributeService {}
 
 impl Server<'_> {
-    pub(crate) fn new_keyboard(product_name: &'static str) -> Result<Self, &'static str> {
+    pub(super) fn new_keyboard(product_name: &'static str) -> Result<Self, &'static str> {
         if BLE_PROFILE_NAME_SUFFIX {
             let mut server = Self::new(AttributeTable::new());
             server.profile_name.product_name = product_name;
@@ -98,6 +96,20 @@ impl Server<'_> {
             name: product_name,
             appearance: &appearance::human_interface_device::KEYBOARD,
         }))
+    }
+
+    pub(super) fn configure(&mut self, device: &DeviceConfig<'_>, battery: &BleBatteryConfig) {
+        self.batteries.central_notifications = battery.enabled;
+        let info = &self.device_config_service;
+        let pnp_id = PnPID {
+            vendor_id: device.vid,
+            product_id: device.pid,
+            ..Default::default()
+        };
+        let manufacturer = heapless::String::try_from(device.manufacturer).expect("manufacturer is too long for BLE");
+        unwrap!(self.set(&info.pnp_id, &pnp_id));
+        unwrap!(self.set(&info.serial_number, &device.serial_number));
+        unwrap!(self.set(&info.manufacturer_name, &manufacturer));
     }
 
     /// The empty return array avoids a name buffer in disabled builds.
@@ -115,7 +127,7 @@ impl Server<'_> {
         })
     }
 
-    pub(crate) fn prepare_name_read(&self, event: &GattEvent<'_, '_, DefaultPacketPool>, slot: u8) {
+    pub(super) fn prepare_name_read(&self, event: &GattEvent<'_, '_, DefaultPacketPool>, slot: u8) {
         let [name] = self.profile_name.characteristic.as_slice() else {
             return;
         };
@@ -140,39 +152,6 @@ impl Server<'_> {
         };
         if reads_name && let Some(value) = self.profile_name(slot).first() {
             unwrap!(self.set(name, value));
-        }
-    }
-
-    pub(crate) fn refresh_battery_level(&self, handle: u16) {
-        let (attribute, status) = if handle == self.battery_service.level.handle {
-            (
-                self.battery_service.level,
-                crate::input_device::battery::current_battery_status(),
-            )
-        } else {
-            #[cfg(feature = "split")]
-            {
-                let Some(slot) = self
-                    .peripheral_battery_services
-                    .levels
-                    .iter()
-                    .position(|level| level.handle == handle)
-                else {
-                    return;
-                };
-                (
-                    self.peripheral_battery_services.levels[slot],
-                    crate::split::driver::current_peripheral_battery_status(crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot])
-                        .unwrap_or(BatteryStatus::Unavailable),
-                )
-            }
-            #[cfg(not(feature = "split"))]
-            return;
-        };
-        if let BatteryStatus::Available { level: Some(level), .. } = status
-            && let Err(e) = self.set(&attribute, &level)
-        {
-            warn!("Failed to refresh battery level: {:?}", e);
         }
     }
 }
@@ -284,16 +263,20 @@ pub(crate) struct HidService {
     pub(crate) system_report: [u8; 1],
 }
 
-pub(crate) struct BleHidServer<'stack, 'server, 'conn, P: PacketPool> {
-    hid: &'conn HidService,
-    conn: &'conn GattConnection<'stack, 'server, P>,
+pub(super) struct HidConnection<'stack, 'server, 'conn> {
+    pub(super) service: &'conn HidService,
+    pub(super) conn: &'conn GattConnection<'stack, 'server, DefaultPacketPool>,
+    pub(super) leds: Cell<LedIndicator>,
+    pub(super) suspended: Cell<bool>,
 }
 
-impl<'stack, 'server, 'conn, P: PacketPool> BleHidServer<'stack, 'server, 'conn, P> {
-    pub(crate) fn new(server: &'conn Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
+impl<'stack, 'server, 'conn> HidConnection<'stack, 'server, 'conn> {
+    pub(super) fn new(server: &'conn Server, conn: &'conn GattConnection<'stack, 'server, DefaultPacketPool>) -> Self {
         Self {
-            hid: &server.hid_service,
+            service: &server.hid_service,
             conn,
+            leds: Cell::new(LedIndicator::default()),
+            suspended: Cell::new(false),
         }
     }
 
@@ -310,17 +293,13 @@ impl<'stack, 'server, 'conn, P: PacketPool> BleHidServer<'stack, 'server, 'conn,
         })?;
         Ok(n)
     }
-}
 
-impl<P: PacketPool> HidWriterTrait for BleHidServer<'_, '_, '_, P> {
-    type ReportType = Report;
-
-    async fn write_report(&mut self, report: &Self::ReportType) -> Result<usize, HidError> {
+    pub(super) async fn write_report(&self, report: &Report) -> Result<usize, HidError> {
         match report {
-            Report::KeyboardReport(r) => self.notify_report(&self.hid.input_keyboard, r).await,
-            Report::MouseReport(r) => self.notify_report(&self.hid.mouse_report, r).await,
-            Report::MediaKeyboardReport(r) => self.notify_report(&self.hid.media_report, r).await,
-            Report::SystemControlReport(r) => self.notify_report(&self.hid.system_report, r).await,
+            Report::KeyboardReport(r) => self.notify_report(&self.service.input_keyboard, r).await,
+            Report::MouseReport(r) => self.notify_report(&self.service.mouse_report, r).await,
+            Report::MediaKeyboardReport(r) => self.notify_report(&self.service.media_report, r).await,
+            Report::SystemControlReport(r) => self.notify_report(&self.service.system_report, r).await,
             // Plover HID over BLE is not supported: the stock HID-over-GATT service
             // has no stenography characteristic. Drop silently at the writer.
             #[cfg(feature = "steno")]

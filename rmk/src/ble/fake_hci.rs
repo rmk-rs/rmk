@@ -12,6 +12,7 @@ use bt_hci::data::{AclPacket, IsoPacket, SyncPacket};
 use bt_hci::{ControllerToHostPacket, FromHciBytes, PacketKind, WriteHci};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
+use trouble_host::prelude::{Uuid, declarations, descriptors};
 
 #[derive(Clone, Default)]
 pub(crate) struct FakeController {
@@ -21,7 +22,7 @@ pub(crate) struct FakeController {
 }
 
 struct State {
-    events: Channel<CriticalSectionRawMutex, Vec<u8>, 16>,
+    events: Channel<CriticalSectionRawMutex, (PacketKind, Vec<u8>), 16>,
     /// The opcode and parameters of every command, in order.
     commands: Mutex<Vec<(Opcode, Vec<u8>)>>,
     /// The connection handle and payload of every ACL packet sent, in order.
@@ -79,6 +80,81 @@ impl FakeController {
             .collect()
     }
 
+    /// Put a client ATT request on the connection.
+    pub(crate) fn att_request(&self, handle: u16, request: &[u8]) {
+        let len = u16::try_from(request.len()).unwrap();
+        let mut packet = Vec::new();
+        packet.extend_from_slice(&(handle | 0x2000).to_le_bytes());
+        packet.extend_from_slice(&(len + 4).to_le_bytes());
+        packet.extend_from_slice(&len.to_le_bytes());
+        packet.extend_from_slice(&[4, 0]);
+        packet.extend_from_slice(request);
+        self.state.events.try_send((PacketKind::AclData, packet)).unwrap();
+    }
+
+    pub(crate) async fn att_exchange(&self, link: u16, request: &[u8], response_opcode: u8) -> Vec<u8> {
+        let start = self.state.acl.lock().unwrap().len();
+        self.att_request(link, request);
+        embassy_time::Timer::after_millis(1).await;
+        self.state.acl.lock().unwrap()[start..]
+            .iter()
+            .find_map(|(handle, frame)| match frame.as_slice() {
+                [_, _, 4, 0, op, payload @ ..] if *handle == link && *op == response_opcode => Some(payload.to_vec()),
+                _ => None,
+            })
+            .expect("missing ATT response to this request")
+    }
+
+    pub(super) async fn read_by_type(&self, link: u16, start_handle: u16, uuid: Uuid) -> Vec<u8> {
+        let [lo, hi] = start_handle.to_le_bytes();
+        let mut request = vec![0x08, lo, hi, 0xff, 0xff];
+        request.extend_from_slice(uuid.as_raw());
+        self.att_exchange(link, &request, 0x09).await
+    }
+
+    pub(crate) async fn read_u8_by_type(&self, link: u16, start: u16, uuid: Uuid) -> Vec<(u16, u8)> {
+        let reply = self.read_by_type(link, start, uuid).await;
+        let [3, entries @ ..] = reply.as_slice() else {
+            panic!("unexpected Read By Type response for a u8: {reply:?}")
+        };
+        let (levels, trailing) = entries.as_chunks::<3>();
+        assert!(trailing.is_empty() && !levels.is_empty());
+        levels
+            .iter()
+            .map(|&[lo, hi, level]| (u16::from_le_bytes([lo, hi]), level))
+            .collect()
+    }
+
+    pub(crate) async fn set_notifications(&self, link: u16, value_handle: u16, enabled: bool) {
+        let reply = self
+            .read_by_type(
+                link,
+                value_handle + 1,
+                descriptors::CLIENT_CHARACTERISTIC_CONFIGURATION.into(),
+            )
+            .await;
+        let [4, lo, hi, _, _, ..] = reply[..] else {
+            panic!("unexpected CCCD response: {reply:?}")
+        };
+        self.att_exchange(link, &[0x12, lo, hi, u8::from(enabled), 0], 0x13)
+            .await;
+    }
+
+    pub(crate) async fn characteristic_handle(&self, link: u16, uuid: u16) -> u16 {
+        let mut start = 1;
+        loop {
+            let reply = self
+                .read_by_type(link, start, declarations::CHARACTERISTIC.into())
+                .await;
+            for entry in reply[1..].chunks_exact(usize::from(reply[0])) {
+                if entry[5..] == uuid.to_le_bytes() {
+                    return u16::from_le_bytes([entry[3], entry[4]]);
+                }
+                start = u16::from_le_bytes([entry[0], entry[1]]) + 1;
+            }
+        }
+    }
+
     /// The minimum interval of every advertising setup, in 0.625 ms units.
     pub(crate) fn advertising_intervals(&self) -> Vec<u32> {
         #[cfg(feature = "ext_adv")]
@@ -124,7 +200,10 @@ impl FakeController {
     }
 
     fn push(&self, event: Vec<u8>) {
-        self.state.events.try_send(event).expect("fake HCI event queue is full");
+        self.state
+            .events
+            .try_send((PacketKind::Event, event))
+            .expect("fake HCI event queue is full");
     }
 
     async fn record<C: Cmd>(&self, cmd: &C) -> Vec<u8> {
@@ -167,10 +246,10 @@ impl Controller for FakeController {
     }
 
     async fn read<'a>(&self, buf: &'a mut Self::Buffer<'_>) -> Result<ControllerToHostPacket<'a>, Infallible> {
-        let event = self.state.events.receive().await;
+        let (kind, event) = self.state.events.receive().await;
         buf[..event.len()].copy_from_slice(&event);
         Ok(
-            ControllerToHostPacket::from_hci_bytes_with_kind(PacketKind::Event, &buf[..event.len()])
+            ControllerToHostPacket::from_hci_bytes_with_kind(kind, &buf[..event.len()])
                 .expect("malformed fake HCI event")
                 .0,
         )
