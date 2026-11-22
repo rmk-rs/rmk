@@ -95,6 +95,10 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         bc.central_battery_user_description
     ));
     lines.push(format!(
+        "pub const CENTRAL_BATTERY_IS_LEFT: Option<bool> = {:?};",
+        bc.central_battery_is_left
+    ));
+    lines.push(format!(
         "pub const NUM_SPLIT_BATTERY_PERIPHERALS: usize = {};",
         bc.split_battery_peripheral_ids.len()
     ));
