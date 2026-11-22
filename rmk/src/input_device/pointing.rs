@@ -94,43 +94,38 @@ impl<S: PointingDriver> PointingDevice<S> {
     const MAX_INIT_RETRIES: u8 = 3;
 
     async fn try_init(&mut self) -> bool {
-        match self.init_state {
+        let retry_count = match self.init_state {
             InitState::Ready => return true,
             InitState::Failed => return false,
-            InitState::Pending => {
-                self.init_state = InitState::Initializing(0);
+            InitState::Pending => 0,
+            InitState::Initializing(retry_count) => retry_count,
+        };
+        self.init_state = InitState::Initializing(retry_count);
+
+        info!(
+            "PointingDevice {}: Initializing sensor (attempt {})",
+            self.id,
+            retry_count + 1
+        );
+
+        match self.sensor.init().await {
+            Ok(()) => {
+                info!("PointingDevice {}: Sensor initialized successfully", self.id);
+                self.init_state = InitState::Ready;
+                true
             }
-            InitState::Initializing(_) => {}
-        }
-
-        if let InitState::Initializing(retry_count) = self.init_state {
-            info!(
-                "PointingDevice {}: Initializing sensor (attempt {})",
-                self.id,
-                retry_count + 1
-            );
-
-            match self.sensor.init().await {
-                Ok(()) => {
-                    info!("PointingDevice {}: Sensor initialized successfully", self.id);
-                    self.init_state = InitState::Ready;
-                    return true;
-                }
-                Err(e) => {
-                    error!("PointingDevice {}: Init failed: {:?}", self.id, e);
-                    if retry_count + 1 >= Self::MAX_INIT_RETRIES {
-                        error!("PointingDevice {}: Max retries reached, giving up", self.id);
-                        self.init_state = InitState::Failed;
-                        return false;
-                    }
-                    self.init_state = InitState::Initializing(retry_count + 1);
-                    Timer::after(Duration::from_millis(100)).await;
+            Err(e) => {
+                error!("PointingDevice {}: Init failed: {:?}", self.id, e);
+                if retry_count + 1 >= Self::MAX_INIT_RETRIES {
+                    error!("PointingDevice {}: Max retries reached, giving up", self.id);
+                    self.init_state = InitState::Failed;
                     return false;
                 }
+                self.init_state = InitState::Initializing(retry_count + 1);
+                Timer::after(Duration::from_millis(100)).await;
+                false
             }
         }
-
-        false
     }
 
     async fn poll_once(&mut self) {
