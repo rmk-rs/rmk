@@ -134,7 +134,6 @@ impl<'a> VialService<'a> {
             ViaCommand::EepromReset => {
                 warn!("Resetting storage..");
                 self.ctx.reset_storage().await;
-                // TODO: Reboot after a eeprom reset?
             }
             ViaCommand::BootloaderJump => {
                 warn!("Bootloader jumping");
