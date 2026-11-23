@@ -340,9 +340,9 @@ mod tests {
 
     fn ble_split() -> SplitConfig {
         SplitConfig {
-            connection: SplitConnection::Ble,
             central: board(2, 2, 0, 0),
             peripheral: vec![board(2, 1, 2, 2)],
+            ..Default::default()
         }
     }
 

@@ -30,25 +30,17 @@ struct BatteryLevel {
 
 fn add_battery<const MAX: usize>(
     table: &mut AttributeTable<'_, NoopRawMutex, MAX>,
-    peripheral_id: Option<usize>,
-    is_left: Option<bool>,
+    standard: bool,
+    description: u16,
     name: &'static str,
 ) -> BatteryLevel {
-    let (service_uuid, level_uuid, description): (Uuid, Uuid, u16) = match (peripheral_id, is_left) {
-        (Some(id), None) => (
+    let (service_uuid, level_uuid): (Uuid, Uuid) = if standard {
+        (service::BATTERY.into(), characteristic::BATTERY_LEVEL.into())
+    } else {
+        (
             PERIPHERAL_BATTERY_SERVICE_UUID.into(),
             PERIPHERAL_BATTERY_LEVEL_UUID.into(),
-            (id + 1) as u16,
-        ),
-        (_, side) => (
-            service::BATTERY.into(),
-            characteristic::BATTERY_LEVEL.into(),
-            match side {
-                Some(true) => 0x010D,  // Left
-                Some(false) => 0x010E, // Right
-                None => 0x0106,        // Main
-            },
-        ),
+        )
     };
     let mut service = table.add_service(Service::new(service_uuid));
     let mut level = service
@@ -84,15 +76,17 @@ impl BatteryServices {
     pub(super) const ATTRIBUTE_COUNT: usize = 7 * Self::CCCD_COUNT;
 
     pub(super) fn new<const MAX: usize>(table: &mut AttributeTable<'_, NoopRawMutex, MAX>) -> Self {
-        let left = crate::CENTRAL_BATTERY_IS_LEFT;
-        let levels = core::array::from_fn(|slot| match slot.checked_sub(1) {
-            None => add_battery(table, None, left, crate::CENTRAL_BATTERY_USER_DESCRIPTION),
-            Some(peripheral) => add_battery(
-                table,
-                Some(crate::SPLIT_BATTERY_PERIPHERAL_IDS[peripheral]),
-                left.map(|left| !left),
-                crate::SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS[peripheral],
-            ),
+        let levels = core::array::from_fn(|slot| {
+            let name = if slot == 0 {
+                crate::CENTRAL_BATTERY_USER_DESCRIPTION
+            } else {
+                crate::SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS[slot - 1]
+            };
+            let standard = crate::STANDARD_BATTERY_DESCRIPTIONS.get(slot);
+            let description = standard
+                .copied()
+                .unwrap_or_else(|| (crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot - 1] + 1) as u16);
+            add_battery(table, standard.is_some(), description, name)
         });
         Self { levels }
     }
@@ -406,18 +400,19 @@ mod tests {
     fn each_battery_has_its_own_percentage_descriptors_and_subscription() {
         let mut table: AttributeTable<'_, NoopRawMutex, 28> = AttributeTable::new();
         let boards = [
-            (None, None, 0x0106u16, "Central"),
+            (true, 0x0106u16, "Central"),
             #[cfg(feature = "split")]
-            (Some(0), Some(true), 0x010D, "Peripheral 0"),
+            (true, 0x010D, "Peripheral 0"),
             #[cfg(feature = "split")]
-            (Some(1), Some(false), 0x010E, "Peripheral 1"),
+            (true, 0x010E, "Peripheral 1"),
             #[cfg(feature = "split")]
-            (Some(254), None, 255, "Peripheral 254"),
+            (false, 255, "Peripheral 254"),
         ];
-        let levels = boards.map(|(peripheral, side, _, name)| add_battery(&mut table, peripheral, side, name).value);
+        let levels =
+            boards.map(|(standard, description, name)| add_battery(&mut table, standard, description, name).value);
         assert_eq!(table.len(), 7 * boards.len());
-        for (value, (peripheral, side, description, name)) in levels.iter().zip(boards) {
-            let (service_uuid, level_uuid): (Uuid, Uuid) = if peripheral.is_none() || side.is_some() {
+        for (value, (standard, description, name)) in levels.iter().zip(boards) {
+            let (service_uuid, level_uuid): (Uuid, Uuid) = if standard {
                 (service::BATTERY.into(), characteristic::BATTERY_LEVEL.into())
             } else {
                 (

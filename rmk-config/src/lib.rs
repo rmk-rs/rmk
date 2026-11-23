@@ -1111,11 +1111,20 @@ pub enum SplitConnection {
     Serial,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SplitSide {
+    Left,
+    Right,
+}
+
 /// Configurations for split keyboards
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SplitConfig {
     pub connection: SplitConnection,
+    /// Physical side of the central for left/right BLE battery reporting.
+    pub central_side: Option<SplitSide>,
     pub central: SplitBoardConfig,
     pub peripheral: Vec<SplitBoardConfig>,
 }

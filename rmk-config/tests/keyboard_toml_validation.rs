@@ -214,6 +214,7 @@ cols = 2
 
 [split]
 connection = "ble"
+central_side = "right"
 
 [split.central]
 rows = 1
@@ -251,6 +252,7 @@ col_pins = ["P0_03"]
         assert_eq!(peripheral.battery_adc_pin.as_deref(), Some("vddh"));
         let constants = config.build_constants(&["split", "_ble"]).unwrap();
         assert_eq!(constants.split_battery_peripheral_ids, [0]);
+        assert_eq!(constants.standard_battery_descriptions, [0x010E, 0x010D]);
     }
 }
 
