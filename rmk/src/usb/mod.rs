@@ -576,7 +576,6 @@ macro_rules! usb_hid_state_and_config {
         let request_handler = paste::paste! {
             [<$descriptor:snake:upper _HANDLER>].init($crate::usb::UsbRequestHandler {
                 protocol: ::embassy_usb::class::hid::HidProtocolMode::Report,
-                keyboard_interface: matches!($protocol, ::embassy_usb::class::hid::HidBootProtocol::Keyboard),
             })
         };
 
@@ -631,15 +630,12 @@ pub(crate) use usb_hid_state_and_config;
 
 pub(crate) struct UsbRequestHandler {
     pub(crate) protocol: HidProtocolMode,
-    pub(crate) keyboard_interface: bool,
 }
 
 impl RequestHandler for UsbRequestHandler {
     fn set_report(&mut self, id: ReportId, data: &[u8]) -> OutResponse {
         info!("Set report for {:?}: {:?}", id, data);
-        if self.keyboard_interface
-            && let (ReportId::Out(0), &[bits]) = (id, data)
-        {
+        if let (ReportId::Out(0), &[bits]) = (id, data) {
             crate::hid::update_led_indicator(ConnectionType::Usb, LedIndicator::from_bits(bits));
         }
         OutResponse::Accepted
@@ -763,7 +759,6 @@ mod tests {
     fn the_keyboard_switches_protocol_and_reports_it() {
         let mut handler = UsbRequestHandler {
             protocol: HidProtocolMode::Report,
-            keyboard_interface: true,
         };
         assert_eq!(handler.get_protocol(), HidProtocolMode::Report);
 
