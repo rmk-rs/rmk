@@ -11,12 +11,7 @@ pub(crate) fn expand_registered_processor_init(
     hardware: &Hardware,
     item_mod: &ItemMod,
 ) -> (TokenStream, Vec<TokenStream>) {
-    let mut initializers = TokenStream::new();
-    let mut executors = vec![];
-
-    let (i, e) = expand_light_indicator_processors(hardware);
-    initializers.extend(i);
-    executors.extend(e);
+    let (mut initializers, mut executors) = expand_light_indicator_processors(hardware);
 
     if cfg!(feature = "_dfu") {
         create_dfu_led_processor(hardware, &mut initializers, &mut executors);
