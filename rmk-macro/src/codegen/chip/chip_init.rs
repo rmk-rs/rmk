@@ -16,7 +16,6 @@ pub(crate) fn expand_chip_init(
     peripheral_id: Option<usize>,
     item_mod: &ItemMod,
 ) -> TokenStream2 {
-    // If there is a function with `#[Overwritten(usb)]`, override the chip initialization
     if let Some((_, items)) = &item_mod.content {
         items
             .iter()
