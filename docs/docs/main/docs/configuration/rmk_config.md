@@ -28,6 +28,7 @@ max_macros = 32
 macro_space_size = 256
 # Default debounce time in ms
 debounce_time = 20
+matrix_scan_interval_us = 1000
 # Report channel size
 report_channel_size = 16
 # Vial channel size
@@ -75,6 +76,7 @@ Increasing the number of combos, forks, morses (tap dances), and macros will inc
 ### Matrix Configuration
 
 - `debounce_time`: Default key debounce time in milliseconds, default value is 20.
+- `matrix_scan_interval_us`: Gap after complete normal-matrix active or polling scans, in microseconds. Defaults to 1000 (1 ms); `0` removes the timed gap but still yields. Async GPIO idle wake and other matrix types are unchanged. This is not a fixed scan period or transport polling rate; nonzero waits are limited by the time driver's resolution.
 
 ### Channel Configuration
 

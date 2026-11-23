@@ -424,7 +424,7 @@ where
             {
                 if self.rescan_needed {
                     // Bound active polling while retaining GPIO-only wake when idle.
-                    Timer::after_millis(1).await;
+                    Timer::after_micros(u64::from(crate::MATRIX_SCAN_INTERVAL_US)).await;
                 }
                 if !self.rescan_needed {
                     self.wait_for_key().await;
@@ -434,7 +434,7 @@ where
                 self.rescan_needed = false;
             }
             #[cfg(not(feature = "async_matrix"))]
-            Timer::after_millis(1).await;
+            Timer::after_micros(u64::from(crate::MATRIX_SCAN_INTERVAL_US)).await;
             self.scan_pos = (0, 0);
         }
     }
