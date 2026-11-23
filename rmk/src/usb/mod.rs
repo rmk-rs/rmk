@@ -12,6 +12,7 @@ use embassy_usb::driver::{Driver, EndpointError};
 use embassy_usb::{Builder, Handler, UsbDevice};
 use rmk_types::DEVICE_INFO_STRING_MAX_LEN;
 use rmk_types::connection::{ConnectionType, UsbState};
+use rmk_types::led_indicator::LedIndicator;
 use static_cell::StaticCell;
 use usbd_hid::descriptor::AsInputReport;
 
@@ -587,7 +588,9 @@ macro_rules! usb_hid_state_and_config {
 
         let state = paste::paste! { [<$descriptor:snake:upper _STATE>].init(::embassy_usb::class::hid::device::State::new()) };
         let request_handler = paste::paste! {
-            [<$descriptor:snake:upper _HANDLER>].init($crate::usb::UsbRequestHandler)
+            [<$descriptor:snake:upper _HANDLER>].init($crate::usb::UsbRequestHandler {
+                keyboard_interface: matches!($protocol, ::embassy_usb::class::hid::HidBootProtocol::Keyboard),
+            })
         };
 
         let hid_config = ::embassy_usb::class::hid::device::Config {
@@ -639,11 +642,18 @@ pub(crate) use add_usb_reader_writer;
 pub(crate) use add_usb_writer;
 pub(crate) use usb_hid_state_and_config;
 
-pub(crate) struct UsbRequestHandler;
+pub(crate) struct UsbRequestHandler {
+    pub(crate) keyboard_interface: bool,
+}
 
 impl RequestHandler for UsbRequestHandler {
     fn set_report(&mut self, id: ReportId, data: &[u8]) -> OutResponse {
         info!("Set report for {:?}: {:?}", id, data);
+        if self.keyboard_interface
+            && let (ReportId::Out(0), &[bits]) = (id, data)
+        {
+            crate::hid::update_led_indicator(ConnectionType::Usb, LedIndicator::from_bits(bits));
+        }
         OutResponse::Accepted
     }
 
@@ -767,7 +777,9 @@ mod tests {
     /// subclass the interface advertises.
     #[test]
     fn the_keyboard_switches_protocol_and_reports_it() {
-        let mut handler = UsbRequestHandler;
+        let mut handler = UsbRequestHandler {
+            keyboard_interface: true,
+        };
         assert_eq!(handler.get_protocol(), HidProtocolMode::Report);
 
         assert_eq!(handler.set_protocol(HidProtocolMode::Boot), OutResponse::Accepted);

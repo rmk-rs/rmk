@@ -485,6 +485,13 @@ pub trait HidReaderTrait {
     fn read_report(&mut self) -> impl Future<Output = Result<Self::ReportType, HidError>>;
 }
 
+pub(crate) fn update_led_indicator(kind: ConnectionType, indicator: LedIndicator) {
+    if crate::state::active_transport() == Some(kind) {
+        LOCK_LED_STATES.store(indicator.into_bits(), Ordering::Relaxed);
+        publish_event(LedIndicatorEvent::new(indicator));
+    }
+}
+
 /// Drain LED indicator OUT reports from `reader` and republish them as
 /// [`LedIndicatorEvent`]s whenever `kind` is the active output transport.
 pub(crate) async fn run_led_reader<R: HidReaderTrait<ReportType = LedIndicator>>(
@@ -495,10 +502,7 @@ pub(crate) async fn run_led_reader<R: HidReaderTrait<ReportType = LedIndicator>>
         match reader.read_report().await {
             Ok(led_indicator) => {
                 info!("Got led indicator");
-                if crate::state::active_transport() == Some(kind) {
-                    LOCK_LED_STATES.store(led_indicator.into_bits(), Ordering::Relaxed);
-                    publish_event(LedIndicatorEvent::new(led_indicator));
-                }
+                update_led_indicator(kind, led_indicator);
             }
             Err(e) => {
                 debug!("Read HID LED indicator error: {:?}", e);
