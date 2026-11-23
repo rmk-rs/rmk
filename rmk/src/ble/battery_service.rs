@@ -104,7 +104,7 @@ impl BatteryServices {
     }
 
     /// Keep one readable value per battery, including while notifications are disabled.
-    pub(super) async fn update_values<const MAX: usize>(&self, table: &AttributeTable<'_, NoopRawMutex, MAX>) -> ! {
+    pub(super) async fn update_values<const MAX: usize>(&self, table: &AttributeTable<'_, NoopRawMutex, MAX>) {
         let update = |battery: &BatteryLevel, status| {
             if let BatteryStatus::Available { level: Some(level), .. } = status
                 && battery.last_percent.get() != Some(level)
@@ -115,30 +115,31 @@ impl BatteryServices {
                 }
             }
         };
-        let mut central = BatteryStatusEvent::subscriber();
-        let mut central_status = crate::input_device::battery::current_battery_status();
+        let central = async {
+            let mut changes = BatteryStatusEvent::subscriber();
+            update(&self.levels[0], crate::input_device::battery::current_battery_status());
+            loop {
+                update(&self.levels[0], changes.next_message_pure().await.0);
+            }
+        };
         #[cfg(feature = "split")]
-        let mut peripherals =
-            (!crate::SPLIT_BATTERY_PERIPHERAL_IDS.is_empty()).then(PeripheralBatteryEvent::subscriber);
-        loop {
-            update(&self.levels[0], central_status);
-            #[cfg(feature = "split")]
-            if let Some(changes) = &mut peripherals {
-                while changes.try_next_message_pure().is_some() {}
-                for (battery, &id) in self.levels[1..].iter().zip(&crate::SPLIT_BATTERY_PERIPHERAL_IDS) {
+        let central = embassy_futures::join::join(central, async {
+            let ids = &crate::SPLIT_BATTERY_PERIPHERAL_IDS;
+            if ids.is_empty() {
+                return;
+            }
+            let mut changes = PeripheralBatteryEvent::subscriber();
+            loop {
+                for (battery, &id) in self.levels[1..].iter().zip(ids) {
                     if let Some(status) = crate::split::driver::current_peripheral_battery_status(id) {
                         update(battery, status);
                     }
                 }
-                if let embassy_futures::select::Either::First(event) =
-                    select(central.next_message_pure(), changes.next_message_pure()).await
-                {
-                    central_status = event.0;
-                }
-                continue;
+                changes.next_message_pure().await;
+                while changes.try_next_message_pure().is_some() {}
             }
-            central_status = central.next_message_pure().await.0;
-        }
+        });
+        central.await;
     }
 }
 
