@@ -546,11 +546,17 @@ where
 
         let led_to_keyboard = async {
             let mut led_events = LedIndicatorEvent::subscriber();
+            let mut last_sent = None;
             loop {
-                let event = led_events.next_event().await;
-                let _ = client
-                    .write_characteristic_without_response(&chars.keyboard_output, &[event.0.into_bits()])
-                    .await;
+                let bits = led_events.next_event().await.0.into_bits();
+                if last_sent != Some(bits)
+                    && client
+                        .write_characteristic_without_response(&chars.keyboard_output, &[bits])
+                        .await
+                        .is_ok()
+                {
+                    last_sent = Some(bits);
+                }
             }
         };
 
