@@ -337,6 +337,7 @@ impl<D: Driver<'static>> UsbTransportBuilder<D> {
         // Linux's usbhid driver auto-enables power/wakeup when it probes a
         // boot-protocol keyboard, so advertise Boot/Keyboard on the primary
         // HID interface.
+        static KEYBOARD_HANDLER: StaticCell<UsbRequestHandler> = StaticCell::new();
         let keyboard_rw = add_usb_reader_writer!(
             &mut builder,
             KeyboardReport,
@@ -344,7 +345,10 @@ impl<D: Driver<'static>> UsbTransportBuilder<D> {
             8,
             8,
             ::embassy_usb::class::hid::HidSubclass::Boot,
-            ::embassy_usb::class::hid::HidBootProtocol::Keyboard
+            ::embassy_usb::class::hid::HidBootProtocol::Keyboard,
+            Some(KEYBOARD_HANDLER.init(UsbRequestHandler {
+                protocol: HidProtocolMode::Report,
+            }))
         );
         let other_writer = add_usb_writer!(&mut builder, CompositeReport, COMPOSITE_WRITE_SIZE, 16);
         #[cfg(feature = "steno")]
@@ -562,26 +566,20 @@ macro_rules! add_usb_logger {
 }
 
 /// Per-descriptor HID `(State, Config)` pair. `paste` generates the `static`s
-/// from the descriptor name so each interface keeps its own State/Handler.
+/// from the descriptor name so each interface keeps its own state.
 /// Size `$max_packet` to the actual report to conserve Packet Memory Area on tight parts.
 macro_rules! usb_hid_state_and_config {
-    ($descriptor:ty, $max_packet:expr, $subclass:expr, $protocol:expr) => {{
+    ($descriptor:ty, $max_packet:expr, $subclass:expr, $protocol:expr, $handler:expr) => {{
         use usbd_hid::descriptor::SerializedDescriptor;
         paste::paste! {
             static [<$descriptor:snake:upper _STATE>]: ::static_cell::StaticCell<::embassy_usb::class::hid::device::State> = ::static_cell::StaticCell::new();
-            static [<$descriptor:snake:upper _HANDLER>]: ::static_cell::StaticCell<$crate::usb::UsbRequestHandler> = ::static_cell::StaticCell::new();
         }
 
         let state = paste::paste! { [<$descriptor:snake:upper _STATE>].init(::embassy_usb::class::hid::device::State::new()) };
-        let request_handler = paste::paste! {
-            [<$descriptor:snake:upper _HANDLER>].init($crate::usb::UsbRequestHandler {
-                protocol: ::embassy_usb::class::hid::HidProtocolMode::Report,
-            })
-        };
 
         let hid_config = ::embassy_usb::class::hid::device::Config {
             report_descriptor: <$descriptor>::desc(),
-            request_handler: Some(request_handler),
+            request_handler: $handler,
             poll_ms: 1,
             max_packet_size: $max_packet,
             hid_subclass: $subclass,
@@ -597,7 +595,8 @@ macro_rules! add_usb_writer {
             $descriptor,
             $max_packet,
             ::embassy_usb::class::hid::HidSubclass::No,
-            ::embassy_usb::class::hid::HidBootProtocol::None
+            ::embassy_usb::class::hid::HidBootProtocol::None,
+            None
         );
         ::embassy_usb::class::hid::device::HidWriter::<_, $n>::new($usb_builder, state, hid_config)
     }};
@@ -612,12 +611,13 @@ macro_rules! add_usb_reader_writer {
             $write_n,
             $max_packet,
             ::embassy_usb::class::hid::HidSubclass::No,
-            ::embassy_usb::class::hid::HidBootProtocol::None
+            ::embassy_usb::class::hid::HidBootProtocol::None,
+            None
         )
     };
-    ($usb_builder:expr, $descriptor:ty, $read_n:expr, $write_n:expr, $max_packet:expr, $subclass:expr, $protocol:expr) => {{
+    ($usb_builder:expr, $descriptor:ty, $read_n:expr, $write_n:expr, $max_packet:expr, $subclass:expr, $protocol:expr, $handler:expr) => {{
         let (state, hid_config) =
-            $crate::usb::usb_hid_state_and_config!($descriptor, $max_packet, $subclass, $protocol);
+            $crate::usb::usb_hid_state_and_config!($descriptor, $max_packet, $subclass, $protocol, $handler);
         ::embassy_usb::class::hid::device::HidReaderWriter::<_, $read_n, $write_n>::new($usb_builder, state, hid_config)
     }};
 }
@@ -628,16 +628,17 @@ pub(crate) use add_usb_reader_writer;
 pub(crate) use add_usb_writer;
 pub(crate) use usb_hid_state_and_config;
 
-pub(crate) struct UsbRequestHandler {
-    pub(crate) protocol: HidProtocolMode,
+struct UsbRequestHandler {
+    protocol: HidProtocolMode,
 }
 
 impl RequestHandler for UsbRequestHandler {
     fn set_report(&mut self, id: ReportId, data: &[u8]) -> OutResponse {
         info!("Set report for {:?}: {:?}", id, data);
-        if let (ReportId::Out(0), &[bits]) = (id, data) {
-            crate::hid::update_led_indicator(ConnectionType::Usb, LedIndicator::from_bits(bits));
-        }
+        let (ReportId::Out(0), &[bits]) = (id, data) else {
+            return OutResponse::Rejected;
+        };
+        crate::hid::update_led_indicator(ConnectionType::Usb, LedIndicator::from_bits(bits));
         OutResponse::Accepted
     }
 
