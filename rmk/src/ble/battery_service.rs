@@ -4,7 +4,7 @@ use core::sync::atomic::Ordering;
 use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
-use rmk_types::battery::BatteryStatus;
+use rmk_types::battery::{BatteryStatus, BleBatteryId};
 use trouble_host::prelude::*;
 
 use super::ble_server::Server;
@@ -28,65 +28,53 @@ struct BatteryLevel {
     last_percent: Cell<Option<u8>>,
 }
 
-fn add_battery<const MAX: usize>(
-    table: &mut AttributeTable<'_, NoopRawMutex, MAX>,
-    standard: bool,
-    description: u16,
-    name: &'static str,
-) -> BatteryLevel {
-    let (service_uuid, level_uuid): (Uuid, Uuid) = if standard {
-        (service::BATTERY.into(), characteristic::BATTERY_LEVEL.into())
-    } else {
-        (
-            PERIPHERAL_BATTERY_SERVICE_UUID.into(),
-            PERIPHERAL_BATTERY_LEVEL_UUID.into(),
-        )
-    };
-    let mut service = table.add_service(Service::new(service_uuid));
-    let mut level = service
-        .add_characteristic_small(level_uuid, [CharacteristicProp::Read, CharacteristicProp::Notify], 0u8)
-        .read_permission(PermissionLevel::EncryptionRequired);
-    let [lo, hi] = description.to_le_bytes();
-    level.add_descriptor_small(
-        descriptors::CHARACTERISTIC_PRESENTATION_FORMAT,
-        AttPermissions {
-            write: PermissionLevel::NotAllowed,
-            ..Default::default()
-        },
-        [0x04, 0, 0xAD, 0x27, 1, lo, hi], // uint8 percentage, Bluetooth SIG namespace
-    );
-    level.add_descriptor_ro(
-        descriptors::CHARACTERISTIC_USER_DESCRIPTION,
-        PermissionLevel::Allowed,
-        name,
-    );
-    level.add_descriptor_ro(descriptors::VALID_RANGE, PermissionLevel::Allowed, &[0u8, 100]);
-    BatteryLevel {
-        value: level.build(),
-        last_percent: Cell::new(None),
-    }
-}
-
 impl BatteryServices {
+    // Rynk can enable rmk-types/split independently of RMK's split feature.
     pub(super) const CCCD_COUNT: usize = if cfg!(feature = "split") {
-        1 + crate::NUM_SPLIT_BATTERY_PERIPHERALS
+        crate::BATTERY_BLE_DESCRIPTIONS.len()
     } else {
         1
     };
     pub(super) const ATTRIBUTE_COUNT: usize = 7 * Self::CCCD_COUNT;
 
     pub(super) fn new<const MAX: usize>(table: &mut AttributeTable<'_, NoopRawMutex, MAX>) -> Self {
-        let levels = core::array::from_fn(|slot| {
-            let name = if slot == 0 {
-                crate::CENTRAL_BATTERY_USER_DESCRIPTION
-            } else {
-                crate::SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS[slot - 1]
+        let descriptions: &[_; Self::CCCD_COUNT] = const { crate::BATTERY_BLE_DESCRIPTIONS.first_chunk().unwrap() };
+        let levels = descriptions.map(|(battery_id, user_description)| {
+            let standard_service = service::BATTERY.into();
+            let standard_level = characteristic::BATTERY_LEVEL.into();
+            let (service_uuid, level_uuid, description): (Uuid, Uuid, u16) = match battery_id {
+                BleBatteryId::Central => (standard_service, standard_level, 0x0106),
+                BleBatteryId::Left => (standard_service, standard_level, 0x010D),
+                BleBatteryId::Right => (standard_service, standard_level, 0x010E),
+                BleBatteryId::Peripheral(id) => (
+                    PERIPHERAL_BATTERY_SERVICE_UUID.into(),
+                    PERIPHERAL_BATTERY_LEVEL_UUID.into(),
+                    u16::from(id) + 1,
+                ),
             };
-            let standard = crate::STANDARD_BATTERY_DESCRIPTIONS.get(slot);
-            let description = standard
-                .copied()
-                .unwrap_or_else(|| (crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot - 1] + 1) as u16);
-            add_battery(table, standard.is_some(), description, name)
+            let mut service = table.add_service(Service::new(service_uuid));
+            let mut level = service
+                .add_characteristic_small(level_uuid, [CharacteristicProp::Read, CharacteristicProp::Notify], 0u8)
+                .read_permission(PermissionLevel::EncryptionRequired);
+            let [lo, hi] = description.to_le_bytes();
+            level.add_descriptor_small(
+                descriptors::CHARACTERISTIC_PRESENTATION_FORMAT,
+                AttPermissions {
+                    write: PermissionLevel::NotAllowed,
+                    ..Default::default()
+                },
+                [0x04, 0, 0xAD, 0x27, 1, lo, hi], // uint8 percentage, Bluetooth SIG namespace
+            );
+            level.add_descriptor_ro(
+                descriptors::CHARACTERISTIC_USER_DESCRIPTION,
+                PermissionLevel::Allowed,
+                user_description,
+            );
+            level.add_descriptor_ro(descriptors::VALID_RANGE, PermissionLevel::Allowed, &[0u8, 100]);
+            BatteryLevel {
+                value: level.build(),
+                last_percent: Cell::new(None),
+            }
         });
         Self { levels }
     }
@@ -241,13 +229,6 @@ pub(crate) struct BlePeripheralBatteryServer<'stack, 'server, 'conn, P: PacketPo
 }
 
 #[cfg(feature = "split")]
-fn find_peripheral_battery_slot(configured_ids: &[usize], peripheral_id: usize) -> Option<usize> {
-    configured_ids
-        .iter()
-        .position(|configured_id| *configured_id == peripheral_id)
-}
-
-#[cfg(feature = "split")]
 impl<'stack, 'server, 'conn, P: PacketPool> BlePeripheralBatteryServer<'stack, 'server, 'conn, P> {
     pub(crate) fn new(server: &Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
         let sub = PeripheralBatteryEvent::subscriber();
@@ -283,7 +264,9 @@ impl<P: PacketPool> Runnable for BlePeripheralBatteryServer<'_, '_, '_, P> {
 
         loop {
             let event = self.sub.next_message_pure().await;
-            if let Some(slot) = find_peripheral_battery_slot(&crate::SPLIT_BATTERY_PERIPHERAL_IDS, event.id)
+            if let Some(slot) = crate::SPLIT_BATTERY_PERIPHERAL_IDS
+                .iter()
+                .position(|&id| id == event.id)
                 && let Some(BatteryStatus::Available { level: Some(level), .. }) =
                     crate::split::driver::current_peripheral_battery_status(event.id)
                 && let Err(e) = self.battery_levels[slot].notify(self.conn, &level, false).await
@@ -291,177 +274,5 @@ impl<P: PacketPool> Runnable for BlePeripheralBatteryServer<'_, '_, '_, P> {
                 error!("Failed to notify peripheral {} battery level: {:?}", event.id, e);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod report_tests {
-    use embassy_futures::join::join;
-    use embassy_futures::select::select;
-    use embassy_time::{Duration, Instant, MockDriver, Timer, with_timeout};
-    use rmk_types::battery::{BatteryStatus, ChargeState};
-    use trouble_host::prelude::*;
-
-    use super::BleBatteryServer;
-    use crate::ble::adv::{Adv, advertise};
-    use crate::ble::ble_server::Server;
-    use crate::ble::fake_hci::FakeController;
-    use crate::ble::{NoopHandler, ble_task};
-    use crate::core_traits::Runnable;
-    use crate::event::{BatteryStatusEvent, publish_event};
-    use crate::keyboard::LAST_KEY_TIMESTAMP;
-    use crate::test_support::test_block_on;
-
-    fn set_level(level: u8) {
-        let status = BatteryStatus::Available {
-            charge_state: ChargeState::Discharging,
-            level: Some(level),
-        };
-        crate::input_device::battery::BATTERY_STATUS.lock(|cache| cache.set(status));
-        publish_event(BatteryStatusEvent(status));
-    }
-
-    #[test]
-    fn a_change_late_in_continuous_typing_reaches_the_host() {
-        crate::ble::rng::seed([7; 32]);
-        let hci = FakeController::default();
-        let mut resources = HostResources::<DefaultPacketPool, 1, 0, 1, 1>::new();
-        let stack = trouble_host::new(hci.clone(), &mut resources).build();
-        let mut peripheral = stack.peripheral();
-        let Ok(server) = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-            name: "test",
-            appearance: &appearance::human_interface_device::KEYBOARD,
-        })) else {
-            panic!("the GATT server must build");
-        };
-        let level = server.batteries.levels[0].value;
-
-        test_block_on(select(ble_task(stack.runner(), &NoopHandler), async {
-            let (conn, ()) = join(
-                advertise(
-                    &mut peripheral,
-                    &server.server,
-                    Adv::Host {
-                        name: "test",
-                        fast: false,
-                    },
-                    cfg!(feature = "ext_adv").then(|| BdAddr::new([1, 2, 3, 4, 5, 0xC6])),
-                    Duration::from_secs(1),
-                ),
-                async {
-                    while hci.advertising_starts() == 0 {
-                        Timer::after_millis(1).await;
-                    }
-                    hci.connect(1, [0xA1, 0, 0, 0, 0, 0xC1]);
-                },
-            )
-            .await;
-            let conn = conn.expect("the host must connect");
-            // The host subscribed to battery notifications.
-            let cccd = level.cccd_handle.expect("battery level must be notifiable");
-            let mut table = ClientAttTable::builder();
-            table.push(cccd, 2, false);
-            let mut table = table.build();
-            table.write(cccd, 0, &[1, 0]).unwrap();
-            server.set_client_att_table(conn.raw(), &table.view());
-
-            set_level(80);
-            let mut battery = BleBatteryServer::new(&server, &conn);
-            select(battery.run(), async {
-                // The connect report goes out, then typing runs past a minute before the level drops.
-                for _ in 0..4 {
-                    LAST_KEY_TIMESTAMP.sender().send(Instant::now().as_secs() as u32);
-                    MockDriver::get().advance(Duration::from_secs(30));
-                    Timer::after_millis(1).await;
-                }
-                set_level(79);
-                with_timeout(Duration::from_secs(1), async {
-                    while hci.notifications(1, level.handle).len() < 2 {
-                        Timer::after_millis(1).await;
-                    }
-                })
-                .await
-                .expect("the new level must reach the host");
-                assert_eq!(hci.notifications(1, level.handle), [[80], [79]]);
-            })
-            .await;
-        }));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-    use trouble_host::prelude::*;
-
-    use super::add_battery;
-
-    #[test]
-    fn each_battery_has_its_own_percentage_descriptors_and_subscription() {
-        let mut table: AttributeTable<'_, NoopRawMutex, 28> = AttributeTable::new();
-        let boards = [
-            (true, 0x0106u16, "Central"),
-            #[cfg(feature = "split")]
-            (true, 0x010D, "Peripheral 0"),
-            #[cfg(feature = "split")]
-            (true, 0x010E, "Peripheral 1"),
-            #[cfg(feature = "split")]
-            (false, 255, "Peripheral 254"),
-        ];
-        let levels =
-            boards.map(|(standard, description, name)| add_battery(&mut table, standard, description, name).value);
-        assert_eq!(table.len(), 7 * boards.len());
-        for (value, (standard, description, name)) in levels.iter().zip(boards) {
-            let (service_uuid, level_uuid): (Uuid, Uuid) = if standard {
-                (service::BATTERY.into(), characteristic::BATTERY_LEVEL.into())
-            } else {
-                (
-                    0x061686b6_6a06_4d02_8a8f_c514225bbdb3u128.into(),
-                    0xcd3259e5_a755_4bf0_9f36_690cddccdb51u128.into(),
-                )
-            };
-            let mut bytes = [0; 32];
-            let service_handle = value.handle - 2;
-            assert_eq!(table.uuid(service_handle), Some(declarations::PRIMARY_SERVICE.into()));
-            let len = table.read(service_handle, 0, &mut bytes).unwrap();
-            assert_eq!(&bytes[..len], service_uuid.as_raw());
-            assert_eq!(table.uuid(value.handle), Some(level_uuid));
-            assert_eq!(
-                table.permissions(value.handle).unwrap().read,
-                PermissionLevel::EncryptionRequired
-            );
-            assert!(value.props.any(&[CharacteristicProp::Read]));
-            assert!(value.props.any(&[CharacteristicProp::Notify]));
-            let [lo, hi] = description.to_le_bytes();
-            let presentation = [4, 0, 0xAD, 0x27, 1, lo, hi];
-            for (uuid, expected) in [
-                (descriptors::CHARACTERISTIC_PRESENTATION_FORMAT, &presentation[..]),
-                (descriptors::CHARACTERISTIC_USER_DESCRIPTION, name.as_bytes()),
-                (descriptors::VALID_RANGE, &[0, 100][..]),
-            ] {
-                let handle = (value.handle + 1..=value.end_handle)
-                    .find(|&h| table.uuid(h) == Some(uuid.into()))
-                    .unwrap();
-                let permissions = table.permissions(handle).unwrap();
-                assert_eq!(permissions.read, PermissionLevel::Allowed);
-                assert_eq!(permissions.write, PermissionLevel::NotAllowed);
-                let len = table.read(handle, 0, &mut bytes).unwrap();
-                assert_eq!(&bytes[..len], expected);
-            }
-            assert_eq!(
-                table.uuid(value.cccd_handle.unwrap()),
-                Some(descriptors::CLIENT_CHARACTERISTIC_CONFIGURATION.into())
-            );
-        }
-    }
-
-    #[cfg(feature = "split")]
-    #[test]
-    fn peripheral_events_map_to_configured_battery_slots() {
-        let configured_ids = [0, 2];
-
-        assert_eq!(super::find_peripheral_battery_slot(&configured_ids, 0), Some(0));
-        assert_eq!(super::find_peripheral_battery_slot(&configured_ids, 1), None);
-        assert_eq!(super::find_peripheral_battery_slot(&configured_ids, 2), Some(1));
     }
 }

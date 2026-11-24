@@ -47,8 +47,8 @@ pub struct BuildConstants {
     pub vial_channel_size: usize,
     pub flash_channel_size: usize,
     pub num_split_peripherals: usize,
-    /// Standard GATT battery presentation descriptions in handle order, central first.
-    pub standard_battery_descriptions: &'static [u16],
+    /// Side of the central when both halves expose standard left/right batteries.
+    pub paired_battery_central_side: Option<SplitSide>,
     pub central_battery_user_description: String,
     pub split_battery_peripheral_ids: Vec<usize>,
     pub split_battery_peripheral_user_descriptions: Vec<String>,
@@ -130,11 +130,13 @@ impl crate::KeyboardTomlConfig {
                             .battery_user_description
                             .unwrap_or_else(|| format!("Peripheral {id}")),
                     );
-                    if split.peripheral.len() == 1 && central_battery.battery_adc_pin.is_some() {
-                        pair_side = split.central_side;
-                    }
                 }
             }
+            pair_side = split.central_side.filter(|_| {
+                split.peripheral.len() == 1
+                    && !split_battery_peripheral_ids.is_empty()
+                    && central_battery.battery_adc_pin.is_some()
+            });
         }
         let total_ble_profiles = rmk.num_ble_profiles + usize::from(active_features.contains(&"dongle"));
         if total_ble_profiles == 0 && active_features.contains(&"_ble") {
@@ -322,11 +324,7 @@ impl crate::KeyboardTomlConfig {
             vial_channel_size: rmk.vial_channel_size,
             flash_channel_size: rmk.flash_channel_size,
             num_split_peripherals,
-            standard_battery_descriptions: match pair_side {
-                None => &[0x0106], // Main
-                Some(SplitSide::Left) => &[0x010D, 0x010E],
-                Some(SplitSide::Right) => &[0x010E, 0x010D],
-            },
+            paired_battery_central_side: pair_side,
             central_battery_user_description: central_battery
                 .battery_user_description
                 .unwrap_or_else(|| "Central".into()),
@@ -622,28 +620,24 @@ mod tests {
             config.auto_calculate_parameters();
             config.build_constants(&["split", "_ble"]).unwrap()
         };
-        for (side, expected) in [
-            (None, &[0x0106][..]),
-            (Some(SplitSide::Left), &[0x010D, 0x010E]),
-            (Some(SplitSide::Right), &[0x010E, 0x010D]),
-        ] {
+        for side in [None, Some(SplitSide::Left), Some(SplitSide::Right)] {
             let pair = resolve(side, board(0), vec![board(1)]);
-            assert_eq!(pair.standard_battery_descriptions, expected);
+            assert_eq!(pair.paired_battery_central_side, side);
             assert_eq!(pair.central_battery_user_description, "Central");
             assert_eq!(pair.split_battery_peripheral_user_descriptions, ["Peripheral 0"]);
         }
         let left = Some(SplitSide::Left);
         for (central, peripheral) in [(board(0), Default::default()), (Default::default(), board(1))] {
             let single = resolve(left, central, vec![peripheral]);
-            assert_eq!(single.standard_battery_descriptions, [0x0106]);
+            assert_eq!(single.paired_battery_central_side, None);
         }
         let multi = resolve(left, board(0), vec![Default::default(), board(2)]);
-        assert_eq!(multi.standard_battery_descriptions, [0x0106]);
+        assert_eq!(multi.paired_battery_central_side, None);
         assert_eq!(multi.split_battery_peripheral_ids, [1]);
         assert_eq!(multi.split_battery_peripheral_user_descriptions, ["Peripheral 1"]);
 
         let sparse = resolve(left, board(0), vec![board(1), Default::default(), board(3)]);
-        assert_eq!(sparse.standard_battery_descriptions, [0x0106]);
+        assert_eq!(sparse.paired_battery_central_side, None);
         assert_eq!(sparse.split_battery_peripheral_ids, [0, 2]);
         assert_eq!(
             sparse.split_battery_peripheral_user_descriptions,

@@ -1111,7 +1111,7 @@ pub enum SplitConnection {
     Serial,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SplitSide {
     Left,

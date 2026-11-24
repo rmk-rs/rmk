@@ -2,7 +2,7 @@ use std::path::Path;
 use std::{env, fs};
 
 use rmk_config::resolved::BuildConstants;
-use rmk_config::{KeyboardTomlConfig, protocol_limits};
+use rmk_config::{KeyboardTomlConfig, SplitSide, protocol_limits};
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -90,14 +90,22 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
         "pub const NUM_SPLIT_PERIPHERALS: usize = {};",
         bc.num_split_peripherals
     ));
-    lines.push(format!(
-        "pub const CENTRAL_BATTERY_USER_DESCRIPTION: &str = {:?};",
-        bc.central_battery_user_description
-    ));
-    lines.push(format!(
-        "pub const STANDARD_BATTERY_DESCRIPTIONS: &[u16] = &{:?};",
-        bc.standard_battery_descriptions
-    ));
+    let peripheral_ids = bc
+        .split_battery_peripheral_ids
+        .iter()
+        .map(|id| format!("Peripheral({id})"));
+    let battery_ids: Vec<String> = match bc.paired_battery_central_side {
+        Some(SplitSide::Left) => vec!["Left".into(), "Right".into()],
+        Some(SplitSide::Right) => vec!["Right".into(), "Left".into()],
+        None => std::iter::once("Central".into()).chain(peripheral_ids).collect(),
+    };
+    let battery_names =
+        std::iter::once(&bc.central_battery_user_description).chain(&bc.split_battery_peripheral_user_descriptions);
+    lines.push("pub const BATTERY_BLE_DESCRIPTIONS: &[(BleBatteryId, &str)] = &[".into());
+    for (id, name) in battery_ids.into_iter().zip(battery_names) {
+        lines.push(format!("    (BleBatteryId::{id}, {name:?}),"));
+    }
+    lines.push("];".into());
     lines.push(format!(
         "pub const NUM_SPLIT_BATTERY_PERIPHERALS: usize = {};",
         bc.split_battery_peripheral_ids.len()
@@ -105,10 +113,6 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     lines.push(format!(
         "pub const SPLIT_BATTERY_PERIPHERAL_IDS: [usize; NUM_SPLIT_BATTERY_PERIPHERALS] = {:?};",
         bc.split_battery_peripheral_ids
-    ));
-    lines.push(format!(
-        "pub const SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS: [&str; NUM_SPLIT_BATTERY_PERIPHERALS] = {:?};",
-        bc.split_battery_peripheral_user_descriptions
     ));
     lines.push(format!("pub const NUM_BLE_PROFILES: usize = {};", bc.num_ble_profiles));
     lines.push(format!("pub const BLE_USE_2M_PHY: bool = {};", bc.ble_use_2m_phy));
