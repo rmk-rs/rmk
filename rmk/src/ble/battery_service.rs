@@ -34,23 +34,29 @@ impl BatteryServices {
 
     pub(super) fn new<const MAX: usize>(table: &mut AttributeTable<'_, NoopRawMutex, MAX>) -> Self {
         let levels = crate::BATTERY_BLE_DESCRIPTIONS.map(|(battery_id, user_description)| {
-            let standard_service = service::BATTERY.into();
-            let standard_level = characteristic::BATTERY_LEVEL.into();
-            let (service_uuid, ch_uuid, description): (Uuid, Uuid, u16) = match battery_id {
-                BleBatteryId::Central => (standard_service, standard_level, 0x0106),
-                BleBatteryId::Left => (standard_service, standard_level, 0x010D),
-                BleBatteryId::Right => (standard_service, standard_level, 0x010E),
-                BleBatteryId::Peripheral(id) => (
-                    PERIPHERAL_BATTERY_SERVICE_UUID.into(),
-                    PERIPHERAL_BATTERY_LEVEL_UUID.into(),
-                    u16::from(id) + 1,
-                ),
-            };
+            let mut service_uuid: Uuid = service::BATTERY.into();
+            let mut characteristic_uuid: Uuid = characteristic::BATTERY_LEVEL.into();
+            // For peripherals, use custom service & characteristic UUID
+            if matches!(battery_id, BleBatteryId::Peripheral(_)) {
+                service_uuid = PERIPHERAL_BATTERY_SERVICE_UUID.into();
+                characteristic_uuid = PERIPHERAL_BATTERY_LEVEL_UUID.into();
+            }
             let mut service = table.add_service(Service::new(service_uuid));
             let mut level = service
-                .add_characteristic_small(ch_uuid, [CharacteristicProp::Read, CharacteristicProp::Notify], 0u8)
+                .add_characteristic_small(
+                    characteristic_uuid,
+                    [CharacteristicProp::Read, CharacteristicProp::Notify],
+                    0u8,
+                )
                 .read_permission(PermissionLevel::EncryptionRequired);
-            let [lo, hi] = description.to_le_bytes();
+
+            // Service description bytes
+            let [lo, hi] = match battery_id {
+                BleBatteryId::Central => 0x0106u16.to_le_bytes(),
+                BleBatteryId::Left => 0x010Du16.to_le_bytes(),
+                BleBatteryId::Right => 0x010Eu16.to_le_bytes(),
+                BleBatteryId::Peripheral(id) => (u16::from(id) + 1).to_le_bytes(),
+            };
             level.add_descriptor_small(
                 descriptors::CHARACTERISTIC_PRESENTATION_FORMAT,
                 AttPermissions {
