@@ -205,25 +205,19 @@ impl<const PROFILES: usize> ProfileManager<PROFILES> {
         state.sender().send(info);
     }
 
-    pub(crate) fn update_profile_cccd_table(
-        &self,
-        profile: u8,
-        peer: &Identity,
-        table: heapless::Vec<u8, CCCD_TABLE_SIZE>,
-    ) {
-        if let Some(state) = self.profiles.get(profile as usize) {
-            state.sender().send_if_modified(|info| {
-                if let Some(info) = info
-                    && !info.removed
-                    && info.info.identity.match_identity(peer)
-                    && info.cccd_table != table
-                {
-                    info.cccd_table = table.clone();
-                    return true;
-                }
-                false
-            });
-        }
+    pub(super) fn update_profile_cccd_table(&self, profile: u8, peer: &Identity, table: &[u8]) {
+        self.profiles[usize::from(profile)].sender().send_if_modified(|info| {
+            if let Some(info) = info
+                && !info.removed
+                && info.info.identity.match_identity(peer)
+                && info.cccd_table.as_slice() != table
+                && let Ok(bytes) = heapless::Vec::from_slice(table)
+            {
+                info.cccd_table = bytes;
+                return true;
+            }
+            false
+        });
     }
 
     /// One persistence receiver per profile, retained across connection changes.

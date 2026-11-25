@@ -354,12 +354,17 @@ fn expand_main(
         quote! {}
     };
 
+    let ble_battery_config = (hardware.communication.ble_enabled()
+        && hardware.battery.adc.is_some())
+    .then(|| quote! { ble_battery_config: ::rmk::config::BleBatteryConfig { enabled: true }, });
+
     let rmk_config = if hardware.storage.is_some() {
         quote! {
             #[allow(clippy::needless_update)]
             let rmk_config = ::rmk::config::RmkConfig {
                 device_config: keyboard_device_config,
                 #vial_config
+                #ble_battery_config
                 #lock_config
                 #rynk_layout_field
                 storage_config,
@@ -372,6 +377,7 @@ fn expand_main(
             let rmk_config = ::rmk::config::RmkConfig {
                 device_config: keyboard_device_config,
                 #vial_config
+                #ble_battery_config
                 #lock_config
                 #rynk_layout_field
                 ..Default::default()

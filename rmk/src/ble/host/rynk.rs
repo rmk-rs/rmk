@@ -9,7 +9,6 @@ use heapless::Vec;
 use rmk_types::protocol::rynk::{RYNK_BLE_CHUNK_SIZE, RYNK_HID_REPORT_SIZE};
 use trouble_host::prelude::*;
 
-use super::GattWriteResult;
 use crate::ble::ble_server::{RynkGattService, RynkHidService, Server};
 use crate::host::rynk::RynkService;
 use crate::host::transport::HostTransportError;
@@ -33,30 +32,22 @@ impl<'a> HostConnection<'a> {
         }
     }
 
-    pub(crate) async fn handle_write(&self, handle: u16, data: &[u8], encrypted: bool) -> GattWriteResult {
+    pub(crate) fn owns_handle(&self, handle: u16) -> bool {
+        self.custom.handle_range().contains(&handle) || self.hid.handle_range().contains(&handle)
+    }
+
+    pub(crate) async fn handle_write(&self, handle: u16, data: &[u8]) -> bool {
         let hid = handle == self.hid.output_data.handle;
-        if hid || handle == self.custom.output_data.handle {
-            if !encrypted {
-                warn!("Rynk: dropping {}-byte write on unencrypted link", data.len());
-                return GattWriteResult::Handled;
-            }
-            if hid && data.len() != RYNK_HID_REPORT_SIZE {
-                warn!("Wrong Rynk HID report size: {}", data.len());
-                return GattWriteResult::Handled;
-            }
-            if !data.is_empty() {
-                self.reply_over_hid.set(hid);
-                self.pipe.write_all(data).await;
-            }
-            GattWriteResult::Handled
-        } else if self.custom.input_data.cccd_handle == Some(handle) || self.hid.input_data.cccd_handle == Some(handle)
-        {
-            GattWriteResult::CccdWrite
-        } else if handle == self.hid.hid_control_point.handle {
-            GattWriteResult::HidControlPoint
-        } else {
-            GattWriteResult::Unhandled
+        if !hid && handle != self.custom.output_data.handle {
+            return false;
         }
+        if hid && data.len() != RYNK_HID_REPORT_SIZE {
+            warn!("Wrong Rynk HID report size: {}", data.len());
+        } else if !data.is_empty() {
+            self.reply_over_hid.set(hid);
+            self.pipe.write_all(data).await;
+        }
+        true
     }
 
     pub(crate) async fn run<P: PacketPool>(&self, conn: &GattConnection<'_, '_, P>, service: &RynkService<'_>) {
@@ -122,37 +113,24 @@ mod tests {
 
         let server = Server::new_default("rmk").unwrap();
         let handler = HostConnection::new(&server);
-
-        assert_eq!(
-            block_on(handler.handle_write(
-                server.rynk_hid_service.output_data.handle,
-                &[0; RYNK_HID_REPORT_SIZE],
-                true
-            )),
-            GattWriteResult::Handled
-        );
+        assert!(block_on(handler.handle_write(
+            server.rynk_hid_service.output_data.handle,
+            &[0; RYNK_HID_REPORT_SIZE]
+        )));
         assert!(handler.reply_over_hid.get());
-        assert_eq!(
-            block_on(handler.handle_write(server.rynk_service.output_data.handle, &[1], true)),
-            GattWriteResult::Handled
-        );
+        assert!(block_on(
+            handler.handle_write(server.rynk_service.output_data.handle, &[1])
+        ));
         assert!(!handler.reply_over_hid.get());
-        assert_eq!(
-            block_on(handler.handle_write(server.rynk_service.input_data.cccd_handle.unwrap(), &[], true,)),
-            GattWriteResult::CccdWrite
-        );
-        assert_eq!(
-            block_on(handler.handle_write(server.rynk_hid_service.input_data.cccd_handle.unwrap(), &[], true,)),
-            GattWriteResult::CccdWrite
-        );
-        assert_eq!(
-            block_on(handler.handle_write(server.rynk_hid_service.hid_control_point.handle, &[0], true,)),
-            GattWriteResult::HidControlPoint
-        );
-        assert_eq!(
-            block_on(handler.handle_write(u16::MAX, &[], true)),
-            GattWriteResult::Unhandled
-        );
+        for handle in [
+            server.rynk_service.input_data.cccd_handle.unwrap(),
+            server.rynk_hid_service.input_data.cccd_handle.unwrap(),
+            server.rynk_hid_service.hid_control_point.handle,
+        ] {
+            assert!(handler.owns_handle(handle));
+        }
+        assert!(!handler.owns_handle(server.hid_service.input_keyboard.cccd_handle.unwrap()));
+        assert!(!block_on(handler.handle_write(u16::MAX, &[])));
     }
 
     /// Build a COBS frame carrying `payload` into `buf`; returns its length.

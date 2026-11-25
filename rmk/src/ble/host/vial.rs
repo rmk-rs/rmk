@@ -5,7 +5,6 @@ use embassy_sync::channel::Channel;
 use embedded_io_async::{ErrorType, Read, Write};
 use trouble_host::prelude::*;
 
-use super::GattWriteResult;
 use crate::ble::ble_server::{Server, VialGattService};
 use crate::host::transport::HostTransportError;
 use crate::host::via::VialService;
@@ -24,25 +23,21 @@ impl<'a> HostConnection<'a> {
         }
     }
 
-    pub(crate) async fn handle_write(&self, handle: u16, data: &[u8], encrypted: bool) -> GattWriteResult {
-        if handle == self.hid.output_data.handle {
-            if !encrypted {
-                return GattWriteResult::Handled;
-            }
-            if let Ok(message) = data.try_into() {
-                debug!("Got Vial packet: {:?}", data);
-                self.incoming.send(message).await;
-            } else {
-                warn!("Wrong Vial packet data: {:?}", data);
-            }
-            GattWriteResult::Handled
-        } else if self.hid.input_data.cccd_handle == Some(handle) {
-            GattWriteResult::CccdWrite
-        } else if handle == self.hid.hid_control_point.handle {
-            GattWriteResult::HidControlPoint
-        } else {
-            GattWriteResult::Unhandled
+    pub(crate) fn owns_handle(&self, handle: u16) -> bool {
+        self.hid.handle_range().contains(&handle)
+    }
+
+    pub(crate) async fn handle_write(&self, handle: u16, data: &[u8]) -> bool {
+        if handle != self.hid.output_data.handle {
+            return false;
         }
+        if let Ok(message) = data.try_into() {
+            debug!("Got Vial packet: {:?}", data);
+            self.incoming.send(message).await;
+        } else {
+            warn!("Wrong Vial packet data: {:?}", data);
+        }
+        true
     }
 
     pub(crate) async fn run<P: PacketPool>(&self, conn: &GattConnection<'_, '_, P>, service: &VialService<'_>) {
@@ -115,22 +110,14 @@ mod tests {
 
         let server = Server::new_default("rmk").unwrap();
         let handler = HostConnection::new(&server);
-
-        assert_eq!(
-            block_on(handler.handle_write(server.vial_service.output_data.handle, &[], true)),
-            GattWriteResult::Handled
-        );
-        assert_eq!(
-            block_on(handler.handle_write(server.vial_service.input_data.cccd_handle.unwrap(), &[], true,)),
-            GattWriteResult::CccdWrite
-        );
-        assert_eq!(
-            block_on(handler.handle_write(server.vial_service.hid_control_point.handle, &[0], true,)),
-            GattWriteResult::HidControlPoint
-        );
-        assert_eq!(
-            block_on(handler.handle_write(u16::MAX, &[], true)),
-            GattWriteResult::Unhandled
-        );
+        let packet = [1; 32];
+        assert!(block_on(
+            handler.handle_write(server.vial_service.output_data.handle, &packet)
+        ));
+        assert_eq!(handler.incoming.try_receive().unwrap(), packet);
+        assert!(handler.owns_handle(server.vial_service.input_data.cccd_handle.unwrap()));
+        assert!(handler.owns_handle(server.vial_service.hid_control_point.handle));
+        assert!(!handler.owns_handle(server.hid_service.input_keyboard.cccd_handle.unwrap()));
+        assert!(!block_on(handler.handle_write(u16::MAX, &[])));
     }
 }

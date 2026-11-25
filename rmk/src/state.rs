@@ -1,4 +1,6 @@
 use core::cell::RefCell;
+#[cfg(feature = "_ble")]
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use embassy_sync::blocking_mutex::Mutex;
 use rmk_types::ble::BleState;
@@ -14,6 +16,11 @@ use crate::event::{ConnectionStatusChangeEvent, publish_event};
 /// change events fire on every transition.
 static CONNECTION_STATUS: Mutex<RawMutex, RefCell<ConnectionStatus>> =
     Mutex::new(RefCell::new(ConnectionStatus::new()));
+
+/// HID Suspend is local to a profile's live link and does not change its public transport status.
+#[cfg(feature = "_ble")]
+static HID_SUSPENDED: [AtomicBool; crate::TOTAL_BLE_PROFILES] =
+    [const { AtomicBool::new(false) }; crate::TOTAL_BLE_PROFILES];
 
 pub(crate) fn active_transport() -> Option<ConnectionType> {
     CONNECTION_STATUS.lock(|c| c.borrow().decide_active())
@@ -89,7 +96,35 @@ pub fn set_usb_state(s: UsbState) {
 }
 
 pub(crate) fn set_ble_state(profile: u8, state: BleState) {
-    update_status(|c| c.ble[profile as usize].state = state);
+    let slot = usize::from(profile);
+    update_status(|c| {
+        #[cfg(feature = "_ble")]
+        if state != BleState::Connected {
+            HID_SUSPENDED[slot].store(false, Ordering::Relaxed);
+        }
+        c.ble[slot].state = state;
+    });
+}
+
+#[cfg(feature = "_ble")]
+pub(crate) fn ble_hid_active(profile: u8) -> bool {
+    let slot = usize::from(profile);
+    CONNECTION_STATUS
+        .lock(|c| c.borrow().ble[slot].state == BleState::Connected && !HID_SUSPENDED[slot].load(Ordering::Relaxed))
+}
+
+/// Returns whether this control resumed a suspended host.
+#[cfg(feature = "_ble")]
+pub(crate) fn set_ble_hid_suspended(profile: u8, suspended: bool) -> bool {
+    let slot = usize::from(profile);
+    CONNECTION_STATUS.lock(|c| {
+        if c.borrow().ble[slot].state != BleState::Connected {
+            return false;
+        }
+        let was_suspended = HID_SUSPENDED[slot].load(Ordering::Relaxed);
+        HID_SUSPENDED[slot].store(suspended, Ordering::Relaxed);
+        was_suspended && !suspended
+    })
 }
 
 pub(crate) fn set_ble_bonded(profile: u8, bonded: bool) {

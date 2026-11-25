@@ -12,7 +12,7 @@ use bt_hci::data::{AclPacket, IsoPacket, SyncPacket};
 use bt_hci::{ControllerToHostPacket, FromHciBytes, PacketKind, WriteHci};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-use trouble_host::prelude::{Uuid, descriptors};
+use trouble_host::prelude::{Uuid, declarations, descriptors};
 
 #[derive(Clone, Default)]
 pub(crate) struct FakeController {
@@ -138,6 +138,21 @@ impl FakeController {
         };
         self.att_exchange(link, &[0x12, lo, hi, u8::from(enabled), 0], 0x13)
             .await;
+    }
+
+    pub(crate) async fn characteristic_handle(&self, link: u16, uuid: u16) -> u16 {
+        let mut start = 1;
+        loop {
+            let reply = self
+                .read_by_type(link, start, declarations::CHARACTERISTIC.into())
+                .await;
+            for entry in reply[1..].chunks_exact(usize::from(reply[0])) {
+                if entry[5..] == uuid.to_le_bytes() {
+                    return u16::from_le_bytes([entry[3], entry[4]]);
+                }
+                start = u16::from_le_bytes([entry[0], entry[1]]) + 1;
+            }
+        }
     }
 
     /// The minimum interval of every advertising setup, in 0.625 ms units.

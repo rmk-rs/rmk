@@ -1,10 +1,8 @@
 //! Keyboard-wide sleep management.
 //!
 //! One manager owns the keyboard's sleep state: it watches [`SLEEP_INPUT`],
-//! latches each decision in [`SLEEPING_STATE`] for pollers like the battery
-//! service, and publishes it as [`SleepStateEvent`] for everything else — the
-//! display, and on split centrals the per-link connection-parameter followers
-//! in `split::ble::central`.
+//! latches each decision in [`SLEEPING_STATE`] for synchronous readers, and
+//! publishes [`SleepStateEvent`] for the display and split connection managers.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 

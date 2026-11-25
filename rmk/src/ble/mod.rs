@@ -15,8 +15,8 @@ use bt_hci::cmd::le::{
 use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeReadPhy, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
-use embassy_futures::join::join5;
-use embassy_futures::select::{Either, Either3, select, select_slice, select3, select6};
+use embassy_futures::join::{join, join5};
+use embassy_futures::select::{Either, Either3, select, select_slice, select3, select5};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::signal::Signal;
@@ -30,11 +30,11 @@ use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 
 use crate::TOTAL_BLE_PROFILES;
 use crate::ble::adv::{Adv, advertise};
-use crate::ble::battery_service::BleBatteryServer;
+use crate::ble::battery_service::LinkChange;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
 #[cfg(feature = "host")]
-use crate::ble::host::{GattWriteResult, HOST_WRITE_BUFFER_SIZE, HostConnection};
+use crate::ble::host::{HOST_WRITE_BUFFER_SIZE, HostConnection};
 use crate::ble::led::BleLedReader;
 #[cfg(feature = "passkey_entry")]
 use crate::ble::passkey::{PasskeyInputState, next_gatt_event};
@@ -412,9 +412,10 @@ async fn run_ble_keyboard<
     let product_name = device_config.product_name;
 
     info!("Starting advertising and GATT service");
-    let Ok(server) = &Server::new_keyboard(product_name) else {
+    let Ok(server) = &mut Server::new_keyboard(product_name) else {
         panic!("product name is too long for BLE");
     };
+    server.batteries.central_notifications = config.enabled;
 
     unwrap!(
         server
@@ -471,7 +472,6 @@ async fn run_ble_keyboard<
                 stack,
                 profile_id,
                 &profile_manager,
-                config,
                 #[cfg(feature = "host")]
                 host_service,
             )
@@ -746,9 +746,6 @@ async fn gatt_events_task(
     let output_keyboard = &server.hid_service.output_keyboard;
     let hid_control_point = &server.hid_service.hid_control_point;
     let input_keyboard = &server.hid_service.input_keyboard;
-    let mouse = &server.hid_service.mouse_report;
-    let media = &server.hid_service.media_report;
-    let system_control = &server.hid_service.system_report;
 
     #[cfg(feature = "passkey_entry")]
     let mut passkey_state = PasskeyInputState::new();
@@ -806,29 +803,20 @@ async fn gatt_events_task(
                 warn!("[gatt] link parameter update failed");
             }
             GattConnectionEvent::Gatt { event: gatt_event } => {
-                let mut cccd_updated = false;
-                let result = match &gatt_event {
-                    GattEvent::Read(event) => {
-                        debug!("Read GATT Event: {:?}", event.handle());
-                        let Ok(security_level) = conn.raw().security_level() else {
-                            continue;
-                        };
-                        if security_level.encrypted() {
-                            None
-                        } else {
-                            Some(AttErrorCode::INSUFFICIENT_ENCRYPTION)
-                        }
-                    }
+                let mut written_cccd = None;
+                let mut link_change = None;
+                let mut hid_suspend = None;
+                let reject_unencrypted = match &gatt_event {
                     GattEvent::Write(event) => {
-                        #[cfg(all(feature = "dongle", feature = "custom_message"))]
-                        let is_custom_message = event.handle() == server.dongle_event_service.custom_to_keyboard.handle;
-                        #[cfg(not(all(feature = "dongle", feature = "custom_message")))]
-                        let is_custom_message = false;
                         let Ok(security_level) = conn.raw().security_level() else {
                             continue;
                         };
                         let encrypted = security_level.encrypted();
-
+                        let handle = event.handle();
+                        #[cfg(all(feature = "dongle", feature = "custom_message"))]
+                        let is_custom_message = handle == server.dongle_event_service.custom_to_keyboard.handle;
+                        #[cfg(not(all(feature = "dongle", feature = "custom_message")))]
+                        let is_custom_message = false;
                         // trouble-host 0.7 exposes written bytes via a closure; copy them out
                         // once so the dispatch below (which awaits) can use them freely.
                         let mut data_buf = [0u8; GATT_WRITE_BUFFER_SIZE];
@@ -838,9 +826,12 @@ async fn gatt_events_task(
                             data.len()
                         });
                         let data = &data_buf[..data_len.min(data_buf.len())];
-                        let mut control_point_write = false;
+                        let uuid = server.table().uuid(handle);
+                        let host_handle = server.hid_service.handle_range().contains(&handle);
+                        #[cfg(feature = "host")]
+                        let host_handle = host_handle || host.is_some_and(|host| host.owns_handle(handle));
 
-                        if event.handle() == output_keyboard.handle {
+                        if handle == output_keyboard.handle {
                             if data_len == 1 {
                                 let led_indicator = LedIndicator::from_bits(data[0]);
                                 debug!("Got keyboard state: {:?}", led_indicator);
@@ -851,15 +842,15 @@ async fn gatt_events_task(
                             } else {
                                 warn!("Wrong keyboard state data: {:?}", data);
                             }
-                        } else if event.handle() == input_keyboard.cccd_handle.expect("No CCCD for input keyboard")
-                            || event.handle() == mouse.cccd_handle.expect("No CCCD for mouse report")
-                            || event.handle() == media.cccd_handle.expect("No CCCD for media report")
-                            || event.handle() == system_control.cccd_handle.expect("No CCCD for system report")
-                            || server.batteries.by_cccd(event.handle()).is_some()
-                        {
-                            cccd_updated = true;
-                        } else if event.handle() == hid_control_point.handle {
-                            control_point_write = true;
+                        } else if uuid == Some(descriptors::CLIENT_CHARACTERISTIC_CONFIGURATION.into()) {
+                            if encrypted && data_len == size_of::<u16>() {
+                                link_change = server.batteries.subscription_write(handle);
+                                written_cccd = (host_handle || link_change.is_some()).then_some(handle);
+                            }
+                        } else if host_handle && uuid == Some(hid_control_point.uuid) {
+                            if encrypted && let [opcode @ 0..=1] = data {
+                                hid_suspend = Some(*opcode == 0);
+                            }
                         } else if is_custom_message {
                             #[cfg(all(feature = "dongle", feature = "custom_message"))]
                             match postcard::from_bytes::<crate::custom_message::CustomMessage>(data) {
@@ -877,68 +868,58 @@ async fn gatt_events_task(
                             }
                         } else {
                             #[cfg(feature = "host")]
-                            if let Some(host) = host {
-                                match host.handle_write(event.handle(), data, encrypted).await {
-                                    GattWriteResult::Handled => {}
-                                    GattWriteResult::CccdWrite => cccd_updated = true,
-                                    GattWriteResult::HidControlPoint => control_point_write = true,
-                                    GattWriteResult::Unhandled => {
-                                        debug!("Write GATT Event to Unknown: {:?}", event.handle())
-                                    }
-                                }
+                            if encrypted
+                                && let Some(host) = host
+                                && !host.handle_write(handle, data).await
+                            {
+                                debug!("Write GATT Event to Unknown: {:?}", handle);
                             }
                             #[cfg(not(feature = "host"))]
-                            debug!("Write GATT Event to Unknown: {:?}", event.handle());
+                            debug!("Write GATT Event to Unknown: {:?}", handle);
                         }
 
-                        if control_point_write && profile_id == crate::state::current_profile() {
-                            info!("Write GATT Event to Control Point: {:?}", event.handle());
-                            // Forward an HID Control Point write to sleep management.
-                            // HID Class spec opcodes for the HID Control Point characteristic:
-                            //   - 0: HID_CTRL_SUSPEND
-                            //   - 1: HID_CTRL_EXIT_SUSPEND
-                            if data_len == 1 {
-                                match data[0] {
-                                    0 => request_sleep(),
-                                    1 => report_activity(),
-                                    _ => {}
-                                }
-                            }
-                        }
-
-                        if encrypted {
-                            None
-                        } else {
-                            Some(AttErrorCode::INSUFFICIENT_ENCRYPTION)
-                        }
+                        !encrypted
                     }
-                    GattEvent::Other(_) => None,
-                    GattEvent::NotAllowed(_) => None,
+                    GattEvent::Read(_) => !conn.raw().security_level().is_ok_and(|level| level.encrypted()),
+                    _ => false,
                 };
-
-                // This step is also performed at drop(), but writing it explicitly is necessary
-                // in order to ensure reply is sent.
-                let result = if let Some(code) = result {
-                    gatt_event.reject(code)
+                let result = if reject_unencrypted {
+                    gatt_event.reject(AttErrorCode::INSUFFICIENT_ENCRYPTION)
                 } else {
                     server.prepare_name_read(&gatt_event, profile_id);
                     gatt_event.accept()
                 };
-                // Update CCCD table after processing the event
-                if cccd_updated {
-                    // When macOS wakes up from sleep mode, it won't send EXIT SUSPEND command
-                    // So we need to monitor the sleep state by using CCCD write event
+                let reply = match result {
+                    Ok(reply) => reply,
+                    Err(e) => {
+                        warn!("[gatt] error sending response: {:?}", e);
+                        continue;
+                    }
+                };
+                if let Some(handle) = written_cccd {
+                    // macOS can re-enable keyboard input on wake without sending Exit Suspend.
+                    if input_keyboard.cccd_handle == Some(handle) && input_keyboard.should_notify(conn) {
+                        hid_suspend = Some(false);
+                    }
                     report_activity();
-
-                    if let Some(table) = server.get_client_att_table(conn.raw())
-                        && let Ok(bytes) = heapless::Vec::from_slice(table.raw())
-                    {
-                        profile_manager.update_profile_cccd_table(profile_id, &conn.raw().peer_identity(), bytes);
+                    if let Some(table) = server.get_client_att_table(conn.raw()) {
+                        profile_manager.update_profile_cccd_table(profile_id, &conn.raw().peer_identity(), table.raw());
+                    }
+                } else if let Some(suspend) = hid_suspend
+                    && profile_id == crate::state::current_profile()
+                {
+                    if suspend {
+                        request_sleep();
+                    } else {
+                        report_activity();
                     }
                 }
-                match result {
-                    Ok(reply) => reply.send().await,
-                    Err(e) => warn!("[gatt] error sending response: {:?}", e),
+                if hid_suspend.is_some_and(|suspend| crate::state::set_ble_hid_suspended(profile_id, suspend)) {
+                    link_change = Some(LinkChange::Resumed);
+                }
+                reply.send().await;
+                if let Some(change) = link_change {
+                    server.batteries.on_link_change(conn, profile_id, change).await;
                 }
             }
             GattConnectionEvent::PhyUpdated { tx_phy, rx_phy } => {
@@ -1100,11 +1081,9 @@ async fn serve_keyboard_connection<
     stack: &Stack<'_, C, DefaultPacketPool>,
     profile_id: u8,
     profile_manager: &ProfileManager<TOTAL_BLE_PROFILES>,
-    config: &BleBatteryConfig,
     #[cfg(feature = "host")] host_service: Option<&crate::host::HostService<'_>>,
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);
-    let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
 
     // `use_1m_phy` exists for legacy host adapters that cannot do 2M.
     // Always use 2M for the dongle link.
@@ -1117,16 +1096,14 @@ async fn serve_keyboard_connection<
     } else {
         PhyKind::Le2M
     };
-    #[cfg(not(feature = "split"))]
-    let battery_task = ble_battery_server.run();
-    #[cfg(feature = "split")]
-    let battery_task = embassy_futures::join::join(ble_battery_server.run(), server.batteries.notify_peripherals(conn));
-
-    // A PHY request sent while the link is still being set up races the controller's own
-    // link-layer setup, so wait until the connection reports itself ready.
-    let phy_task = async {
+    // Restored subscriptions and PHY negotiation both need an encrypted link.
+    let connected_tasks = async {
         wait_for_connection_status(|s| s.ble[profile_id as usize].state == BleState::Connected).await;
-        update_ble_phy(stack, conn.raw(), host_phy).await;
+        join(
+            update_ble_phy(stack, conn.raw(), host_phy),
+            server.batteries.report_changes(conn, profile_id),
+        )
+        .await;
         core::future::pending::<()>().await;
     };
 
@@ -1190,11 +1167,10 @@ async fn serve_keyboard_connection<
     #[cfg(not(feature = "dongle"))]
     let dongle_event_task = core::future::pending::<()>();
 
-    select6(
+    select5(
         gatt_task,
         connection_params,
-        phy_task,
-        battery_task,
+        connected_tasks,
         writer_task,
         dongle_event_task,
     )
@@ -1285,9 +1261,9 @@ mod tests {
 
     use embassy_futures::select::select3;
     use embassy_time::{Duration, MockDriver, Timer};
-    use rmk_types::battery::{BatteryStatus, ChargeState};
+    use rmk_types::battery::{BatteryStatus, BleBatteryId, ChargeState};
     use rmk_types::ble::{BleState, BleStatus};
-    use trouble_host::prelude::characteristic;
+    use trouble_host::prelude::{characteristic, descriptors};
 
     use super::fake_hci::FakeController;
     use crate::event::{Axis, AxisEvent, AxisValType, KeyboardEvent, PointingEvent, publish_event};
@@ -1332,8 +1308,17 @@ mod tests {
     }
 
     fn with_keyboard(hci: FakeController, bonds: &[super::ProfileInfo], test: impl core::future::Future<Output = ()>) {
+        with_keyboard_battery(hci, bonds, crate::config::BleBatteryConfig::disabled(), test);
+    }
+
+    fn with_keyboard_battery(
+        hci: FakeController,
+        bonds: &[super::ProfileInfo],
+        battery: crate::config::BleBatteryConfig,
+        test: impl core::future::Future<Output = ()>,
+    ) {
         use super::{CONNECTIONS_MAX, DefaultPacketPool, HostResources, L2CAP_CHANNELS_MAX, TOTAL_BLE_PROFILES};
-        use crate::config::{BleBatteryConfig, DeviceConfig};
+        use crate::config::DeviceConfig;
         use crate::core_traits::Runnable;
         use crate::storage::{Storage, StorageKey, StorageValue, async_flash_wrapper};
         use crate::test_support::InMemoryFlash;
@@ -1351,7 +1336,7 @@ mod tests {
                 &stack,
                 [1, 2, 3, 4, 5, 0xC6],
                 &DeviceConfig::default(),
-                &BleBatteryConfig::disabled(),
+                &battery,
                 #[cfg(feature = "host")]
                 None,
             ),
@@ -1607,6 +1592,25 @@ mod tests {
         crate::state::wait_for_connection_status(|s| s.selected_profile().state == BleState::Connected).await;
     }
 
+    fn battery_profiles(second_peer: [u8; 6]) -> Vec<super::ProfileInfo> {
+        let mut peers = vec![bond(0, HOST_A)];
+        if crate::NUM_HOST_LINKS > 1 && crate::NUM_BLE_PROFILES > 1 {
+            peers.push(bond(1, second_peer));
+        }
+        for peer in &mut peers {
+            peer.info.is_bonded = true;
+        }
+        peers
+    }
+
+    async fn reconnect_second_profile(hci: &FakeController, peer: [u8; 6]) {
+        crate::channel::BLE_PROFILE_CHANNEL
+            .send(super::profile::BleProfileAction::Switch(1))
+            .await;
+        advertising(hci, 1).await;
+        reconnect(hci, 2, peer).await;
+    }
+
     fn set_central_level(level: Option<u8>) {
         let status = BatteryStatus::Available {
             charge_state: ChargeState::Discharging,
@@ -1614,6 +1618,78 @@ mod tests {
         };
         crate::input_device::battery::BATTERY_STATUS.lock(|cache| cache.set(status));
         publish_event(crate::event::BatteryStatusEvent(status));
+    }
+
+    async fn set_peripheral_levels(_percent: u8) {
+        #[cfg(feature = "split")]
+        for (slot, &id) in crate::SPLIT_BATTERY_PERIPHERAL_IDS.iter().enumerate() {
+            let status = BatteryStatus::Available {
+                charge_state: ChargeState::Discharging,
+                level: Some(_percent.saturating_sub(slot as u8)),
+            };
+            crate::split::driver::set_peripheral_battery(id, status);
+        }
+        #[cfg(feature = "split")]
+        Timer::after_millis(1).await;
+    }
+
+    #[test]
+    fn subscribed_profiles_receive_the_latest_central_battery_level_while_idle() {
+        let hci = FakeController::default();
+        let peers = battery_profiles(HOST_A);
+        let battery = crate::config::BleBatteryConfig { enabled: true };
+        with_keyboard_battery(hci.clone(), &peers, battery, async {
+            set_central_level(None);
+            reconnect(&hci, 1, HOST_A).await;
+            let level = hci.characteristic_handle(1, 0x2a19).await;
+            hci.set_notifications(1, level, true).await;
+            assert!(hci.notifications(1, level).is_empty());
+            set_central_level(Some(0));
+            Timer::after_millis(1).await;
+            assert_eq!(hci.notifications(1, level), [[0]]);
+
+            if peers.len() == 2 {
+                reconnect_second_profile(&hci, HOST_A).await;
+                hci.set_notifications(2, level, true).await;
+                assert_eq!(hci.notifications(2, level), [[0]]);
+            }
+
+            MockDriver::get().advance(Duration::from_secs(75));
+            set_central_level(Some(79));
+            publish_event(crate::event::BatteryStatusEvent(BatteryStatus::Available {
+                charge_state: ChargeState::Discharging,
+                level: Some(78),
+            }));
+            Timer::after_millis(1).await;
+            let selected = peers.len() as u16;
+            for link in 1..=selected {
+                assert_eq!(hci.notifications(link, level), [[0], [78]]);
+            }
+
+            hci.set_notifications(selected, level, false).await;
+            set_central_level(Some(77));
+            Timer::after_millis(1).await;
+            assert_eq!(hci.notifications(selected, level), [[0], [78]]);
+            set_central_level(None);
+            hci.set_notifications(selected, level, true).await;
+            assert_eq!(hci.notifications(selected, level), [[0], [78], [77]]);
+            if peers.len() == 2 {
+                assert_eq!(hci.notifications(1, level), [[0], [78], [77]]);
+            }
+
+            let [lo, hi] = hci.characteristic_handle(selected, 0x2a4c).await.to_le_bytes();
+            hci.att_request(selected, &[0x52, lo, hi, 0]); // A reconnect starts a fresh HID session.
+            Timer::after_millis(1).await;
+            let starts = hci.advertising_starts();
+            hci.drop_link(selected);
+            advertising(&hci, starts).await;
+            set_central_level(Some(76));
+            Timer::after_millis(1).await;
+            set_central_level(None);
+            reconnect(&hci, 3, HOST_A).await;
+            Timer::after_millis(1).await;
+            assert_eq!(hci.notifications(3, level), [[76]]);
+        });
     }
 
     #[test]
@@ -1642,6 +1718,122 @@ mod tests {
                 67
             );
             assert!(hci.notifications(1, level).is_empty());
+        });
+    }
+
+    fn standard_battery_count() -> usize {
+        crate::BATTERY_BLE_DESCRIPTIONS
+            .iter()
+            .filter(|(id, _)| !matches!(id, BleBatteryId::Peripheral(_)))
+            .count()
+    }
+
+    #[cfg(feature = "split")]
+    #[test]
+    fn subscribed_peripheral_receives_its_first_battery_level_when_boards_report_together() {
+        if crate::SPLIT_BATTERY_PERIPHERAL_IDS.is_empty() {
+            return;
+        }
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
+            reconnect(&hci, 1, HOST_A).await;
+            let handle = if standard_battery_count() == 2 {
+                hci.read_u8_by_type(1, 1, characteristic::BATTERY_LEVEL.into()).await[1].0
+            } else {
+                let uuid = 0xcd3259e5_a755_4bf0_9f36_690cddccdb51u128.into();
+                hci.read_u8_by_type(1, 1, uuid).await[0].0
+            };
+            hci.set_notifications(1, handle, true).await;
+            set_peripheral_levels(60).await;
+            MockDriver::get().advance(Duration::from_secs(3));
+            Timer::after_millis(1).await;
+            assert_eq!(hci.notifications(1, handle), [[60]]);
+        });
+    }
+
+    #[test]
+    fn hid_suspend_pauses_battery_notifications_only_for_that_host() {
+        let hci = FakeController::default();
+        let peers = battery_profiles(HOST_B);
+        let battery = crate::config::BleBatteryConfig { enabled: true };
+        with_keyboard_battery(hci.clone(), &peers, battery, async {
+            set_central_level(Some(80));
+            set_peripheral_levels(60).await;
+            reconnect(&hci, 1, HOST_A).await;
+            let mut levels = hci.read_u8_by_type(1, 1, characteristic::BATTERY_LEVEL.into()).await;
+            assert_eq!(levels.len(), standard_battery_count());
+            let peripheral_uuid = 0xcd3259e5_a755_4bf0_9f36_690cddccdb51u128.into();
+            for _ in levels.len()..1 + crate::NUM_SPLIT_BATTERY_PERIPHERALS {
+                let next = levels.last().unwrap().0 + 1;
+                levels.push(hci.read_u8_by_type(1, next, peripheral_uuid).await[0]);
+            }
+            for (index, &(level, percent)) in levels.iter().enumerate() {
+                let format = hci
+                    .read_by_type(1, level + 1, descriptors::CHARACTERISTIC_PRESENTATION_FORMAT.into())
+                    .await;
+                let description = match crate::BATTERY_BLE_DESCRIPTIONS[index].0 {
+                    BleBatteryId::Central => 0x0106,
+                    BleBatteryId::Left => 0x010D,
+                    BleBatteryId::Right => 0x010E,
+                    BleBatteryId::Peripheral(id) => u16::from(id) + 1,
+                };
+                assert_eq!(u16::from_le_bytes([format[8], format[9]]), description);
+                assert_eq!(
+                    percent,
+                    if index == 0 {
+                        80
+                    } else {
+                        61u8.saturating_sub(index as u8)
+                    }
+                );
+                hci.set_notifications(1, level, true).await;
+            }
+            let [lo, hi] = hci.characteristic_handle(1, 0x2a4c).await.to_le_bytes();
+            let input = hci.characteristic_handle(1, 0x2a4d).await;
+            hci.set_notifications(1, input, true).await;
+            if peers.len() == 2 {
+                reconnect_second_profile(&hci, HOST_B).await;
+                for &(level, _) in &levels {
+                    hci.set_notifications(2, level, true).await;
+                }
+            }
+
+            let transport = crate::state::current_connection_status();
+            for (step, resume_with_input) in [false, true].into_iter().enumerate() {
+                hci.att_request(1, &[0x52, lo, hi, 0]); // HID Suspend
+                Timer::after_millis(1).await;
+                hci.set_notifications(1, input, false).await;
+                hci.set_notifications(1, levels[0].0, true).await;
+                let delta = 1 + step as u8;
+                set_central_level(Some(80 - delta));
+                set_peripheral_levels(60 - delta).await;
+                for &(level, initial) in &levels {
+                    let expected = initial.saturating_sub(delta);
+                    let [lo, hi] = level.to_le_bytes();
+                    assert_eq!(hci.att_exchange(1, &[0x0a, lo, hi], 0x0b).await, [expected]);
+                    assert_eq!(hci.notifications(1, level).len(), 1 + step);
+                    if peers.len() == 2 {
+                        let reports = hci.notifications(2, level);
+                        assert_eq!(reports.len(), 2 + step);
+                        assert_eq!(reports.last().unwrap(), &[expected]);
+                    }
+                }
+                assert_eq!(crate::state::current_connection_status(), transport);
+                set_central_level(None);
+                if resume_with_input {
+                    hci.set_notifications(1, input, true).await;
+                } else {
+                    hci.att_request(1, &[0x52, lo, hi, 1]); // Exit Suspend
+                    Timer::after_millis(1).await;
+                }
+                hci.att_request(1, &[0x52, lo, hi, 1]); // A duplicate resume must not replay a second time.
+                Timer::after_millis(1).await;
+                for &(level, initial) in &levels {
+                    let reports = hci.notifications(1, level);
+                    assert_eq!(reports.len(), 2 + step);
+                    assert_eq!(reports.last().unwrap(), &[initial.saturating_sub(delta)]);
+                }
+            }
         });
     }
 

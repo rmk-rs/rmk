@@ -1,31 +1,31 @@
 use core::cell::Cell;
-use core::sync::atomic::Ordering;
 
-use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_time::{Duration, Instant, Timer, with_timeout};
+use embassy_time::Timer;
 use rmk_types::battery::{BatteryStatus, BleBatteryId};
 use trouble_host::prelude::*;
 
-use super::ble_server::Server;
-use crate::core_traits::Runnable;
 #[cfg(feature = "split")]
 use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
-use crate::keyboard::LAST_KEY_TIMESTAMP;
-use crate::sleep::SLEEPING_STATE;
 
 const PERIPHERAL_BATTERY_SERVICE_UUID: u128 = 0x061686b6_6a06_4d02_8a8f_c514225bbdb3;
 const PERIPHERAL_BATTERY_LEVEL_UUID: u128 = 0xcd3259e5_a755_4bf0_9f36_690cddccdb51;
 
 /// Battery services in handle order, starting with the central on every profile.
 pub(super) struct BatteryServices {
+    pub(super) central_notifications: bool,
     levels: [BatteryLevel; BatteryServices::CCCD_COUNT],
 }
 
 struct BatteryLevel {
     value: Characteristic<u8>,
     last_percent: Cell<Option<u8>>,
+}
+
+pub(super) enum LinkChange {
+    SubscriptionWritten(usize),
+    Resumed,
 }
 
 impl BatteryServices {
@@ -76,13 +76,17 @@ impl BatteryServices {
                 last_percent: Cell::new(None),
             }
         });
-        Self { levels }
+        Self {
+            levels,
+            central_notifications: true,
+        }
     }
 
-    pub(super) fn by_cccd(&self, handle: u16) -> Option<usize> {
+    pub(super) fn subscription_write(&self, handle: u16) -> Option<LinkChange> {
         self.levels
             .iter()
             .position(|battery| battery.value.cccd_handle == Some(handle))
+            .map(LinkChange::SubscriptionWritten)
     }
 
     /// Keep one readable value per battery, including while notifications are disabled.
@@ -124,128 +128,79 @@ impl BatteryServices {
         central.await;
     }
 
-    /// Send the configured split batteries' levels to this connection.
-    #[cfg(feature = "split")]
-    pub(super) async fn notify_peripherals<P: PacketPool>(&self, conn: &GattConnection<'_, '_, P>) {
-        let ids = &crate::SPLIT_BATTERY_PERIPHERAL_IDS;
-        if ids.is_empty() {
-            return;
+    async fn notify_current(
+        &self,
+        conn: &GattConnection<'_, '_, impl PacketPool>,
+        profile: u8,
+        slot: usize,
+    ) -> Result<(), Error> {
+        let battery = &self.levels[slot];
+        if crate::state::ble_hid_active(profile)
+            && (slot != 0 || self.central_notifications)
+            && let Some(level) = battery.last_percent.get()
+            && let Err(e) = battery.value.notify(conn, &level, false).await
+        {
+            warn!("Failed to notify battery handle {}: {:?}", battery.value.handle, e);
+            return Err(e);
         }
+        Ok(())
+    }
 
-        let mut changes = PeripheralBatteryEvent::subscriber();
-        // Wait for the GATT server to be ready before sending the initial levels.
-        Timer::after_secs(2).await;
-
-        // Drain queued events before reading the latest levels from the cache.
-        while changes.try_next_message_pure().is_some() {}
-        for (battery, &id) in self.levels[1..].iter().zip(ids) {
-            if let Some(BatteryStatus::Available { level: Some(level), .. }) =
-                crate::split::driver::current_peripheral_battery_status(id)
-                && let Err(e) = battery.value.notify(conn, &level, false).await
-            {
-                error!("Failed to notify initial peripheral {} battery level: {:?}", id, e);
-            }
-        }
-
-        loop {
-            let id = changes.next_message_pure().await.id;
-            if let Some(slot) = ids.iter().position(|&peripheral_id| peripheral_id == id)
-                && let Some(BatteryStatus::Available { level: Some(level), .. }) =
-                    crate::split::driver::current_peripheral_battery_status(id)
-                && let Err(e) = self.levels[slot + 1].value.notify(conn, &level, false).await
-            {
-                error!("Failed to notify peripheral {} battery level: {:?}", id, e);
-            }
+    pub(super) async fn on_link_change(
+        &self,
+        conn: &GattConnection<'_, '_, impl PacketPool>,
+        profile: u8,
+        change: LinkChange,
+    ) {
+        let slots = match change {
+            LinkChange::SubscriptionWritten(slot) => slot..slot + 1,
+            LinkChange::Resumed => 0..self.levels.len(),
+        };
+        for slot in slots {
+            let _ = self.notify_current(conn, profile, slot).await;
         }
     }
-}
 
-pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
-    battery_level: Characteristic<u8>,
-    conn: &'conn GattConnection<'stack, 'server, P>,
-    sub: <BatteryStatusEvent as SubscribableEvent>::Subscriber,
-}
-
-impl<'stack, 'server, 'conn, P: PacketPool> BleBatteryServer<'stack, 'server, 'conn, P> {
-    pub(crate) fn new(server: &Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
-        Self {
-            battery_level: server.batteries.levels[0].value,
-            conn,
-            sub: BatteryStatusEvent::subscriber(),
-        }
-    }
-}
-
-impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
-    async fn run(&mut self) -> ! {
-        let mut last_key = LAST_KEY_TIMESTAMP
-            .receiver()
-            .expect("battery activity receiver slots exhausted");
-
-        // Wait 2 seconds, ensure that gatt server has been started
-        Timer::after_secs(2).await;
-
-        // First report after connected.
-        //
-        // Prefer the cached status from the processor — that way a host that
-        // connects after the level has already stabilized (battery clamped at
-        // 100%, no recent key activity, etc.) doesn't have to wait for a state
-        // change to learn the level. If the cache is empty, fall through to
-        // waiting on the event stream.
-        let first_report = async {
-            if let BatteryStatus::Available { level: Some(level), .. } =
-                crate::input_device::battery::current_battery_status()
-                && self.battery_level.notify(self.conn, &level, false).await.is_ok()
-            {
+    pub(super) async fn report_changes(&self, conn: &GattConnection<'_, '_, impl PacketPool>, profile: u8) {
+        let central = async {
+            if !self.central_notifications {
                 return;
             }
+            let mut changes = BatteryStatusEvent::subscriber();
             loop {
-                let mut state = self.sub.next_message_pure().await;
-                while let Some(newer) = self.sub.try_next_message_pure() {
-                    state = newer;
+                while changes.try_next_message_pure().is_some() {}
+                if self.notify_current(conn, profile, 0).await.is_err() {
+                    Timer::after_secs(2).await;
+                    continue;
                 }
-                if let BatteryStatus::Available { level: Some(level), .. } = state.0 {
-                    if let Err(e) = self.battery_level.notify(self.conn, &level, false).await {
-                        error!("Failed to notify battery level: {:?}", e);
-                    } else {
-                        // The first report is sent, return to continue
-                        return;
-                    }
-                }
-                embassy_time::Timer::after_secs(2).await;
+                while !matches!(
+                    changes.next_message_pure().await.0,
+                    BatteryStatus::Available { level: Some(_), .. }
+                ) {}
             }
         };
-
-        // Try to do the first battery report in 30 seconds
-        with_timeout(Duration::from_secs(30), first_report).await.ok();
-
-        // Hold each battery change until the keyboard is in use: a key press within the last
-        // minute, the next key press, or 30 awake minutes. Every link wakes on the same change
-        // and sends the same cached level, so hosts on different profiles agree.
-        loop {
-            self.sub.next_message_pure().await;
-            // `try_get` marks the latest press as seen, so `changed` waits for a new one.
-            let idle = last_key
-                .try_get()
-                .is_none_or(|last_press| (Instant::now().as_secs() as u32).saturating_sub(last_press) >= 60);
-            if idle {
-                let awake_timeout = async {
-                    loop {
-                        Timer::after_secs(1800).await;
-                        if !SLEEPING_STATE.load(Ordering::Acquire) {
-                            break;
-                        }
+        #[cfg(feature = "split")]
+        let central = embassy_futures::join::join(central, async {
+            let ids = &crate::SPLIT_BATTERY_PERIPHERAL_IDS;
+            if ids.is_empty() {
+                return;
+            }
+            let mut changes = PeripheralBatteryEvent::subscriber();
+            loop {
+                for slot in 1..self.levels.len() {
+                    let _ = self.notify_current(conn, profile, slot).await;
+                }
+                while let embassy_sync::pubsub::WaitResult::Message(event) = changes.next_message().await {
+                    if matches!(event.state.0, BatteryStatus::Available { level: Some(_), .. })
+                        && let Some(slot) = ids.iter().position(|&id| id == event.id)
+                    {
+                        let _ = self.notify_current(conn, profile, slot + 1).await;
                     }
-                };
-                select(awake_timeout, last_key.changed()).await;
+                }
+                // A lagged subscriber has lost board IDs. Replay the current values for this link.
+                while changes.try_next_message_pure().is_some() {}
             }
-            while self.sub.try_next_message_pure().is_some() {}
-            if let BatteryStatus::Available { level: Some(level), .. } =
-                crate::input_device::battery::current_battery_status()
-                && let Err(e) = self.battery_level.notify(self.conn, &level, false).await
-            {
-                error!("Failed to notify battery level: {:?}", e);
-            }
-        }
+        });
+        central.await;
     }
 }
