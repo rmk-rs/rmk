@@ -23,10 +23,6 @@ impl<'a> HostConnection<'a> {
         }
     }
 
-    pub(crate) fn owns_handle(&self, handle: u16) -> bool {
-        self.hid.handle_range().contains(&handle)
-    }
-
     pub(crate) async fn handle_write(&self, handle: u16, data: &[u8]) -> bool {
         if handle != self.hid.output_data.handle {
             return false;
@@ -105,7 +101,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classifies_vial_gatt_handles() {
+    fn routes_vial_gatt_writes() {
         use crate::test_support::test_block_on as block_on;
 
         let server = Server::new_default("rmk").unwrap();
@@ -115,9 +111,6 @@ mod tests {
             handler.handle_write(server.vial_service.output_data.handle, &packet)
         ));
         assert_eq!(handler.incoming.try_receive().unwrap(), packet);
-        assert!(handler.owns_handle(server.vial_service.input_data.cccd_handle.unwrap()));
-        assert!(handler.owns_handle(server.vial_service.hid_control_point.handle));
-        assert!(!handler.owns_handle(server.hid_service.input_keyboard.cccd_handle.unwrap()));
         assert!(!block_on(handler.handle_write(u16::MAX, &[])));
     }
 }

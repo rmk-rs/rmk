@@ -828,8 +828,14 @@ async fn gatt_events_task(
                         let data = &data_buf[..data_len.min(data_buf.len())];
                         let uuid = server.table().uuid(handle);
                         let host_handle = server.hid_service.handle_range().contains(&handle);
-                        #[cfg(feature = "host")]
-                        let host_handle = host_handle || host.is_some_and(|host| host.owns_handle(handle));
+                        #[cfg(feature = "vial")]
+                        let host_handle =
+                            host_handle || (host.is_some() && server.vial_service.handle_range().contains(&handle));
+                        #[cfg(feature = "rynk")]
+                        let host_handle = host_handle
+                            || (host.is_some()
+                                && (server.rynk_service.handle_range().contains(&handle)
+                                    || server.rynk_hid_service.handle_range().contains(&handle)));
 
                         if handle == output_keyboard.handle {
                             if data_len == 1 {

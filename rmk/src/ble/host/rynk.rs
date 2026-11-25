@@ -32,10 +32,6 @@ impl<'a> HostConnection<'a> {
         }
     }
 
-    pub(crate) fn owns_handle(&self, handle: u16) -> bool {
-        self.custom.handle_range().contains(&handle) || self.hid.handle_range().contains(&handle)
-    }
-
     pub(crate) async fn handle_write(&self, handle: u16, data: &[u8]) -> bool {
         let hid = handle == self.hid.output_data.handle;
         if !hid && handle != self.custom.output_data.handle {
@@ -108,7 +104,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classifies_rynk_gatt_handles() {
+    fn routes_rynk_gatt_writes() {
         use crate::test_support::test_block_on as block_on;
 
         let server = Server::new_default("rmk").unwrap();
@@ -122,14 +118,6 @@ mod tests {
             handler.handle_write(server.rynk_service.output_data.handle, &[1])
         ));
         assert!(!handler.reply_over_hid.get());
-        for handle in [
-            server.rynk_service.input_data.cccd_handle.unwrap(),
-            server.rynk_hid_service.input_data.cccd_handle.unwrap(),
-            server.rynk_hid_service.hid_control_point.handle,
-        ] {
-            assert!(handler.owns_handle(handle));
-        }
-        assert!(!handler.owns_handle(server.hid_service.input_keyboard.cccd_handle.unwrap()));
         assert!(!block_on(handler.handle_write(u16::MAX, &[])));
     }
 
