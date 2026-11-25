@@ -31,8 +31,6 @@ use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 use crate::TOTAL_BLE_PROFILES;
 use crate::ble::adv::{Adv, advertise};
 use crate::ble::battery_service::BleBatteryServer;
-#[cfg(feature = "split")]
-use crate::ble::battery_service::BlePeripheralBatteryServer;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
 #[cfg(feature = "host")]
@@ -1107,10 +1105,6 @@ async fn serve_keyboard_connection<
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
-    #[cfg(feature = "split")]
-    let mut ble_peripheral_battery_server = crate::SPLIT_BATTERY_PERIPHERAL_IDS
-        .first()
-        .map(|_| BlePeripheralBatteryServer::new(server, conn));
 
     // `use_1m_phy` exists for legacy host adapters that cannot do 2M.
     // Always use 2M for the dongle link.
@@ -1126,7 +1120,7 @@ async fn serve_keyboard_connection<
     #[cfg(not(feature = "split"))]
     let battery_task = ble_battery_server.run();
     #[cfg(feature = "split")]
-    let battery_task = embassy_futures::join::join(ble_battery_server.run(), ble_peripheral_battery_server.run());
+    let battery_task = embassy_futures::join::join(ble_battery_server.run(), server.batteries.notify_peripherals(conn));
 
     // A PHY request sent while the link is still being set up races the controller's own
     // link-layer setup, so wait until the connection reports itself ready.

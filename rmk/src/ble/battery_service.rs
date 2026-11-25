@@ -123,6 +123,41 @@ impl BatteryServices {
         });
         central.await;
     }
+
+    /// Send the configured split batteries' levels to this connection.
+    #[cfg(feature = "split")]
+    pub(super) async fn notify_peripherals<P: PacketPool>(&self, conn: &GattConnection<'_, '_, P>) {
+        let ids = &crate::SPLIT_BATTERY_PERIPHERAL_IDS;
+        if ids.is_empty() {
+            return;
+        }
+
+        let mut changes = PeripheralBatteryEvent::subscriber();
+        // Wait for the GATT server to be ready before sending the initial levels.
+        Timer::after_secs(2).await;
+
+        // Drain queued events before reading the latest levels from the cache.
+        while changes.try_next_message_pure().is_some() {}
+        for (battery, &id) in self.levels[1..].iter().zip(ids) {
+            if let Some(BatteryStatus::Available { level: Some(level), .. }) =
+                crate::split::driver::current_peripheral_battery_status(id)
+                && let Err(e) = battery.value.notify(conn, &level, false).await
+            {
+                error!("Failed to notify initial peripheral {} battery level: {:?}", id, e);
+            }
+        }
+
+        loop {
+            let id = changes.next_message_pure().await.id;
+            if let Some(slot) = ids.iter().position(|&peripheral_id| peripheral_id == id)
+                && let Some(BatteryStatus::Available { level: Some(level), .. }) =
+                    crate::split::driver::current_peripheral_battery_status(id)
+                && let Err(e) = self.levels[slot + 1].value.notify(conn, &level, false).await
+            {
+                error!("Failed to notify peripheral {} battery level: {:?}", id, e);
+            }
+        }
+    }
 }
 
 pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
@@ -210,68 +245,6 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
                 && let Err(e) = self.battery_level.notify(self.conn, &level, false).await
             {
                 error!("Failed to notify battery level: {:?}", e);
-            }
-        }
-    }
-}
-
-/// GATT server task that exposes a peripheral's battery level over BLE.
-///
-/// Subscribes to [`PeripheralBatteryEvent`] (published by the split driver
-/// when the peripheral reports its battery via the split BLE link) and
-/// notifies the matching peripheral battery characteristic so the host can
-/// read it the same way it reads the central's level.
-#[cfg(feature = "split")]
-pub(crate) struct BlePeripheralBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
-    battery_levels: [Characteristic<u8>; crate::NUM_SPLIT_BATTERY_PERIPHERALS],
-    conn: &'conn GattConnection<'stack, 'server, P>,
-    sub: <PeripheralBatteryEvent as SubscribableEvent>::Subscriber,
-}
-
-#[cfg(feature = "split")]
-impl<'stack, 'server, 'conn, P: PacketPool> BlePeripheralBatteryServer<'stack, 'server, 'conn, P> {
-    pub(crate) fn new(server: &Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
-        let sub = PeripheralBatteryEvent::subscriber();
-
-        Self {
-            battery_levels: core::array::from_fn(|slot| server.batteries.levels[slot + 1].value),
-            conn,
-            sub,
-        }
-    }
-}
-
-#[cfg(feature = "split")]
-impl<P: PacketPool> Runnable for BlePeripheralBatteryServer<'_, '_, '_, P> {
-    async fn run(&mut self) -> ! {
-        // Wait for the GATT server to be ready before pushing notifications.
-        Timer::after_secs(2).await;
-
-        // The subscriber is created before this snapshot, so discarding queued
-        // events and then reading the cache cannot miss a newer value.
-        while self.sub.try_next_message_pure().is_some() {}
-        for (slot, peripheral_id) in crate::SPLIT_BATTERY_PERIPHERAL_IDS.iter().copied().enumerate() {
-            if let Some(BatteryStatus::Available { level: Some(level), .. }) =
-                crate::split::driver::current_peripheral_battery_status(peripheral_id)
-                && let Err(e) = self.battery_levels[slot].notify(self.conn, &level, false).await
-            {
-                error!(
-                    "Failed to set initial peripheral {} battery level: {:?}",
-                    peripheral_id, e
-                );
-            }
-        }
-
-        loop {
-            let event = self.sub.next_message_pure().await;
-            if let Some(slot) = crate::SPLIT_BATTERY_PERIPHERAL_IDS
-                .iter()
-                .position(|&id| id == event.id)
-                && let Some(BatteryStatus::Available { level: Some(level), .. }) =
-                    crate::split::driver::current_peripheral_battery_status(event.id)
-                && let Err(e) = self.battery_levels[slot].notify(self.conn, &level, false).await
-            {
-                error!("Failed to notify peripheral {} battery level: {:?}", event.id, e);
             }
         }
     }
