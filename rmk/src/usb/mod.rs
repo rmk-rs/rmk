@@ -645,11 +645,11 @@ pub(crate) struct UsbRequestHandler<const COMPOSITE: bool>;
 impl<const COMPOSITE: bool> RequestHandler for UsbRequestHandler<COMPOSITE> {
     #[cfg(feature = "hires_scroll")]
     fn get_report(&mut self, id: ReportId, buf: &mut [u8]) -> Option<usize> {
-        use crate::hid::{RESOLUTION_MULTIPLIER_REPORT_ID, resolution_multipliers, unpack_resolution_multipliers};
+        use crate::hid::{RESOLUTION_MULTIPLIER_REPORT_ID, USB_SCROLL_MULTIPLIERS};
         if !COMPOSITE || id != ReportId::Feature(RESOLUTION_MULTIPLIER_REPORT_ID) || buf.len() < 3 {
             return None;
         }
-        let [wheel, pan] = unpack_resolution_multipliers(resolution_multipliers(ConnectionType::Usb));
+        let [wheel, pan] = USB_SCROLL_MULTIPLIERS.get();
         buf[..3].copy_from_slice(&[RESOLUTION_MULTIPLIER_REPORT_ID, wheel, pan]);
         Some(3)
     }
@@ -657,22 +657,15 @@ impl<const COMPOSITE: bool> RequestHandler for UsbRequestHandler<COMPOSITE> {
     fn set_report(&mut self, id: ReportId, data: &[u8]) -> OutResponse {
         #[cfg(feature = "hires_scroll")]
         if let ReportId::Feature(report_id) = id {
-            use crate::hid::{
-                RESOLUTION_MULTIPLIER_REPORT_ID, pack_resolution_multipliers, set_resolution_multipliers,
-            };
+            use crate::hid::{RESOLUTION_MULTIPLIER_REPORT_ID, USB_SCROLL_MULTIPLIERS};
             // A numbered report's control transfer carries its id first (HID 1.11 §8.1).
             return match data {
                 &[RESOLUTION_MULTIPLIER_REPORT_ID, wheel, pan]
-                    if COMPOSITE && report_id == RESOLUTION_MULTIPLIER_REPORT_ID =>
+                    if COMPOSITE
+                        && report_id == RESOLUTION_MULTIPLIER_REPORT_ID
+                        && USB_SCROLL_MULTIPLIERS.set([wheel, pan]) =>
                 {
-                    match pack_resolution_multipliers([wheel, pan]) {
-                        Some(packed) => {
-                            info!("USB host set scroll resolution multipliers: {:?}", [wheel, pan]);
-                            set_resolution_multipliers(ConnectionType::Usb, packed);
-                            OutResponse::Accepted
-                        }
-                        None => OutResponse::Rejected,
-                    }
+                    OutResponse::Accepted
                 }
                 _ => OutResponse::Rejected,
             };
@@ -728,7 +721,7 @@ impl Handler for UsbDeviceHandler {
     fn reset(&mut self) {
         BOOT_MODE.store(false, Ordering::Relaxed);
         #[cfg(feature = "hires_scroll")]
-        crate::hid::set_resolution_multipliers(ConnectionType::Usb, 0);
+        crate::hid::USB_SCROLL_MULTIPLIERS.reset();
         self.pre_suspend = UsbState::Enabled;
         set_usb_state(UsbState::Enabled);
         info!("Bus reset, the Vbus current limit is 100mA");
@@ -921,10 +914,9 @@ mod resolution_multiplier_tests {
     use embassy_usb::class::hid::ReportId;
     use embassy_usb::class::hid::device::RequestHandler;
     use embassy_usb::control::OutResponse;
-    use rmk_types::connection::ConnectionType;
 
     use super::{UsbDeviceHandler, UsbRequestHandler};
-    use crate::hid::{RESOLUTION_MULTIPLIER_REPORT_ID as ID, resolution_multipliers};
+    use crate::hid::{RESOLUTION_MULTIPLIER_REPORT_ID as ID, USB_SCROLL_MULTIPLIERS};
 
     const FEATURE: ReportId = ReportId::Feature(ID);
 
@@ -938,10 +930,10 @@ mod resolution_multiplier_tests {
         assert_eq!(handler.set_report(FEATURE, &[ID, 1, 0]), OutResponse::Accepted);
         assert_eq!(handler.get_report(FEATURE, &mut buf), Some(3));
         assert_eq!(buf[..3], [ID, 1, 0]);
-        assert_eq!(resolution_multipliers(ConnectionType::Usb), 0b01);
+        assert_eq!(USB_SCROLL_MULTIPLIERS.get(), [1, 0]);
 
         UsbDeviceHandler::new().reset();
-        assert_eq!(resolution_multipliers(ConnectionType::Usb), 0);
+        assert_eq!(USB_SCROLL_MULTIPLIERS.get(), [0, 0]);
     }
 
     #[test]
@@ -949,7 +941,7 @@ mod resolution_multiplier_tests {
         let mut handler = UsbRequestHandler::<false>;
         assert_eq!(handler.set_report(FEATURE, &[ID, 1, 1]), OutResponse::Rejected);
         assert_eq!(handler.get_report(FEATURE, &mut [0; 3]), None);
-        assert_eq!(resolution_multipliers(ConnectionType::Usb), 0);
+        assert_eq!(USB_SCROLL_MULTIPLIERS.get(), [0, 0]);
     }
 
     #[test]
@@ -962,6 +954,6 @@ mod resolution_multiplier_tests {
             handler.set_report(ReportId::Feature(0x06), &[0x06, 1, 1]),
             OutResponse::Rejected
         );
-        assert_eq!(resolution_multipliers(ConnectionType::Usb), 0);
+        assert_eq!(USB_SCROLL_MULTIPLIERS.get(), [0, 0]);
     }
 }

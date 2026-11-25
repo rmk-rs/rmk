@@ -1674,7 +1674,7 @@ mod tests {
     #[test]
     fn test_scroll_follows_the_host_resolution_per_axis() {
         use rmk_types::action::KeyAction;
-        use rmk_types::connection::{ConnectionType, UsbState};
+        use rmk_types::connection::UsbState;
 
         use crate::channel::USB_REPORT_CHANNEL;
         use crate::config::{BehaviorConfig, PositionalConfig};
@@ -1709,7 +1709,7 @@ mod tests {
             crate::state::set_usb_state(UsbState::Configured);
             USB_REPORT_CHANNEL.clear();
             // The host enabled the wheel's multiplier only.
-            crate::hid::set_resolution_multipliers(ConnectionType::Usb, 0b01);
+            assert!(crate::hid::USB_SCROLL_MULTIPLIERS.set([1, 0]));
             let mut behavior = BehaviorConfig::default();
             let positional: PositionalConfig<1, 1> = PositionalConfig::default();
             let mut data: KeymapData<1, 1, 1, 0> = KeymapData::new([[[KeyAction::No]]]);
@@ -1722,7 +1722,7 @@ mod tests {
             processor.on_pointing_event(scroll(7, 0)).await;
             assert_eq!(wheel_and_pan(USB_REPORT_CHANNEL.try_receive().unwrap()), (0, 1));
 
-            crate::hid::set_resolution_multipliers(ConnectionType::Usb, 0);
+            crate::hid::USB_SCROLL_MULTIPLIERS.reset();
         });
     }
 

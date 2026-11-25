@@ -112,31 +112,38 @@ impl Server<'_> {
         })
     }
 
-    pub(crate) fn prepare_name_read(&self, event: &GattEvent<'_, '_, DefaultPacketPool>, slot: u8) {
-        let [name] = self.profile_name.characteristic.as_slice() else {
-            return;
-        };
-        let uuid = Uuid::from(characteristic::DEVICE_NAME);
-        let reads_name = match event {
-            GattEvent::Read(read) => read.handle() == name.handle,
+    pub(crate) fn prepare_profile_read(&self, event: &GattEvent<'_, '_, DefaultPacketPool>, slot: u8) {
+        let reads = |handle, uuid: Uuid| match event {
+            GattEvent::Read(read) => read.handle() == handle,
             GattEvent::Other(other) => match other.payload().incoming() {
                 AttClient::Request(AttReq::ReadByType {
                     attribute_type,
                     start,
                     end,
-                }) => attribute_type == uuid && (start..=end).contains(&name.handle),
+                }) => attribute_type == uuid && (start..=end).contains(&handle),
                 AttClient::Request(AttReq::FindByTypeValue {
                     att_type,
                     start_handle,
                     end_handle,
                     ..
-                }) => Uuid::from(att_type) == uuid && (start_handle..=end_handle).contains(&name.handle),
+                }) => Uuid::from(att_type) == uuid && (start_handle..=end_handle).contains(&handle),
                 _ => false,
             },
             _ => false,
         };
-        if reads_name && let Some(value) = self.profile_name(slot).first() {
+        if let [name] = self.profile_name.characteristic.as_slice()
+            && reads(name.handle, characteristic::DEVICE_NAME.into())
+            && let Some(value) = self.profile_name(slot).first()
+        {
             unwrap!(self.set(name, value));
+        }
+
+        #[cfg(feature = "hires_scroll")]
+        {
+            let report = &self.hid_service.resolution_multipliers;
+            if reads(report.handle, Uuid::new_short(0x2a4d)) {
+                unwrap!(self.set(report, &crate::hid::BLE_SCROLL_MULTIPLIERS[slot as usize].get()));
+            }
         }
     }
 }

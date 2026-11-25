@@ -202,9 +202,9 @@ pub struct MouseReport {
     pub buttons: u8, // MouseButtons
     pub x: i16,
     pub y: i16,
-    /// Scroll down (negative) or up (positive) this many units
+    /// Scroll down (negative) or up (positive) in wheel units from [`scroll_resolution`].
     pub wheel: i16,
-    /// Scroll left (negative) or right (positive) this many units
+    /// Scroll left (negative) or right (positive) in pan units from [`scroll_resolution`].
     pub pan: i16,
 }
 
@@ -434,45 +434,58 @@ pub(crate) const RESOLUTION_MULTIPLIER_REPORT_ID: u8 = 0x05;
 #[cfg(feature = "hires_scroll")]
 const RESOLUTION_MULTIPLIER: i16 = 120;
 
-/// The Resolution Multiplier feature values the USB and the BLE host set, as `[wheel, pan]`
-/// bits 0 and 1. Zero until a host enables high-resolution scrolling.
+/// The two one-bit logical values from one host's wheel and pan Feature report.
 #[cfg(feature = "hires_scroll")]
-static RESOLUTION_MULTIPLIERS: [core::sync::atomic::AtomicU8; 2] = [
-    core::sync::atomic::AtomicU8::new(0),
-    core::sync::atomic::AtomicU8::new(0),
-];
-
-/// Packs a `[wheel, pan]` feature payload, or `None` when a value is outside its 0..=1 range.
-#[cfg(feature = "hires_scroll")]
-pub(crate) fn pack_resolution_multipliers([wheel, pan]: [u8; 2]) -> Option<u8> {
-    (wheel <= 1 && pan <= 1).then_some(wheel | (pan << 1))
-}
-
-/// The `[wheel, pan]` feature payload for packed multipliers.
-#[cfg(feature = "hires_scroll")]
-pub(crate) fn unpack_resolution_multipliers(packed: u8) -> [u8; 2] {
-    [packed & 1, (packed >> 1) & 1]
-}
+pub(crate) struct ScrollMultipliers(core::sync::atomic::AtomicU8);
 
 #[cfg(feature = "hires_scroll")]
-pub(crate) fn resolution_multipliers(transport: ConnectionType) -> u8 {
-    RESOLUTION_MULTIPLIERS[transport as usize].load(Ordering::Relaxed)
-}
-
-#[cfg(feature = "hires_scroll")]
-pub(crate) fn set_resolution_multipliers(transport: ConnectionType, packed: u8) {
-    RESOLUTION_MULTIPLIERS[transport as usize].store(packed, Ordering::Relaxed);
-}
-
-/// Wheel and pan units per detent that the host receiving reports expects: 1 unless
-/// it enabled high-resolution scrolling. Scroll producers multiply detents by these.
-pub(crate) fn scroll_resolution() -> (i16, i16) {
-    #[cfg(feature = "hires_scroll")]
-    if let Some(transport) = crate::state::active_transport() {
-        let [wheel, pan] = unpack_resolution_multipliers(resolution_multipliers(transport));
-        let units = |enabled: u8| if enabled == 1 { RESOLUTION_MULTIPLIER } else { 1 };
-        return (units(wheel), units(pan));
+impl ScrollMultipliers {
+    const fn new() -> Self {
+        Self(core::sync::atomic::AtomicU8::new(0))
     }
+
+    pub(crate) fn get(&self) -> [u8; 2] {
+        let bits = self.0.load(Ordering::Relaxed);
+        [bits & 1, (bits >> 1) & 1]
+    }
+
+    pub(crate) fn set(&self, [wheel, pan]: [u8; 2]) -> bool {
+        if wheel > 1 || pan > 1 {
+            return false;
+        }
+        self.0.store(wheel | (pan << 1), Ordering::Relaxed);
+        true
+    }
+
+    pub(crate) fn reset(&self) {
+        self.0.store(0, Ordering::Relaxed);
+    }
+}
+
+#[cfg(all(feature = "hires_scroll", not(feature = "_no_usb")))]
+pub(crate) static USB_SCROLL_MULTIPLIERS: ScrollMultipliers = ScrollMultipliers::new();
+
+#[cfg(all(feature = "hires_scroll", feature = "_ble"))]
+pub(crate) static BLE_SCROLL_MULTIPLIERS: [ScrollMultipliers; crate::TOTAL_BLE_PROFILES] =
+    [const { ScrollMultipliers::new() }; crate::TOTAL_BLE_PROFILES];
+
+/// Wheel and pan report units per detent for the active host, in that order.
+/// Each value is 1 until the host enables high-resolution scrolling on that axis.
+pub fn scroll_resolution() -> (i16, i16) {
+    #[cfg(feature = "hires_scroll")]
+    {
+        let [wheel, pan] = match crate::state::active_transport() {
+            #[cfg(not(feature = "_no_usb"))]
+            Some(ConnectionType::Usb) => USB_SCROLL_MULTIPLIERS.get(),
+            #[cfg(feature = "_ble")]
+            Some(ConnectionType::Ble) => BLE_SCROLL_MULTIPLIERS[crate::state::current_profile() as usize].get(),
+            _ => [0, 0],
+        };
+        let units = |enabled: u8| if enabled == 1 { RESOLUTION_MULTIPLIER } else { 1 };
+        (units(wheel), units(pan))
+    }
+
+    #[cfg(not(feature = "hires_scroll"))]
     (1, 1)
 }
 
