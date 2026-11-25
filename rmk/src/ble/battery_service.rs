@@ -29,20 +29,14 @@ struct BatteryLevel {
 }
 
 impl BatteryServices {
-    // Rynk can enable rmk-types/split independently of RMK's split feature.
-    pub(super) const CCCD_COUNT: usize = if cfg!(feature = "split") {
-        crate::BATTERY_BLE_DESCRIPTIONS.len()
-    } else {
-        1
-    };
+    pub(super) const CCCD_COUNT: usize = crate::BATTERY_BLE_DESCRIPTIONS.len();
     pub(super) const ATTRIBUTE_COUNT: usize = 7 * Self::CCCD_COUNT;
 
     pub(super) fn new<const MAX: usize>(table: &mut AttributeTable<'_, NoopRawMutex, MAX>) -> Self {
-        let descriptions: &[_; Self::CCCD_COUNT] = const { crate::BATTERY_BLE_DESCRIPTIONS.first_chunk().unwrap() };
-        let levels = descriptions.map(|(battery_id, user_description)| {
+        let levels = crate::BATTERY_BLE_DESCRIPTIONS.map(|(battery_id, user_description)| {
             let standard_service = service::BATTERY.into();
             let standard_level = characteristic::BATTERY_LEVEL.into();
-            let (service_uuid, level_uuid, description): (Uuid, Uuid, u16) = match battery_id {
+            let (service_uuid, ch_uuid, description): (Uuid, Uuid, u16) = match battery_id {
                 BleBatteryId::Central => (standard_service, standard_level, 0x0106),
                 BleBatteryId::Left => (standard_service, standard_level, 0x010D),
                 BleBatteryId::Right => (standard_service, standard_level, 0x010E),
@@ -54,7 +48,7 @@ impl BatteryServices {
             };
             let mut service = table.add_service(Service::new(service_uuid));
             let mut level = service
-                .add_characteristic_small(level_uuid, [CharacteristicProp::Read, CharacteristicProp::Notify], 0u8)
+                .add_characteristic_small(ch_uuid, [CharacteristicProp::Read, CharacteristicProp::Notify], 0u8)
                 .read_permission(PermissionLevel::EncryptionRequired);
             let [lo, hi] = description.to_le_bytes();
             level.add_descriptor_small(

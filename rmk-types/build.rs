@@ -101,15 +101,15 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     };
     let battery_names =
         std::iter::once(&bc.central_battery_user_description).chain(&bc.split_battery_peripheral_user_descriptions);
-    lines.push("pub const BATTERY_BLE_DESCRIPTIONS: &[(BleBatteryId, &str)] = &[".into());
+    lines.push(format!(
+        "pub const NUM_SPLIT_BATTERY_PERIPHERALS: usize = {};\n\
+         pub const BATTERY_BLE_DESCRIPTIONS: [(BleBatteryId, &str); 1 + NUM_SPLIT_BATTERY_PERIPHERALS] = [",
+        bc.split_battery_peripheral_ids.len()
+    ));
     for (id, name) in battery_ids.into_iter().zip(battery_names) {
         lines.push(format!("    (BleBatteryId::{id}, {name:?}),"));
     }
     lines.push("];".into());
-    lines.push(format!(
-        "pub const NUM_SPLIT_BATTERY_PERIPHERALS: usize = {};",
-        bc.split_battery_peripheral_ids.len()
-    ));
     lines.push(format!(
         "pub const SPLIT_BATTERY_PERIPHERAL_IDS: [usize; NUM_SPLIT_BATTERY_PERIPHERALS] = {:?};",
         bc.split_battery_peripheral_ids
