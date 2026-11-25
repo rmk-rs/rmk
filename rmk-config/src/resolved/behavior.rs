@@ -43,9 +43,14 @@ pub struct Combos {
 }
 
 pub struct Combo {
-    pub actions: Vec<String>,
+    pub trigger: ComboTrigger,
     pub output: String,
     pub layer: Option<u8>,
+}
+
+pub enum ComboTrigger {
+    Actions(Vec<String>),
+    Positions(Vec<[u8; 2]>),
 }
 
 pub struct Macros {
@@ -137,7 +142,11 @@ impl crate::KeyboardTomlConfig {
                 .combos
                 .into_iter()
                 .map(|combo| Combo {
-                    actions: combo.actions,
+                    trigger: if combo.positions.is_empty() {
+                        ComboTrigger::Actions(combo.actions)
+                    } else {
+                        ComboTrigger::Positions(combo.positions)
+                    },
                     output: combo.output,
                     layer: combo.layer,
                 })
@@ -307,6 +316,65 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::{BehaviorConfig, KeyboardTomlConfig};
+
+    fn config_with_combo(combo: &str) -> KeyboardTomlConfig {
+        toml::from_str(&format!(
+            r#"
+[layout]
+rows = 1
+cols = 2
+map = "(0,0) (0,1)"
+
+[[keymap.layer]]
+keys = "A A"
+
+[behavior.combo]
+combos = [{{ {combo} }}]
+"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn position_combo_resolves_without_reinterpreting_action_combos() {
+        let positions = config_with_combo(r#"positions = [[0, 0], [0, 1]], output = "Escape""#)
+            .behavior()
+            .unwrap()
+            .combos
+            .unwrap();
+        assert!(matches!(
+            &positions.combos[0].trigger,
+            super::ComboTrigger::Positions(values) if values == &vec![[0, 0], [0, 1]]
+        ));
+
+        let actions = config_with_combo(r#"actions = ["A", "B"], output = "Escape""#)
+            .behavior()
+            .unwrap()
+            .combos
+            .unwrap();
+        assert!(matches!(
+            &actions.combos[0].trigger,
+            super::ComboTrigger::Actions(values) if values == &vec!["A".to_string(), "B".to_string()]
+        ));
+    }
+
+    #[test]
+    fn position_combo_validation_rejects_ambiguous_or_invalid_coordinates() {
+        for (combo, message) in [
+            (
+                r#"actions = ["A"], positions = [[0, 0]], output = "Escape""#,
+                "either actions or positions",
+            ),
+            (r#"positions = [[0, 0], [0, 0]], output = "Escape""#, "is duplicated"),
+            (r#"positions = [[1, 0]], output = "Escape""#, "outside the 1x2 matrix"),
+        ] {
+            let error = match config_with_combo(combo).behavior() {
+                Ok(_) => panic!("expected combo validation error"),
+                Err(error) => error,
+            };
+            assert!(error.contains(message), "unexpected error: {error}");
+        }
+    }
 
     #[test]
     fn morse_profile_enable_flow_tap_resolves_as_override() {

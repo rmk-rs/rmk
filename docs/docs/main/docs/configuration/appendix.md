@@ -208,7 +208,9 @@ timeout = "150ms"
 prior_idle_time = "130ms"  # optional, prevents accidental triggers during fast typing
 combos = [
   # Press J and K keys simultaneously to output Escape key
-  { actions = ["J", "K"], output = "Escape" }
+  { actions = ["J", "K"], output = "Escape" },
+  # Or match the unified physical matrix positions directly
+  { positions = [[1, 3], [1, 10]], output = "Backspace" }
 ]
 
 # Macro configuration

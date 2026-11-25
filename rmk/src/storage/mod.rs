@@ -17,7 +17,7 @@ use sequential_storage::cache::page_states::CalculatedPageStates;
 use sequential_storage::map::{Key as MapKey, MapConfig, MapStorage, PostcardValue, SerializationError};
 #[cfg(feature = "host")]
 use {
-    crate::keyboard::combo::ComboConfig,
+    crate::keyboard::combo::{ComboConfig, PositionComboConfig},
     rmk_types::action::{EncoderAction, KeyAction},
     rmk_types::constants::MACRO_CHUNK_SIZE,
     rmk_types::fork::Fork,
@@ -192,6 +192,11 @@ pub(crate) enum StorageItem {
         config: ComboConfig,
     },
     #[cfg(feature = "host")]
+    PositionCombo {
+        idx: u8,
+        config: PositionComboConfig,
+    },
+    #[cfg(feature = "host")]
     Fork {
         idx: u8,
         fork: Fork,
@@ -234,6 +239,8 @@ impl StorageItem {
             Self::Encoder { layer, idx, action } => {
                 (StorageKey::Encoder { layer, idx }, StorageValue::EncoderAction(action))
             }
+            #[cfg(feature = "host")]
+            Self::PositionCombo { idx, config } => (StorageKey::Combo(idx), StorageValue::PositionCombo(config)),
             #[cfg(feature = "host")]
             Self::Combo { idx, config } => (StorageKey::Combo(idx), StorageValue::Combo(config)),
             #[cfg(feature = "host")]
@@ -296,6 +303,9 @@ pub(crate) enum StorageValue {
     #[cfg(feature = "_ble")]
     ActiveBleProfile(u8),
     UserData(heapless::Vec<u8, USER_DATA_MAX_SIZE>),
+    /// Appended to preserve every existing postcard enum discriminant.
+    #[cfg(feature = "host")]
+    PositionCombo(PositionComboConfig),
 }
 
 impl<'a> PostcardValue<'a> for StorageValue {}
@@ -519,8 +529,17 @@ impl<F: AsyncNorFlash> Storage<F> {
         // An empty slot is written as an empty config, so a combo the user added over the host
         // protocol is cleared, not left behind.
         for (idx, combo) in behavior.combo.combos.iter().enumerate() {
-            let config = combo.as_ref().map_or_else(ComboConfig::empty, |c| c.config.clone());
-            put(StorageItem::Combo { idx: idx as u8, config }).await;
+            let definition = combo
+                .as_ref()
+                .map(|c| c.definition())
+                .unwrap_or_else(rmk_types::combo::ComboDefinition::empty);
+            put(match definition {
+                rmk_types::combo::ComboDefinition::Actions(config) => StorageItem::Combo { idx: idx as u8, config },
+                rmk_types::combo::ComboDefinition::Positions(config) => {
+                    StorageItem::PositionCombo { idx: idx as u8, config }
+                }
+            })
+            .await;
         }
         for (idx, fork) in behavior.fork.forks.iter().enumerate() {
             put(StorageItem::Fork {
@@ -768,6 +787,37 @@ mod tests {
                 read(StorageKey::ConnectionType).await,
                 Ok(Some(StorageValue::ConnectionType(ConnectionType::Ble)))
             ));
+        });
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn empty_combo_records_restore_as_vacant_slots() {
+        block_on(async {
+            let mut storage = new_storage(async_flash_wrapper(Part::new())).await;
+            storage
+                .put(StorageItem::Combo {
+                    idx: 0,
+                    config: ComboConfig::empty(),
+                })
+                .await
+                .unwrap();
+            storage
+                .put(StorageItem::PositionCombo {
+                    idx: 1,
+                    config: PositionComboConfig::empty(),
+                })
+                .await
+                .unwrap();
+            let mut behavior = RuntimeBehaviorConfig::default();
+            behavior.combo.combos[0] = Some(crate::keyboard::combo::Combo::default());
+            behavior.combo.combos[1] = Some(crate::keyboard::combo::Combo::default());
+            storage
+                .read_layout(&mut crate::keymap::KeymapData::new([[[KeyAction::No]]]), &mut behavior)
+                .await
+                .unwrap();
+            assert!(behavior.combo.combos[0].is_none());
+            assert!(behavior.combo.combos[1].is_none());
         });
     }
 

@@ -327,10 +327,12 @@ pub(crate) async fn process_vial<'a>(
 
                     let combo_idx = report.output_data[3] as usize;
                     ctx.with_combos(|combos| {
-                        if let Some(Some(combo)) = combos.get(combo_idx) {
+                        if let Some(Some(combo)) = combos.get(combo_idx)
+                            && let Some(config) = combo.legacy_config()
+                        {
                             // Combo components
                             for i in 0..MAX_COMBO_KEYS {
-                                let kc = combo.config.actions.get(i).copied().unwrap_or(KeyAction::No);
+                                let kc = config.actions.get(i).copied().unwrap_or(KeyAction::No);
                                 LittleEndian::write_u16(
                                     &mut report.input_data[1 + i * 2..3 + i * 2],
                                     to_via_keycode(kc),
@@ -339,7 +341,7 @@ pub(crate) async fn process_vial<'a>(
                             // Combo output
                             LittleEndian::write_u16(
                                 &mut report.input_data[1 + MAX_COMBO_KEYS * 2..3 + MAX_COMBO_KEYS * 2],
-                                to_via_keycode(combo.config.output),
+                                to_via_keycode(config.output),
                             );
                         } else {
                             report.input_data[1..3 + MAX_COMBO_KEYS * 2].fill(0);

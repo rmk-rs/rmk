@@ -78,9 +78,13 @@ Combo configuration includes the following parameters:
 - `timeout`: Defines the maximum time window for pressing all combo keys. If the time exceeds this, the combo key will not be triggered. The format is a string, which can be milliseconds (e.g. "200ms") or seconds (e.g. "1s"). Defaults to 50ms.
 - `prior_idle_time`: An optional cooldown window after any key press before a combo can start recording. This helps prevent accidental combo triggers during fast typing. The format is a string (e.g. `"130ms"`). If not set, there is no idle check (equivalent to ZMK's `require-prior-idle-ms`).
 - `combos`: An array containing all defined combos. Each combo configuration is an object containing the following attributes:
-  - `actions`: An array of strings defining the keys that need to be pressed simultaneously to trigger the combo action.
-  - `output`: A string defining the output action to be triggered when all keys in `actions` are pressed simultaneously.
-  - `layer`: An optional parameter, a number, specifying which layer the combo is valid on. If not specified, the combo is valid on all layers.
+  - `actions`: An array of strings defining the resolved key actions that trigger a legacy combo.
+  - `positions`: An alternative to `actions`, written as `[[row, col], ...]`, that matches physical positions in the keyboard's unified matrix. Split-board row/column offsets are already included. Position combos keep working when those keys have duplicate actions or resolve differently on another layer.
+  - `output`: The action emitted when every configured action or position is pressed.
+  - `layer`: An optional parameter specifying the active layer on which the combo is valid. If omitted, the combo is valid on all layers; position matching remains independent of the resolved actions.
+
+Each combo must use either `actions` or `positions`, never both. Existing
+action-based configurations retain their original semantics.
 
 Here is an example of combo configuration:
 
@@ -93,6 +97,8 @@ combos = [
   { actions = ["J", "K"], output = "Escape" },
   # Press F and D keys simultaneously to output Tab key, but only valid on layer 0
   { actions = ["F", "D"], output = "Tab", layer = 0 },
+  # Physical positions work even if both currently resolve to the same action
+  { positions = [[1, 3], [1, 10]], output = "Backspace" },
   # Three-key combo, press A, S, and D keys to switch to layer 2
   { actions = ["A", "S", "D"], output = "TO(2)" }
 ]

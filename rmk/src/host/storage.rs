@@ -1,5 +1,6 @@
 use embassy_time::Duration;
 use embedded_storage_async::nor_flash::NorFlash as AsyncNorFlash;
+use rmk_types::action::KeyAction;
 use rmk_types::constants::MACRO_CHUNK_SIZE;
 
 use crate::keyboard::combo::Combo;
@@ -66,7 +67,14 @@ impl<F: AsyncNorFlash> Storage<F> {
                 }
                 (StorageKey::Combo(idx), StorageValue::Combo(config)) => {
                     if let Some(slot) = behavior.combo.combos.get_mut(idx as usize) {
-                        *slot = Some(Combo::new(config));
+                        *slot =
+                            (!config.actions.is_empty() || config.output != KeyAction::No).then(|| Combo::new(config));
+                    }
+                }
+                (StorageKey::Combo(idx), StorageValue::PositionCombo(config)) => {
+                    if let Some(slot) = behavior.combo.combos.get_mut(idx as usize) {
+                        *slot = (!config.positions.is_empty() || config.output != KeyAction::No)
+                            .then(|| Combo::new_positions(config));
                     }
                 }
                 (StorageKey::Fork(idx), StorageValue::Fork(fork)) => {
@@ -89,12 +97,41 @@ impl<F: AsyncNorFlash> Storage<F> {
 
 #[cfg(test)]
 mod tests {
-    use rmk_types::action::Action;
+    use rmk_types::action::{Action, KeyAction};
+    use rmk_types::combo::{MatrixPosition, PositionCombo};
     use rmk_types::keycode::{HidKeyCode, KeyCode};
     use rmk_types::morse::{HOLD, Morse, MorseMode, MorsePattern, MorseProfile, TAP};
     use sequential_storage::map::Value;
 
     use super::*;
+
+    #[test]
+    fn storage_round_trips_legacy_and_position_combo_variants() {
+        let legacy = rmk_types::combo::Combo::new([KeyAction::No], KeyAction::No, Some(1));
+        let position = PositionCombo::new([MatrixPosition { row: 2, col: 3 }], KeyAction::No, Some(1));
+
+        let mut legacy_buffer = [0u8; 128];
+        let legacy_len = Value::serialize_into(&StorageValue::Combo(legacy.clone()), &mut legacy_buffer).unwrap();
+        assert_eq!(
+            &legacy_buffer[..legacy_len],
+            &[8, 0, 0, 1, 1],
+            "the persisted legacy Combo discriminant and payload must remain unchanged"
+        );
+
+        for expected in [StorageValue::Combo(legacy), StorageValue::PositionCombo(position)] {
+            let mut buffer = [0u8; 128];
+            let len = Value::serialize_into(&expected, &mut buffer).unwrap();
+            let (actual, consumed) = StorageValue::deserialize_from(&buffer[..len]).unwrap();
+            assert_eq!(consumed, len);
+            match (expected, actual) {
+                (StorageValue::Combo(expected), StorageValue::Combo(actual)) => assert_eq!(actual, expected),
+                (StorageValue::PositionCombo(expected), StorageValue::PositionCombo(actual)) => {
+                    assert_eq!(actual, expected)
+                }
+                _ => panic!("combo storage variant changed during round trip"),
+            }
+        }
+    }
 
     /// Every shape of `Morse` a host can write has to survive the round trip:
     /// Vial's four fixed actions, a partly filled table, and raw morse patterns.

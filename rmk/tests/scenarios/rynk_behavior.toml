@@ -42,6 +42,43 @@ steps = [
 ]
 expect = [["A"], [], ["C"], []]
 
+# Definition endpoints are additive: they can represent both trigger modes,
+# while the frozen GetCombo endpoint refuses a position slot it cannot encode.
+[[test]]
+name = "position_combo_write_round_trips_and_matches_duplicate_actions"
+steps = [
+  { rynk = { cmd = "SetKeyAction", payload = { position = { layer = 0, row = 0, col = 1 }, action = { Single = { Key = { Hid = "A" } } } } } },
+  { rynk = { cmd = "SetComboDefinition", payload = { index = 0, definition = { Positions = { positions = [
+    { row = 0, col = 0 },
+    { row = 0, col = 1 },
+  ], output = { Single = { Key = { Hid = "D" } } } } } } } },
+  { rynk = { cmd = "GetComboDefinition", payload = 0, reply = { Positions = { positions = [
+    { row = 0, col = 0 },
+    { row = 0, col = 1 },
+  ], output = { Single = { Key = { Hid = "D" } } } } } } },
+  { rynk = { cmd = "GetCombo", payload = 0, error = "Invalid" } },
+  { press = [0, 0] },
+  { press = [0, 1] },
+  { release = [0, 0] },
+  { release = [0, 1] },
+]
+expect = [["D"], []]
+
+[[test]]
+name = "position_combo_write_validates_coordinates_layers_and_duplicates"
+steps = [
+  { rynk = { cmd = "SetComboDefinition", payload = { index = 0, definition = { Positions = { positions = [
+    { row = 0, col = 0 },
+    { row = 0, col = 0 },
+  ], output = { Single = { Key = { Hid = "D" } } } } } }, error = "Invalid" } },
+  { rynk = { cmd = "SetComboDefinition", payload = { index = 0, definition = { Positions = { positions = [
+    { row = 1, col = 0 },
+  ], output = { Single = { Key = { Hid = "D" } } } } } }, error = "Invalid" } },
+  { rynk = { cmd = "SetComboDefinition", payload = { index = 0, definition = { Positions = { positions = [
+    { row = 0, col = 0 },
+  ], output = { Single = { Key = { Hid = "D" } } }, layer = 1 } } }, error = "Invalid" } },
+]
+
 # Two different writes, each read back: the read follows the write instead of
 # echoing a default that happens to match it.
 [[test]]
@@ -202,6 +239,19 @@ steps = [
   { rynk = { cmd = "GetComboBulk", payload = { start_index = 6 }, reply = { configs = [
     { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "C" } } }, layer = 0 },
     { actions = [{ Single = { Key = { Hid = "B" } } }], output = { Single = { Key = { Hid = "D" } } }, layer = 1 },
+  ] } } },
+]
+
+[[test]]
+name = "combo_definition_bulk_round_trips_both_trigger_modes"
+steps = [
+  { rynk = { cmd = "SetComboDefinitionBulk", payload = { start_index = 6, definitions = [
+    { Actions = { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "C" } } }, layer = 0 } },
+    { Positions = { positions = [{ row = 0, col = 1 }, { row = 0, col = 2 }], output = { Single = { Key = { Hid = "D" } } } } },
+  ] } } },
+  { rynk = { cmd = "GetComboDefinitionBulk", payload = { start_index = 6 }, reply = { definitions = [
+    { Actions = { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "C" } } }, layer = 0 } },
+    { Positions = { positions = [{ row = 0, col = 1 }, { row = 0, col = 2 }], output = { Single = { Key = { Hid = "D" } } } } },
   ] } } },
 ]
 

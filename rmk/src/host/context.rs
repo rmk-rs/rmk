@@ -3,7 +3,7 @@
 use embassy_time::Duration;
 use rmk_types::action::{EncoderAction, KeyAction};
 use rmk_types::battery::BatteryStatus;
-use rmk_types::combo::Combo as ComboConfig;
+use rmk_types::combo::{Combo as ComboConfig, ComboDefinition};
 use rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rmk_types::fork::Fork;
 use rmk_types::led_indicator::LedIndicator;
@@ -137,6 +137,56 @@ impl<'a> KeyboardContext<'a> {
         store(StorageItem::Combo { idx, config }).await?;
         #[cfg(not(feature = "storage"))]
         let _ = config;
+        Ok(true)
+    }
+
+    /// Validate a versioned combo against this keyboard's matrix. Legacy
+    /// action combos retain the validation behavior of `SetCombo`; position
+    /// combos reject out-of-range layers/coordinates and duplicate positions.
+    pub fn combo_definition_is_valid(&self, definition: &ComboDefinition) -> bool {
+        let ComboDefinition::Positions(config) = definition else {
+            return true;
+        };
+        let (rows, cols, layers) = self.keymap_dimensions();
+        if config.layer.is_some_and(|layer| layer as usize >= layers) {
+            return false;
+        }
+        config.positions.iter().enumerate().all(|(idx, position)| {
+            (position.row as usize) < rows
+                && (position.col as usize) < cols
+                && !config.positions[..idx].contains(position)
+        })
+    }
+
+    /// Replace a combo slot using the additive action-or-position definition.
+    pub async fn set_combo_definition(&self, idx: u8, definition: ComboDefinition) -> Result<bool, ()> {
+        if !self.combo_definition_is_valid(&definition) {
+            return Ok(false);
+        }
+        let valid = self.keymap.with_combos_mut(|combos| {
+            if (idx as usize) >= combos.len() {
+                return false;
+            }
+            combos[idx as usize] = if definition.is_empty() {
+                None
+            } else {
+                Some(Combo::from_definition(definition.clone()))
+            };
+            true
+        });
+        if !valid {
+            return Ok(false);
+        }
+        #[cfg(feature = "storage")]
+        store(match definition {
+            definition if definition.is_empty() => StorageItem::Combo {
+                idx,
+                config: ComboConfig::empty(),
+            },
+            ComboDefinition::Actions(config) => StorageItem::Combo { idx, config },
+            ComboDefinition::Positions(config) => StorageItem::PositionCombo { idx, config },
+        })
+        .await?;
         Ok(true)
     }
 
