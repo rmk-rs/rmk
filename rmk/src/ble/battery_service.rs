@@ -219,9 +219,7 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
         // Try to do the first battery report in 30 seconds
         with_timeout(Duration::from_secs(30), first_report).await.ok();
 
-        // Hold each battery change until the keyboard is in use: a key press within the last
-        // minute, the next key press, or 30 awake minutes. Every link wakes on the same change
-        // and sends the same cached level, so hosts on different profiles agree.
+        // While idle, wait for the next key press or a retry while awake.
         loop {
             self.sub.next_message_pure().await;
             // `try_get` marks the latest press as seen, so `changed` waits for a new one.
@@ -230,8 +228,9 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
                 .is_none_or(|last_press| (Instant::now().as_secs() as u32).saturating_sub(last_press) >= 60);
             if idle {
                 let awake_timeout = async {
+                    let retry_secs = (2 * u64::from(crate::SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS)).max(1800);
                     loop {
-                        Timer::after_secs(1800).await;
+                        Timer::after_secs(retry_secs).await;
                         if !SLEEPING_STATE.load(Ordering::Acquire) {
                             break;
                         }
