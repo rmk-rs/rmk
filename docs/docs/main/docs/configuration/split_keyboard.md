@@ -62,7 +62,7 @@ col_pins = ["P0_30"]
 
 Note that each board's region (`rows`/`cols` plus `row_offset`/`col_offset`) must not overlap another board's region in the whole keyboard's matrix — overlapping regions are rejected at build time.
 
-Each board can configure its [battery ADC](./wireless.md#split-battery-adc-configuration). For [left/right BLE battery reporting](./wireless.md#peripheral-battery-reporting-over-ble-gatt) on a measured pair, set `central_side = "left"` or `"right"` in `[split]`.
+Each board can configure its [battery ADC](./wireless.md#split-battery-adc-configuration). For [left/right BLE battery reporting](./wireless.md#show-left-and-right-battery-levels) on a measured pair, set `central_side = "left"` or `"right"` in `[split]`.
 
 ## Split keyboard matrix configuration
 

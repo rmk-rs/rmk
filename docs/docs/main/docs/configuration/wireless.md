@@ -45,7 +45,7 @@ On a split keyboard, put the battery fields in the table for each board you want
 Omit a board's table to use its preset. If you add a table, include all battery settings that board
 needs. See the [nRF52840 split example](https://github.com/rmk-rs/rmk/blob/main/examples/use_config/nrf52840_ble_split/keyboard.toml).
 
-### Show left and right battery levels {#peripheral-battery-reporting-over-ble-gatt}
+### Show left and right battery levels
 
 On a two-board split that measures both batteries, set `central_side = "left"` or
 `central_side = "right"` in `[split]` to match the side of the central board. Compatible computers
