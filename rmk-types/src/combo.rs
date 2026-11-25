@@ -24,13 +24,13 @@ pub struct Combo {
     #[cfg_attr(feature = "wasm", tsify(type = "KeyAction[]"))]
     pub actions: Vec<KeyAction, COMBO_SIZE>,
     pub output: KeyAction,
-    pub layer: Option<u8>,
+    /// Bitmask of layers the combo is valid on. `u32::MAX` means all layers.
+    pub layers: u32,
 }
 
 impl MaxSize for Combo {
-    const POSTCARD_MAX_SIZE: usize = crate::heapless_vec_max_size::<KeyAction, COMBO_SIZE>()
-        + KeyAction::POSTCARD_MAX_SIZE
-        + Option::<u8>::POSTCARD_MAX_SIZE;
+    const POSTCARD_MAX_SIZE: usize =
+        crate::heapless_vec_max_size::<KeyAction, COMBO_SIZE>() + KeyAction::POSTCARD_MAX_SIZE + u32::POSTCARD_MAX_SIZE;
 }
 
 impl Combo {
@@ -38,7 +38,7 @@ impl Combo {
     ///
     /// Actions equal to `KeyAction::No` are filtered out. If there are more
     /// non-No actions than `COMBO_SIZE`, excess actions are silently dropped.
-    pub fn new<I: IntoIterator<Item = KeyAction>>(actions: I, output: KeyAction, layer: Option<u8>) -> Self {
+    pub fn new<I: IntoIterator<Item = KeyAction>>(actions: I, output: KeyAction, layers: u32) -> Self {
         let mut combo_actions = Vec::new();
         for action in actions {
             if action != KeyAction::No && combo_actions.push(action).is_err() {
@@ -48,7 +48,7 @@ impl Combo {
         Self {
             actions: combo_actions,
             output,
-            layer,
+            layers,
         }
     }
 
@@ -57,7 +57,7 @@ impl Combo {
         Self {
             actions: Vec::new(),
             output: KeyAction::No,
-            layer: None,
+            layers: u32::MAX,
         }
     }
 

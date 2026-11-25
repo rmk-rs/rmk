@@ -160,11 +160,8 @@ fn expand_combos(
     let combos_def = combos.combos.iter().map(|combo| {
         let actions = combo.actions.iter().map(|a| parse_key(a.to_owned(), profiles));
         let output = parse_key(combo.output.to_owned(), profiles);
-        let layer = match combo.layer {
-            Some(layer) => quote! { ::core::option::Option::Some(#layer) },
-            None => quote! { ::core::option::Option::None },
-        };
-        quote! { ::rmk::keyboard::combo::Combo::new(::rmk::keyboard::combo::ComboConfig::new([#(#actions),*], #output, #layer)) }
+        let layers = combo.layers;
+        quote! { ::rmk::keyboard::combo::Combo::new(::rmk::keyboard::combo::ComboConfig::new([#(#actions),*], #output, #layers)) }
     });
 
     quote! {

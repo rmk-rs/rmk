@@ -28,12 +28,20 @@ impl crate::KeyboardTomlConfig {
                                 i
                             ));
                         }
-                        if let Some(layer) = c.layer
-                            && layer >= num_layers
-                        {
+                        let layers = match (c.layer, &c.layers) {
+                            (Some(_), Some(_)) => {
+                                return Err(format!("keyboard.toml: combo #{i} sets both layer and layers"));
+                            }
+                            (Some(layer), None) => &[layer][..],
+                            (None, Some(layers)) if layers.is_empty() => {
+                                return Err(format!("keyboard.toml: layers list in combo #{i} is empty"));
+                            }
+                            (None, Some(layers)) => layers,
+                            (None, None) => &[],
+                        };
+                        if layers.iter().any(|&l| l >= num_layers.min(32)) {
                             return Err(format!(
-                                "keyboard.toml: layer in combo #{} is greater than [keymap].layers",
-                                i
+                                "keyboard.toml: layer in combo #{i} must be below [keymap].layers and 32"
                             ));
                         }
                     }

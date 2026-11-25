@@ -45,7 +45,7 @@ pub struct Combos {
 pub struct Combo {
     pub actions: Vec<String>,
     pub output: String,
-    pub layer: Option<u8>,
+    pub layers: u32,
 }
 
 pub struct Macros {
@@ -139,7 +139,11 @@ impl crate::KeyboardTomlConfig {
                 .map(|combo| Combo {
                     actions: combo.actions,
                     output: combo.output,
-                    layer: combo.layer,
+                    layers: match (combo.layer, combo.layers) {
+                        (Some(layer), _) => 1 << layer,
+                        (None, Some(layers)) => layers.iter().fold(0, |mask, &layer| mask | 1 << layer),
+                        (None, None) => u32::MAX,
+                    },
                 })
                 .collect(),
             timeout_ms: c.timeout.map(|t| t.0),
@@ -393,8 +397,8 @@ hold_timeout = "300ms"
         assert!(err.contains("max_morse_profiles"), "unexpected error: {err}");
     }
 
-    /// A two-layer keyboard with the given `forks = [...]` list.
-    fn config_with_forks(forks: &str) -> KeyboardTomlConfig {
+    /// A two-layer keyboard with the given behavior.
+    fn two_layer_config(behavior: BehaviorConfig) -> KeyboardTomlConfig {
         let mut config: KeyboardTomlConfig = toml::from_str(
             r#"
 [layout]
@@ -410,11 +414,65 @@ keys = "A"
 "#,
         )
         .unwrap();
-        config.behavior = Some(BehaviorConfig {
+        config.behavior = Some(behavior);
+        config
+    }
+
+    /// A two-layer keyboard with the given `forks = [...]` list.
+    fn config_with_forks(forks: &str) -> KeyboardTomlConfig {
+        two_layer_config(BehaviorConfig {
             fork: Some(toml::from_str(forks).unwrap()),
             ..Default::default()
-        });
-        config
+        })
+    }
+
+    /// A two-layer keyboard with the given `combos = [...]` list.
+    fn config_with_combos(combos: &str) -> KeyboardTomlConfig {
+        two_layer_config(BehaviorConfig {
+            combo: Some(toml::from_str(combos).unwrap()),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn combo_layers_resolve_to_a_mask() {
+        let config = config_with_combos(
+            r#"combos = [
+              { actions = ["A", "B"], output = "C", layers = [0, 1] },
+              { actions = ["A", "B"], output = "C", layer = 1 },
+              { actions = ["A", "B"], output = "C" },
+            ]"#,
+        );
+
+        let combos = config.behavior().unwrap().combos.unwrap().combos;
+        assert_eq!(combos[0].layers, 0b11);
+        assert_eq!(combos[1].layers, 0b10);
+        assert_eq!(combos[2].layers, u32::MAX);
+    }
+
+    #[test]
+    fn invalid_combo_layers_are_errors() {
+        for (combos, message) in [
+            (
+                r#"combos = [{ actions = ["A", "B"], output = "C", layers = [] }]"#,
+                "layers list",
+            ),
+            (
+                r#"combos = [{ actions = ["A", "B"], output = "C", layers = [2] }]"#,
+                "must be below",
+            ),
+            (
+                r#"combos = [{ actions = ["A", "B"], output = "C", layer = 2 }]"#,
+                "must be below",
+            ),
+            (
+                r#"combos = [{ actions = ["A", "B"], output = "C", layer = 0, layers = [1] }]"#,
+                "both layer and layers",
+            ),
+        ] {
+            let err = config_with_combos(combos).behavior().err().unwrap();
+            assert!(err.contains(message), "unexpected error: {err}");
+        }
     }
 
     #[test]

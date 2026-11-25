@@ -181,7 +181,7 @@ async fn client_against_run_session() {
 
         // Combo round-trip, guarded on advertised count.
         if caps.max_combos > 0 {
-            let combo = Combo::new([KeyAction::Morse(1), KeyAction::Morse(2)], KeyAction::Morse(3), Some(0));
+            let combo = Combo::new([KeyAction::Morse(1), KeyAction::Morse(2)], KeyAction::Morse(3), 1 << 0);
             client.set_combo(0, combo.clone()).await.unwrap();
             assert_eq!(client.get_combo(0).await.unwrap(), combo);
         }

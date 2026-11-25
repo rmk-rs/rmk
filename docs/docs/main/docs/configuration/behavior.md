@@ -80,7 +80,8 @@ Combo configuration includes the following parameters:
 - `combos`: An array containing all defined combos. Each combo configuration is an object containing the following attributes:
   - `actions`: An array of strings defining the keys that need to be pressed simultaneously to trigger the combo action.
   - `output`: A string defining the output action to be triggered when all keys in `actions` are pressed simultaneously.
-  - `layer`: An optional parameter, a number, specifying which layer the combo is valid on. If not specified, the combo is valid on all layers.
+  - `layers`: An optional list of the layers the combo is valid on. If neither `layers` nor `layer` is specified, the combo is valid on all layers.
+  - `layer`: An optional single layer the combo is valid on, the same as a one-element `layers` list. Specify at most one of `layer` and `layers`.
 
 Here is an example of combo configuration:
 
@@ -93,6 +94,8 @@ combos = [
   { actions = ["J", "K"], output = "Escape" },
   # Press F and D keys simultaneously to output Tab key, but only valid on layer 0
   { actions = ["F", "D"], output = "Tab", layer = 0 },
+  # Press K and L keys simultaneously to output Backspace key on layers 0, 1 and 3
+  { actions = ["K", "L"], output = "Backspace", layers = [0, 1, 3] },
   # Three-key combo, press A, S, and D keys to switch to layer 2
   { actions = ["A", "S", "D"], output = "TO(2)" }
 ]

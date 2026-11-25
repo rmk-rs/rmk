@@ -52,8 +52,10 @@ impl Combo {
             return false;
         }
 
-        if let Some(layer) = self.config.layer
-            && layer != active_layer
+        if self.config.layers != u32::MAX
+            && !1u32
+                .checked_shl(active_layer.into())
+                .is_some_and(|bit| self.config.layers & bit != 0)
         {
             return false;
         }
@@ -169,7 +171,7 @@ mod tests {
         let mut combo = Combo::new(ComboConfig::new(
             [hid(HidKeyCode::A), hid(HidKeyCode::B)],
             KeyAction::No,
-            None,
+            u32::MAX,
         ));
         let a = hid(HidKeyCode::A);
         let b = hid(HidKeyCode::B);
@@ -184,5 +186,16 @@ mod tests {
             combo.is_triggered(),
             "a KC_NO combo must trigger so the release path consumes the releases"
         );
+    }
+
+    #[test]
+    fn combo_only_records_on_its_layers() {
+        let a = hid(HidKeyCode::A);
+        let mut combo = Combo::new(ComboConfig::new([a, hid(HidKeyCode::B)], KeyAction::No, 0b101));
+
+        assert!(combo.update(&a, KeyboardEvent::key(0, 0, true), 0));
+        assert!(combo.update(&a, KeyboardEvent::key(0, 0, true), 2));
+        assert!(!combo.update(&a, KeyboardEvent::key(0, 0, true), 1));
+        assert!(!combo.update(&a, KeyboardEvent::key(0, 0, true), 32));
     }
 }

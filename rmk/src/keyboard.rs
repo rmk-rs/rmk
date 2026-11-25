@@ -2189,7 +2189,7 @@ mod test {
             behavior.combo.combos[0] = Some(Combo::new(rmk_types::combo::Combo::new(
                 [k!(Right), k!(Up)],
                 k!(Escape),
-                None,
+                u32::MAX,
             )));
             behavior
                 .fork
