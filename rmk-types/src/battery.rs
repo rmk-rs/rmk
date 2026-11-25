@@ -1,7 +1,19 @@
-//! Battery status types.
+//! Battery status and BLE battery identifiers.
 
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
+
+/// Identifies the battery represented by a BLE Battery Level characteristic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BleBatteryId {
+    Left,
+    Right,
+    /// Battery of a unibody keyboard or a split central without a `Left` or `Right` identity.
+    /// Reported as GATT `main` (`0x0106`).
+    Central,
+    /// Zero-based board index for an RMK peripheral battery service.
+    Peripheral(u8),
+}
 
 /// Charge state of the battery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
