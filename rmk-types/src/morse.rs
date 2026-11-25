@@ -209,24 +209,11 @@ impl MorseProfile {
         hold_timeout_ms: Option<u16>,
         gap_timeout_ms: Option<u16>,
     ) -> Self {
-        let mut v = 0u64;
-        if let Some(t) = hold_timeout_ms {
-            v = encode_timeout_ms(t);
-        }
-        if let Some(t) = gap_timeout_ms {
-            v |= encode_timeout_ms(t) << GAP_TIMEOUT_SHIFT;
-        }
-        if let Some(b) = unilateral_tap {
-            v |= if b { UNI_TAP_MASK } else { UNI_TAP_HIGH_BIT };
-        }
-        if let Some(m) = mode {
-            v |= match m {
-                MorseMode::Normal => MODE_MASK,
-                MorseMode::HoldOnOtherPress => 0x8000_0000,
-                MorseMode::PermissiveHold => 0x4000_0000,
-            };
-        }
-        MorseProfile(v)
+        Self::const_default()
+            .with_unilateral_tap(unilateral_tap)
+            .with_mode(mode)
+            .with_hold_timeout_ms(hold_timeout_ms)
+            .with_gap_timeout_ms(gap_timeout_ms)
     }
 }
 

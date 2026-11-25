@@ -13,7 +13,7 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::action::Action;
-use crate::constants::{MACRO_MAX_NUM, MACRO_SPACE_SIZE};
+use crate::constants::{MACRO_SPACE_SIZE, MAX_MACROS};
 
 /// One step of a macro.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
@@ -173,14 +173,14 @@ const fn macro_size(ops: &[MacroOp]) -> usize {
     len + crate::varint_max_size(len)
 }
 
-/// Whether a default macro table can be compiled in: at most `MACRO_MAX_NUM`
+/// Whether a default macro table can be compiled in: at most `MAX_MACROS`
 /// macros, each pausing for release at most once and typing only ASCII, and all
 /// of them, with the unused slots, fitting the firmware's macro buffer.
 pub const fn validate_default_macros(macros: &[&[MacroOp]]) -> bool {
-    if macros.len() > MACRO_MAX_NUM {
+    if macros.len() > MAX_MACROS {
         return false;
     }
-    let (mut total, mut m) = ((MACRO_MAX_NUM - macros.len()) * macro_size(&[]), 0);
+    let (mut total, mut m) = ((MAX_MACROS - macros.len()) * macro_size(&[]), 0);
     while m < macros.len() {
         let (ops, mut paused, mut i) = (macros[m], false, 0);
         while i < ops.len() {
@@ -233,13 +233,13 @@ mod tests {
             MacroOp::PauseForRelease
         ]]));
         const EMPTY: &[MacroOp] = &[];
-        assert!(!validate_default_macros(&[EMPTY; MACRO_MAX_NUM + 1]));
-        assert!(validate_default_macros(&[EMPTY; MACRO_MAX_NUM]));
+        assert!(!validate_default_macros(&[EMPTY; MAX_MACROS + 1]));
+        assert!(validate_default_macros(&[EMPTY; MAX_MACROS]));
 
         // Every slot costs its framing, so a text that fits alone doesn't fit beside the empty slots.
         assert!(!validate_default_macros(&[&[MacroOp::Char(b'a'); LONGEST_TEXT]]));
         assert!(validate_default_macros(&[
-            &[MacroOp::Char(b'a'); LONGEST_TEXT + 1 - MACRO_MAX_NUM]
+            &[MacroOp::Char(b'a'); LONGEST_TEXT + 1 - MAX_MACROS]
         ]));
     }
 

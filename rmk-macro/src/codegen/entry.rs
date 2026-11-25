@@ -146,12 +146,6 @@ pub(crate) fn rmk_entry_select(
                     if !processors.is_empty() {
                         tasks.push(processors_task);
                     };
-                    let joined = join_all_tasks(tasks);
-                    quote! {
-                        #transport_prelude
-                        #auto_mouse_layer_prelude
-                        #joined
-                    }
                 }
                 SplitConnection::Serial => {
                     if !processors.is_empty() {
@@ -206,14 +200,13 @@ pub(crate) fn rmk_entry_select(
                                 )
                             });
                         });
-
-                    let joined = join_all_tasks(tasks);
-                    quote! {
-                        #transport_prelude
-                        #auto_mouse_layer_prelude
-                        #joined
-                    }
                 }
+            }
+            let joined = join_all_tasks(tasks);
+            quote! {
+                #transport_prelude
+                #auto_mouse_layer_prelude
+                #joined
             }
         }
         BoardConfig::UniBody(_) => rmk_entry_unibody(

@@ -6,11 +6,11 @@ use rmk_types::protocol::rynk::{RynkError, SetMacroRequest};
 
 use super::super::RynkService;
 use super::Handle;
-use crate::MACRO_MAX_NUM;
+use crate::MAX_MACROS;
 
 impl Handle<GetMacro> for RynkService<'_> {
     async fn handle(&self, idx: u8) -> Result<Macro, RynkError> {
-        if idx as usize >= MACRO_MAX_NUM {
+        if idx as usize >= MAX_MACROS {
             return Err(RynkError::Invalid);
         }
         self.ctx
@@ -23,7 +23,7 @@ impl Handle<GetMacro> for RynkService<'_> {
 impl Handle<SetMacro> for RynkService<'_> {
     async fn handle(&self, r: SetMacroRequest) -> Result<(), RynkError> {
         // A macro past the buffer never decodes: `serve` answers `Malformed` first.
-        if r.index as usize >= MACRO_MAX_NUM {
+        if r.index as usize >= MAX_MACROS {
             return Err(RynkError::Invalid);
         }
         #[cfg(feature = "storage")]

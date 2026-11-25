@@ -327,7 +327,7 @@ impl ConditionSet {
         if let Some(condition) = self.connection {
             let connection = context.lighting_context().connection;
             if let Some(wanted) = condition.transport {
-                let active = match connection.decide_active() {
+                let active = match connection.active {
                     Some(ConnectionType::Usb) => ActiveTransport::Usb,
                     Some(ConnectionType::Ble) => ActiveTransport::Ble,
                     None => ActiveTransport::NoneActive,
@@ -336,10 +336,8 @@ impl ConditionSet {
                     return false;
                 }
             }
-            if condition
-                .profile
-                .is_some_and(|profile| connection.ble.profile != profile)
-                || condition.ble_state.is_some_and(|state| connection.ble.state != state)
+            if condition.profile.is_some_and(|profile| connection.profile != profile)
+                || condition.ble_state.is_some_and(|state| connection.ble_state != state)
             {
                 return false;
             }
@@ -351,7 +349,7 @@ impl ConditionSet {
             }
             if condition
                 .usb_connected
-                .is_some_and(|wanted| connection.usb_ready() != wanted)
+                .is_some_and(|wanted| connection.usb_ready != wanted)
             {
                 return false;
             }
@@ -730,11 +728,11 @@ fn earliest(left: Option<u64>, right: Option<u64>) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use rmk_types::ble::{BleState, BleStatus};
-    use rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
+    use rmk_types::ble::BleState;
+    use rmk_types::connection::ConnectionType;
 
     use super::super::compositor::RenderPolicy;
-    use super::super::{BuiltinEffect, Compositor, LayerState, LogicalFrame, Rgb8};
+    use super::super::{BuiltinEffect, Compositor, LayerState, LightingConnection, LogicalFrame, Rgb8};
     use super::*;
     use crate::types::battery::{BatteryStatus, ChargeState};
 
@@ -753,14 +751,11 @@ mod tests {
     #[test]
     fn connection_conditions_conjoin_transport_profile_and_ble_state() {
         let mut context = LightingContext {
-            connection: ConnectionStatus {
-                usb: UsbState::Configured,
-                ble: BleStatus {
-                    profile: 3,
-                    state: BleState::Connected,
-                    bonded: false,
-                },
-                preferred: ConnectionType::Ble,
+            connection: LightingConnection {
+                active: Some(ConnectionType::Ble),
+                usb_ready: true,
+                profile: 3,
+                ble_state: BleState::Connected,
             },
             ..LightingContext::default()
         };
@@ -776,7 +771,7 @@ mod tests {
         };
 
         assert!(conditions.matches(&context, &NoBatteries, None, None));
-        context.connection.preferred = ConnectionType::Usb;
+        context.connection.active = Some(ConnectionType::Usb);
         assert!(!conditions.matches(&context, &NoBatteries, None, None));
 
         let usb = ConditionSet {
@@ -791,10 +786,10 @@ mod tests {
         };
         assert!(usb.matches(&context, &NoBatteries, None, None));
 
-        context.connection.ble.profile = 4;
+        context.connection.profile = 4;
         assert!(!usb.matches(&context, &NoBatteries, None, None));
-        context.connection.ble.profile = 3;
-        context.connection.ble.state = BleState::Advertising;
+        context.connection.profile = 3;
+        context.connection.ble_state = BleState::Advertising;
         assert!(!usb.matches(&context, &NoBatteries, None, None));
     }
 
@@ -849,7 +844,7 @@ mod tests {
         assert!(!empty(0).matches(&context, &NoBatteries, None, None));
 
         // The active profile plays no part: switching it changes nothing.
-        context.connection.ble.profile = 1;
+        context.connection.profile = 1;
         assert!(paired(0).matches(&context, &NoBatteries, None, None));
         assert!(empty(1).matches(&context, &NoBatteries, None, None));
     }
@@ -869,9 +864,8 @@ mod tests {
         assert!(!plugged(true).matches(&context, &NoBatteries, None, None));
 
         // Ready but not the active transport: still "connected".
-        context.connection.usb = UsbState::Configured;
-        context.connection.ble.state = BleState::Connected;
-        context.connection.preferred = ConnectionType::Ble;
+        context.connection.usb_ready = true;
+        context.connection.active = Some(ConnectionType::Ble);
         assert!(plugged(true).matches(&context, &NoBatteries, None, None));
         assert!(!plugged(false).matches(&context, &NoBatteries, None, None));
     }
@@ -879,14 +873,11 @@ mod tests {
     #[test]
     fn connection_condition_matches_none_active_and_empty_condition() {
         let context = LightingContext {
-            connection: ConnectionStatus {
-                usb: UsbState::Enabled,
-                ble: BleStatus {
-                    profile: 2,
-                    state: BleState::Advertising,
-                    bonded: false,
-                },
-                preferred: ConnectionType::Usb,
+            connection: LightingConnection {
+                active: None,
+                usb_ready: false,
+                profile: 2,
+                ble_state: BleState::Advertising,
             },
             ..LightingContext::default()
         };

@@ -269,8 +269,6 @@ pub async fn initialize_nrf_ble_split_peripheral_and_run<
                     continue;
                 }
                 Err(e) => {
-                    #[cfg(feature = "defmt")]
-                    let e = defmt::Debug2Format(&e);
                     error!("Advertise error: {:?}", e);
                     Timer::after_millis(500).await;
                     continue;

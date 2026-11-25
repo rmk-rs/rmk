@@ -78,6 +78,12 @@ pub(crate) fn parse_keyboard_mod(item_mod: syn::ItemMod) -> TokenStream2 {
 
     // Reject oversized strings before firmware initialization.
     let name_len = identity.product_name.len();
+    let profiles = rmk_types::constants::NUM_BLE_PROFILES;
+    let suffix_len = if rmk_types::constants::BLE_PROFILE_NAME_SUFFIX && profiles > 0 {
+        format!("_{profiles}").len()
+    } else {
+        0
+    };
     let vendor_len = identity.manufacturer.len();
     // Match the marker normalization in build_serial_number.
     let serial_id = identity.serial_number.as_deref().map_or("", |serial| {
@@ -108,7 +114,7 @@ pub(crate) fn parse_keyboard_mod(item_mod: syn::ItemMod) -> TokenStream2 {
         return quote! { compile_error!(#msg); };
     }
     for (field, len, max) in [
-        ("product_name", name_len, BLE_ADV_NAME_MAX_LEN),
+        ("product_name", name_len, BLE_ADV_NAME_MAX_LEN - suffix_len),
         ("manufacturer", vendor_len, DEVICE_INFO_STRING_MAX_LEN),
     ] {
         if hardware.communication.ble_enabled() && len > max {

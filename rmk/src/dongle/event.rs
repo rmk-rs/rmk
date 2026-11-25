@@ -72,6 +72,11 @@ pub(crate) async fn run(server: &Server<'_>, conn: &GattConnection<'_, '_, Defau
                 e = battery.next_event().fuse() => DongleEvent::Battery(e),
                 e = next_peripheral_battery.fuse() => e,
             };
+            if matches!(event, DongleEvent::Action(_) | DongleEvent::Modifier(_))
+                && crate::state::current_profile() != crate::ble::profile::DONGLE_PROFILE
+            {
+                continue;
+            }
             let _ = queue.try_send(event);
         }
     };

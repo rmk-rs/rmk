@@ -15,7 +15,7 @@ use crate::constants::COMBO_SIZE;
 /// Actions are stored in a Vec — only meaningful keys are present (no `KeyAction::No` padding).
 ///
 /// Note: `COMBO_SIZE` is a **wire-format** capacity — on firmware it equals
-/// `COMBO_MAX_LENGTH` (from `keyboard.toml`), on host it's a fixed upper bound.
+/// `MAX_COMBO_KEYS` (from `keyboard.toml`), on host it's a fixed upper bound.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]

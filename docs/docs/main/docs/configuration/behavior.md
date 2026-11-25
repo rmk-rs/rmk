@@ -323,17 +323,17 @@ TH(A, B, MRZ)
 
 The following parameters in the `[rmk]` section control the resource allocation for the Morse feature:
 
-- `morse_max_num`: The maximum number of Morse key you can create. (Default: 8, Range: 0-255)
-- `morse_profile_max_num`: The capacity of the named profile table in `[behavior.morse.profiles]`. (Default: 16, Range: 0-255)
+- `max_morses`: The maximum number of Morse key you can create. (Default: 8, Range: 0-255)
+- `max_morse_profiles`: The capacity of the named profile table in `[behavior.morse.profiles]`. (Default: 16, Range: 0-255)
 - `max_patterns_per_key`: The maximum number of individual patterns (like ".-") or actions that a single Morse key can contain. (Default: 8, Range: 4-32)
 
 ```toml
 [rmk]
-morse_max_num = 10  # To support up to 10 morse keys
+max_morses = 10  # To support up to 10 morse keys
 max_patterns_per_key = 32  # To support up to 32 morse patterns per morse key
 ```
 
-Note that the Vial-style method (using `tap`, `hold`, `hold_after_tap`, `double_tap`) needs at least 4 patterns. RMK raises `morse_max_num` and `max_patterns_per_key` automatically to fit the morse keys defined in `keyboard.toml`, so set them only to reserve room for keys added later (for example through Vial). A single key cannot hold more than 32 patterns; the build fails above that limit.
+Note that the Vial-style method (using `tap`, `hold`, `hold_after_tap`, `double_tap`) needs at least 4 patterns. RMK raises `max_morses` and `max_patterns_per_key` automatically to fit the morse keys defined in `keyboard.toml`, so set them only to reserve room for keys added later (for example through Vial). A single key cannot hold more than 32 patterns; the build fails above that limit.
 
 ::: warning Vial Compatibility
 Please note that while the firmware can handle all Morse configurations, Vial can only recognize and edit the four basic Vial-style actions. These correspond to the patterns for single tap (.), hold (-), double tap (..), and hold-after-tap (.-). More complex patterns defined using morse_actions or extended tap_actions will not be visible or editable in Vial.
@@ -346,7 +346,7 @@ Here is a comprehensive example of morse configuration:
 ```toml
 [rmk]
 # Maximum number of morses keyboard can store (max 255)
-morse_max_num = 9
+max_morses = 9
 # Maximum number of patterns a morse key can handle (max 32)
 max_patterns_per_key = 32
 
@@ -458,7 +458,7 @@ In the `fork` sub-table, you can configure the keyboard's state-based key fork f
 Fork configuration includes the following parameters:
 
 - `forks`: An array containing all defined forks. Each fork configuration is an object containing the following attributes:
-  - `trigger`: Defines the triggering key, or a list of keys. A list creates one fork per key, each counting toward `fork_max_num`.
+  - `trigger`: Defines the triggering key, or a list of keys. A list creates one fork per key, each counting toward `max_forks`.
   - `negative_output`: A string defining the output action to be triggered when the conditions are not met. If omitted, the trigger key is left alone and no modifiers are suppressed (optional)
   - `positive_output`: A string defining the output action to be triggered when the conditions are met. Defaults to the trigger key (optional)
   - `layers`: A list of layers the trigger key must come from. Defaults to all layers (optional)
@@ -616,7 +616,7 @@ Some keys cannot be classified; they never trigger immediate deactivation (only 
 ::: note Rust API
 Configure the layer via `BehaviorConfig` and run the helper future alongside your other keyboard tasks. Subscriber slots are resolved from `keyboard.toml`'s `[event]` section at build time, so point `KEYBOARD_TOML_PATH` (set in `.cargo/config.toml`) to a `keyboard.toml` and increment `[event.pointing].subs` and `[event.layer_change].subs` by `1` there as well. When using `deactivate_on_key` / `reset_timeout_on_key`, also set `[event.action].subs` to `1` (it defaults to `0`) in that file. Otherwise the firmware panics at startup.
 
-The number of entries defaults to `2` without a `keyboard.toml`; with one it is auto-derived from `[[behavior.auto_mouse_layer]]` (`0` when absent), so set `[rmk].auto_mouse_layer_max_num` explicitly to override. `extra_mouse_keys` is a `&'static [KeyCode]`, so its length has no cap.
+The number of entries defaults to `2` without a `keyboard.toml`; with one it is auto-derived from `[[behavior.auto_mouse_layer]]` (`0` when absent), so set `[rmk].max_auto_mouse_layers` explicitly to override. `extra_mouse_keys` is a `&'static [KeyCode]`, so its length has no cap.
 
 ```rust
 use embassy_time::Duration;

@@ -8,7 +8,8 @@
 # static memory when a feature is disabled.
 #
 # Format per event: { name = "event_name", count = N }
-# `count` defaults to 1 if omitted.
+# `count` defaults to 1 if omitted. Subscribers held per BLE host link are
+# counted in build_constants.rs from `[ble] max_connections`.
 
 # --- Display-gated internal subscribers ---
 
@@ -51,8 +52,6 @@ events = [{ name = "battery_status" }]
 [[subscriber]]
 features = ["_ble"]
 events = [
-    # ble/battery_service.rs: BatteryStatusEvent::subscriber()
-    { name = "battery_status" },
     # ble/mod.rs: KeyboardEvent/PointingEvent wake subscribers, created when
     # advertising times out. Without a reserved slot they panic on boards whose
     # permanent subscribers already fill the base count.
@@ -60,8 +59,7 @@ events = [
     { name = "pointing" },
 ]
 
-# Rynk sessions subscribe to these topics; USB+BLE boards need two slots.
-
+# host/rynk/topics.rs: the USB Rynk connection subscribes to these topics.
 [[subscriber]]
 features = ["rynk"]
 events = [
@@ -78,19 +76,6 @@ events = [
 features = ["rynk", "lighting"]
 events = [
     { name = "lighting_changed" },
-]
-
-[[subscriber]]
-features = ["rynk", "_ble"]
-events = [
-    # Second session slot for the always-on topics on dual-transport boards.
-    { name = "battery_status" },
-    { name = "layer_change" },
-    { name = "wpm_update" },
-    { name = "connection_status_change" },
-    { name = "sleep_state" },
-    { name = "led_indicator" },
-    { name = "modifier" },
 ]
 
 # --- Dongle-gated internal subscribers (both binaries enable `dongle`) ---
@@ -114,13 +99,6 @@ features = ["dongle", "display"]
 events = [
     # display/mod.rs: DisplayProcessor subscribes on a dongle with a screen.
     { name = "dongle_state" },
-]
-
-[[subscriber]]
-features = ["rynk", "lighting", "_ble"]
-events = [
-    # Second Rynk session slot on dual-transport boards.
-    { name = "lighting_changed" },
 ]
 
 [[subscriber]]

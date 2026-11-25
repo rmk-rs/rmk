@@ -46,4 +46,4 @@ start_addr = 0xff0000
 num_sectors = 16
 
 [rmk]
-ble_profiles_num = 3
+num_ble_profiles = 3

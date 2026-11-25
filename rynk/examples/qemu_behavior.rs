@@ -12,9 +12,9 @@ use embassy_futures::select::{Either, select};
 use embedded_io_adapters::tokio_1::FromTokio;
 use rynk::rmk_types::action::{Action, EncoderAction, KeyAction};
 use rynk::rmk_types::battery::BatteryStatus;
-use rynk::rmk_types::ble::{BleState, BleStatus};
+use rynk::rmk_types::ble::BleStatus;
 use rynk::rmk_types::combo::Combo;
-use rynk::rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
+use rynk::rmk_types::connection::{ConnectionType, UsbState};
 use rynk::rmk_types::fork::{Fork, StateBits};
 use rynk::rmk_types::keyboard_macros::MacroOp;
 use rynk::rmk_types::keycode::{HidKeyCode, KeyCode};
@@ -115,7 +115,7 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(caps.max_macros, 32);
     assert_eq!(caps.macro_space_size, 256);
     assert!(!caps.macros_writable, "no storage, so macros are read-only");
-    assert_eq!(caps.max_morse, 8);
+    assert_eq!(caps.max_morses, 8);
     assert_eq!(caps.max_patterns_per_key, 8);
     assert_eq!(caps.max_forks, 8);
     assert!(!caps.storage_enabled);
@@ -277,22 +277,15 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     assert!(!client.get_sleep_state().await?);
     assert_eq!(client.get_led_indicator().await?, LedIndicator::default());
     assert_eq!(client.get_connection_type().await?, ConnectionType::Usb);
+    let connection = client.get_connection_status().await?;
     assert_eq!(
-        client.get_connection_status().await?,
-        ConnectionStatus {
-            usb: UsbState::Disabled,
-            ble: BleStatus {
-                profile: 0,
-                state: BleState::Inactive,
-                bonded: false,
-            },
-            preferred: ConnectionType::Usb,
-        }
+        (connection.usb, connection.selected, connection.preferred),
+        (UsbState::Disabled, 0, ConnectionType::Usb)
     );
+    assert!(connection.ble.iter().all(|profile| *profile == BleStatus::default()));
 
     // Every capability-gated command the fixture lacks is rejected client-side,
     // before touching the wire.
-    expect_unsupported("get_ble_status", client.get_ble_status().await);
     expect_unsupported("switch_ble_profile", client.switch_ble_profile(0).await);
     expect_unsupported("clear_ble_profile", client.clear_ble_profile(0).await);
     expect_unsupported("get_peripheral_status", client.get_peripheral_status(0).await);
@@ -369,12 +362,12 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(client.read_all_combos().await?, mutated_combos);
     client.write_all_combos(all_combos).await?;
 
-    // Morse table pages back every slot (the list is padded to `max_morse`);
+    // Morse table pages back every slot (the list is padded to `max_morses`);
     // slot 0 carries the configured profile, and a page at the slot count is empty.
     let all_morses = client.read_all_morses().await?;
-    assert_eq!(all_morses.len(), caps.max_morse as usize);
+    assert_eq!(all_morses.len(), caps.max_morses as usize);
     assert_eq!(all_morses[0], empty_morse(MorseProfile::const_default()));
-    assert!(client.get_morse_bulk(caps.max_morse).await?.configs.is_empty());
+    assert!(client.get_morse_bulk(caps.max_morses).await?.configs.is_empty());
     let mut mutated_morses = all_morses.clone();
     mutated_morses[0] = empty_morse(MorseProfile::const_default().with_hold_timeout_ms(Some(200)));
     client.write_all_morses(mutated_morses.clone()).await?;

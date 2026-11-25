@@ -31,14 +31,14 @@ fn default_sub_count() -> usize {
 
 /// Compile-time constants emitted as `pub const` items by `rmk-types/build.rs`.
 pub struct BuildConstants {
-    pub custom_message_max_size: usize,
-    pub combo_max_num: usize,
-    pub combo_max_length: usize,
-    pub fork_max_num: usize,
-    pub morse_max_num: usize,
-    pub morse_profile_max_num: usize,
+    pub max_custom_message_size: usize,
+    pub max_combos: usize,
+    pub max_combo_keys: usize,
+    pub max_forks: usize,
+    pub max_morses: usize,
+    pub max_morse_profiles: usize,
     pub max_patterns_per_key: usize,
-    pub macro_max_num: usize,
+    pub max_macros: usize,
     pub macro_space_size: usize,
     pub debounce_time: u16,
     pub mouse_key_interval: u16,
@@ -46,16 +46,22 @@ pub struct BuildConstants {
     pub report_channel_size: usize,
     pub vial_channel_size: usize,
     pub flash_channel_size: usize,
-    pub split_peripherals_num: usize,
+    pub num_split_peripherals: usize,
     pub central_battery_user_description: String,
     pub split_battery_peripheral_ids: Vec<usize>,
     pub split_battery_peripheral_user_descriptions: Vec<String>,
-    pub ble_profiles_num: usize,
+    /// Host profiles, set by `[rmk] num_ble_profiles`.
+    pub num_ble_profiles: usize,
+    /// Host profiles plus the dongle profile.
+    pub total_ble_profiles: usize,
+    /// Simultaneous BLE host and dongle connections: 0 without BLE.
+    pub num_host_links: usize,
     pub ble_use_2m_phy: bool,
+    pub ble_profile_name_suffix: bool,
     pub split_central_sleep_timeout_seconds: u32,
     pub split_central_max_latency_powered: u16,
     pub split_central_max_latency_battery: u16,
-    pub auto_mouse_layer_max_num: usize,
+    pub max_auto_mouse_layers: usize,
     /// Rynk RX/TX buffer size (bytes).
     pub rynk_buffer_size: usize,
     pub dongle_pairing_window_secs: u32,
@@ -102,11 +108,11 @@ impl crate::KeyboardTomlConfig {
     pub fn build_constants(&self, active_features: &[&str]) -> Result<BuildConstants, String> {
         let rmk = &self.rmk;
 
-        // Fix split_peripherals_num: when split feature is enabled, ensure at least 1
-        let split_peripherals_num = if active_features.contains(&"split") && rmk.split_peripherals_num < 1 {
+        // Fix num_split_peripherals: when split feature is enabled, ensure at least 1
+        let num_split_peripherals = if active_features.contains(&"split") && rmk.num_split_peripherals < 1 {
             1
         } else {
-            rmk.split_peripherals_num
+            rmk.num_split_peripherals
         };
         let central_battery_user_description = self
             .resolve_battery_config(None)?
@@ -129,15 +135,83 @@ impl crate::KeyboardTomlConfig {
                 }
             }
         }
+        let total_ble_profiles = rmk.num_ble_profiles + usize::from(active_features.contains(&"dongle"));
+        if total_ble_profiles == 0 && active_features.contains(&"_ble") {
+            return Err("BLE requires at least one BLE profile; set num_ble_profiles > 0 or enable dongle".to_string());
+        }
+        let ble_profile_name_suffix = self.ble.as_ref().is_some_and(|ble| ble.profile_name_suffix);
+        let num_host_links = if active_features.contains(&"_ble") {
+            if ble_profile_name_suffix && !active_features.contains(&"_ext_adv") {
+                return Err("keyboard.toml: [ble] profile_name_suffix requires the `ext_adv` feature".to_string());
+            }
+            let links = self.ble.as_ref().and_then(|ble| ble.max_connections).unwrap_or(1);
+            if links == 0 || links > total_ble_profiles {
+                return Err(format!(
+                    "keyboard.toml: [ble.max_connections] must be between 1 and the {total_ble_profiles} BLE profiles, got {links}"
+                ));
+            }
+            // Only extended advertising gives each profile an address, and so a link, of its own.
+            if links > 1 && !active_features.contains(&"_ext_adv") {
+                return Err("keyboard.toml: [ble.max_connections] above 1 requires the `ext_adv` feature".to_string());
+            }
+            links
+        } else {
+            0
+        };
+
+        let mut event_config = self.event.clone();
+        // ble/mod.rs: each host link runs a battery service. Its HID writer waits
+        // for the link's profile to be selected, and until the link encrypts its
+        // PHY task waits too.
+        event_config.battery_status.subs += num_host_links;
+        event_config.connection_status_change.subs += 2 * num_host_links;
+        if !split_battery_peripheral_ids.is_empty() {
+            event_config.peripheral_battery.subs += num_host_links;
+        }
+        // host/rynk/topics.rs: each host link opens its own Rynk session.
+        if active_features.contains(&"rynk") {
+            for event in [
+                &mut event_config.battery_status,
+                &mut event_config.layer_change,
+                &mut event_config.wpm_update,
+                &mut event_config.connection_status_change,
+                &mut event_config.sleep_state,
+                &mut event_config.led_indicator,
+                &mut event_config.modifier,
+            ] {
+                event.subs += num_host_links;
+            }
+            if active_features.contains(&"lighting") {
+                event_config.lighting_changed.subs += num_host_links;
+            }
+        }
+
+        // Each PointingDevice subscribes to the sleep state. Devices built by
+        // hand in Rust are declared under `[event.sleep_state]` instead.
+        event_config.sleep_state.subs += self.pointing_device_count();
+
+        // Every link subscribes to the outgoing queue, so a central needs one
+        // slot per split peripheral on top of its link toward the dongle.
+        if active_features.contains(&"custom_message") && active_features.contains(&"split") {
+            event_config.custom_message_out.subs += num_split_peripherals;
+        }
+
+        // Dynamically size dfu_cmd subscribers: 1 (central) + N (peripherals).
+        // The base count of 1 covers the central; each peripheral adds one.
+        if active_features.contains(&"dfu_split") {
+            event_config.dfu_cmd.subs += num_split_peripherals;
+            event_config.dfu_cmd.pubs += 1; // Split-Loop as second publisher (USB-Proxy is first)
+        }
+
         // Build event channels
         macro_rules! event_channels {
             ($($field:ident),* $(,)?) => {
                 vec![$(
                     EventChannel {
                         name: stringify!($field).to_string(),
-                        channel_size: self.event.$field.channel_size,
-                        pubs: self.event.$field.pubs,
-                        subs: self.event.$field.subs,
+                        channel_size: event_config.$field.channel_size,
+                        pubs: event_config.$field.pubs,
+                        subs: event_config.$field.subs,
                     },
                 )*]
             };
@@ -173,41 +247,6 @@ impl crate::KeyboardTomlConfig {
         // Declarations live in subscriber_default.toml.
         apply_feature_subscriber_bumps(&mut events, active_features);
 
-        // Each PointingDevice subscribes to the sleep state. Devices built by
-        // hand in Rust are declared under `[event.sleep_state]` instead.
-        let pointing_devices = self.pointing_device_count();
-        if pointing_devices > 0
-            && let Some(event) = events.iter_mut().find(|event| event.name == "sleep_state")
-        {
-            event.subs += pointing_devices;
-        }
-
-        // Every link subscribes to the outgoing queue, so a central needs one
-        // slot per split peripheral on top of its link toward the dongle.
-        if active_features.contains(&"custom_message")
-            && active_features.contains(&"split")
-            && let Some(event) = events.iter_mut().find(|event| event.name == "custom_message_out")
-        {
-            event.subs += split_peripherals_num;
-        }
-
-        // Dynamically size dfu_cmd subscribers: 1 (central) + N (peripherals).
-        // The base count of 1 covers the central; each peripheral adds one.
-        if active_features.contains(&"dfu_split")
-            && let Some(event) = events.iter_mut().find(|e| e.name == "dfu_cmd")
-        {
-            event.subs += split_peripherals_num;
-            event.pubs += 1; // Split-Loop as second publisher (USB-Proxy is first)
-        }
-
-        if !split_battery_peripheral_ids.is_empty()
-            && active_features.contains(&"split")
-            && active_features.contains(&"_ble")
-            && let Some(event) = events.iter_mut().find(|event| event.name == "peripheral_battery")
-        {
-            event.subs += 1;
-        }
-
         // Only validate passkey settings when the build will emit passkey constants.
         let passkey = if active_features.contains(&"passkey_entry") {
             self.ble.as_ref().map(resolve_passkey_enabled).transpose()?
@@ -217,10 +256,10 @@ impl crate::KeyboardTomlConfig {
 
         // Validate that config values do not exceed protocol ceilings.
         use crate::protocol_limits;
-        if rmk.combo_max_length > protocol_limits::MAX_COMBO_SIZE {
+        if rmk.max_combo_keys > protocol_limits::MAX_COMBO_SIZE {
             return Err(format!(
-                "combo_max_length ({}) exceeds protocol ceiling MAX_COMBO_SIZE ({})",
-                rmk.combo_max_length,
+                "max_combo_keys ({}) exceeds protocol ceiling MAX_COMBO_SIZE ({})",
+                rmk.max_combo_keys,
                 protocol_limits::MAX_COMBO_SIZE
             ));
         }
@@ -238,15 +277,15 @@ impl crate::KeyboardTomlConfig {
                 protocol_limits::MAX_MACRO_SPACE_SIZE
             ));
         }
-        let auto_mouse_layer_max_num = rmk
-            .auto_mouse_layer_max_num
-            .unwrap_or(crate::resolved::behavior::DEFAULT_AUTO_MOUSE_LAYER_MAX_NUM);
+        let max_auto_mouse_layers = rmk
+            .max_auto_mouse_layers
+            .unwrap_or(crate::resolved::behavior::DEFAULT_MAX_AUTO_MOUSE_LAYERS);
         if let Some(entries) = self.behavior.as_ref().and_then(|b| b.auto_mouse_layer.as_ref()) {
-            if entries.len() > auto_mouse_layer_max_num {
+            if entries.len() > max_auto_mouse_layers {
                 return Err(format!(
-                    "number of [[behavior.auto_mouse_layer]] entries ({}) exceeds auto_mouse_layer_max_num ({})",
+                    "number of [[behavior.auto_mouse_layer]] entries ({}) exceeds max_auto_mouse_layers ({})",
                     entries.len(),
-                    auto_mouse_layer_max_num
+                    max_auto_mouse_layers
                 ));
             }
             let uses_action_event = entries
@@ -260,22 +299,23 @@ impl crate::KeyboardTomlConfig {
         }
 
         // Host capability fields are u8/u16 on the wire; check the values no deserializer bound
-        // covers (morse_max_num and split_peripherals_num can also be auto-raised past 255).
-        validate_u8_capability("morse_max_num", rmk.morse_max_num)?;
-        validate_u8_capability("split_peripherals_num", split_peripherals_num)?;
-        validate_u8_capability("ble_profiles_num", rmk.ble_profiles_num)?;
-        validate_u8_capability("macro_max_num", rmk.macro_max_num)?;
+        // covers (max_morses and num_split_peripherals can also be auto-raised past 255).
+        validate_u8_capability("max_morses", rmk.max_morses)?;
+        validate_u8_capability("num_split_peripherals", num_split_peripherals)?;
+        validate_u8_capability("num_ble_profiles", rmk.num_ble_profiles)?;
+        validate_u8_capability("max_connections", num_host_links)?;
+        validate_u8_capability("max_macros", rmk.max_macros)?;
         validate_u16_capability("macro_space_size", rmk.macro_space_size)?;
         validate_u16_capability("rynk_buffer_size", rmk.rynk_buffer_size)?;
         Ok(BuildConstants {
-            custom_message_max_size: rmk.custom_message_max_size,
-            combo_max_num: rmk.combo_max_num,
-            combo_max_length: rmk.combo_max_length,
-            fork_max_num: rmk.fork_max_num,
-            morse_max_num: rmk.morse_max_num,
-            morse_profile_max_num: rmk.morse_profile_max_num,
+            max_custom_message_size: rmk.max_custom_message_size,
+            max_combos: rmk.max_combos,
+            max_combo_keys: rmk.max_combo_keys,
+            max_forks: rmk.max_forks,
+            max_morses: rmk.max_morses,
+            max_morse_profiles: rmk.max_morse_profiles,
             max_patterns_per_key: rmk.max_patterns_per_key,
-            macro_max_num: rmk.macro_max_num,
+            max_macros: rmk.max_macros,
             macro_space_size: rmk.macro_space_size,
             debounce_time: rmk.debounce_time,
             mouse_key_interval: rmk.mouse_key_interval,
@@ -283,16 +323,19 @@ impl crate::KeyboardTomlConfig {
             report_channel_size: rmk.report_channel_size,
             vial_channel_size: rmk.vial_channel_size,
             flash_channel_size: rmk.flash_channel_size,
-            split_peripherals_num,
+            num_split_peripherals,
             central_battery_user_description,
             split_battery_peripheral_ids,
             split_battery_peripheral_user_descriptions,
-            ble_profiles_num: rmk.ble_profiles_num,
+            num_ble_profiles: rmk.num_ble_profiles,
+            total_ble_profiles,
+            num_host_links,
             ble_use_2m_phy: self.ble.as_ref().and_then(|ble| ble.use_2m_phy).unwrap_or(true),
+            ble_profile_name_suffix,
             split_central_sleep_timeout_seconds: rmk.split_central_sleep_timeout_seconds,
             split_central_max_latency_powered: rmk.split_central_max_latency_powered,
             split_central_max_latency_battery: rmk.split_central_max_latency_battery,
-            auto_mouse_layer_max_num,
+            max_auto_mouse_layers,
             rynk_buffer_size: rmk.rynk_buffer_size,
             dongle_pairing_window_secs: rmk.dongle_pairing_window_secs,
             events,
@@ -476,8 +519,11 @@ mod tests {
     }
 
     #[test]
-    fn split_ble_reserves_peripheral_battery_subscriber_only_with_battery_ids() {
+    fn ble_battery_subscribers_cover_each_host_link() {
         let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
+        config.rmk.num_ble_profiles = 5;
+        config.event.battery_status.subs = 2;
+        config.event.peripheral_battery.subs = 3;
         config.split = Some(SplitConfig {
             peripheral: vec![SplitBoardConfig {
                 battery: Some(BatteryTomlConfig {
@@ -490,18 +536,75 @@ mod tests {
         });
         config.auto_calculate_parameters();
 
-        let base = config.build_constants(&[]).unwrap();
-        let split_ble = config.build_constants(&["split", "_ble"]).unwrap();
-        let subs = |constants: &BuildConstants| {
-            constants
+        let cases: &[(&[&str], Option<usize>, usize, usize)] = &[
+            (&[], None, 3, 3),
+            (&["_ble"], None, 4, 3),
+            (&["_ble", "_ext_adv"], Some(5), 8, 3),
+            (&["split", "_ble"], None, 5, 4),
+            (&["split", "_ble", "_ext_adv"], Some(5), 9, 8),
+            (&["split", "_ble", "_ext_adv", "dongle"], Some(6), 11, 9),
+        ];
+        for &(features, max_connections, battery_status_subs, peripheral_battery_subs) in cases {
+            config.ble = Some(BleConfig {
+                max_connections,
+                ..Default::default()
+            });
+            let constants = config.build_constants(features).unwrap();
+            for (name, expected) in [
+                ("battery_status", battery_status_subs),
+                ("peripheral_battery", peripheral_battery_subs),
+            ] {
+                let event = constants.events.iter().find(|event| event.name == name).unwrap();
+                assert_eq!(event.subs, expected, "{features:?}: {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn each_host_link_reserves_both_of_its_connection_status_waits() {
+        let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
+        config.rmk.num_ble_profiles = 3;
+        for (features, max_connections, expected) in [
+            (&[][..], None, 1),
+            (&["_ble"], None, 3),
+            (&["_ble", "_ext_adv"], Some(3), 7),
+        ] {
+            config.ble = Some(BleConfig {
+                max_connections,
+                ..Default::default()
+            });
+            let constants = config.build_constants(features).unwrap();
+            let event = constants
                 .events
                 .iter()
-                .find(|event| event.name == "peripheral_battery")
-                .unwrap()
-                .subs
-        };
+                .find(|event| event.name == "connection_status_change")
+                .unwrap();
+            assert_eq!(event.subs, expected, "{features:?}");
+        }
+    }
 
-        assert_eq!(subs(&split_ble), subs(&base) + 1);
+    #[test]
+    fn max_connections_fit_the_profiles_and_need_extended_advertising() {
+        let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
+        config.rmk.num_ble_profiles = 2;
+        assert_eq!(config.build_constants(&["_ble", "_ext_adv"]).unwrap().num_host_links, 1);
+        for (max_connections, features, links) in [
+            (0, &["_ble", "_ext_adv"][..], None),
+            (2, &["_ble"], None),
+            (2, &["_ble", "_ext_adv"], Some(2)),
+            (3, &["_ble", "_ext_adv"], None),
+            (3, &["_ble", "_ext_adv", "dongle"], Some(3)),
+        ] {
+            config.ble = Some(BleConfig {
+                max_connections: Some(max_connections),
+                ..Default::default()
+            });
+            let resolved = config
+                .build_constants(features)
+                .ok()
+                .map(|constants| constants.num_host_links);
+            assert_eq!(resolved, links, "{max_connections} links with {features:?}");
+        }
     }
 
     #[test]
@@ -703,18 +806,18 @@ mod tests {
     }
 
     #[test]
-    fn auto_mouse_layer_max_num_explicitly_too_small_is_rejected() {
-        let toml = "[rmk]\nauto_mouse_layer_max_num = 0\n\n[[behavior.auto_mouse_layer]]\ntarget_layer = 1\n";
+    fn max_auto_mouse_layers_explicitly_too_small_is_rejected() {
+        let toml = "[rmk]\nmax_auto_mouse_layers = 0\n\n[[behavior.auto_mouse_layer]]\ntarget_layer = 1\n";
         let err = match parse(toml).build_constants(&[]) {
-            Ok(_) => panic!("expected auto_mouse_layer_max_num validation failure"),
+            Ok(_) => panic!("expected max_auto_mouse_layers validation failure"),
             Err(err) => err,
         };
-        assert!(err.contains("auto_mouse_layer_max_num"));
+        assert!(err.contains("max_auto_mouse_layers"));
     }
 
     #[test]
     fn auto_mouse_layer_within_capacity_is_accepted() {
-        let toml = "[rmk]\nauto_mouse_layer_max_num = 1\n\n[[behavior.auto_mouse_layer]]\ntarget_layer = 1\nextra_mouse_keys = [\"LCtrl\"]\n";
+        let toml = "[rmk]\nmax_auto_mouse_layers = 1\n\n[[behavior.auto_mouse_layer]]\ntarget_layer = 1\nextra_mouse_keys = [\"LCtrl\"]\n";
         assert!(parse(toml).build_constants(&[]).is_ok());
     }
 
@@ -755,10 +858,10 @@ mod tests {
 
     #[test]
     fn validates_capability_wire_widths() {
-        assert!(validate_u8_capability("ble_profiles_num", 255).is_ok());
+        assert!(validate_u8_capability("num_ble_profiles", 255).is_ok());
         assert_eq!(
-            validate_u8_capability("ble_profiles_num", 256),
-            Err("ble_profiles_num (256) exceeds the u8 host capability field (max 255)".to_string())
+            validate_u8_capability("num_ble_profiles", 256),
+            Err("num_ble_profiles (256) exceeds the u8 host capability field (max 255)".to_string())
         );
 
         assert!(validate_u16_capability("rynk_buffer_size", 65535).is_ok());

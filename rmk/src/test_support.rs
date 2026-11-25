@@ -10,7 +10,7 @@ use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use embassy_time::{Duration, MockDriver};
 
-pub const COMBO_MAX_LENGTH: usize = crate::COMBO_MAX_LENGTH;
+pub const MAX_COMBO_KEYS: usize = crate::MAX_COMBO_KEYS;
 
 #[cfg(feature = "vial")]
 pub fn to_via_keycode(action: rmk_types::action::KeyAction) -> u16 {
@@ -18,13 +18,12 @@ pub fn to_via_keycode(action: rmk_types::action::KeyAction) -> u16 {
 }
 
 #[cfg(all(feature = "_no_usb", feature = "_ble"))]
-pub fn set_ble_state(state: rmk_types::ble::BleState) {
-    crate::state::set_ble_state(state);
+pub fn set_ble_state(profile: u8, state: rmk_types::ble::BleState) {
+    crate::state::set_ble_state(profile, state);
 }
 
-#[cfg(any(not(feature = "_no_usb"), feature = "_ble"))]
 pub fn reset_connection_status() {
-    crate::state::CONNECTION_STATUS.lock(|c| c.set(rmk_types::connection::ConnectionStatus::default()));
+    crate::state::update_status(|c| *c = Default::default());
 }
 
 #[cfg(feature = "storage")]

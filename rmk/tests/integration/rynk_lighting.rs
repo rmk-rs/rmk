@@ -129,7 +129,7 @@ fn loopback<T>(
     test_block_on(async {
         // Drain test flash writes so a storage handler cannot block the session.
         let device = select(
-            select(service.run_session(&mut dev_rx, &mut dev_tx), background),
+            select(service.run(&mut dev_rx, &mut dev_tx), background),
             rmk::test_support::drain_flash_channel(),
         );
         match select(device, script(&mut host)).await {

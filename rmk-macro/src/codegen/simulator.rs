@@ -256,9 +256,13 @@ fn expand_test(
         quote! { build() }
     };
     let fn_name = format_ident!("{}", test.name);
+    let gates = features.iter().map(|f| match f.strip_prefix('!') {
+        Some(f) => quote! { not(feature = #f) },
+        None => quote! { feature = #f },
+    });
 
     Ok(quote! {
-        #[cfg(all(#(feature = #features),*))]
+        #[cfg(all(#(#gates),*))]
         #[test]
         fn #fn_name() {
             ::rmk::test_support::test_block_on(async {
@@ -707,7 +711,7 @@ expect = [[]]
 
     #[test]
     fn rmk_section_is_rejected() {
-        let doc = format!("{MINIMAL}\n[rmk]\ncombo_max_num = 16\n");
+        let doc = format!("{MINIMAL}\n[rmk]\nmax_combos = 16\n");
         let err = expand(&doc, None).expect_err("expected error");
         assert!(err.contains("[rmk]"), "unexpected error: {err}");
     }

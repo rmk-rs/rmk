@@ -31,14 +31,14 @@ impl Handle<GetCapabilities> for RynkService<'_> {
 
             // Input device limits (compile-time from keyboard.toml)
             num_encoders: self.ctx.num_encoders() as u8,
-            max_combos: constants::COMBO_MAX_NUM as u8,
-            max_combo_keys: constants::COMBO_MAX_LENGTH as u8,
-            max_macros: constants::MACRO_MAX_NUM as u8,
+            max_combos: constants::MAX_COMBOS as u8,
+            max_combo_keys: constants::MAX_COMBO_KEYS as u8,
+            max_macros: constants::MAX_MACROS as u8,
             macro_space_size: constants::MACRO_SPACE_SIZE as u16,
             macros_writable: cfg!(feature = "storage"),
-            max_morse: constants::MORSE_MAX_NUM as u8,
+            max_morses: constants::MAX_MORSES as u8,
             max_patterns_per_key: constants::MAX_PATTERNS_PER_KEY as u8,
-            max_forks: constants::FORK_MAX_NUM as u8,
+            max_forks: constants::MAX_FORKS as u8,
 
             // Feature flags
             storage_enabled: cfg!(feature = "storage"),
@@ -49,9 +49,18 @@ impl Handle<GetCapabilities> for RynkService<'_> {
 
             // Connectivity
             is_split: cfg!(feature = "split"),
-            num_split_peripherals: constants::SPLIT_PERIPHERALS_NUM as u8,
+            num_split_peripherals: constants::NUM_SPLIT_PERIPHERALS as u8,
             ble_enabled: cfg!(feature = "_ble"),
-            num_ble_profiles: constants::NUM_BLE_PROFILE as u8,
+            num_ble_profiles: if cfg!(feature = "_ble") {
+                constants::NUM_BLE_PROFILES as u8
+            } else {
+                0
+            },
+            max_connections: constants::NUM_HOST_LINKS as u8,
+            #[cfg(all(feature = "_ble", feature = "dongle"))]
+            dongle_profile: Some(crate::ble::profile::DONGLE_PROFILE),
+            #[cfg(not(all(feature = "_ble", feature = "dongle")))]
+            dongle_profile: None,
 
             // Protocol limits
             max_payload_size: RYNK_MAX_PAYLOAD_SIZE as u16,

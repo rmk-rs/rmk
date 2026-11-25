@@ -614,7 +614,7 @@ impl<'a> KeyMap<'a> {
 
     pub(crate) fn auto_mouse_layer_configs(
         &self,
-    ) -> heapless::Vec<crate::config::AutoMouseLayerConfig, { crate::AUTO_MOUSE_LAYER_MAX_NUM }> {
+    ) -> heapless::Vec<crate::config::AutoMouseLayerConfig, { crate::MAX_AUTO_MOUSE_LAYERS }> {
         self.inner.borrow().behavior.auto_mouse_layer.clone()
     }
 
@@ -824,22 +824,11 @@ impl<'a> KeyMap<'a> {
         })
     }
 
-    pub(crate) fn set_encoder_clockwise(&self, layer: usize, id: usize, action: KeyAction) -> Option<EncoderAction> {
-        let mut inner = self.inner.borrow_mut();
-        let idx = inner.encoder_index(layer, id);
-        if let Some(encoders) = &mut inner.encoders
-            && let Some(encoder_action) = encoders.get_mut(idx)
-        {
-            encoder_action.clockwise = action;
-            return Some(*encoder_action);
-        }
-        None
-    }
-
-    pub(crate) fn set_encoder_counter_clockwise(
+    pub(crate) fn set_encoder_direction(
         &self,
         layer: usize,
         id: usize,
+        clockwise: bool,
         action: KeyAction,
     ) -> Option<EncoderAction> {
         let mut inner = self.inner.borrow_mut();
@@ -847,7 +836,11 @@ impl<'a> KeyMap<'a> {
         if let Some(encoders) = &mut inner.encoders
             && let Some(encoder_action) = encoders.get_mut(idx)
         {
-            encoder_action.counter_clockwise = action;
+            if clockwise {
+                encoder_action.clockwise = action;
+            } else {
+                encoder_action.counter_clockwise = action;
+            }
             return Some(*encoder_action);
         }
         None

@@ -314,12 +314,12 @@ rmk = { features = [ "dfu_rp", "split", "dfu_split"] }
 ### Peripherals count
 
 Each connected peripheral needs one subscriber slot on `DfuCmdEvent`.
-The number of subscribers is automatically calculated using the `SPLIT_PERIPHERALS_NUM` constant.
+The number of subscribers is automatically calculated using the `NUM_SPLIT_PERIPHERALS` constant.
 The constant is automatically set to 1 when the `split` feature is enabled.
 However, if you have more than one peripheral, increase the constant accordingly:
 ```toml title="keyboard.toml"
 [rmk]
-split_peripherals_num = 2 # central + 2 peripherals
+num_split_peripherals = 2 # central + 2 peripherals
 ```
 
 See [RMK Internal Configuration](../../configuration/rmk_config.md) for details on

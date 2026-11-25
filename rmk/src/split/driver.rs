@@ -48,12 +48,12 @@ struct PeripheralSlot {
     battery: BatteryStatus,
 }
 
-static PERIPHERAL_SLOTS: BlockingMutex<crate::RawMutex, Cell<[PeripheralSlot; crate::SPLIT_PERIPHERALS_NUM]>> =
+static PERIPHERAL_SLOTS: BlockingMutex<crate::RawMutex, Cell<[PeripheralSlot; crate::NUM_SPLIT_PERIPHERALS]>> =
     BlockingMutex::new(Cell::new(
         [PeripheralSlot {
             connected: false,
             battery: BatteryStatus::Unavailable,
-        }; crate::SPLIT_PERIPHERALS_NUM],
+        }; crate::NUM_SPLIT_PERIPHERALS],
     ));
 
 /// Read-modify-write peripheral `id`'s slot. Returns `false` when `id` is out
@@ -126,7 +126,7 @@ mod tests {
         set_peripheral_battery(0, status);
 
         assert_eq!(current_peripheral_battery_status(0), Some(status));
-        assert_eq!(current_peripheral_battery_status(crate::SPLIT_PERIPHERALS_NUM), None);
+        assert_eq!(current_peripheral_battery_status(crate::NUM_SPLIT_PERIPHERALS), None);
         let event = subscriber.try_next_message_pure().unwrap();
         assert_eq!(event.id, 0);
         assert_eq!(event.state.0, status);

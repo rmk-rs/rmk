@@ -81,12 +81,9 @@ impl<'a> KeyboardContext<'a> {
         clockwise: bool,
         action: KeyAction,
     ) -> Result<(), ()> {
-        let updated = if clockwise {
-            self.keymap.set_encoder_clockwise(layer as usize, idx as usize, action)
-        } else {
-            self.keymap
-                .set_encoder_counter_clockwise(layer as usize, idx as usize, action)
-        };
+        let updated = self
+            .keymap
+            .set_encoder_direction(layer as usize, idx as usize, clockwise, action);
         #[cfg(feature = "storage")]
         if let Some(encoder) = updated {
             store(StorageItem::Encoder {

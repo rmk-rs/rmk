@@ -23,7 +23,7 @@ use rmk_types::action::Action;
 use rmk_types::keycode::{HidKeyCode, KeyCode};
 use rmk_types::modifier::ModifierCombination;
 
-use crate::AUTO_MOUSE_LAYER_MAX_NUM;
+use crate::MAX_AUTO_MOUSE_LAYERS;
 use crate::config::AutoMouseLayerConfig;
 use crate::core_traits::Runnable;
 use crate::event::{
@@ -46,7 +46,7 @@ use crate::processor::Processor;
 #[::rmk::macros::runnable_generated]
 pub struct AutoMouseLayerRunner<'a, 'k> {
     keymap: &'a KeyMap<'k>,
-    entries: Vec<EntryState, AUTO_MOUSE_LAYER_MAX_NUM>,
+    entries: Vec<EntryState, MAX_AUTO_MOUSE_LAYERS>,
     /// `true` if any entry has `deactivate_on_key` or `reset_timeout_on_key` set,
     /// so action events must be inspected.
     any_action_event_configured: bool,
@@ -57,7 +57,7 @@ impl<'a, 'k> AutoMouseLayerRunner<'a, 'k> {
     pub fn new(keymap: &'a KeyMap<'k>) -> Self {
         let num_layer = keymap.num_layer();
         let configs = keymap.auto_mouse_layer_configs();
-        let mut entries: Vec<EntryState, AUTO_MOUSE_LAYER_MAX_NUM> = Vec::new();
+        let mut entries: Vec<EntryState, MAX_AUTO_MOUSE_LAYERS> = Vec::new();
         let mut any_action_event_configured = false;
         for config in configs.iter().cloned() {
             if (config.target_layer as usize) >= num_layer {
@@ -85,7 +85,7 @@ impl<'a, 'k> AutoMouseLayerRunner<'a, 'k> {
             {
                 warn!(
                     "auto_mouse_layer: too many entries configured (max {}); entry for device_id {:?} is dropped",
-                    AUTO_MOUSE_LAYER_MAX_NUM, device_id
+                    MAX_AUTO_MOUSE_LAYERS, device_id
                 );
             }
         }
@@ -240,8 +240,8 @@ fn layer_shared_with_other(entries: &[EntryState], idx: usize, layer: u8) -> boo
         .any(|(i, e)| i != idx && e.self_activated && e.config.target_layer == layer)
 }
 
-fn timeout_step(entries: &mut [EntryState], now: Instant) -> Vec<u8, AUTO_MOUSE_LAYER_MAX_NUM> {
-    let mut released: Vec<u8, AUTO_MOUSE_LAYER_MAX_NUM> = Vec::new();
+fn timeout_step(entries: &mut [EntryState], now: Instant) -> Vec<u8, MAX_AUTO_MOUSE_LAYERS> {
+    let mut released: Vec<u8, MAX_AUTO_MOUSE_LAYERS> = Vec::new();
     for i in 0..entries.len() {
         let expired = entries[i].self_activated && entries[i].deadline.is_some_and(|d| d <= now);
         if !expired {
@@ -284,8 +284,8 @@ fn pointing_step(entries: &mut [EntryState], idx: usize, now: Instant, activated
 /// Actions that emit no single keycode/modifier set (layer switches, macros,
 /// `Again`/`Repeat`, `GraveEscape`, ...) are unclassifiable and never deactivate;
 /// the timeout path clears the layer instead.
-fn keypress_step(entries: &mut [EntryState], action: Action, now: Instant) -> Vec<u8, AUTO_MOUSE_LAYER_MAX_NUM> {
-    let mut released: Vec<u8, AUTO_MOUSE_LAYER_MAX_NUM> = Vec::new();
+fn keypress_step(entries: &mut [EntryState], action: Action, now: Instant) -> Vec<u8, MAX_AUTO_MOUSE_LAYERS> {
+    let mut released: Vec<u8, MAX_AUTO_MOUSE_LAYERS> = Vec::new();
     for i in 0..entries.len() {
         if !entries[i].self_activated {
             continue;

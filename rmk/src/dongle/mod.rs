@@ -38,7 +38,7 @@ use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 use vial_router as router;
 
 use crate::ble::adv::Adv;
-use crate::ble::profile::{ProfileInfo, ProfileManager};
+use crate::ble::profile::{ProfileInfo, ProfileManager, set_stack_bond};
 use crate::ble::scan::{DONGLE_SCAN_WINDOW, connect, scan_config, start_scan};
 use crate::ble::{CentralCmds, wait_for_stack_started};
 use crate::channel::send_hid_report;
@@ -71,7 +71,8 @@ type DongleBleResources = HostResources<DefaultPacketPool, DONGLE_CONNECTIONS_MA
 /// - the dongle event service
 type Client<'a, C> = GattClient<'a, C, DefaultPacketPool, 4>;
 
-const BOND_SLOT: u8 = 0;
+/// The dongle's only profile, holding the bond of the keyboard it relays.
+const KEYBOARD_PROFILE: u8 = 0;
 
 /// Which keyboard a connection is to. Decides whether the link pairs or
 /// encrypts, and whether a rejected key means the stored bond is dead.
@@ -193,9 +194,8 @@ where
             .build();
         let stack = &stack;
         let scan = ScanHandler::new();
-        let mut profile_manager = ProfileManager::new(stack);
-        profile_manager.load_bonded_devices().await;
-        profile_manager.update_stack_bonds();
+        let profile_manager = ProfileManager::new().await;
+        set_stack_bond(stack, profile_manager.bond_info(KEYBOARD_PROFILE).map(|bond| bond.info));
         let mut central = DongleCentral {
             stack,
             scan: &scan,
@@ -220,7 +220,7 @@ struct DongleCentral<'b, 's: 'b, C: Controller + ControllerCmdAsync<LeSetPhy>> {
     stack: &'b Stack<'s, C, DefaultPacketPool>,
     scan: &'b ScanHandler,
     router: &'b DongleRouter,
-    profiles: &'b ProfileManager<'b, 's, C, DefaultPacketPool, 1>,
+    profiles: &'b ProfileManager<1>,
     /// The last state published, so a path that ends where it began says nothing.
     state: Cell<DongleState>,
 }
@@ -239,7 +239,7 @@ where
     async fn run(&mut self) -> ! {
         wait_for_stack_started().await;
 
-        let bonded = self.profiles.bond_info(BOND_SLOT).map(|b| b.info.identity.addr);
+        let bonded = self.profiles.bond_info(KEYBOARD_PROFILE).map(|b| b.info.identity.addr);
         self.scan.bonded_addr.lock(|a| a.set(bonded.map(|addr| addr.addr)));
         // The only chance to pair while a bond exists: one window at boot, so a
         // keyboard the user already set seeking can replace the bonded one.
@@ -251,7 +251,7 @@ where
         }
 
         loop {
-            let bonded = self.profiles.bond_info(BOND_SLOT).map(|b| b.info.identity.addr);
+            let bonded = self.profiles.bond_info(KEYBOARD_PROFILE).map(|b| b.info.identity.addr);
             self.scan.bonded_addr.lock(|a| a.set(bonded.map(|addr| addr.addr)));
 
             if let Some(addr) = bonded {
@@ -294,8 +294,6 @@ where
         match with_timeout(Duration::from_secs(15), connect(&mut central, &config)).await {
             Ok(Ok(conn)) => Some(conn),
             Ok(Err(e)) => {
-                #[cfg(feature = "defmt")]
-                let e = defmt::Debug2Format(&e);
                 debug!("[dongle] connect error: {:?}", e);
                 None
             }
@@ -411,8 +409,9 @@ where
                 // Save the new bond — also when the bonded keyboard cleared its side
                 // and re-paired, otherwise we keep an old key nothing accepts anymore.
                 Ok(ConnectionEvent::PairingComplete { bond: Some(bond), .. }) => {
+                    set_stack_bond(self.stack, Some(bond.clone()));
                     self.profiles.set_bond(ProfileInfo {
-                        slot_num: BOND_SLOT,
+                        profile: KEYBOARD_PROFILE,
                         removed: false,
                         info: bond,
                         cccd_table: heapless::Vec::new(),
@@ -423,7 +422,8 @@ where
                 Ok(ConnectionEvent::PairingFailed(e)) => {
                     warn!("[dongle] pairing failed: {:?}", e);
                     if peer == Peer::Bonded {
-                        self.profiles.clear_bond(BOND_SLOT);
+                        self.profiles.clear_bond(KEYBOARD_PROFILE);
+                        set_stack_bond(self.stack, None);
                     }
                     return false;
                 }
@@ -433,7 +433,8 @@ where
                 Ok(ConnectionEvent::Disconnected { reason }) => {
                     if peer == Peer::Bonded && reason == Status::AUTHENTICATION_FAILURE {
                         warn!("[dongle] bonded keyboard refused our key, dropping the bond");
-                        self.profiles.clear_bond(BOND_SLOT);
+                        self.profiles.clear_bond(KEYBOARD_PROFILE);
+                        set_stack_bond(self.stack, None);
                     }
                     return false;
                 }
@@ -545,11 +546,17 @@ where
 
         let led_to_keyboard = async {
             let mut led_events = LedIndicatorEvent::subscriber();
+            let mut last_sent = None;
             loop {
-                let event = led_events.next_event().await;
-                let _ = client
-                    .write_characteristic_without_response(&chars.keyboard_output, &[event.0.into_bits()])
-                    .await;
+                let bits = led_events.next_event().await.0.into_bits();
+                if last_sent != Some(bits)
+                    && client
+                        .write_characteristic_without_response(&chars.keyboard_output, &[bits])
+                        .await
+                        .is_ok()
+                {
+                    last_sent = Some(bits);
+                }
             }
         };
 

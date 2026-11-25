@@ -4,8 +4,8 @@
 #   UPDATE_SNAPSHOTS=1 cargo test -p rmk-types --features host --features "rynk _ble split" split_ble_wire_frames
 # Format: <label>  <hex bytes>
 
-GetSplitCentralLatency reply Ok(state)     04 06 07 01 01 06 04 01 02 01 02 00
-GetSplitCentralLatency request ()          04 06 07 01 00
-SetSplitCentralLatency reply Err(Invalid)  06 07 07 01 01 05 00
-SetSplitCentralLatency reply Ok(state)     04 07 07 01 01 06 04 01 02 01 02 00
-SetSplitCentralLatency request policy      04 07 07 01 04 04 01 02 00
+GetSplitCentralLatency reply Ok(state)     04 0a 07 01 01 06 04 01 02 01 02 00
+GetSplitCentralLatency request ()          04 0a 07 01 00
+SetSplitCentralLatency reply Err(Invalid)  06 0b 07 01 01 05 00
+SetSplitCentralLatency reply Ok(state)     04 0b 07 01 01 06 04 01 02 01 02 00
+SetSplitCentralLatency request policy      04 0b 07 01 04 04 01 02 00

@@ -24,7 +24,7 @@ pub mod topology;
 
 pub use color::Rgb8;
 pub use compositor::{Compositor, LogicalFrame, RenderError, RenderPolicy, RenderResult, RenderTransaction};
-pub use context::{IndicatorState, LayerState, LightingContext, LightingContextProvider};
+pub use context::{IndicatorState, LayerState, LightingConnection, LightingContext, LightingContextProvider};
 pub use effect::{BuiltinEffect, EffectSample, LightingEffect};
 pub use output::{
     BrightnessTransform, OutputSelection, RouteError, RoutedFrameSink, RoutedPixel, ValidatedRouting, VisitSummary,

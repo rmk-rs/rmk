@@ -10,7 +10,6 @@ use syn::{ItemFn, ItemMod};
 use crate::codegen::override_helper::{Overwritten, find_overwritten};
 
 pub(crate) fn expand_usb_init(hardware: &Hardware, item_mod: &ItemMod) -> TokenStream2 {
-    // If there is a function with `#[Overwritten(usb)]`, override the chip initialization
     if let Some((_, items)) = &item_mod.content {
         items
             .iter()

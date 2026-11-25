@@ -50,26 +50,22 @@ impl SnapshotProvider for KeymapLightingState<'_, '_> {
         }
         let connection = crate::state::current_connection_status();
         let powered = connection.usb.is_powered();
+        // Profiles past the mask's width are dropped rather than wrapped onto another bit.
+        let bonded_slots = connection
+            .ble
+            .iter()
+            .take(u8::BITS as usize)
+            .enumerate()
+            .filter(|(_, profile)| profile.bonded)
+            .fold(0, |mask, (slot, _)| mask | 1 << slot);
         LightingContext {
             layers: LayerState::new(effective, default, active),
             indicators: indicator_state(),
             powered,
             local_powered: powered,
-            connection,
-            bonded_slots: bonded_slots(),
+            connection: (&connection).into(),
+            bonded_slots,
         }
-    }
-}
-
-/// Bonded-slot bitmap, or zero on builds with no BLE stack to bond with.
-fn bonded_slots() -> u8 {
-    #[cfg(feature = "_ble")]
-    {
-        crate::state::bonded_slots()
-    }
-    #[cfg(not(feature = "_ble"))]
-    {
-        0
     }
 }
 

@@ -15,13 +15,16 @@ impl crate::KeyboardTomlConfig {
                     }
                 }
                 if let Some(combo) = &behavior.combo {
-                    if combo.combos.len() > self.rmk.combo_max_num {
-                        return Err("keyboard.toml: number of combos is greater than combo_max_num configured under [rmk] section".to_string());
+                    if combo.combos.len() > self.rmk.max_combos {
+                        return Err(
+                            "keyboard.toml: number of combos is greater than max_combos configured under [rmk] section"
+                                .to_string(),
+                        );
                     }
                     for (i, c) in combo.combos.iter().enumerate() {
-                        if c.actions.len() > self.rmk.combo_max_length {
+                        if c.actions.len() > self.rmk.max_combo_keys {
                             return Err(format!(
-                                "keyboard.toml: number of keys in combo #{} is greater than combo_max_length configured under [rmk] section",
+                                "keyboard.toml: number of keys in combo #{} is greater than max_combo_keys configured under [rmk] section",
                                 i
                             ));
                         }
@@ -37,9 +40,9 @@ impl crate::KeyboardTomlConfig {
                 }
                 if let Some(fork) = &behavior.fork {
                     let count: usize = fork.forks.iter().map(|f| f.trigger.keys().len()).sum();
-                    if count > self.rmk.fork_max_num {
+                    if count > self.rmk.max_forks {
                         return Err(
-                            "keyboard.toml: number of forks is greater than fork_max_num configured under [rmk] section"
+                            "keyboard.toml: number of forks is greater than max_forks configured under [rmk] section"
                                 .to_string(),
                         );
                     }
@@ -59,15 +62,15 @@ impl crate::KeyboardTomlConfig {
                     }
                 }
                 if let Some(entries) = &behavior.auto_mouse_layer {
-                    let auto_mouse_layer_max_num = self
+                    let max_auto_mouse_layers = self
                         .rmk
-                        .auto_mouse_layer_max_num
-                        .unwrap_or(crate::resolved::behavior::DEFAULT_AUTO_MOUSE_LAYER_MAX_NUM);
-                    if entries.len() > auto_mouse_layer_max_num {
+                        .max_auto_mouse_layers
+                        .unwrap_or(crate::resolved::behavior::DEFAULT_MAX_AUTO_MOUSE_LAYERS);
+                    if entries.len() > max_auto_mouse_layers {
                         return Err(format!(
-                            "keyboard.toml: number of [[behavior.auto_mouse_layer]] entries ({}) exceeds auto_mouse_layer_max_num ({}) configured under [rmk] section",
+                            "keyboard.toml: number of [[behavior.auto_mouse_layer]] entries ({}) exceeds max_auto_mouse_layers ({}) configured under [rmk] section",
                             entries.len(),
-                            auto_mouse_layer_max_num
+                            max_auto_mouse_layers
                         ));
                     }
                     let mut seen_device_ids: Vec<Option<u8>> = Vec::new();
@@ -119,10 +122,10 @@ impl crate::KeyboardTomlConfig {
                 }
                 if let Some(morse) = &behavior.morse
                     && let Some(morses) = &morse.morses
-                    && morses.len() > self.rmk.morse_max_num
+                    && morses.len() > self.rmk.max_morses
                 {
                     return Err(
-                        "keyboard.toml: number of morses is greater than morse_max_num configured under [rmk] section"
+                        "keyboard.toml: number of morses is greater than max_morses configured under [rmk] section"
                             .to_string(),
                     );
                 }

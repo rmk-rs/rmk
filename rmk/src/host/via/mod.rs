@@ -9,7 +9,7 @@ use crate::hid::ViaReport;
 use crate::host::context::KeyboardContext;
 use crate::host::via::keycode_convert::{from_via_keycode, to_via_keycode};
 use crate::keymap::KeyMap;
-use crate::{MACRO_MAX_NUM, MACRO_SPACE_SIZE, boot};
+use crate::{MACRO_SPACE_SIZE, MAX_MACROS, boot};
 
 pub(crate) mod keycode_convert;
 pub mod rgb_matrix;
@@ -19,8 +19,6 @@ pub struct VialService<'a, RgbMatrix = rgb_matrix::Unsupported> {
     ctx: KeyboardContext<'a>,
     vial_config: VialConfig<'static>,
     rgb_matrix: RgbMatrix,
-    #[cfg(feature = "host_lock")]
-    locker: crate::host::lock::HostLock<'a>,
 }
 
 impl<'a> VialService<'a, rgb_matrix::Unsupported> {
@@ -35,14 +33,6 @@ impl<'a, RgbMatrix> VialService<'a, RgbMatrix> {
             ctx: KeyboardContext::new(keymap),
             vial_config: config.vial_config,
             rgb_matrix,
-            // Vial's poll cadence is ~100 ms (`VialCommand::UnlockPoll`).
-            #[cfg(feature = "host_lock")]
-            locker: crate::host::lock::HostLock::new(
-                config.vial_config.unlock_keys,
-                keymap,
-                config.vial_config.insecure,
-                embassy_time::Duration::from_millis(100),
-            ),
         }
     }
 }
@@ -69,7 +59,11 @@ impl<'a, const OVERLAY_CAP: usize, const MAILBOX_CAP: usize>
 }
 
 impl<RgbMatrix: rgb_matrix::ViaRgbMatrixControl> VialService<'_, RgbMatrix> {
-    async fn process_via_packet(&self, report: &mut ViaReport) {
+    async fn process_via_packet(
+        &self,
+        report: &mut ViaReport,
+        #[cfg(feature = "host_lock")] locker: &crate::host::lock::HostLock<'_>,
+    ) {
         let command_id = report.output_data[0];
 
         // Caller pre-fills `input_data` from `output_data`, so individual arms
@@ -95,7 +89,7 @@ impl<RgbMatrix: rgb_matrix::ViaRgbMatrixControl> VialService<'_, RgbMatrix> {
                             error!("It is not secure to use matrix tester without vial lock");
                         }
                         #[cfg(feature = "host_lock")]
-                        ViaKeyboardInfo::SwitchMatrixState if self.locker.is_unlocked() => {
+                        ViaKeyboardInfo::SwitchMatrixState if locker.is_unlocked() => {
                             let bitmap = &mut report.input_data[2..];
                             self.ctx.read_matrix_state(bitmap);
                             // Vial wants each row's bytes big-endian (QMK matrix_row_t order).
@@ -163,14 +157,13 @@ impl<RgbMatrix: rgb_matrix::ViaRgbMatrixControl> VialService<'_, RgbMatrix> {
             ViaCommand::EepromReset => {
                 warn!("Resetting storage..");
                 self.ctx.reset_storage().await;
-                // TODO: Reboot after a eeprom reset?
             }
             ViaCommand::BootloaderJump => {
                 warn!("Bootloader jumping");
                 boot::jump_to_bootloader();
             }
             ViaCommand::DynamicKeymapMacroGetCount => {
-                report.input_data[1] = MACRO_MAX_NUM as u8;
+                report.input_data[1] = MAX_MACROS as u8;
             }
             ViaCommand::DynamicKeymapMacroGetBufferSize => {
                 BigEndian::write_u16(&mut report.input_data[1..3], MACRO_SPACE_SIZE as u16);
@@ -276,7 +269,7 @@ impl<RgbMatrix: rgb_matrix::ViaRgbMatrixControl> VialService<'_, RgbMatrix> {
                     report,
                     &self.vial_config,
                     #[cfg(feature = "host_lock")]
-                    &self.locker,
+                    locker,
                     &self.ctx,
                 )
                 .await
@@ -290,10 +283,15 @@ impl<RgbMatrix: rgb_matrix::ViaRgbMatrixControl> VialService<'_, RgbMatrix> {
 }
 
 impl<RgbMatrix: rgb_matrix::ViaRgbMatrixControl> VialService<'_, RgbMatrix> {
-    /// Drive one Vial session against `rx`/`tx` (32-byte request → 32-byte
-    /// response, processed in place). Returns on any read/write error;
-    /// transport-specific reconnect lives in the caller.
-    pub async fn run_session<R: Read, T: Write>(&self, rx: &mut R, tx: &mut T) {
+    /// Serve 32-byte requests until the connection ends.
+    pub async fn run<R: Read, T: Write>(&self, rx: &mut R, tx: &mut T) {
+        #[cfg(feature = "host_lock")]
+        let locker = crate::host::lock::HostLock::new(
+            self.vial_config.unlock_keys,
+            self.ctx.keymap,
+            self.vial_config.insecure,
+            embassy_time::Duration::from_millis(100),
+        );
         let mut buf = [0u8; 32];
         loop {
             if rx.read_exact(&mut buf).await.is_err() {
@@ -303,7 +301,12 @@ impl<RgbMatrix: rgb_matrix::ViaRgbMatrixControl> VialService<'_, RgbMatrix> {
                 input_data: buf,
                 output_data: buf,
             };
-            self.process_via_packet(&mut report).await;
+            self.process_via_packet(
+                &mut report,
+                #[cfg(feature = "host_lock")]
+                &locker,
+            )
+            .await;
             if tx.write_all(&report.input_data).await.is_err() {
                 return;
             }
@@ -334,8 +337,19 @@ mod tests {
     /// These tests run no storage task, so writes that wait for one would never be
     /// answered; the stand-in answers them.
     fn process(service: &mut VialService, report: &mut ViaReport) {
+        #[cfg(feature = "host_lock")]
+        let locker = crate::host::lock::HostLock::new(
+            service.vial_config.unlock_keys,
+            service.ctx.keymap,
+            service.vial_config.insecure,
+            embassy_time::Duration::from_millis(100),
+        );
         block_on(embassy_futures::select::select(
-            service.process_via_packet(report),
+            service.process_via_packet(
+                report,
+                #[cfg(feature = "host_lock")]
+                &locker,
+            ),
             crate::test_support::drain_flash_channel(),
         ));
     }

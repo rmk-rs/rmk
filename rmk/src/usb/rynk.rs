@@ -18,7 +18,7 @@ use crate::usb::add_usb_reader_writer;
 #[cfg(feature = "rynk")]
 impl HostSession for crate::host::rynk::RynkService<'_> {
     async fn serve<R: Read, W: Write>(&self, rx: &mut R, tx: &mut W) {
-        self.run_session(rx, tx).await
+        self.run(rx, tx).await
     }
 }
 

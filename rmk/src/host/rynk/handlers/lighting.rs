@@ -615,14 +615,14 @@ impl Handle<PutLightingExtendedRuntimeConditionalSceneChunk> for RynkService<'_>
             #[cfg(feature = "_ble")]
             if let Some(connection) = cell.connection
                 && let Some(profile) = connection.profile
-                && (profile as usize) >= crate::NUM_BLE_PROFILE
+                && (profile as usize) >= crate::NUM_BLE_PROFILES
             {
                 return Ok(Err(LightingError::InvalidRequest));
             }
             #[cfg(feature = "_ble")]
             if let Some(connection) = cell.connection
                 && let Some(bonded) = connection.bonded
-                && (bonded.slot as usize) >= crate::NUM_BLE_PROFILE
+                && (bonded.slot as usize) >= crate::NUM_BLE_PROFILES
             {
                 return Ok(Err(LightingError::InvalidRequest));
             }
@@ -1810,7 +1810,7 @@ mod tests {
             .len();
         let req_len = RYNK_HEADER_SIZE + payload_len;
         let mut message = RynkMessage::from_decoded(&mut buffer[..], req_len);
-        // Same gate `run_session` builds, derived from the service under test so
+        // Same gate `run` builds, derived from the service under test so
         // the lock tier is exercised exactly as it is in production.
         let locker = crate::host::lock::HostLock::new(
             service.lock_config.unlock_keys,
@@ -1818,10 +1818,15 @@ mod tests {
             service.lock_config.insecure,
             crate::host::rynk::RYNK_UNLOCK_WINDOW,
         );
-        service.dispatch(&locker, session, &mut message).await.unwrap();
-        // The reply is COBS-framed in place; deframe it back to [cmd, seq, payload].
-        let mut reply = message.frame().to_vec();
-        let framed_len = reply.len();
+        let mut written = Box::new([0u8; rmk_types::constants::RYNK_BUFFER_SIZE]);
+        let mut tx = written.as_mut_slice();
+        service
+            .serve_request(&locker, session, &mut message, &mut tx)
+            .await
+            .unwrap();
+        let framed_len = rmk_types::constants::RYNK_BUFFER_SIZE - tx.len();
+        // The reply is COBS-framed; deframe it back to [cmd, seq, payload].
+        let mut reply = written[..framed_len].to_vec();
         let mut deframer = Deframer::new();
         deframer.commit(framed_len);
         let decoded_len = deframer.next(&mut reply).expect("framed reply");
@@ -2220,7 +2225,7 @@ mod tests {
                 },
                 connection: Some(rmk_types::protocol::rynk::LightingConnectionCondition {
                     transport: None,
-                    profile: Some(crate::NUM_BLE_PROFILE as u8),
+                    profile: Some(crate::NUM_BLE_PROFILES as u8),
                     ble_state: None,
                     bonded: None,
                     usb_connected: None,
