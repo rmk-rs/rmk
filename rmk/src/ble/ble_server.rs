@@ -1,16 +1,19 @@
+use core::cell::Cell;
 use core::fmt::Write as _;
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use postcard::experimental::max_size::MaxSize;
 use rmk_types::ble::BLE_ADV_NAME_MAX_LEN;
+use rmk_types::led_indicator::LedIndicator;
 use trouble_host::att::{AttClient, AttReq};
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
 use super::battery_service::BatteryServices;
-use super::device_info::DeviceConfigurationService;
+use super::device_info::{DeviceConfigurationService, PnPID};
 use crate::BLE_PROFILE_NAME_SUFFIX;
+use crate::config::DeviceConfig;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use crate::dongle::event::{CUSTOM_TO_DONGLE_UUID, CUSTOM_TO_KEYBOARD_UUID};
 #[cfg(feature = "dongle")]
@@ -19,7 +22,7 @@ use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_MAX, DONGLE_EVEN
 use crate::hid::RynkHidReport;
 #[cfg(feature = "vial")]
 use crate::hid::ViaReport;
-use crate::hid::{BleCompositeReport, CompositeReportType, HidError, HidWriterTrait, MOUSE_REPORT_SIZE, Report};
+use crate::hid::{BleCompositeReport, CompositeReportType, HidError, MOUSE_REPORT_SIZE, Report};
 
 // Used for saving the client attribute (CCCD) table. Tracks the trouble-host
 // per-connection client-specific attribute buffer size.
@@ -35,14 +38,14 @@ use rmk_types::protocol::rynk::{
 pub(crate) struct Server {
     profile_name: ProfileName,
     pub(super) batteries: BatteryServices,
-    pub(crate) hid_service: HidService,
+    pub(super) hid_service: HidService,
     #[cfg(feature = "vial")]
     pub(crate) vial_service: VialGattService,
     #[cfg(feature = "rynk")]
     pub(crate) rynk_service: RynkGattService,
     #[cfg(feature = "rynk")]
     pub(crate) rynk_hid_service: RynkHidService,
-    pub(crate) device_config_service: DeviceConfigurationService,
+    device_config_service: DeviceConfigurationService,
     #[cfg(feature = "dongle")]
     pub(crate) dongle_event_service: DongleEventService,
 }
@@ -83,7 +86,7 @@ struct GapService {
 struct GenericAttributeService {}
 
 impl Server<'_> {
-    pub(crate) fn new_keyboard(product_name: &'static str) -> Result<Self, &'static str> {
+    pub(super) fn new_keyboard(product_name: &'static str) -> Result<Self, &'static str> {
         if BLE_PROFILE_NAME_SUFFIX {
             let mut server = Self::new(AttributeTable::new());
             server.profile_name.product_name = product_name;
@@ -93,6 +96,19 @@ impl Server<'_> {
             name: product_name,
             appearance: &appearance::human_interface_device::KEYBOARD,
         }))
+    }
+
+    pub(super) fn configure(&self, device: &DeviceConfig<'_>) {
+        let info = &self.device_config_service;
+        let pnp_id = PnPID {
+            vendor_id: device.vid,
+            product_id: device.pid,
+            ..Default::default()
+        };
+        let manufacturer = heapless::String::try_from(device.manufacturer).expect("manufacturer is too long for BLE");
+        unwrap!(self.set(&info.pnp_id, &pnp_id));
+        unwrap!(self.set(&info.serial_number, &device.serial_number));
+        unwrap!(self.set(&info.manufacturer_name, &manufacturer));
     }
 
     /// The empty return array avoids a name buffer in disabled builds.
@@ -110,7 +126,7 @@ impl Server<'_> {
         })
     }
 
-    pub(crate) fn prepare_name_read(&self, event: &GattEvent<'_, '_, DefaultPacketPool>, slot: u8) {
+    pub(super) fn prepare_name_read(&self, event: &GattEvent<'_, '_, DefaultPacketPool>, slot: u8) {
         let [name] = self.profile_name.characteristic.as_slice() else {
             return;
         };
@@ -246,19 +262,13 @@ pub(crate) struct HidService {
     pub(crate) system_report: [u8; 1],
 }
 
-pub(crate) struct BleHidServer<'stack, 'server, 'conn, P: PacketPool> {
-    hid: &'conn HidService,
-    conn: &'conn GattConnection<'stack, 'server, P>,
+pub(super) struct HidConnection<'stack, 'server, 'conn> {
+    pub(super) service: &'conn HidService,
+    pub(super) conn: &'conn GattConnection<'stack, 'server, DefaultPacketPool>,
+    pub(super) leds: Cell<LedIndicator>,
 }
 
-impl<'stack, 'server, 'conn, P: PacketPool> BleHidServer<'stack, 'server, 'conn, P> {
-    pub(crate) fn new(server: &'conn Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
-        Self {
-            hid: &server.hid_service,
-            conn,
-        }
-    }
-
+impl HidConnection<'_, '_, '_> {
     async fn notify_report<R: AsInputReport, const N: usize>(
         &self,
         characteristic: &Characteristic<[u8; N]>,
@@ -272,17 +282,13 @@ impl<'stack, 'server, 'conn, P: PacketPool> BleHidServer<'stack, 'server, 'conn,
         })?;
         Ok(n)
     }
-}
 
-impl<P: PacketPool> HidWriterTrait for BleHidServer<'_, '_, '_, P> {
-    type ReportType = Report;
-
-    async fn write_report(&mut self, report: &Self::ReportType) -> Result<usize, HidError> {
+    pub(super) async fn write_report(&self, report: &Report) -> Result<usize, HidError> {
         match report {
-            Report::KeyboardReport(r) => self.notify_report(&self.hid.input_keyboard, r).await,
-            Report::MouseReport(r) => self.notify_report(&self.hid.mouse_report, r).await,
-            Report::MediaKeyboardReport(r) => self.notify_report(&self.hid.media_report, r).await,
-            Report::SystemControlReport(r) => self.notify_report(&self.hid.system_report, r).await,
+            Report::KeyboardReport(r) => self.notify_report(&self.service.input_keyboard, r).await,
+            Report::MouseReport(r) => self.notify_report(&self.service.mouse_report, r).await,
+            Report::MediaKeyboardReport(r) => self.notify_report(&self.service.media_report, r).await,
+            Report::SystemControlReport(r) => self.notify_report(&self.service.system_report, r).await,
             // Plover HID over BLE is not supported: the stock HID-over-GATT service
             // has no stenography characteristic. Drop silently at the writer.
             #[cfg(feature = "steno")]
