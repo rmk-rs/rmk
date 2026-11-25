@@ -314,17 +314,17 @@ fn expand_main(
         quote! {}
     };
 
-    // Rynk-only: bake the physical-layout blob as a compile-time const and enable
-    // the lock gate. Both fields land adjacently in the `RmkConfig` literal below.
-    let (layout_blob_static, rynk_layout_field, lock_config) = if host.rynk_enabled {
+    let (layout_blob_static, rynk_config_fields) = if host.rynk_enabled {
         let blob_lit = proc_macro2::Literal::byte_string(&layout.blob);
         (
             quote! { static LAYOUT_BLOB: &[u8] = #blob_lit; },
-            quote! { layout_blob: LAYOUT_BLOB, },
-            quote! { lock_config: LOCK_CONFIG, },
+            quote! {
+                lock_config: LOCK_CONFIG,
+                layout_blob: LAYOUT_BLOB,
+            },
         )
     } else {
-        (quote! {}, quote! {}, quote! {})
+        (quote! {}, quote! {})
     };
 
     let host_service_init = if host.rynk_enabled || host.vial_enabled {
@@ -348,36 +348,13 @@ fn expand_main(
         watchdog_task,
     );
 
-    let vial_config = if host.vial_enabled {
-        quote! { vial_config: VIAL_CONFIG,}
-    } else {
-        quote! {}
-    };
-
-    let rmk_config = if hardware.storage.is_some() {
-        quote! {
-            #[allow(clippy::needless_update)]
-            let rmk_config = ::rmk::config::RmkConfig {
-                device_config: keyboard_device_config,
-                #vial_config
-                #lock_config
-                #rynk_layout_field
-                storage_config,
-                ..Default::default()
-            };
-        }
-    } else {
-        quote! {
-            #[allow(clippy::needless_update)]
-            let rmk_config = ::rmk::config::RmkConfig {
-                device_config: keyboard_device_config,
-                #vial_config
-                #lock_config
-                #rynk_layout_field
-                ..Default::default()
-            };
-        }
-    };
+    let vial_config = host
+        .vial_enabled
+        .then(|| quote! { vial_config: VIAL_CONFIG, });
+    let storage_config = hardware
+        .storage
+        .is_some()
+        .then(|| quote! { storage_config, });
 
     let main_function_sig = if hardware.chip.series == ChipSeries::Esp32 {
         quote! {
@@ -420,8 +397,14 @@ fn expand_main(
             // Bake the physical-layout blob (rynk) as a compile-time const
             #layout_blob_static
 
-            // Set all keyboard config
-            #rmk_config
+            #[allow(clippy::needless_update)]
+            let rmk_config = ::rmk::config::RmkConfig {
+                device_config: keyboard_device_config,
+                #vial_config
+                #rynk_config_fields
+                #storage_config
+                ..Default::default()
+            };
 
             // Initialize the registered processors
             #registered_processor_initializers
