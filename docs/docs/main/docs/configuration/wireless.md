@@ -34,7 +34,7 @@ adc_divider_total = 2806
 from that pin to ground, and `adc_divider_total` is the sum of both resistors. Use the same unit
 for both values.
 
-### Split keyboards {#split-battery-adc-configuration}
+### Split keyboards
 
 On a split keyboard, put the battery fields in the table for each board you want to measure.
 
