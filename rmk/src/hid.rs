@@ -216,10 +216,15 @@ impl AsInputReport for MouseReport {
             return Err(BufferOverflow);
         }
         buffer[0] = self.buttons;
-        buffer[1..3].copy_from_slice(&self.x.to_le_bytes());
-        buffer[3..5].copy_from_slice(&self.y.to_le_bytes());
-        buffer[5..7].copy_from_slice(&self.wheel.to_le_bytes());
-        buffer[7..9].copy_from_slice(&self.pan.to_le_bytes());
+        // The descriptor's signed axes have a logical minimum of -32767.
+        for (dest, delta) in buffer[1..MOUSE_REPORT_SIZE]
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .zip([self.x, self.y, self.wheel, self.pan])
+        {
+            *dest = delta.max(-i16::MAX).to_le_bytes();
+        }
         Ok(MOUSE_REPORT_SIZE)
     }
 }
@@ -496,6 +501,20 @@ mod mouse_report_tests {
     use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
     use super::{CompositeReport, MOUSE_REPORT_SIZE, MouseReport};
+
+    #[test]
+    fn saturated_mouse_deltas_stay_within_the_advertised_range() {
+        let report = MouseReport {
+            x: i16::MIN,
+            y: i16::MAX,
+            wheel: i16::MAX,
+            pan: i16::MIN,
+            ..Default::default()
+        };
+        let mut buf = [0u8; MOUSE_REPORT_SIZE];
+        report.serialize(&mut buf).unwrap();
+        assert_eq!(buf, [0, 1, 0x80, 0xff, 0x7f, 0xff, 0x7f, 1, 0x80]);
+    }
 
     /// The report map tells the host how to parse the axes and `serialize`
     /// writes them; only this test holds the two to the same widths.
