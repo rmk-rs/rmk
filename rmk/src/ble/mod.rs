@@ -394,7 +394,7 @@ impl<
 }
 
 /// Owns the GATT server and the profile manager, and advertises→connects→
-/// serves forever, joined with the stack runner and the sleep manager.
+/// serves forever alongside the stack runner.
 async fn run_ble_keyboard<
     #[cfg(feature = "host")] 'r,
     C: Controller
