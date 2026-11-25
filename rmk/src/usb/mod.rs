@@ -642,7 +642,38 @@ pub(crate) use usb_hid_state_and_config;
 pub(crate) struct UsbRequestHandler;
 
 impl RequestHandler for UsbRequestHandler {
+    #[cfg(feature = "hires_scroll")]
+    fn get_report(&mut self, id: ReportId, buf: &mut [u8]) -> Option<usize> {
+        use crate::hid::{RESOLUTION_MULTIPLIER_REPORT_ID, resolution_multipliers, unpack_resolution_multipliers};
+        if id != ReportId::Feature(RESOLUTION_MULTIPLIER_REPORT_ID) || buf.len() < 3 {
+            return None;
+        }
+        let [wheel, pan] = unpack_resolution_multipliers(resolution_multipliers(ConnectionType::Usb));
+        buf[..3].copy_from_slice(&[RESOLUTION_MULTIPLIER_REPORT_ID, wheel, pan]);
+        Some(3)
+    }
+
     fn set_report(&mut self, id: ReportId, data: &[u8]) -> OutResponse {
+        #[cfg(feature = "hires_scroll")]
+        if let ReportId::Feature(report_id) = id {
+            use crate::hid::{
+                RESOLUTION_MULTIPLIER_REPORT_ID, pack_resolution_multipliers, set_resolution_multipliers,
+            };
+            // A numbered report's control transfer carries its id first (HID 1.11 §8.1).
+            return match data {
+                &[RESOLUTION_MULTIPLIER_REPORT_ID, wheel, pan] if report_id == RESOLUTION_MULTIPLIER_REPORT_ID => {
+                    match pack_resolution_multipliers([wheel, pan]) {
+                        Some(packed) => {
+                            info!("USB host set scroll resolution multipliers: {:?}", [wheel, pan]);
+                            set_resolution_multipliers(ConnectionType::Usb, packed);
+                            OutResponse::Accepted
+                        }
+                        None => OutResponse::Rejected,
+                    }
+                }
+                _ => OutResponse::Rejected,
+            };
+        }
         info!("Set report for {:?}: {:?}", id, data);
         OutResponse::Accepted
     }
@@ -693,6 +724,8 @@ impl Handler for UsbDeviceHandler {
 
     fn reset(&mut self) {
         BOOT_MODE.store(false, Ordering::Relaxed);
+        #[cfg(feature = "hires_scroll")]
+        crate::hid::set_resolution_multipliers(ConnectionType::Usb, 0);
         self.pre_suspend = UsbState::Enabled;
         set_usb_state(UsbState::Enabled);
         info!("Bus reset, the Vbus current limit is 100mA");
@@ -876,5 +909,48 @@ mod tests {
         handler.suspended(true);
         handler.suspended(false);
         assert_eq!(current_usb_state(), UsbState::Configured);
+    }
+}
+
+#[cfg(all(test, feature = "hires_scroll"))]
+mod resolution_multiplier_tests {
+    use embassy_usb::Handler;
+    use embassy_usb::class::hid::ReportId;
+    use embassy_usb::class::hid::device::RequestHandler;
+    use embassy_usb::control::OutResponse;
+    use rmk_types::connection::ConnectionType;
+
+    use super::{UsbDeviceHandler, UsbRequestHandler};
+    use crate::hid::{RESOLUTION_MULTIPLIER_REPORT_ID as ID, resolution_multipliers};
+
+    const FEATURE: ReportId = ReportId::Feature(ID);
+
+    #[test]
+    fn the_host_enables_multipliers_until_the_next_bus_reset() {
+        let mut handler = UsbRequestHandler;
+        let mut buf = [0u8; 8];
+        assert_eq!(handler.get_report(FEATURE, &mut buf), Some(3));
+        assert_eq!(buf[..3], [ID, 0, 0]);
+
+        assert_eq!(handler.set_report(FEATURE, &[ID, 1, 0]), OutResponse::Accepted);
+        assert_eq!(handler.get_report(FEATURE, &mut buf), Some(3));
+        assert_eq!(buf[..3], [ID, 1, 0]);
+        assert_eq!(resolution_multipliers(ConnectionType::Usb), 0b01);
+
+        UsbDeviceHandler::new().reset();
+        assert_eq!(resolution_multipliers(ConnectionType::Usb), 0);
+    }
+
+    #[test]
+    fn malformed_multiplier_reports_are_rejected() {
+        let mut handler = UsbRequestHandler;
+        for data in [&[ID, 2, 0][..], &[ID, 1][..], &[1, 1][..], &[ID, 1, 1, 0][..]] {
+            assert_eq!(handler.set_report(FEATURE, data), OutResponse::Rejected, "{data:?}");
+        }
+        assert_eq!(
+            handler.set_report(ReportId::Feature(0x06), &[0x06, 1, 1]),
+            OutResponse::Rejected
+        );
+        assert_eq!(resolution_multipliers(ConnectionType::Usb), 0);
     }
 }

@@ -224,58 +224,256 @@ impl AsInputReport for MouseReport {
     }
 }
 
-/// A composite hid report which contains mouse, consumer, system reports.
-/// Report id is used to distinguish from them.
-#[gen_hid_descriptor(
-    (collection = APPLICATION, usage_page = GENERIC_DESKTOP, usage = MOUSE) = {
-        (collection = PHYSICAL, usage = POINTER) = {
-            (report_id = 0x02,) = {
-                (usage_page = BUTTON, usage_min = BUTTON_1, usage_max = BUTTON_8) = {
-                    #[packed_bits = 8] #[item_settings(data,variable,absolute)] buttons=input;
+/// Length of `BleCompositeReport::desc()`, which `ble_server::HidService` declares.
+#[cfg(all(feature = "_ble", not(feature = "hires_scroll")))]
+pub(crate) const BLE_REPORT_MAP_SIZE: usize = 177;
+#[cfg(all(feature = "_ble", feature = "hires_scroll"))]
+pub(crate) const BLE_REPORT_MAP_SIZE: usize = 258;
+
+/// Defines `CompositeReport` and the BLE report map around one mouse pointer
+/// collection, so the two transports always describe the mouse the same way.
+macro_rules! composite_reports {
+    ($pointer:tt $(, $multiplier:ident)*) => {
+        /// A composite hid report which contains mouse, consumer, system reports.
+        /// Report id is used to distinguish from them.
+        #[gen_hid_descriptor(
+            (collection = APPLICATION, usage_page = GENERIC_DESKTOP, usage = MOUSE) = {
+                (collection = PHYSICAL, usage = POINTER) = $pointer;
+            },
+            (collection = APPLICATION, usage_page = CONSUMER, usage = CONSUMER_CONTROL) = {
+                (report_id = 0x03,) = {
+                    (usage_page = CONSUMER, usage_min = 0x00, usage_max = 0x514) = {
+                    #[item_settings(data,array,absolute,not_null)] media_usage_id=input;
+                    }
                 };
-                (usage_page = GENERIC_DESKTOP,) = {
-                    (usage = X,) = {
-                        #[item_settings(data,variable,relative)] x=input;
-                    };
-                    (usage = Y,) = {
-                        #[item_settings(data,variable,relative)] y=input;
-                    };
-                    (usage = WHEEL,) = {
-                        #[item_settings(data,variable,relative)] wheel=input;
+            },
+            (collection = APPLICATION, usage_page = GENERIC_DESKTOP, usage = SYSTEM_CONTROL) = {
+                (report_id = 0x04,) = {
+                    (usage_min = 0x01, usage_max = 0xB7, logical_min = 1) = {
+                        #[item_settings(data,array,absolute,not_null)] system_usage_id=input;
                     };
                 };
-                (usage_page = CONSUMER,) = {
-                    (usage = AC_PAN,) = {
-                        #[item_settings(data,variable,relative)] pan=input;
-                    };
-                };
-            };
-        };
-    },
-    (collection = APPLICATION, usage_page = CONSUMER, usage = CONSUMER_CONTROL) = {
-        (report_id = 0x03,) = {
-            (usage_page = CONSUMER, usage_min = 0x00, usage_max = 0x514) = {
-            #[item_settings(data,array,absolute,not_null)] media_usage_id=input;
             }
+        )]
+        #[derive(Default, Serialize)]
+        pub struct CompositeReport {
+            pub(crate) buttons: u8, // MouseButtons
+            pub(crate) x: i16,
+            pub(crate) y: i16,
+            pub(crate) wheel: i16, // Scroll down (negative) or up (positive) this many units
+            pub(crate) pan: i16,   // Scroll left (negative) or right (positive) this many units
+            pub(crate) media_usage_id: u16,
+            pub(crate) system_usage_id: u8,
+            $(pub(crate) $multiplier: u8,)*
+        }
+
+        /// The BLE report map: everything in one HID service, distinguished by report id.
+        ///
+        /// Android's HID host only attaches to the first HID service instance (AOSP
+        /// `bta_hh_le.cc`, b/286413526), so unlike USB the keyboard/mouse/media/system
+        /// reports must share a single service. Only `desc()` is used; the actual
+        /// payloads are still serialized from `KeyboardReport`, `MouseReport`, etc.,
+        /// as HID-over-GATT carries the report id in the Report Reference descriptor
+        /// instead of the payload.
+        #[cfg(feature = "_ble")]
+        #[gen_hid_descriptor(
+            (collection = APPLICATION, usage_page = GENERIC_DESKTOP, usage = KEYBOARD) = {
+                (report_id = 0x01,) = {
+                    (usage_page = KEYBOARD, usage_min = 0xE0, usage_max = 0xE7) = {
+                        #[packed_bits = 8] #[item_settings(data,variable,absolute)] modifier=input;
+                    };
+                    (logical_min = 0,) = {
+                        #[item_settings(constant,variable,absolute)] reserved=input;
+                    };
+                    (usage_page = LEDS, usage_min = 0x01, usage_max = 0x05) = {
+                        #[packed_bits = 5] #[item_settings(data,variable,absolute)] leds=output;
+                    };
+                    (usage_page = KEYBOARD, usage_min = 0x00, usage_max = 0xDD) = {
+                        #[item_settings(data,array,absolute)] keycodes=input;
+                    };
+                };
+            },
+            (collection = APPLICATION, usage_page = GENERIC_DESKTOP, usage = MOUSE) = {
+                (collection = PHYSICAL, usage = POINTER) = $pointer;
+            },
+            (collection = APPLICATION, usage_page = CONSUMER, usage = CONSUMER_CONTROL) = {
+                (report_id = 0x03,) = {
+                    (usage_page = CONSUMER, usage_min = 0x00, usage_max = 0x514) = {
+                    #[item_settings(data,array,absolute,not_null)] media_usage_id=input;
+                    }
+                };
+            },
+            (collection = APPLICATION, usage_page = GENERIC_DESKTOP, usage = SYSTEM_CONTROL) = {
+                (report_id = 0x04,) = {
+                    (usage_min = 0x01, usage_max = 0xB7, logical_min = 1) = {
+                        #[item_settings(data,array,absolute,not_null)] system_usage_id=input;
+                    };
+                };
+            }
+        )]
+        #[allow(dead_code)]
+        #[derive(Default)]
+        pub struct BleCompositeReport {
+            pub(crate) modifier: u8,
+            pub(crate) reserved: u8,
+            pub(crate) leds: u8,
+            pub(crate) keycodes: [u8; 6],
+            pub(crate) buttons: u8,
+            pub(crate) x: i16,
+            pub(crate) y: i16,
+            pub(crate) wheel: i16,
+            pub(crate) pan: i16,
+            pub(crate) media_usage_id: u16,
+            pub(crate) system_usage_id: u8,
+            $(pub(crate) $multiplier: u8,)*
+        }
+    };
+}
+
+#[cfg(not(feature = "hires_scroll"))]
+composite_reports!({
+    (report_id = 0x02,) = {
+        (usage_page = BUTTON, usage_min = BUTTON_1, usage_max = BUTTON_8) = {
+            #[packed_bits = 8]
+            #[item_settings(data, variable, absolute)]
+            buttons = input;
         };
-    },
-    (collection = APPLICATION, usage_page = GENERIC_DESKTOP, usage = SYSTEM_CONTROL) = {
-        (report_id = 0x04,) = {
-            (usage_min = 0x01, usage_max = 0xB7, logical_min = 1) = {
-                #[item_settings(data,array,absolute,not_null)] system_usage_id=input;
+        (usage_page = GENERIC_DESKTOP,) = {
+            (usage = X,) = {
+                #[item_settings(data, variable, relative)]
+                x = input;
+            };
+            (usage = Y,) = {
+                #[item_settings(data, variable, relative)]
+                y = input;
+            };
+            (usage = WHEEL,) = {
+                #[item_settings(data, variable, relative)]
+                wheel = input;
             };
         };
+        (usage_page = CONSUMER,) = {
+            (usage = AC_PAN,) = {
+                #[item_settings(data, variable, relative)]
+                pan = input;
+            };
+        };
+    };
+});
+
+// Each scroll axis shares a logical collection with its Resolution Multiplier, which
+// is how the HID Usage Tables scope a multiplier to the controls it scales. Linux
+// only honours multiplier fields with a report count of 1, hence one per axis.
+#[cfg(feature = "hires_scroll")]
+composite_reports!(
+    {
+        (report_id = 0x02,) = {
+            (usage_page = BUTTON, usage_min = BUTTON_1, usage_max = BUTTON_8) = {
+                #[packed_bits = 8]
+                #[item_settings(data, variable, absolute)]
+                buttons = input;
+            };
+            (usage_page = GENERIC_DESKTOP,) = {
+                (usage = X,) = {
+                    #[item_settings(data, variable, relative)]
+                    x = input;
+                };
+                (usage = Y,) = {
+                    #[item_settings(data, variable, relative)]
+                    y = input;
+                };
+            };
+        };
+        (collection = LOGICAL, usage_page = GENERIC_DESKTOP, usage = WHEEL) = {
+            (
+                report_id = 0x05,
+                usage = 0x48,
+                logical_min = 0,
+                logical_max = 1,
+                physical_min = 1,
+                physical_max = 120,
+            ) = {
+                #[item_settings(data, variable, absolute)]
+                wheel_multiplier = feature;
+            };
+            (report_id = 0x02, usage = WHEEL) = {
+                #[item_settings(data, variable, relative)]
+                wheel = input;
+            };
+        };
+        (collection = LOGICAL, usage_page = CONSUMER, usage = AC_PAN) = {
+            (
+                report_id = 0x05,
+                usage_page = GENERIC_DESKTOP,
+                usage = 0x48,
+                logical_min = 0,
+                logical_max = 1,
+                physical_min = 1,
+                physical_max = 120,
+            ) = {
+                #[item_settings(data, variable, absolute)]
+                pan_multiplier = feature;
+            };
+            (report_id = 0x02, usage_page = CONSUMER, usage = AC_PAN) = {
+                #[item_settings(data, variable, relative)]
+                pan = input;
+            };
+        };
+    },
+    wheel_multiplier,
+    pan_multiplier
+);
+
+/// Report id of the Resolution Multiplier feature report, `[wheel, pan]`.
+#[cfg(feature = "hires_scroll")]
+pub(crate) const RESOLUTION_MULTIPLIER_REPORT_ID: u8 = 0x05;
+
+/// Wheel or pan units per detent once a host turns its multiplier on: the
+/// descriptor's physical maximum, and the unit Windows (`WHEEL_DELTA`) and Linux
+/// (`REL_WHEEL_HI_RES`) both count in.
+#[cfg(feature = "hires_scroll")]
+const RESOLUTION_MULTIPLIER: i16 = 120;
+
+/// The Resolution Multiplier feature values the USB and the BLE host set, as `[wheel, pan]`
+/// bits 0 and 1. Zero until a host enables high-resolution scrolling.
+#[cfg(feature = "hires_scroll")]
+static RESOLUTION_MULTIPLIERS: [core::sync::atomic::AtomicU8; 2] = [
+    core::sync::atomic::AtomicU8::new(0),
+    core::sync::atomic::AtomicU8::new(0),
+];
+
+/// Packs a `[wheel, pan]` feature payload, or `None` when a value is outside its 0..=1 range.
+#[cfg(feature = "hires_scroll")]
+pub(crate) fn pack_resolution_multipliers([wheel, pan]: [u8; 2]) -> Option<u8> {
+    (wheel <= 1 && pan <= 1).then_some(wheel | (pan << 1))
+}
+
+/// The `[wheel, pan]` feature payload for packed multipliers.
+#[cfg(feature = "hires_scroll")]
+pub(crate) fn unpack_resolution_multipliers(packed: u8) -> [u8; 2] {
+    [packed & 1, (packed >> 1) & 1]
+}
+
+#[cfg(feature = "hires_scroll")]
+pub(crate) fn resolution_multipliers(transport: ConnectionType) -> u8 {
+    RESOLUTION_MULTIPLIERS[transport as usize].load(Ordering::Relaxed)
+}
+
+#[cfg(feature = "hires_scroll")]
+pub(crate) fn set_resolution_multipliers(transport: ConnectionType, packed: u8) {
+    RESOLUTION_MULTIPLIERS[transport as usize].store(packed, Ordering::Relaxed);
+}
+
+/// Wheel and pan units per detent that the host receiving reports expects: 1 unless
+/// it enabled high-resolution scrolling. Scroll producers multiply detents by these.
+pub(crate) fn scroll_resolution() -> (i16, i16) {
+    #[cfg(feature = "hires_scroll")]
+    if let Some(transport) = crate::state::active_transport() {
+        let [wheel, pan] = unpack_resolution_multipliers(resolution_multipliers(transport));
+        let units = |enabled: u8| if enabled == 1 { RESOLUTION_MULTIPLIER } else { 1 };
+        return (units(wheel), units(pan));
     }
-)]
-#[derive(Default, Serialize)]
-pub struct CompositeReport {
-    pub(crate) buttons: u8, // MouseButtons
-    pub(crate) x: i16,
-    pub(crate) y: i16,
-    pub(crate) wheel: i16, // Scroll down (negative) or up (positive) this many units
-    pub(crate) pan: i16,   // Scroll left (negative) or right (positive) this many units
-    pub(crate) media_usage_id: u16,
-    pub(crate) system_usage_id: u8,
+    (1, 1)
 }
 
 #[cfg(test)]
@@ -320,86 +518,43 @@ mod mouse_report_tests {
     }
 }
 
-/// The BLE report map: everything in one HID service, distinguished by report id.
-///
-/// Android's HID host only attaches to the first HID service instance (AOSP
-/// `bta_hh_le.cc`, b/286413526), so unlike USB the keyboard/mouse/media/system
-/// reports must share a single service. Only `desc()` is used; the actual
-/// payloads are still serialized from `KeyboardReport`, `MouseReport`, etc.,
-/// as HID-over-GATT carries the report id in the Report Reference descriptor
-/// instead of the payload.
-#[cfg(feature = "_ble")]
-#[gen_hid_descriptor(
-    (collection = APPLICATION, usage_page = GENERIC_DESKTOP, usage = KEYBOARD) = {
-        (report_id = 0x01,) = {
-            (usage_page = KEYBOARD, usage_min = 0xE0, usage_max = 0xE7) = {
-                #[packed_bits = 8] #[item_settings(data,variable,absolute)] modifier=input;
-            };
-            (logical_min = 0,) = {
-                #[item_settings(constant,variable,absolute)] reserved=input;
-            };
-            (usage_page = LEDS, usage_min = 0x01, usage_max = 0x05) = {
-                #[packed_bits = 5] #[item_settings(data,variable,absolute)] leds=output;
-            };
-            (usage_page = KEYBOARD, usage_min = 0x00, usage_max = 0xDD) = {
-                #[item_settings(data,array,absolute)] keycodes=input;
-            };
-        };
-    },
-    (collection = APPLICATION, usage_page = GENERIC_DESKTOP, usage = MOUSE) = {
-        (collection = PHYSICAL, usage = POINTER) = {
-            (report_id = 0x02,) = {
-                (usage_page = BUTTON, usage_min = BUTTON_1, usage_max = BUTTON_8) = {
-                    #[packed_bits = 8] #[item_settings(data,variable,absolute)] buttons=input;
-                };
-                (usage_page = GENERIC_DESKTOP,) = {
-                    (usage = X,) = {
-                        #[item_settings(data,variable,relative)] x=input;
-                    };
-                    (usage = Y,) = {
-                        #[item_settings(data,variable,relative)] y=input;
-                    };
-                    (usage = WHEEL,) = {
-                        #[item_settings(data,variable,relative)] wheel=input;
-                    };
-                };
-                (usage_page = CONSUMER,) = {
-                    (usage = AC_PAN,) = {
-                        #[item_settings(data,variable,relative)] pan=input;
-                    };
-                };
-            };
-        };
-    },
-    (collection = APPLICATION, usage_page = CONSUMER, usage = CONSUMER_CONTROL) = {
-        (report_id = 0x03,) = {
-            (usage_page = CONSUMER, usage_min = 0x00, usage_max = 0x514) = {
-            #[item_settings(data,array,absolute,not_null)] media_usage_id=input;
-            }
-        };
-    },
-    (collection = APPLICATION, usage_page = GENERIC_DESKTOP, usage = SYSTEM_CONTROL) = {
-        (report_id = 0x04,) = {
-            (usage_min = 0x01, usage_max = 0xB7, logical_min = 1) = {
-                #[item_settings(data,array,absolute,not_null)] system_usage_id=input;
-            };
-        };
+#[cfg(all(test, feature = "hires_scroll"))]
+mod resolution_multiplier_descriptor_tests {
+    use usbd_hid::descriptor::SerializedDescriptor;
+
+    use super::CompositeReport;
+
+    fn count(haystack: &[u8], needle: &[u8]) -> usize {
+        haystack.windows(needle.len()).filter(|w| *w == needle).count()
     }
-)]
-#[allow(dead_code)]
-#[derive(Default)]
-pub struct BleCompositeReport {
-    pub(crate) modifier: u8,
-    pub(crate) reserved: u8,
-    pub(crate) leds: u8,
-    pub(crate) keycodes: [u8; 6],
-    pub(crate) buttons: u8,
-    pub(crate) x: i16,
-    pub(crate) y: i16,
-    pub(crate) wheel: i16,
-    pub(crate) pan: i16,
-    pub(crate) media_usage_id: u16,
-    pub(crate) system_usage_id: u8,
+
+    /// Usage 0x48 in report 5, logical 0..=1 over physical 1..=120, 8 bits, Feature.
+    const MULTIPLIER: [u8; 16] = [
+        0x09, 0x48, 0x85, 0x05, 0x15, 0x00, 0x25, 0x01, 0x35, 0x01, 0x45, 0x78, 0x75, 0x08, 0xb1, 0x02,
+    ];
+
+    #[test]
+    fn wheel_and_pan_each_share_a_logical_collection_with_a_multiplier() {
+        let desc = CompositeReport::desc();
+        // Wheel then pan: logical collection, its multiplier, then its relative input in report 2.
+        for collection in [&[0x09, 0x38, 0xa1, 0x02][..], &[0x0a, 0x38, 0x02, 0xa1, 0x02][..]] {
+            let start = desc.windows(collection.len()).position(|w| w == collection).unwrap();
+            let body = &desc[start + collection.len()..];
+            let end = body.iter().position(|&b| b == 0xc0).unwrap();
+            let body = &body[..end];
+            let multiplier = body.windows(MULTIPLIER.len()).position(|w| w == MULTIPLIER).unwrap();
+            let input = body.windows(2).position(|w| w == [0x85, 0x02]).unwrap();
+            assert!(multiplier < input);
+        }
+        // The physical range is reset before anything else is declared.
+        assert_eq!(count(desc, &[0x35, 0x00, 0x45, 0x00]), 2);
+    }
+
+    #[cfg(feature = "_ble")]
+    #[test]
+    fn ble_report_map_declares_the_same_multipliers() {
+        assert_eq!(count(super::BleCompositeReport::desc(), &MULTIPLIER), 2);
+    }
 }
 
 #[cfg(all(test, feature = "_ble"))]
@@ -416,7 +571,7 @@ mod ble_report_map_tests {
         fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
             haystack.windows(needle.len()).position(|w| w == needle)
         }
-        assert_eq!(desc.len(), 177, "update HidService's report_map size on change");
+        assert_eq!(desc.len(), super::BLE_REPORT_MAP_SIZE);
         let keyboard = find(desc, &[0x09, 0x06]).expect("missing Usage Keyboard");
         for report_id in 1u8..=4 {
             let id = find(desc, &[0x85, report_id]).unwrap_or_else(|| panic!("missing ReportID {report_id}"));

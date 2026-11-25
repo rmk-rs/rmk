@@ -302,6 +302,10 @@ impl MouseState {
             r.wheel = w;
             r.pan = p;
         }
+        // Wheel keys step in whole detents whatever resolution the host scrolls in.
+        let (wheel_units, pan_units) = crate::hid::scroll_resolution();
+        r.wheel = r.wheel.saturating_mul(wheel_units);
+        r.pan = r.pan.saturating_mul(pan_units);
         r
     }
 

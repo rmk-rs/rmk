@@ -63,6 +63,12 @@ Scroll mode keeps motion between samples. It computes `total = remainder + delta
 | 2      | 5     | 5+5=10 | 1                | 10−1×8=2  |
 | 3      | 5     | 2+5=7  | 0                | 7         |
 
+#### High-resolution scrolling
+
+Each scroll step above is one wheel detent, so scrolling moves in visible jumps. Enable the `hires_scroll` Cargo feature to declare a HID Resolution Multiplier on the wheel and pan. A host that turns it on, such as Windows or Linux, receives 120 units per detent: scroll mode and device scrolling then emit `delta * multiplier * 120 / divisor`, moving at the same speed in 1/120 detent steps, while wheel keys keep stepping whole detents. Hosts that never turn it on still receive whole detents.
+
+The feature changes the report descriptor over USB and BLE, so bonded BLE hosts that cache it may need to pair again.
+
 ### Sniper
 
 Maps X/Y to cursor at reduced sensitivity for precision aiming.
