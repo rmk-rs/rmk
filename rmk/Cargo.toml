@@ -325,7 +325,7 @@ futures = { version = "0.3", default-features = false, features = [
 heapless = "0.9"
 sequential-storage = { version = "8.0.1", features = ["postcard"] }
 static_cell = "2"
-usbd-hid = "0.10"
+usbd-hid = "0.10.2"
 
 byteorder = { version = "1", default-features = false, optional = true }
 defmt = { version = "1", optional = true }
