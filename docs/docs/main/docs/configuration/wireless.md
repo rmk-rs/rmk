@@ -34,8 +34,6 @@ adc_divider_total = 2806
 from that pin to ground, and `adc_divider_total` is the sum of both resistors. Use the same unit
 for both values.
 
-If you're upgrading from RMK 0.9, see [how to move your battery settings](../migration/v09_v10#battery-configuration-tables).
-
 ### Split keyboards {#split-battery-adc-configuration}
 
 On a split keyboard, put the battery fields in the table for each board you want to measure.
