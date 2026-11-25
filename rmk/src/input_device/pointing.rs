@@ -426,14 +426,14 @@ impl Default for SniperConfig {
 
 /// `d * multiplier / divisor`, saturating, with `remainder` carrying the fraction
 /// to the next call. A divisor of 0 disables the axis.
-fn scale_motion(d: i16, multiplier: i32, divisor: u8, remainder: &mut i16) -> i16 {
+fn scale_motion(d: i16, multiplier: i32, divisor: i32, remainder: &mut i16) -> i16 {
     if divisor == 0 {
         *remainder = 0;
         return 0;
     }
     let total = i32::from(d) * multiplier + i32::from(*remainder);
-    let out = total / i32::from(divisor);
-    *remainder = (total - out * i32::from(divisor)) as i16;
+    let out = total / divisor;
+    *remainder = (total % divisor) as i16;
     out.clamp(i16::MIN.into(), i16::MAX.into()) as i16
 }
 
@@ -550,18 +550,15 @@ fn calculate_scroll_delta(
     }
     let (pan, wheel) = (&config.pan, &config.wheel);
     let (wheel_units, pan_units) = crate::hid::scroll_resolution();
-    let sx = scale_motion(
-        x,
-        i32::from(pan.multiplier) * i32::from(pan_units),
-        pan.divisor,
-        &mut accumulator.remainder_x,
-    );
-    let sy = scale_motion(
-        y,
-        i32::from(wheel.multiplier) * i32::from(wheel_units),
-        wheel.divisor,
-        &mut accumulator.remainder_y,
-    );
+    // Keep the remainder in the same units when the host changes resolution.
+    // Even the coarsest divisor (255 * 120) leaves a remainder that fits in i16.
+    let scale = |delta, axis: &ScrollAxis, units, rest: &mut i16| {
+        let precision = i32::from(crate::hid::RESOLUTION_MULTIPLIER);
+        let divisor = i32::from(axis.divisor) * if units == 1 { precision } else { 1 };
+        scale_motion(delta, i32::from(axis.multiplier) * precision, divisor, rest)
+    };
+    let sx = scale(x, pan, pan_units, &mut accumulator.remainder_x);
+    let sy = scale(y, wheel, wheel_units, &mut accumulator.remainder_y);
     (
         if wheel.invert { sy } else { sy.saturating_neg() },
         if pan.invert { sx.saturating_neg() } else { sx },
@@ -757,13 +754,13 @@ impl<'a> PointingProcessor<'a> {
                         let out_x = scale_motion(
                             x,
                             cursor_config.multiplier_x.into(),
-                            cursor_config.divisor_x,
+                            cursor_config.divisor_x.into(),
                             &mut accumulator.remainder_x,
                         );
                         let out_y = scale_motion(
                             y,
                             cursor_config.multiplier_y.into(),
-                            cursor_config.divisor_y,
+                            cursor_config.divisor_y.into(),
                             &mut accumulator.remainder_y,
                         );
                         // Motion too small to move the cursor yet, as in sniper mode.
@@ -1721,6 +1718,12 @@ mod tests {
             assert_eq!(wheel_and_pan(USB_REPORT_CHANNEL.try_receive().unwrap()), (-15, 0));
             processor.on_pointing_event(scroll(7, 0)).await;
             assert_eq!(wheel_and_pan(USB_REPORT_CHANNEL.try_receive().unwrap()), (0, 1));
+
+            processor.on_pointing_event(scroll(1, 0)).await;
+            assert!(USB_REPORT_CHANNEL.try_receive().is_err());
+            assert!(crate::hid::USB_SCROLL_MULTIPLIERS.set([0, 1]));
+            processor.on_pointing_event(scroll(1, 0)).await;
+            assert_eq!(wheel_and_pan(USB_REPORT_CHANNEL.try_receive().unwrap()), (0, 30));
 
             crate::hid::USB_SCROLL_MULTIPLIERS.reset();
         });

@@ -432,7 +432,9 @@ pub(crate) const RESOLUTION_MULTIPLIER_REPORT_ID: u8 = 0x05;
 /// descriptor's physical maximum, and the unit Windows (`WHEEL_DELTA`) and Linux
 /// (`REL_WHEEL_HI_RES`) both count in.
 #[cfg(feature = "hires_scroll")]
-const RESOLUTION_MULTIPLIER: i16 = 120;
+pub(crate) const RESOLUTION_MULTIPLIER: i16 = 120;
+#[cfg(not(feature = "hires_scroll"))]
+pub(crate) const RESOLUTION_MULTIPLIER: i16 = 1;
 
 /// The two one-bit logical values from one host's wheel and pan Feature report.
 #[cfg(feature = "hires_scroll")]

@@ -65,9 +65,11 @@ Scroll mode keeps motion between samples. It computes `total = remainder + delta
 
 #### High-resolution scrolling
 
-Each scroll step above is one wheel detent, so scrolling moves in visible jumps. Enable the `hires_scroll` Cargo feature to declare a HID Resolution Multiplier on the wheel and pan. A host that turns it on, such as Windows or Linux, receives 120 units per detent: scroll mode and device scrolling then emit `delta * multiplier * 120 / divisor`, moving at the same speed in 1/120 detent steps, while wheel keys keep stepping whole detents. Hosts that never turn it on still receive whole detents.
+Enable the `hires_scroll` Cargo feature on `rmk` to advertise a HID Resolution Multiplier for the wheel and pan. A host can enable each axis independently. For example, with a divisor of 8, one sensor count produces 15 of the 120 units in a detent on an enabled axis. An axis in whole-detent mode accumulates eight counts before sending one step.
 
-The feature changes the report descriptor over USB and BLE, so bonded BLE hosts that cache it may need to pair again.
+Wheel keys keep their configured detent size. An RMK dongle also relays whole detents from the keyboard and converts them to the units requested by its USB host. Custom mouse-report producers can obtain the active host's wheel and pan units per detent from `rmk::hid::scroll_resolution()`.
+
+The feature changes the USB and BLE report descriptors. Bonded BLE hosts that cache the old descriptor may need to pair again.
 
 ### Sniper
 
