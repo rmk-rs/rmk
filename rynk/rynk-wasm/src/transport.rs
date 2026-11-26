@@ -174,9 +174,9 @@ mod tests {
     }
 
     /// The wasm pump drops `Driver::run` — mid-frame — whenever a call it was
-    /// carrying resolves. Cancelling cannot stop the JS `send` that write had
-    /// started, so a second one on top of it interleaves both frames into bytes the
-    /// firmware can only discard.
+    /// carrying resolves, and the next run retries that write. Cancelling cannot
+    /// stop the JS `send` it had started, so the retry must finish that send
+    /// rather than put the frame on the wire a second time.
     #[wasm_bindgen_test]
     async fn write_is_cancel_safe() {
         let sent = Rc::new(RefCell::new(String::new()));
@@ -187,6 +187,7 @@ mod tests {
         // no gap inside it for the next send to slip into.
         let cancel_immediately = ready(());
         select(writer.write(b"AB"), cancel_immediately).await;
+        assert_eq!(writer.write(b"AB").await.unwrap(), 2);
         writer.write(b"CD").await.unwrap();
 
         assert_eq!(sent.take(), "ABCD");
