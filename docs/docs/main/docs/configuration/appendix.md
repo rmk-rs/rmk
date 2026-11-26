@@ -396,6 +396,7 @@ max_macros = 32
 macro_space_size = 256
 # Default debounce time in ms
 debounce_time = 20
+matrix_scan_interval_us = 1000
 # Report channel size
 report_channel_size = 16
 # Vial channel size

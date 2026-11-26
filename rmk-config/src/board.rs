@@ -196,32 +196,31 @@ fn validate_split_config(split: &SplitConfig, layout: Option<&LayoutTomlConfig>)
     }
 
     let regions: Vec<_> = boards()
-        .map(|(b, ctx)| {
-            (
-                b.row_offset,
-                b.row_offset + b.rows,
-                b.col_offset,
-                b.col_offset + b.cols,
-                ctx,
-            )
+        .map(|(board, ctx)| {
+            let rows = board.row_offset..board.row_offset.saturating_add(board.rows);
+            let cols = board.col_offset..board.col_offset.saturating_add(board.cols);
+            ([rows, cols], ctx)
         })
         .collect();
     if let Some(layout) = layout {
         let (rows, cols) = (layout.rows as usize, layout.cols as usize);
-        for (r0, r1, c0, c1, ctx) in &regions {
-            if *r1 > rows || *c1 > cols {
+        for ([board_rows, board_cols], ctx) in &regions {
+            if board_rows.end > rows || board_cols.end > cols {
                 return Err(format!(
-                    "keyboard.toml: {ctx} occupies rows {r0}..{r1}, cols {c0}..{c1}, which exceeds [layout] ({rows} rows x {cols} cols)"
+                    "keyboard.toml: {ctx} occupies rows {board_rows:?}, cols {board_cols:?}, which exceeds [layout] ({rows} rows x {cols} cols)"
                 ));
             }
         }
     }
-    for (i, a) in regions.iter().enumerate() {
-        for b in &regions[i + 1..] {
-            if a.0 < b.1 && b.0 < a.1 && a.2 < b.3 && b.2 < a.3 {
+    for (i, (region, ctx)) in regions.iter().enumerate() {
+        for (other, other_ctx) in &regions[i + 1..] {
+            if region
+                .iter()
+                .zip(other)
+                .all(|(a, b)| a.start < b.end && b.start < a.end)
+            {
                 return Err(format!(
-                    "keyboard.toml: {} and {} overlap in the unified matrix — adjust row_offset/col_offset",
-                    a.4, b.4
+                    "keyboard.toml: {ctx} and {other_ctx} overlap in the unified matrix — adjust row_offset/col_offset"
                 ));
             }
         }

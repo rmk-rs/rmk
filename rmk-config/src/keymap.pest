@@ -132,8 +132,8 @@ key_map = { SOI ~ key_action* ~ EOI }
 
 // `[layout].map`: newline is significant, so spacing is parsed explicitly.
 
-left_hand = { ^"L" | ^"LH" | ^"Left" }
-right_hand = { ^"R" | ^"RH" | ^"Right" }
+left_hand = { ^"Left" | ^"LH" | ^"L" }
+right_hand = { ^"Right" | ^"RH" | ^"R" }
 bilateral_hand = { "*" | ^"Bilateral" }
 hand = _{ left_hand | right_hand | bilateral_hand }
 
