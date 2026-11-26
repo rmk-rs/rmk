@@ -105,3 +105,103 @@ impl<Pin: FlexPin, D: DebouncerTrait<ROW, COL>, const PIN_NUM: usize, const ROW:
     #[cfg(feature = "async_matrix")]
     async fn wait_for_key(&mut self) {}
 }
+
+#[cfg(test)]
+mod tests {
+    use core::cell::RefCell;
+    use core::convert::Infallible;
+    use std::rc::Rc;
+
+    use embedded_hal::digital::{ErrorType, InputPin, OutputPin};
+
+    use super::*;
+    use crate::test_support::test_block_on;
+
+    const ROW: usize = 2;
+    const COL: usize = 3;
+
+    /// Row `r` is read on pin `r`; column `c` is driven on pin `ROW + c`.
+    #[derive(Default)]
+    struct Board {
+        driven: Option<usize>,
+        pressed: [[bool; COL]; ROW],
+    }
+
+    struct FakePin {
+        idx: usize,
+        board: Rc<RefCell<Board>>,
+    }
+
+    impl ErrorType for FakePin {
+        type Error = Infallible;
+    }
+
+    impl InputPin for FakePin {
+        fn is_high(&mut self) -> Result<bool, Infallible> {
+            let board = self.board.borrow();
+            Ok(self.idx < ROW && board.driven.is_some_and(|out| board.pressed[self.idx][out - ROW]))
+        }
+
+        fn is_low(&mut self) -> Result<bool, Infallible> {
+            self.is_high().map(|high| !high)
+        }
+    }
+
+    impl OutputPin for FakePin {
+        fn set_high(&mut self) -> Result<(), Infallible> {
+            self.board.borrow_mut().driven = Some(self.idx);
+            Ok(())
+        }
+
+        fn set_low(&mut self) -> Result<(), Infallible> {
+            self.board.borrow_mut().driven = None;
+            Ok(())
+        }
+    }
+
+    impl FlexPin for FakePin {
+        fn set_as_input(&mut self) {}
+        fn set_as_output(&mut self) {}
+    }
+
+    struct ImmediateDebouncer;
+
+    impl DebouncerTrait<ROW, COL> for ImmediateDebouncer {
+        fn detect_change_with_debounce(&mut self, _: usize, _: usize, active: bool, state: &KeyState) -> DebounceState {
+            if active != state.pressed {
+                DebounceState::Debounced
+            } else {
+                DebounceState::Ignored
+            }
+        }
+    }
+
+    #[test]
+    fn simultaneous_presses_on_rectangular_matrix_are_reported_in_scan_order() {
+        let board = Rc::new(RefCell::new(Board::default()));
+        let pins = core::array::from_fn(|idx| FakePin {
+            idx,
+            board: board.clone(),
+        });
+        let scan_map = core::array::from_fn(|row| core::array::from_fn(|col| ScanLocation::Pins(row, ROW + col)));
+        let mut matrix: BidirectionalMatrix<_, _, { ROW + COL }, ROW, COL> =
+            BidirectionalMatrix::new(pins, ImmediateDebouncer, scan_map);
+
+        let keys = [(0, 1), (0, 2), (1, 0), (1, 2)];
+        for &(row, col) in &keys {
+            board.borrow_mut().pressed[row][col] = true;
+        }
+        let events = test_block_on(async {
+            let mut events = Vec::new();
+            for _ in 0..keys.len() {
+                events.push(matrix.read_keyboard_event().await);
+            }
+            events
+        });
+        let expected: Vec<_> = keys
+            .iter()
+            .map(|&(row, col)| KeyboardEvent::key(row as u8, col as u8, true))
+            .collect();
+        assert_eq!(events, expected);
+    }
+}
