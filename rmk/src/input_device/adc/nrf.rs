@@ -22,6 +22,8 @@ pub struct NrfAdc<'a, const PIN_NUM: usize, const EVENT_NUM: usize> {
     light_sleep: Option<Duration>,
     sample: [i16; PIN_NUM],
     previous_sample: [i16; PIN_NUM],
+    /// First scan, taken as the joystick's resting position.
+    center: [i16; PIN_NUM],
     event_type: [AnalogEventType; EVENT_NUM],
     /// Pointing device ID for each event; battery entries are unused.
     event_device_ids: [u8; EVENT_NUM],
@@ -60,6 +62,7 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
             light_sleep,
             sample: [0; PIN_NUM],
             previous_sample: [0; PIN_NUM],
+            center: [0; PIN_NUM],
             event_index: EVENT_NUM as u8,
             channel_index: 0,
             last_activity: None,
@@ -94,6 +97,7 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                 if !self.has_sample {
                     // Establish a baseline without treating startup readings as movement.
                     self.previous_sample = self.sample;
+                    self.center = self.sample;
                     self.has_sample = true;
                 }
                 self.channel_index = 0;
@@ -115,7 +119,10 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                     for axis in &mut axes[..usize::from(axis_count)] {
                         let channel = self.channel_index as usize;
                         let value = self.sample[channel];
-                        if (i32::from(value) - i32::from(self.previous_sample[channel])).abs() > 150 {
+                        // Moving, or held outside a 1/8-range (12-bit) deadzone around rest.
+                        if (i32::from(value) - i32::from(self.previous_sample[channel])).abs() > 150
+                            || (i32::from(value) - i32::from(self.center[channel])).abs() > 512
+                        {
                             self.last_activity = Some(Instant::now());
                         }
                         axis.value = (value + i16::MIN / 2).saturating_mul(2);
