@@ -283,6 +283,9 @@ pub struct UsbTransport<'a, D: Driver<'static>, S = ()> {
 }
 
 impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
+    // Not inlined: building the USB device needs large temporaries, which would otherwise stay
+    // in the caller's poll frame, under every later poll of the keyboard.
+    #[inline(never)]
     pub fn new(
         driver: D,
         device_config: DeviceConfig<'static>,
