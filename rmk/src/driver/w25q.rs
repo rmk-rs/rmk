@@ -50,6 +50,23 @@ impl<BUS: SpiBus, CS: OutputPin> W25qNorFlash<BUS, CS> {
         }
     }
 
+    /// Run one chip-select-framed transaction: write `cmd`, then read into
+    /// `buf`. `SpiBus` may return before bytes are on the wire, so the bus is
+    /// flushed before CS is released.
+    async fn transaction(&mut self, cmd: &[u8], buf: &mut [u8]) -> Result<(), W25qError<BUS::Error>> {
+        self.cs.set_low().ok();
+        let res = async {
+            self.bus.write(cmd).await?;
+            if !buf.is_empty() {
+                self.bus.read(buf).await?;
+            }
+            self.bus.flush().await
+        }
+        .await;
+        self.cs.set_high().ok();
+        res.map_err(W25qError::Spi)
+    }
+
     /// Wait until the write-in-progress bit clears. Datasheet worst case for
     /// a 64 KiB block erase is ~400 ms; the 10 s deadline leaves ample margin
     /// before reporting a stuck chip instead of spinning forever.
@@ -78,15 +95,8 @@ impl<BUS: SpiBus, CS: OutputPin> W25qNorFlash<BUS, CS> {
     }
 
     pub async fn read_jedec_id(&mut self) -> Result<[u8; 3], W25qError<BUS::Error>> {
-        self.cs.set_low().ok();
-        if let Err(e) = self.bus.write(&[CMD_JEDEC_ID]).await {
-            self.cs.set_high().ok();
-            return Err(W25qError::Spi(e));
-        }
         let mut id = [0u8; 3];
-        let res = self.bus.read(&mut id).await;
-        self.cs.set_high().ok();
-        res.map_err(W25qError::Spi)?;
+        self.transaction(&[CMD_JEDEC_ID], &mut id).await?;
         Ok(id)
     }
 
@@ -96,31 +106,18 @@ impl<BUS: SpiBus, CS: OutputPin> W25qNorFlash<BUS, CS> {
 
     pub async fn clear_block_protection(&mut self) -> Result<(), W25qError<BUS::Error>> {
         self.write_enable().await?;
-        self.cs.set_low().ok();
-        let res = self.bus.write(&[CMD_WRITE_STATUS, 0x00]).await.map_err(W25qError::Spi);
-        self.cs.set_high().ok();
-        res?;
+        self.transaction(&[CMD_WRITE_STATUS, 0x00], &mut []).await?;
         self.wait_wip().await
     }
 
     async fn read_status(&mut self) -> Result<u8, W25qError<BUS::Error>> {
-        self.cs.set_low().ok();
-        if let Err(e) = self.bus.write(&[CMD_READ_STATUS]).await {
-            self.cs.set_high().ok();
-            return Err(W25qError::Spi(e));
-        }
         let mut status = [0u8; 1];
-        let res = self.bus.read(&mut status).await;
-        self.cs.set_high().ok();
-        res.map_err(W25qError::Spi)?;
+        self.transaction(&[CMD_READ_STATUS], &mut status).await?;
         Ok(status[0])
     }
 
     async fn write_enable(&mut self) -> Result<(), W25qError<BUS::Error>> {
-        self.cs.set_low().ok();
-        let res = self.bus.write(&[CMD_WRITE_ENABLE]).await.map_err(W25qError::Spi);
-        self.cs.set_high().ok();
-        res?;
+        self.transaction(&[CMD_WRITE_ENABLE], &mut []).await?;
         // Verify Write-Enable-Latch was set
         let status = self.read_status().await?;
         if status & 0x02 == 0 {
@@ -132,14 +129,7 @@ impl<BUS: SpiBus, CS: OutputPin> W25qNorFlash<BUS, CS> {
     async fn read_data(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), W25qError<BUS::Error>> {
         self.wait_wip().await?;
         let (cmd, cmd_len) = self.address_header(CMD_READ, CMD_READ_4B, addr);
-        self.cs.set_low().ok();
-        if let Err(e) = self.bus.write(&cmd[..cmd_len]).await {
-            self.cs.set_high().ok();
-            return Err(W25qError::Spi(e));
-        }
-        let res = self.bus.read(buf).await.map_err(W25qError::Spi);
-        self.cs.set_high().ok();
-        res
+        self.transaction(&cmd[..cmd_len], buf).await
     }
 
     async fn page_program(&mut self, addr: u32, data: &[u8]) -> Result<(), W25qError<BUS::Error>> {
@@ -149,10 +139,7 @@ impl<BUS: SpiBus, CS: OutputPin> W25qNorFlash<BUS, CS> {
         let mut tx_buf = [0u8; 5 + PAGE_SIZE as usize];
         tx_buf[..header_len].copy_from_slice(&header[..header_len]);
         tx_buf[header_len..total].copy_from_slice(data);
-        self.cs.set_low().ok();
-        let res = self.bus.write(&tx_buf[..total]).await.map_err(W25qError::Spi);
-        self.cs.set_high().ok();
-        res?;
+        self.transaction(&tx_buf[..total], &mut []).await?;
         self.wait_wip().await
     }
 }
@@ -224,10 +211,7 @@ impl<BUS: SpiBus, CS: OutputPin> NorFlash for W25qNorFlash<BUS, CS> {
             };
             self.write_enable().await?;
             let (cmd, cmd_len) = self.address_header(opcode, opcode_4b, from);
-            self.cs.set_low().ok();
-            let res = self.bus.write(&cmd[..cmd_len]).await.map_err(W25qError::Spi);
-            self.cs.set_high().ok();
-            res?;
+            self.transaction(&cmd[..cmd_len], &mut []).await?;
             self.verify_wip_set().await?;
             self.wait_wip().await?;
             from += size;
