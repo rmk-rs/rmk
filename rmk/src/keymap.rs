@@ -296,23 +296,26 @@ impl KeyMapInner<'_> {
             return self.get_action_at(event.source, layer as usize);
         }
 
+        let (action, layer) = self.select_action(event.source);
+        self.replace_layer_cache(event.source, layer);
+        action
+    }
+
+    fn select_action(&self, source: KeyboardEventSource) -> (KeyAction, u8) {
         for layer_idx in (0..self.num_layer).rev() {
             if self.layer_state[layer_idx] || layer_idx as u8 == self.behavior.default_layer {
-                let action = self.get_action_at(event.source, layer_idx);
+                let action = self.get_action_at(source, layer_idx);
                 if action == KeyAction::Transparent {
                     continue;
                 }
-                self.replace_layer_cache(event.source, layer_idx as u8);
-                return action;
+                return (action, layer_idx as u8);
             }
             if layer_idx as u8 == self.behavior.default_layer {
                 break;
             }
         }
 
-        // Keep release on the same transparent default-layer action as press.
-        self.replace_layer_cache(event.source, self.behavior.default_layer);
-        KeyAction::No
+        (KeyAction::No, self.behavior.default_layer)
     }
 
     fn get_activated_layer(&self) -> u8 {
@@ -513,6 +516,14 @@ impl<'a> KeyMap<'a> {
 
     pub(crate) fn get_action_with_layer_cache(&self, event: KeyboardEvent) -> KeyAction {
         self.inner.borrow_mut().get_action_with_layer_cache(event)
+    }
+
+    pub(crate) fn peek_action(&self, source: KeyboardEventSource) -> KeyAction {
+        self.peek_action_with_layer(source).0
+    }
+
+    pub(crate) fn peek_action_with_layer(&self, source: KeyboardEventSource) -> (KeyAction, u8) {
+        self.inner.borrow().select_action(source)
     }
 
     pub(crate) fn get_action_at(&self, source: KeyboardEventSource, layer: usize) -> KeyAction {
