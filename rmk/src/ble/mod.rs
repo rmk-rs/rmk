@@ -367,9 +367,10 @@ async fn run_ble_keyboard<
     let product_name = device_config.product_name;
 
     info!("Starting advertising and GATT service");
-    let Ok(server) = &Server::new_keyboard(device_config) else {
+    let Ok(server) = &Server::new_keyboard(product_name) else {
         panic!("product name is too long for BLE");
     };
+    server.configure(device_config);
 
     if crate::ble::passkey::passkey_entry_enabled() {
         stack.set_io_capabilities(IoCapabilities::KeyboardOnly);

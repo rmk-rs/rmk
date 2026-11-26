@@ -86,30 +86,32 @@ struct GapService {
 struct GenericAttributeService {}
 
 impl Server<'_> {
-    pub(super) fn new_keyboard(device: &DeviceConfig<'static>) -> Result<Self, &'static str> {
-        let product_name = device.product_name;
-        let server = if BLE_PROFILE_NAME_SUFFIX {
+    pub(super) fn new_keyboard(product_name: &'static str) -> Result<Self, &'static str> {
+        if BLE_PROFILE_NAME_SUFFIX {
             let mut server = Self::new(AttributeTable::new());
             server.profile_name.product_name = product_name;
-            server
-        } else {
-            Self::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-                name: product_name,
-                appearance: &appearance::human_interface_device::KEYBOARD,
-            }))?
-        };
+            return Ok(server);
+        }
+        Self::new_with_config(GapConfig::Peripheral(PeripheralConfig {
+            name: product_name,
+            appearance: &appearance::human_interface_device::KEYBOARD,
+        }))
+    }
 
-        let info = &server.device_config_service;
+    /// Kept separate from [`Self::new_keyboard`] so `new_keyboard` can tail-return
+    /// `Self::new_with_config` without moving the multi-KiB `Server` through `?`/`Ok(...)`
+    /// on the BLE task stack.
+    pub(super) fn configure(&self, device: &DeviceConfig<'_>) {
+        let info = &self.device_config_service;
         let pnp_id = PnPID {
             vendor_id: device.vid,
             product_id: device.pid,
             ..Default::default()
         };
         let manufacturer = heapless::String::try_from(device.manufacturer).expect("manufacturer is too long for BLE");
-        unwrap!(server.set(&info.pnp_id, &pnp_id));
-        unwrap!(server.set(&info.serial_number, &device.serial_number));
-        unwrap!(server.set(&info.manufacturer_name, &manufacturer));
-        Ok(server)
+        unwrap!(self.set(&info.pnp_id, &pnp_id));
+        unwrap!(self.set(&info.serial_number, &device.serial_number));
+        unwrap!(self.set(&info.manufacturer_name, &manufacturer));
     }
 
     /// The empty return array avoids a name buffer in disabled builds.
