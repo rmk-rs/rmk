@@ -204,6 +204,53 @@ mod tests {
     }
 
     #[test]
+    fn held_joystick_deflection_keeps_fast_polling_until_recentered() {
+        crate::test_support::test_block_on(async {
+            const CENTER: [i16; 2] = [2048, 2048];
+            const DEFLECTED: [i16; 2] = [3500, 2048];
+            const HELD_SCANS: usize = 100;
+            const CENTERED_SCANS: usize = 70;
+            let mut samples = VecDeque::from([CENTER]);
+            samples.extend([DEFLECTED; HELD_SCANS]);
+            samples.extend([CENTER; CENTERED_SCANS]);
+            let mut adc = NrfAdc::new(
+                Saadc { samples: &mut samples },
+                [AnalogEventType::Joystick(2)],
+                [0],
+                Duration::from_millis(20),
+                Some(Duration::from_millis(350)),
+            );
+            let mut scans = std::vec::Vec::new();
+            for _ in 0..1 + HELD_SCANS + CENTERED_SCANS {
+                let NrfAdcEvent::Pointing(event) = adc.read_nrf_adc_event().await else {
+                    panic!("joystick event")
+                };
+                scans.push((Instant::now(), event.axes[0].value));
+            }
+            let intervals: std::vec::Vec<u64> = scans.windows(2).map(|w| (w[1].0 - w[0].0).as_millis()).collect();
+
+            // Every sample during the hold commands the same nonzero displacement from center.
+            assert!(
+                scans[1..=HELD_SCANS]
+                    .iter()
+                    .all(|&(_, x)| x == scans[1].1 && x != scans[0].1)
+            );
+            // Startup is idle, so the first deflected scan arrives after the light-sleep interval.
+            assert_eq!(intervals[0], 350);
+            let held = &intervals[1..HELD_SCANS];
+            assert!(
+                held.iter().all(|&ms| ms == 20),
+                "held deflection slowed after {} ms: intervals {:?}",
+                held.iter().take_while(|&&ms| ms == 20).sum::<u64>(),
+                held
+            );
+
+            // Once recentered, idle polling resumes 1.2 s after the last movement.
+            assert_eq!(intervals.last(), Some(&350), "centered stick never returned to idle");
+        });
+    }
+
+    #[test]
     fn battery_only_uses_the_configured_polling_interval() {
         crate::test_support::test_block_on(async {
             let mut samples = VecDeque::from([[1000], [2000], [3000]]);
