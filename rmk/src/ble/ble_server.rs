@@ -86,29 +86,30 @@ struct GapService {
 struct GenericAttributeService {}
 
 impl Server<'_> {
-    pub(super) fn new_keyboard(product_name: &'static str) -> Result<Self, &'static str> {
-        if BLE_PROFILE_NAME_SUFFIX {
+    pub(super) fn new_keyboard(device: &DeviceConfig<'static>) -> Result<Self, &'static str> {
+        let product_name = device.product_name;
+        let server = if BLE_PROFILE_NAME_SUFFIX {
             let mut server = Self::new(AttributeTable::new());
             server.profile_name.product_name = product_name;
-            return Ok(server);
-        }
-        Self::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-            name: product_name,
-            appearance: &appearance::human_interface_device::KEYBOARD,
-        }))
-    }
+            server
+        } else {
+            Self::new_with_config(GapConfig::Peripheral(PeripheralConfig {
+                name: product_name,
+                appearance: &appearance::human_interface_device::KEYBOARD,
+            }))?
+        };
 
-    pub(super) fn configure(&self, device: &DeviceConfig<'_>) {
-        let info = &self.device_config_service;
+        let info = &server.device_config_service;
         let pnp_id = PnPID {
             vendor_id: device.vid,
             product_id: device.pid,
             ..Default::default()
         };
         let manufacturer = heapless::String::try_from(device.manufacturer).expect("manufacturer is too long for BLE");
-        unwrap!(self.set(&info.pnp_id, &pnp_id));
-        unwrap!(self.set(&info.serial_number, &device.serial_number));
-        unwrap!(self.set(&info.manufacturer_name, &manufacturer));
+        unwrap!(server.set(&info.pnp_id, &pnp_id));
+        unwrap!(server.set(&info.serial_number, &device.serial_number));
+        unwrap!(server.set(&info.manufacturer_name, &manufacturer));
+        Ok(server)
     }
 
     /// The empty return array avoids a name buffer in disabled builds.
@@ -273,17 +274,16 @@ impl HidConnection<'_, '_, '_> {
         &self,
         characteristic: &Characteristic<[u8; N]>,
         report: &R,
-    ) -> Result<usize, HidError> {
+    ) -> Result<(), HidError> {
         let mut buf = [0u8; N];
-        let n = report.serialize(&mut buf).map_err(|_| HidError::ReportSerializeError)?;
+        report.serialize(&mut buf).map_err(|_| HidError::ReportSerializeError)?;
         characteristic.notify(self.conn, &buf, true).await.map_err(|e| {
             error!("Failed to notify HID report: {:?}", e);
             HidError::BleError
-        })?;
-        Ok(n)
+        })
     }
 
-    pub(super) async fn write_report(&self, report: &Report) -> Result<usize, HidError> {
+    pub(super) async fn write_report(&self, report: &Report) -> Result<(), HidError> {
         match report {
             Report::KeyboardReport(r) => self.notify_report(&self.service.input_keyboard, r).await,
             Report::MouseReport(r) => self.notify_report(&self.service.mouse_report, r).await,
@@ -294,7 +294,7 @@ impl HidConnection<'_, '_, '_> {
             #[cfg(feature = "steno")]
             Report::StenoReport(_) => {
                 debug!("Steno chord dropped: Plover HID over BLE is not supported");
-                Ok(0)
+                Ok(())
             }
         }
     }
