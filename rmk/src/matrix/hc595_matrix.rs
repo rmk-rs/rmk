@@ -33,10 +33,10 @@
 
 use embassy_time::Timer;
 use embedded_hal::digital::{InputPin, OutputPin};
-#[cfg(feature = "async_matrix")]
-use embedded_hal_async::digital::Wait;
 use embedded_hal_async::spi::SpiDevice;
 use rmk_macro::input_device;
+#[cfg(feature = "async_matrix")]
+use {embassy_futures::select::select_array, embedded_hal_async::digital::Wait};
 
 use crate::debounce::{DebounceState, DebouncerTrait};
 use crate::event::KeyboardEvent;
@@ -161,7 +161,8 @@ impl<
                     }
 
                     #[cfg(feature = "async_matrix")]
-                    if self.key_states[col_idx][row_idx].pressed {
+                    if self.key_states[col_idx][row_idx].pressed || matches!(debounce_state, DebounceState::InProgress)
+                    {
                         self.rescan_needed = true;
                     }
                 }
@@ -198,8 +199,13 @@ impl<
 {
     #[cfg(feature = "async_matrix")]
     async fn wait_for_key(&mut self) {
+        let ones = [0xFFu8; SR_MAX_BYTES];
+        self.pulse_latch(&ones[..Self::NUM_BYTES]).await;
+
+        let futs = self.row_pins.each_mut().map(|row_pin| row_pin.wait_for_high());
+        let _ = select_array(futs).await;
+
         self.clear_columns().await;
-        Timer::after_millis(1).await;
     }
 }
 
