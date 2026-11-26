@@ -1615,7 +1615,7 @@ impl<'a> Keyboard<'a> {
     async fn process_action_mouse(&mut self, key: HidKeyCode, event: KeyboardEvent) {
         let action = {
             let config = self.keymap.mouse_key_config();
-            self.mouse.process(key, event.pressed, &config)
+            self.mouse.process(key, event, &config)
         };
 
         // Sync button state to keymap for conditional layer / fork consumers
