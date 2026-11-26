@@ -10,6 +10,25 @@ RMK provides four built-in matrix implementations to match different hardware de
 
 The standard approach. Keys are wired in a row-column grid, using diodes to prevent [ghosting](https://en.wikipedia.org/wiki/Key_rollover#Key_jamming_and_ghosting). RMK supports both col2row and row2col diode configurations to match your PCB design. You can set the diode direction in the [matrix configuration](../configuration/keyboard_matrix#matrix-configuration).
 
+Normal scans sample inputs without an explicit per-output settling wait.
+`[rmk] matrix_scan_interval_us` sets the wait after complete active scans
+while keys are held or debounce is pending, and after complete polling
+scans without `async_matrix`.
+It defaults to 1000 µs (1 ms). Set it to `0` to remove the timed gap while
+still yielding to other tasks. With `async_matrix`, idle waits remain
+GPIO-based regardless of this setting. Other matrix types keep their
+existing constructors and timing.
+
+```toml
+[rmk]
+matrix_scan_interval_us = 1000
+```
+
+This is a gap after a scan, not a fixed scan period or USB/BLE report rate.
+Scan work and executor scheduling add to the period. Nonzero delays round
+up to the time driver's resolution; 125 µs requires a sufficiently fine
+timebase. Smaller gaps trade higher activity for more frequent sampling.
+
 ### Direct Pin Matrix
 
 Each key connects directly to its own GPIO pin, eliminating the matrix grid and the need for diodes. All key states are read simultaneously without scanning. This method requires a high number of GPIO pins, so it's best for small keyboards and macropads. In the Rust API this is [`rmk::matrix::direct_pin::DirectPinMatrix`](https://github.com/rmk-rs/rmk/blob/main/rmk/src/matrix/direct_pin.rs); see the [`rp2040_direct_pin`](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/rp2040_direct_pin/src/main.rs) example.

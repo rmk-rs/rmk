@@ -75,6 +75,10 @@ fn generate_constants(bc: &BuildConstants, config: &KeyboardTomlConfig) -> Strin
     lines.push(format!("pub const MAX_FORKS: usize = {};", bc.max_forks));
     lines.push(format!("pub const DEBOUNCE_THRESHOLD: u16 = {};", bc.debounce_time));
     lines.push(format!(
+        "pub const MATRIX_SCAN_INTERVAL_US: u32 = {};",
+        bc.matrix_scan_interval_us
+    ));
+    lines.push(format!(
         "pub const REPORT_CHANNEL_SIZE: usize = {};",
         bc.report_channel_size
     ));
