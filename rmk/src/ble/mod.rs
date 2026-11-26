@@ -12,6 +12,8 @@ use bt_hci::cmd::le::{
 use bt_hci::cmd::le::{LeRand, LeReadLocalSupportedFeatures, LeReadPhy, LeSetPhy};
 use bt_hci::controller::{ControllerCmdAsync, ControllerCmdSync};
 use bt_hci::param::Error as HciError;
+#[cfg(feature = "split")]
+use embassy_futures::join::join3;
 use embassy_futures::join::{join, join5};
 use embassy_futures::select::{Either, Either3, select, select_slice, select3};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -335,7 +337,7 @@ where
                 &self.peripheral_matrices
             ));
 
-            embassy_futures::join::join3(
+            join3(
                 poll_separately(keyboard),
                 poll_separately(sessions),
                 scan_and_connect_peripherals(&stack, &conn_channels, &ended),
@@ -971,9 +973,9 @@ async fn disconnect(conn: &GattConnection<'_, '_, DefaultPacketPool>) {
 }
 
 /// Set keyboard <-> host connection parameters
-async fn set_conn_params<P: PacketPool>(
-    stack: &Stack<'_, impl Controller + ControllerCmdSync<LeReadLocalSupportedFeatures>, P>,
-    conn: &GattConnection<'_, '_, P>,
+async fn set_conn_params(
+    stack: &Stack<'_, impl Controller + ControllerCmdSync<LeReadLocalSupportedFeatures>, DefaultPacketPool>,
+    conn: &GattConnection<'_, '_, DefaultPacketPool>,
 ) {
     let requests = [
         // The first request is what Apple devices accept:

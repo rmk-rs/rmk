@@ -113,7 +113,7 @@ impl Server<'_> {
     }
 
     /// The empty return array avoids a name buffer in disabled builds.
-    pub(crate) fn profile_name(
+    pub(super) fn profile_name(
         &self,
         slot: u8,
     ) -> [heapless::String<BLE_ADV_NAME_MAX_LEN>; BLE_PROFILE_NAME_SUFFIX as usize] {
