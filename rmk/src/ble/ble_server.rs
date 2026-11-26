@@ -22,7 +22,7 @@ use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_MAX, DONGLE_EVEN
 use crate::hid::RynkHidReport;
 #[cfg(feature = "vial")]
 use crate::hid::ViaReport;
-use crate::hid::{BleCompositeReport, CompositeReportType, HidError, MOUSE_REPORT_SIZE, Report};
+use crate::hid::{BleCompositeReport, CompositeReportType, MOUSE_REPORT_SIZE, Report};
 
 // Used for saving the client attribute (CCCD) table. Tracks the trouble-host
 // per-connection client-specific attribute buffer size.
@@ -276,16 +276,16 @@ impl HidConnection<'_, '_, '_> {
         &self,
         characteristic: &Characteristic<[u8; N]>,
         report: &R,
-    ) -> Result<(), HidError> {
+    ) -> Result<(), trouble_host::Error> {
         let mut buf = [0u8; N];
-        report.serialize(&mut buf).map_err(|_| HidError::ReportSerializeError)?;
-        characteristic.notify(self.conn, &buf, true).await.map_err(|e| {
-            error!("Failed to notify HID report: {:?}", e);
-            HidError::BleError
-        })
+        report
+            .serialize(&mut buf)
+            .map_err(|_| trouble_host::Error::InvalidValue)?;
+        characteristic.notify(self.conn, &buf, true).await
     }
 
-    pub(super) async fn write_report(&self, report: &Report) -> Result<(), HidError> {
+    /// Callers decide whether a failure is worth logging.
+    pub(super) async fn write_report(&self, report: &Report) -> Result<(), trouble_host::Error> {
         match report {
             Report::KeyboardReport(r) => self.notify_report(&self.service.input_keyboard, r).await,
             Report::MouseReport(r) => self.notify_report(&self.service.mouse_report, r).await,
