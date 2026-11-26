@@ -75,9 +75,11 @@
 //! - Reads must be cancel-safe: a read cancelled before completion consumes
 //!   nothing (the session `select`, and the wasm per-call pattern, cancel the
 //!   pump freely).
-//! - Writes must be cancel-safe too: a cancelled `write` whose bytes are still
-//!   going out must finish before the next one starts, or the two interleave
-//!   into a frame the firmware can only discard.
+//! - Writes must be cancel-safe too: the driver retries a cancelled `write`
+//!   with the same bytes, so the cancelled one must commit nothing. A
+//!   transport that cannot recall a started write (a JS promise, a submitted
+//!   USB transfer) finishes it in that retry and returns its count instead of
+//!   sending the bytes twice.
 //!
 //! ## Multi-version dispatch
 //!
