@@ -87,9 +87,9 @@ impl<
             // Scan matrix and send report
             for row_idx in row_idx_start..self.direct_pins.len() {
                 let pins_row = self.direct_pins.get_mut(row_idx).unwrap();
-                for col_idx in col_idx_start..pins_row.len() {
+                let col_start = if row_idx == row_idx_start { col_idx_start } else { 0 };
+                for col_idx in col_start..pins_row.len() {
                     let direct_pin = pins_row.get_mut(col_idx).unwrap();
-                    // for (col_idx, direct_pin) in pins_row.iter_mut().enumerate() {
                     if let Some(direct_pin) = direct_pin {
                         let pin_state = if self.low_active {
                             direct_pin.is_low().ok().unwrap_or_default()
