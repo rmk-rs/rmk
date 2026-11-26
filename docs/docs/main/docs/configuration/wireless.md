@@ -170,12 +170,11 @@ Battery measurement reserves ADC1. This configuration requires RMK's ESP32 BLE i
 
 ### Peripheral battery reporting over BLE GATT
 
-When peripherals are configured to sample their batteries (see above), their levels are forwarded to the central over the split BLE links and re-exposed to the host through standard Battery Service instances (UUID `0x180F`) on the central's GATT server. The host sees one Battery Service instance for:
+The central exposes its own battery first using the standard Battery Service (`0x180F`) and Battery Level (`0x2A19`). On a two-board keyboard that measures both batteries, set `central_side = "left"` or `"right"` in `[split]` to report **Left** and **Right** in their presentation descriptors (`0x2904`). The readable names (`0x2901`) default to `Central` and `Peripheral 0` and honor `battery_user_description`. A host that uses the first discovered service sees the central, including on right-central keyboards.
 
-- the central's own battery level, and
-- each peripheral with `battery_adc_pin` set by its own table or the board preset.
+Omitting `central_side`, measuring fewer than two batteries, or configuring three or more boards exposes **Main** as the sole standard battery. Each peripheral with a configured battery ADC exposes one top-level RMK Peripheral Battery service (`061686b6-6a06-4d02-8a8f-c514225bbdb3`). Read or subscribe to its level characteristic (`cd3259e5-a755-4bf0-9f36-690cddccdb51`) for that board's unsigned 8-bit percentage. For peripheral `N` (zero-based), the description field of its presentation descriptor (`0x2904`) is `N + 1`. Its user description (`0x2901`) defaults to `Peripheral N`.
 
-Set `battery_user_description` in each board's battery table to give its battery a name such as `"Left"` or `"Right"`. The host determines whether these names and separate battery levels appear in its interface.
+After upgrading a previously paired multi-board keyboard, a host that cached the old battery services may need to rediscover them.
 
 The split feature uses trouble-host's default client ATT table size. To reserve more space for client-specific attributes such as CCCDs, set `TROUBLE_HOST_CLIENT_ATT_TABLE_SIZE` in the project environment, for example in `.cargo/config.toml`:
 

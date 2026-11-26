@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use crate::{DEFAULT_PASSKEY_ENTRY_TIMEOUT_SECS, MIN_PASSKEY_ENTRY_TIMEOUT_SECS};
+use crate::{DEFAULT_PASSKEY_ENTRY_TIMEOUT_SECS, MIN_PASSKEY_ENTRY_TIMEOUT_SECS, SplitSide};
 
 const SUBSCRIBER_DEFAULT_CONFIG: &str = include_str!("../default_config/subscriber_default.toml");
 
@@ -47,6 +47,8 @@ pub struct BuildConstants {
     pub vial_channel_size: usize,
     pub flash_channel_size: usize,
     pub num_split_peripherals: usize,
+    /// Side of the central when both halves expose standard left/right batteries.
+    pub paired_battery_central_side: Option<SplitSide>,
     pub central_battery_user_description: String,
     pub split_battery_peripheral_ids: Vec<usize>,
     pub split_battery_peripheral_user_descriptions: Vec<String>,
@@ -114,10 +116,8 @@ impl crate::KeyboardTomlConfig {
         } else {
             rmk.num_split_peripherals
         };
-        let central_battery_user_description = self
-            .resolve_battery_config(None)?
-            .battery_user_description
-            .unwrap_or_else(|| "Central".into());
+        let central_battery = self.resolve_battery_config(None)?;
+        let mut pair_side = None;
         let mut split_battery_peripheral_ids = Vec::new();
         let mut split_battery_peripheral_user_descriptions = Vec::new();
         if active_features.contains(&"split")
@@ -134,6 +134,11 @@ impl crate::KeyboardTomlConfig {
                     );
                 }
             }
+            pair_side = split.central_side.filter(|_| {
+                split.peripheral.len() == 1
+                    && !split_battery_peripheral_ids.is_empty()
+                    && central_battery.battery_adc_pin.is_some()
+            });
         }
         let total_ble_profiles = rmk.num_ble_profiles + usize::from(active_features.contains(&"dongle"));
         if total_ble_profiles == 0 && active_features.contains(&"_ble") {
@@ -160,13 +165,15 @@ impl crate::KeyboardTomlConfig {
         };
 
         let mut event_config = self.event.clone();
-        // ble/mod.rs: each host link runs a battery service. Its HID writer waits
-        // for the link's profile to be selected, and until the link encrypts its
-        // PHY task waits too.
-        event_config.battery_status.subs += num_host_links;
-        event_config.connection_status_change.subs += 2 * num_host_links;
-        if !split_battery_peripheral_ids.is_empty() {
-            event_config.peripheral_battery.subs += num_host_links;
+        if num_host_links > 0 {
+            // One subscriber maintains the GATT values; each link has its own notification task.
+            let battery_subscribers = 1 + num_host_links;
+            event_config.battery_status.subs += battery_subscribers;
+            if !split_battery_peripheral_ids.is_empty() {
+                event_config.peripheral_battery.subs += battery_subscribers;
+            }
+            // Both the HID writer and the PHY task wait for connection status.
+            event_config.connection_status_change.subs += 2 * num_host_links;
         }
         // host/rynk/topics.rs: each host link opens its own Rynk session.
         if active_features.contains(&"rynk") {
@@ -324,7 +331,10 @@ impl crate::KeyboardTomlConfig {
             vial_channel_size: rmk.vial_channel_size,
             flash_channel_size: rmk.flash_channel_size,
             num_split_peripherals,
-            central_battery_user_description,
+            paired_battery_central_side: pair_side,
+            central_battery_user_description: central_battery
+                .battery_user_description
+                .unwrap_or_else(|| "Central".into()),
             split_battery_peripheral_ids,
             split_battery_peripheral_user_descriptions,
             num_ble_profiles: rmk.num_ble_profiles,
@@ -404,7 +414,7 @@ mod tests {
     use crate::battery::BatteryTomlConfig;
     use crate::{
         BleConfig, DEFAULT_PASSKEY_ENTRY_TIMEOUT_SECS, KeyboardTomlConfig, MIN_PASSKEY_ENTRY_TIMEOUT_SECS,
-        SplitBoardConfig, SplitConfig,
+        SplitBoardConfig, SplitConfig, SplitSide,
     };
 
     #[test]
@@ -416,7 +426,7 @@ mod tests {
             (vec!["split"], 2),
             (vec!["rynk"], 2),
             (vec!["split", "rynk"], 3),
-            (vec!["split", "rynk", "_ble"], 5),
+            (vec!["split", "rynk", "_ble"], 6),
         ] {
             let constants = config.build_constants(&features).unwrap();
             let event = constants.events.iter().find(|e| e.name == "battery_status").unwrap();
@@ -519,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn ble_battery_subscribers_cover_each_host_link() {
+    fn ble_battery_subscribers_cover_the_server_and_each_host_link() {
         let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
         config.rmk.num_ble_profiles = 5;
         config.event.battery_status.subs = 2;
@@ -538,11 +548,11 @@ mod tests {
 
         let cases: &[(&[&str], Option<usize>, usize, usize)] = &[
             (&[], None, 3, 3),
-            (&["_ble"], None, 4, 3),
-            (&["_ble", "_ext_adv"], Some(5), 8, 3),
-            (&["split", "_ble"], None, 5, 4),
-            (&["split", "_ble", "_ext_adv"], Some(5), 9, 8),
-            (&["split", "_ble", "_ext_adv", "dongle"], Some(6), 11, 9),
+            (&["_ble"], None, 5, 3),
+            (&["_ble", "_ext_adv"], Some(5), 9, 3),
+            (&["split", "_ble"], None, 6, 5),
+            (&["split", "_ble", "_ext_adv"], Some(5), 10, 9),
+            (&["split", "_ble", "_ext_adv", "dongle"], Some(6), 12, 10),
         ];
         for &(features, max_connections, battery_status_subs, peripheral_battery_subs) in cases {
             config.ble = Some(BleConfig {
@@ -608,57 +618,51 @@ mod tests {
     }
 
     #[test]
-    fn resolves_split_battery_peripheral_ids() {
-        let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
-        config.split = Some(SplitConfig {
-            peripheral: vec![
-                SplitBoardConfig {
-                    battery: Some(BatteryTomlConfig {
-                        battery_adc_pin: Some("P0_02".to_string()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                SplitBoardConfig::default(),
-                SplitBoardConfig {
-                    battery: Some(BatteryTomlConfig {
-                        battery_adc_pin: Some("P0_04".to_string()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            ],
+    fn only_an_explicit_measured_pair_has_standard_left_right_batteries() {
+        let board = |col_offset| SplitBoardConfig {
+            rows: 1,
+            cols: 1,
+            col_offset,
+            battery: Some(BatteryTomlConfig {
+                battery_adc_pin: Some("vddh".into()),
+                ..Default::default()
+            }),
             ..Default::default()
-        });
-        config.auto_calculate_parameters();
+        };
+        let resolve = |central_side, central, peripheral| {
+            let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
+            config.split = Some(SplitConfig {
+                central_side,
+                central,
+                peripheral,
+                ..Default::default()
+            });
+            config.auto_calculate_parameters();
+            config.build_constants(&["split", "_ble"]).unwrap()
+        };
+        for side in [None, Some(SplitSide::Left), Some(SplitSide::Right)] {
+            let pair = resolve(side, board(0), vec![board(1)]);
+            assert_eq!(pair.paired_battery_central_side, side);
+            assert_eq!(pair.central_battery_user_description, "Central");
+            assert_eq!(pair.split_battery_peripheral_user_descriptions, ["Peripheral 0"]);
+        }
+        let left = Some(SplitSide::Left);
+        for (central, peripheral) in [(board(0), Default::default()), (Default::default(), board(1))] {
+            let single = resolve(left, central, vec![peripheral]);
+            assert_eq!(single.paired_battery_central_side, None);
+        }
+        let multi = resolve(left, board(0), vec![Default::default(), board(2)]);
+        assert_eq!(multi.paired_battery_central_side, None);
+        assert_eq!(multi.split_battery_peripheral_ids, [1]);
+        assert_eq!(multi.split_battery_peripheral_user_descriptions, ["Peripheral 1"]);
 
-        let constants = config.build_constants(&["split", "_ble"]).unwrap();
-
-        assert_eq!(constants.split_battery_peripheral_ids, [0, 2]);
-    }
-
-    #[test]
-    fn split_with_battery_ids_uses_zero_based_peripheral_ids() {
-        let mut config: KeyboardTomlConfig = toml::from_str("").unwrap();
-        config.split = Some(SplitConfig {
-            peripheral: vec![
-                SplitBoardConfig::default(),
-                SplitBoardConfig {
-                    battery: Some(BatteryTomlConfig {
-                        battery_adc_pin: Some("P0_02".to_string()),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
-        config.auto_calculate_parameters();
-
-        let constants = config.build_constants(&["split"]).unwrap();
-
-        assert_eq!(constants.split_battery_peripheral_ids, [1]);
-        assert_eq!(constants.split_battery_peripheral_user_descriptions, ["Peripheral 1"]);
+        let sparse = resolve(left, board(0), vec![board(1), Default::default(), board(3)]);
+        assert_eq!(sparse.paired_battery_central_side, None);
+        assert_eq!(sparse.split_battery_peripheral_ids, [0, 2]);
+        assert_eq!(
+            sparse.split_battery_peripheral_user_descriptions,
+            ["Peripheral 0", "Peripheral 2"]
+        );
     }
 
     #[test]

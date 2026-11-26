@@ -31,8 +31,6 @@ use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 use crate::TOTAL_BLE_PROFILES;
 use crate::ble::adv::{Adv, advertise};
 use crate::ble::battery_service::BleBatteryServer;
-#[cfg(feature = "split")]
-use crate::ble::battery_service::BlePeripheralBatteryServer;
 use crate::ble::ble_server::{BleHidServer, Server};
 use crate::ble::device_info::{PnPID, VidSource};
 #[cfg(feature = "host")]
@@ -695,7 +693,8 @@ async fn run_ble_keyboard<
     join5(
         ble_task(runner, &event_handler),
         connection_loop,
-        select_slice(workers),
+        // Refresh shared values before answering a pending discovery read.
+        select(server.batteries.update_values(server.table()), select_slice(workers)),
         run_led_reader(&mut ble_led_reader, ConnectionType::Ble),
         profile_manager.run(),
     )
@@ -744,9 +743,6 @@ async fn gatt_events_task(
     led: &Cell<LedIndicator>,
     #[cfg(feature = "host")] host: Option<&HostConnection<'_>>,
 ) {
-    let level = &server.battery_service.level;
-    #[cfg(feature = "split")]
-    let peripheral_levels = &server.peripheral_battery_services.levels;
     let output_keyboard = &server.hid_service.output_keyboard;
     let hid_control_point = &server.hid_service.hid_control_point;
     let input_keyboard = &server.hid_service.input_keyboard;
@@ -818,7 +814,6 @@ async fn gatt_events_task(
                             continue;
                         };
                         if security_level.encrypted() {
-                            server.refresh_battery_level(event.handle());
                             None
                         } else {
                             Some(AttErrorCode::INSUFFICIENT_ENCRYPTION)
@@ -860,20 +855,7 @@ async fn gatt_events_task(
                             || event.handle() == mouse.cccd_handle.expect("No CCCD for mouse report")
                             || event.handle() == media.cccd_handle.expect("No CCCD for media report")
                             || event.handle() == system_control.cccd_handle.expect("No CCCD for system report")
-                            || event.handle() == level.cccd_handle.expect("No CCCD for battery level")
-                            || {
-                                #[cfg(feature = "split")]
-                                {
-                                    peripheral_levels.iter().any(|level| {
-                                        event.handle()
-                                            == level.cccd_handle.expect("No CCCD for peripheral battery level")
-                                    })
-                                }
-                                #[cfg(not(feature = "split"))]
-                                {
-                                    false
-                                }
-                            }
+                            || server.batteries.by_cccd(event.handle()).is_some()
                         {
                             cccd_updated = true;
                         } else if event.handle() == hid_control_point.handle {
@@ -1123,10 +1105,6 @@ async fn serve_keyboard_connection<
 ) {
     let mut ble_hid_server = BleHidServer::new(server, conn);
     let mut ble_battery_server = config.enabled.then(|| BleBatteryServer::new(server, conn));
-    #[cfg(feature = "split")]
-    let mut ble_peripheral_battery_server = crate::SPLIT_BATTERY_PERIPHERAL_IDS
-        .first()
-        .map(|_| BlePeripheralBatteryServer::new(server, conn));
 
     // `use_1m_phy` exists for legacy host adapters that cannot do 2M.
     // Always use 2M for the dongle link.
@@ -1142,7 +1120,7 @@ async fn serve_keyboard_connection<
     #[cfg(not(feature = "split"))]
     let battery_task = ble_battery_server.run();
     #[cfg(feature = "split")]
-    let battery_task = embassy_futures::join::join(ble_battery_server.run(), ble_peripheral_battery_server.run());
+    let battery_task = embassy_futures::join::join(ble_battery_server.run(), server.batteries.notify_peripherals(conn));
 
     // A PHY request sent while the link is still being set up races the controller's own
     // link-layer setup, so wait until the connection reports itself ready.
@@ -1306,8 +1284,10 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     use embassy_futures::select::select3;
-    use embassy_time::{Duration, MockDriver};
+    use embassy_time::{Duration, MockDriver, Timer};
+    use rmk_types::battery::{BatteryStatus, ChargeState};
     use rmk_types::ble::{BleState, BleStatus};
+    use trouble_host::prelude::characteristic;
 
     use super::fake_hci::FakeController;
     use crate::event::{Axis, AxisEvent, AxisValType, KeyboardEvent, PointingEvent, publish_event};
@@ -1625,6 +1605,44 @@ mod tests {
         hci.connect(handle, peer);
         hci.encrypt(handle);
         crate::state::wait_for_connection_status(|s| s.selected_profile().state == BleState::Connected).await;
+    }
+
+    fn set_central_level(level: Option<u8>) {
+        let status = BatteryStatus::Available {
+            charge_state: ChargeState::Discharging,
+            level,
+        };
+        crate::input_device::battery::BATTERY_STATUS.lock(|cache| cache.set(status));
+        publish_event(crate::event::BatteryStatusEvent(status));
+    }
+
+    #[test]
+    fn battery_reads_are_current_with_central_notifications_disabled() {
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
+            set_central_level(Some(73));
+            reconnect(&hci, 1, HOST_A).await;
+            // Unplugging clears the processor's estimate until the next ADC sample.
+            set_central_level(None);
+            Timer::after_millis(10).await;
+            let (level, percent) = hci.read_u8_by_type(1, 1, characteristic::BATTERY_LEVEL.into()).await[0];
+            assert_eq!(percent, 73);
+            let [lo, hi] = level.to_le_bytes();
+            hci.set_notifications(1, level, true).await;
+            set_central_level(Some(72));
+            assert_eq!(hci.att_exchange(1, &[0x0a, lo, hi], 0x0b).await, [72]);
+            // A custom fuel gauge can publish percentages without using the ADC processor.
+            publish_event(crate::event::BatteryStatusEvent(BatteryStatus::Available {
+                charge_state: ChargeState::Discharging,
+                level: Some(67),
+            }));
+            assert_eq!(hci.att_exchange(1, &[0x0a, lo, hi], 0x0b).await, [67]);
+            assert_eq!(
+                hci.read_u8_by_type(1, 1, characteristic::BATTERY_LEVEL.into()).await[0].1,
+                67
+            );
+            assert!(hci.notifications(1, level).is_empty());
+        });
     }
 
     #[test]

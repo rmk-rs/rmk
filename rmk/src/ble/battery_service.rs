@@ -1,6 +1,9 @@
+use core::cell::Cell;
+
 use embassy_futures::select::select;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
-use rmk_types::battery::BatteryStatus;
+use rmk_types::battery::{BatteryStatus, BleBatteryId};
 use trouble_host::prelude::*;
 
 use super::ble_server::Server;
@@ -10,103 +13,149 @@ use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
 use crate::keyboard::LAST_KEY_TIMESTAMP;
 
-const CHARACTERISTIC_PRESENTATION_FORMAT_UINT8: u8 = 0x04;
-const CHARACTERISTIC_PRESENTATION_FORMAT_EXPONENT_ZERO: u8 = 0x00;
-const CHARACTERISTIC_PRESENTATION_FORMAT_UNIT_PERCENTAGE: u16 = 0x27AD;
-const CHARACTERISTIC_PRESENTATION_FORMAT_NAMESPACE_BLUETOOTH_SIG: u8 = 0x01;
-const CHARACTERISTIC_PRESENTATION_FORMAT_DESCRIPTION_MAIN: u16 = 0x0106;
+const PERIPHERAL_BATTERY_SERVICE_UUID: u128 = 0x061686b6_6a06_4d02_8a8f_c514225bbdb3;
+const PERIPHERAL_BATTERY_LEVEL_UUID: u128 = 0xcd3259e5_a755_4bf0_9f36_690cddccdb51;
 
-const fn battery_presentation_format(description: u16) -> [u8; 7] {
-    let [unit_low, unit_high] = CHARACTERISTIC_PRESENTATION_FORMAT_UNIT_PERCENTAGE.to_le_bytes();
-    let [description_low, description_high] = description.to_le_bytes();
-    [
-        CHARACTERISTIC_PRESENTATION_FORMAT_UINT8,
-        CHARACTERISTIC_PRESENTATION_FORMAT_EXPONENT_ZERO,
-        unit_low,
-        unit_high,
-        CHARACTERISTIC_PRESENTATION_FORMAT_NAMESPACE_BLUETOOTH_SIG,
-        description_low,
-        description_high,
-    ]
+/// Battery services in handle order, starting with the central on every profile.
+pub(super) struct BatteryServices {
+    levels: [BatteryLevel; BatteryServices::CCCD_COUNT],
 }
 
-const MAIN_BATTERY_PRESENTATION_FORMAT: [u8; 7] =
-    battery_presentation_format(CHARACTERISTIC_PRESENTATION_FORMAT_DESCRIPTION_MAIN);
-
-/// Battery service
-#[gatt_service(uuid = service::BATTERY)]
-pub(crate) struct BatteryService {
-    /// Battery Level
-    #[descriptor(
-        uuid = descriptors::CHARACTERISTIC_PRESENTATION_FORMAT,
-        read,
-        value = MAIN_BATTERY_PRESENTATION_FORMAT
-    )]
-    #[descriptor(
-        uuid = descriptors::CHARACTERISTIC_USER_DESCRIPTION,
-        read,
-        value = crate::CENTRAL_BATTERY_USER_DESCRIPTION
-    )]
-    #[descriptor(uuid = descriptors::VALID_RANGE, read, value = [0, 100])]
-    #[characteristic(uuid = characteristic::BATTERY_LEVEL, read, notify)]
-    pub(crate) level: u8,
+struct BatteryLevel {
+    value: Characteristic<u8>,
+    last_percent: Cell<Option<u8>>,
 }
 
-#[cfg(feature = "split")]
-pub(crate) struct PeripheralBatteryServices {
-    pub(crate) levels: [Characteristic<u8>; crate::NUM_SPLIT_BATTERY_PERIPHERALS],
-}
+impl BatteryServices {
+    pub(super) const CCCD_COUNT: usize = crate::BATTERY_BLE_DESCRIPTIONS.len();
+    pub(super) const ATTRIBUTE_COUNT: usize = 7 * Self::CCCD_COUNT;
 
-#[cfg(feature = "split")]
-impl PeripheralBatteryServices {
-    pub(crate) const ATTRIBUTE_COUNT: usize = 7 * crate::NUM_SPLIT_BATTERY_PERIPHERALS;
-    pub(crate) const CCCD_COUNT: usize = crate::NUM_SPLIT_BATTERY_PERIPHERALS;
-
-    pub(crate) fn new<M: embassy_sync::blocking_mutex::raw::RawMutex, const MAX: usize>(
-        table: &mut AttributeTable<'_, M, MAX>,
-    ) -> Self {
-        Self {
-            levels: core::array::from_fn(|slot| {
-                add_peripheral_battery_level(
-                    table,
-                    crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot],
-                    crate::SPLIT_BATTERY_PERIPHERAL_USER_DESCRIPTIONS[slot],
+    pub(super) fn new<const MAX: usize>(table: &mut AttributeTable<'_, NoopRawMutex, MAX>) -> Self {
+        let levels = crate::BATTERY_BLE_DESCRIPTIONS.map(|(battery_id, user_description)| {
+            let mut service_uuid: Uuid = service::BATTERY.into();
+            let mut characteristic_uuid: Uuid = characteristic::BATTERY_LEVEL.into();
+            // For peripherals, use custom service & characteristic UUID
+            if matches!(battery_id, BleBatteryId::Peripheral(_)) {
+                service_uuid = PERIPHERAL_BATTERY_SERVICE_UUID.into();
+                characteristic_uuid = PERIPHERAL_BATTERY_LEVEL_UUID.into();
+            }
+            let mut service = table.add_service(Service::new(service_uuid));
+            let mut level = service
+                .add_characteristic_small(
+                    characteristic_uuid,
+                    [CharacteristicProp::Read, CharacteristicProp::Notify],
+                    0u8,
                 )
-            }),
+                .read_permission(PermissionLevel::EncryptionRequired);
+
+            // Service description bytes
+            let [lo, hi] = match battery_id {
+                BleBatteryId::Central => 0x0106u16.to_le_bytes(),
+                BleBatteryId::Left => 0x010Du16.to_le_bytes(),
+                BleBatteryId::Right => 0x010Eu16.to_le_bytes(),
+                BleBatteryId::Peripheral(id) => (u16::from(id) + 1).to_le_bytes(),
+            };
+            level.add_descriptor_small(
+                descriptors::CHARACTERISTIC_PRESENTATION_FORMAT,
+                AttPermissions {
+                    write: PermissionLevel::NotAllowed,
+                    ..Default::default()
+                },
+                [0x04, 0, 0xAD, 0x27, 1, lo, hi], // uint8 percentage, Bluetooth SIG namespace
+            );
+            level.add_descriptor_ro(
+                descriptors::CHARACTERISTIC_USER_DESCRIPTION,
+                PermissionLevel::Allowed,
+                user_description,
+            );
+            level.add_descriptor_ro(descriptors::VALID_RANGE, PermissionLevel::Allowed, &[0u8, 100]);
+            BatteryLevel {
+                value: level.build(),
+                last_percent: Cell::new(None),
+            }
+        });
+        Self { levels }
+    }
+
+    pub(super) fn by_cccd(&self, handle: u16) -> Option<usize> {
+        self.levels
+            .iter()
+            .position(|battery| battery.value.cccd_handle == Some(handle))
+    }
+
+    /// Keep one readable value per battery, including while notifications are disabled.
+    pub(super) async fn update_values<const MAX: usize>(&self, table: &AttributeTable<'_, NoopRawMutex, MAX>) {
+        let update = |battery: &BatteryLevel, status| {
+            if let BatteryStatus::Available { level: Some(level), .. } = status
+                && battery.last_percent.get() != Some(level)
+            {
+                match table.set(&battery.value, &level) {
+                    Ok(()) => battery.last_percent.set(Some(level)),
+                    Err(e) => warn!("Failed to update battery handle {}: {:?}", battery.value.handle, e),
+                }
+            }
+        };
+        let central = async {
+            let mut changes = BatteryStatusEvent::subscriber();
+            update(&self.levels[0], crate::input_device::battery::current_battery_status());
+            loop {
+                update(&self.levels[0], changes.next_message_pure().await.0);
+            }
+        };
+        #[cfg(feature = "split")]
+        let central = embassy_futures::join::join(central, async {
+            let ids = &crate::SPLIT_BATTERY_PERIPHERAL_IDS;
+            if ids.is_empty() {
+                return;
+            }
+            let mut changes = PeripheralBatteryEvent::subscriber();
+            loop {
+                for (battery, &id) in self.levels[1..].iter().zip(ids) {
+                    if let Some(status) = crate::split::driver::current_peripheral_battery_status(id) {
+                        update(battery, status);
+                    }
+                }
+                changes.next_message_pure().await;
+                while changes.try_next_message_pure().is_some() {}
+            }
+        });
+        central.await;
+    }
+
+    /// Send the configured split batteries' levels to this connection.
+    #[cfg(feature = "split")]
+    pub(super) async fn notify_peripherals<P: PacketPool>(&self, conn: &GattConnection<'_, '_, P>) {
+        let ids = &crate::SPLIT_BATTERY_PERIPHERAL_IDS;
+        if ids.is_empty() {
+            return;
+        }
+
+        let mut changes = PeripheralBatteryEvent::subscriber();
+        // Wait for the GATT server to be ready before sending the initial levels.
+        Timer::after_secs(2).await;
+
+        // Drain queued events before reading the latest levels from the cache.
+        while changes.try_next_message_pure().is_some() {}
+        for (battery, &id) in self.levels[1..].iter().zip(ids) {
+            if let Some(BatteryStatus::Available { level: Some(level), .. }) =
+                crate::split::driver::current_peripheral_battery_status(id)
+                && let Err(e) = battery.value.notify(conn, &level, false).await
+            {
+                error!("Failed to notify initial peripheral {} battery level: {:?}", id, e);
+            }
+        }
+
+        loop {
+            let id = changes.next_message_pure().await.id;
+            if let Some(slot) = ids.iter().position(|&peripheral_id| peripheral_id == id)
+                && let Some(BatteryStatus::Available { level: Some(level), .. }) =
+                    crate::split::driver::current_peripheral_battery_status(id)
+                && let Err(e) = self.levels[slot + 1].value.notify(conn, &level, false).await
+            {
+                error!("Failed to notify peripheral {} battery level: {:?}", id, e);
+            }
         }
     }
-}
-
-#[cfg(feature = "split")]
-fn add_peripheral_battery_level<M: embassy_sync::blocking_mutex::raw::RawMutex, const MAX: usize>(
-    table: &mut AttributeTable<'_, M, MAX>,
-    peripheral_id: usize,
-    user_description: &'static str,
-) -> Characteristic<u8> {
-    let permissions = AttPermissions {
-        read: PermissionLevel::Allowed,
-        write: PermissionLevel::NotAllowed,
-        ..Default::default()
-    };
-    let mut service = table.add_service(Service::new(service::BATTERY));
-    let mut level = service.add_characteristic_small(
-        characteristic::BATTERY_LEVEL,
-        [CharacteristicProp::Read, CharacteristicProp::Notify],
-        0u8,
-    );
-    let description = u16::try_from(peripheral_id + 1).expect("peripheral id exceeds GATT namespace range");
-    level.add_descriptor_small(
-        descriptors::CHARACTERISTIC_PRESENTATION_FORMAT,
-        permissions,
-        battery_presentation_format(description),
-    );
-    level.add_descriptor_ro(
-        descriptors::CHARACTERISTIC_USER_DESCRIPTION,
-        PermissionLevel::Allowed,
-        user_description,
-    );
-    level.add_descriptor_small(descriptors::VALID_RANGE, permissions, [0u8, 100]);
-    level.build()
 }
 
 pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
@@ -118,7 +167,7 @@ pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
 impl<'stack, 'server, 'conn, P: PacketPool> BleBatteryServer<'stack, 'server, 'conn, P> {
     pub(crate) fn new(server: &Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
         Self {
-            battery_level: server.battery_service.level,
+            battery_level: server.batteries.levels[0].value,
             conn,
             sub: BatteryStatusEvent::subscriber(),
         }
@@ -144,7 +193,7 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
         let first_report = async {
             if let BatteryStatus::Available { level: Some(level), .. } =
                 crate::input_device::battery::current_battery_status()
-                && self.battery_level.notify(self.conn, &level, true).await.is_ok()
+                && self.battery_level.notify(self.conn, &level, false).await.is_ok()
             {
                 return;
             }
@@ -154,7 +203,7 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
                     state = newer;
                 }
                 if let BatteryStatus::Available { level: Some(level), .. } = state.0 {
-                    if let Err(e) = self.battery_level.notify(self.conn, &level, true).await {
+                    if let Err(e) = self.battery_level.notify(self.conn, &level, false).await {
                         error!("Failed to notify battery level: {:?}", e);
                     } else {
                         // The first report is sent, return to continue
@@ -168,9 +217,7 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
         // Try to do the first battery report in 30 seconds
         with_timeout(Duration::from_secs(30), first_report).await.ok();
 
-        // Hold each battery change until the keyboard is in use: a key press within the last
-        // minute, the next key press, or 30 awake minutes. Every link wakes on the same change
-        // and sends the same cached level, so hosts on different profiles agree.
+        // While idle, wait for the next key press or a retry while awake.
         loop {
             self.sub.next_message_pure().await;
             // `try_get` marks the latest press as seen, so `changed` waits for a new one.
@@ -179,8 +226,9 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
                 .is_none_or(|last_press| (Instant::now().as_secs() as u32).saturating_sub(last_press) >= 60);
             if idle {
                 let awake_timeout = async {
+                    let retry_secs = (2 * u64::from(crate::SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS)).max(1800);
                     loop {
-                        Timer::after_secs(1800).await;
+                        Timer::after_secs(retry_secs).await;
                         if !crate::state::current_sleeping() {
                             break;
                         }
@@ -191,313 +239,10 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
             while self.sub.try_next_message_pure().is_some() {}
             if let BatteryStatus::Available { level: Some(level), .. } =
                 crate::input_device::battery::current_battery_status()
-                && let Err(e) = self.battery_level.notify(self.conn, &level, true).await
+                && let Err(e) = self.battery_level.notify(self.conn, &level, false).await
             {
                 error!("Failed to notify battery level: {:?}", e);
             }
         }
-    }
-}
-
-/// GATT server task that exposes a peripheral's battery level over BLE.
-///
-/// Subscribes to [`PeripheralBatteryEvent`] (published by the split driver
-/// when the peripheral reports its battery via the split BLE link) and
-/// notifies the matching peripheral battery characteristic so the host can
-/// read it the same way it reads the central's level.
-#[cfg(feature = "split")]
-pub(crate) struct BlePeripheralBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
-    battery_levels: [Characteristic<u8>; crate::NUM_SPLIT_BATTERY_PERIPHERALS],
-    conn: &'conn GattConnection<'stack, 'server, P>,
-    sub: <PeripheralBatteryEvent as SubscribableEvent>::Subscriber,
-}
-
-#[cfg(feature = "split")]
-fn find_peripheral_battery_slot(configured_ids: &[usize], peripheral_id: usize) -> Option<usize> {
-    configured_ids
-        .iter()
-        .position(|configured_id| *configured_id == peripheral_id)
-}
-
-#[cfg(feature = "split")]
-fn initialize_peripheral_battery_levels(server: &Server) {
-    for (slot, peripheral_id) in crate::SPLIT_BATTERY_PERIPHERAL_IDS.iter().copied().enumerate() {
-        if let Some(BatteryStatus::Available { level: Some(level), .. }) =
-            crate::split::driver::current_peripheral_battery_status(peripheral_id)
-            && let Err(e) = server.set(&server.peripheral_battery_services.levels[slot], &level)
-        {
-            error!(
-                "Failed to initialize peripheral {} battery level: {:?}",
-                peripheral_id, e
-            );
-        }
-    }
-}
-
-#[cfg(feature = "split")]
-impl<'stack, 'server, 'conn, P: PacketPool> BlePeripheralBatteryServer<'stack, 'server, 'conn, P> {
-    pub(crate) fn new(server: &Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
-        let sub = PeripheralBatteryEvent::subscriber();
-        initialize_peripheral_battery_levels(server);
-
-        Self {
-            battery_levels: server.peripheral_battery_services.levels,
-            conn,
-            sub,
-        }
-    }
-}
-
-#[cfg(feature = "split")]
-impl<P: PacketPool> Runnable for BlePeripheralBatteryServer<'_, '_, '_, P> {
-    async fn run(&mut self) -> ! {
-        // Wait for the GATT server to be ready before pushing notifications.
-        Timer::after_secs(2).await;
-
-        // The subscriber is created before this snapshot, so discarding queued
-        // events and then reading the cache cannot miss a newer value.
-        while self.sub.try_next_message_pure().is_some() {}
-        for (slot, peripheral_id) in crate::SPLIT_BATTERY_PERIPHERAL_IDS.iter().copied().enumerate() {
-            if let Some(BatteryStatus::Available { level: Some(level), .. }) =
-                crate::split::driver::current_peripheral_battery_status(peripheral_id)
-                && let Err(e) = self.battery_levels[slot].notify(self.conn, &level, true).await
-            {
-                error!(
-                    "Failed to set initial peripheral {} battery level: {:?}",
-                    peripheral_id, e
-                );
-            }
-        }
-
-        loop {
-            let event = self.sub.next_message_pure().await;
-            if let Some(slot) = find_peripheral_battery_slot(&crate::SPLIT_BATTERY_PERIPHERAL_IDS, event.id)
-                && let Some(BatteryStatus::Available { level: Some(level), .. }) =
-                    crate::split::driver::current_peripheral_battery_status(event.id)
-                && let Err(e) = self.battery_levels[slot].notify(self.conn, &level, true).await
-            {
-                error!("Failed to notify peripheral {} battery level: {:?}", event.id, e);
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod report_tests {
-    use embassy_futures::join::join;
-    use embassy_futures::select::select;
-    use embassy_time::{Duration, Instant, MockDriver, Timer, with_timeout};
-    use rmk_types::battery::{BatteryStatus, ChargeState};
-    use trouble_host::prelude::*;
-
-    use super::BleBatteryServer;
-    use crate::ble::adv::{Adv, advertise};
-    use crate::ble::ble_server::Server;
-    use crate::ble::fake_hci::FakeController;
-    use crate::ble::{NoopHandler, ble_task};
-    use crate::core_traits::Runnable;
-    use crate::event::{BatteryStatusEvent, publish_event};
-    use crate::keyboard::LAST_KEY_TIMESTAMP;
-    use crate::test_support::test_block_on;
-
-    fn set_level(level: u8) {
-        let status = BatteryStatus::Available {
-            charge_state: ChargeState::Discharging,
-            level: Some(level),
-        };
-        crate::input_device::battery::BATTERY_STATUS.lock(|cache| cache.set(status));
-        publish_event(BatteryStatusEvent(status));
-    }
-
-    #[test]
-    fn a_change_late_in_continuous_typing_reaches_the_host() {
-        crate::ble::rng::seed([7; 32]);
-        let hci = FakeController::default();
-        let mut resources = HostResources::<DefaultPacketPool, 1, 0, 1, 1>::new();
-        let stack = trouble_host::new(hci.clone(), &mut resources).build();
-        let mut peripheral = stack.peripheral();
-        let Ok(server) = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
-            name: "test",
-            appearance: &appearance::human_interface_device::KEYBOARD,
-        })) else {
-            panic!("the GATT server must build");
-        };
-        let level = server.battery_service.level;
-
-        test_block_on(select(ble_task(stack.runner(), &NoopHandler), async {
-            let (conn, ()) = join(
-                advertise(
-                    &mut peripheral,
-                    &server.server,
-                    Adv::Host {
-                        name: "test",
-                        fast: false,
-                    },
-                    cfg!(feature = "ext_adv").then(|| BdAddr::new([1, 2, 3, 4, 5, 0xC6])),
-                    Duration::from_secs(1),
-                ),
-                async {
-                    while hci.advertising_starts() == 0 {
-                        Timer::after_millis(1).await;
-                    }
-                    hci.connect(1, [0xA1, 0, 0, 0, 0, 0xC1]);
-                },
-            )
-            .await;
-            let conn = conn.expect("the host must connect");
-            // The host subscribed to battery notifications.
-            let cccd = level.cccd_handle.expect("battery level must be notifiable");
-            let mut table = ClientAttTable::builder();
-            table.push(cccd, 2, false);
-            let mut table = table.build();
-            table.write(cccd, 0, &[1, 0]).unwrap();
-            server.set_client_att_table(conn.raw(), &table.view());
-
-            set_level(80);
-            let mut battery = BleBatteryServer::new(&server, &conn);
-            select(battery.run(), async {
-                // The connect report goes out, then typing runs past a minute before the level drops.
-                for _ in 0..4 {
-                    LAST_KEY_TIMESTAMP.sender().send(Instant::now().as_secs() as u32);
-                    MockDriver::get().advance(Duration::from_secs(30));
-                    Timer::after_millis(1).await;
-                }
-                set_level(79);
-                with_timeout(Duration::from_secs(1), async {
-                    while hci.notifications(1, level.handle).len() < 2 {
-                        Timer::after_millis(1).await;
-                    }
-                })
-                .await
-                .expect("the new level must reach the host");
-                assert_eq!(hci.notifications(1, level.handle), [[80], [79]]);
-            })
-            .await;
-        }));
-    }
-}
-
-#[cfg(test)]
-mod cpf_tests {
-    use super::{CHARACTERISTIC_PRESENTATION_FORMAT_DESCRIPTION_MAIN, battery_presentation_format};
-
-    #[test]
-    fn battery_presentation_format_uses_assigned_numbers() {
-        assert_eq!(
-            battery_presentation_format(CHARACTERISTIC_PRESENTATION_FORMAT_DESCRIPTION_MAIN),
-            [0x04, 0x00, 0xAD, 0x27, 0x01, 0x06, 0x01]
-        );
-    }
-}
-
-#[cfg(all(test, feature = "split"))]
-mod tests {
-    use embassy_sync::blocking_mutex::raw::{NoopRawMutex, RawMutex};
-    use trouble_host::prelude::{AttributeTable, Characteristic, CharacteristicProp, characteristic};
-
-    use super::{
-        BatteryService, MAIN_BATTERY_PRESENTATION_FORMAT, add_peripheral_battery_level, find_peripheral_battery_slot,
-    };
-
-    fn descriptor_value<M: RawMutex, const N: usize>(
-        table: &AttributeTable<'_, M, N>,
-        characteristic: Characteristic<u8>,
-        uuid: trouble_host::prelude::Uuid,
-    ) -> heapless::Vec<u8, 32> {
-        for handle in characteristic.handle + 1..=characteristic.end_handle {
-            if table.uuid(handle) == Some(uuid) {
-                let mut value = [0; 32];
-                let len = table.read(handle, 0, &mut value).unwrap();
-                return heapless::Vec::from_slice(&value[..len]).unwrap();
-            }
-        }
-        panic!("Battery Level descriptor not found");
-    }
-
-    #[test]
-    fn peripheral_battery_services_use_ids_as_unique_descriptions() {
-        let mut table: AttributeTable<'_, NoopRawMutex, 21> = AttributeTable::new();
-        let main = BatteryService::new(&mut table);
-        let peripherals = [
-            add_peripheral_battery_level(&mut table, 0, "Left"),
-            add_peripheral_battery_level(&mut table, 254, "Right"),
-        ];
-
-        assert_eq!(table.len(), 21);
-        assert_eq!(main.level.uuid, characteristic::BATTERY_LEVEL.into());
-        assert!(main.level.props.any(&[CharacteristicProp::Read]));
-        assert!(main.level.props.any(&[CharacteristicProp::Notify]));
-        assert!(main.level.cccd_handle.is_some());
-        for level in &peripherals {
-            assert_eq!(level.uuid, characteristic::BATTERY_LEVEL.into());
-            assert!(level.props.any(&[CharacteristicProp::Read]));
-            assert!(level.props.any(&[CharacteristicProp::Notify]));
-            assert!(level.cccd_handle.is_some());
-        }
-
-        assert_eq!(
-            descriptor_value(
-                &table,
-                main.level,
-                trouble_host::prelude::descriptors::CHARACTERISTIC_PRESENTATION_FORMAT.into()
-            ),
-            MAIN_BATTERY_PRESENTATION_FORMAT.as_slice()
-        );
-        assert_eq!(
-            descriptor_value(
-                &table,
-                peripherals[0],
-                trouble_host::prelude::descriptors::CHARACTERISTIC_PRESENTATION_FORMAT.into()
-            ),
-            [0x04, 0x00, 0xAD, 0x27, 0x01, 0x01, 0x00].as_slice()
-        );
-        assert_eq!(
-            descriptor_value(
-                &table,
-                peripherals[1],
-                trouble_host::prelude::descriptors::CHARACTERISTIC_PRESENTATION_FORMAT.into()
-            ),
-            [0x04, 0x00, 0xAD, 0x27, 0x01, 0xFF, 0x00].as_slice()
-        );
-        for level in core::iter::once(&main.level).chain(peripherals.iter()) {
-            assert_eq!(
-                descriptor_value(&table, *level, trouble_host::prelude::descriptors::VALID_RANGE.into()),
-                [0, 100].as_slice()
-            );
-        }
-        assert_eq!(
-            descriptor_value(
-                &table,
-                main.level,
-                trouble_host::prelude::descriptors::CHARACTERISTIC_USER_DESCRIPTION.into()
-            ),
-            crate::CENTRAL_BATTERY_USER_DESCRIPTION.as_bytes()
-        );
-        assert_eq!(
-            descriptor_value(
-                &table,
-                peripherals[0],
-                trouble_host::prelude::descriptors::CHARACTERISTIC_USER_DESCRIPTION.into()
-            ),
-            b"Left".as_slice()
-        );
-        assert_eq!(
-            descriptor_value(
-                &table,
-                peripherals[1],
-                trouble_host::prelude::descriptors::CHARACTERISTIC_USER_DESCRIPTION.into()
-            ),
-            b"Right".as_slice()
-        );
-        assert_ne!(peripherals[0].handle, peripherals[1].handle);
-    }
-
-    #[test]
-    fn peripheral_events_map_to_configured_battery_slots() {
-        let configured_ids = [0, 2];
-
-        assert_eq!(find_peripheral_battery_slot(&configured_ids, 0), Some(0));
-        assert_eq!(find_peripheral_battery_slot(&configured_ids, 1), None);
-        assert_eq!(find_peripheral_battery_slot(&configured_ids, 2), Some(1));
     }
 }

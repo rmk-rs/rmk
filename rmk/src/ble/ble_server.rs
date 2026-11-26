@@ -3,15 +3,12 @@ use core::fmt::Write as _;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use postcard::experimental::max_size::MaxSize;
-use rmk_types::battery::BatteryStatus;
 use rmk_types::ble::BLE_ADV_NAME_MAX_LEN;
 use trouble_host::att::{AttClient, AttReq};
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
-use super::battery_service::BatteryService;
-#[cfg(feature = "split")]
-use super::battery_service::PeripheralBatteryServices;
+use super::battery_service::BatteryServices;
 use super::device_info::DeviceConfigurationService;
 use crate::BLE_PROFILE_NAME_SUFFIX;
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
@@ -37,9 +34,7 @@ use rmk_types::protocol::rynk::{
 #[gatt_server(mutex_type = NoopRawMutex, connections_max = crate::ble::NUM_HOST_LINKS)]
 pub(crate) struct Server {
     profile_name: ProfileName,
-    pub(crate) battery_service: BatteryService,
-    #[cfg(feature = "split")]
-    pub(crate) peripheral_battery_services: PeripheralBatteryServices,
+    pub(super) batteries: BatteryServices,
     pub(crate) hid_service: HidService,
     #[cfg(feature = "vial")]
     pub(crate) vial_service: VialGattService,
@@ -140,39 +135,6 @@ impl Server<'_> {
         };
         if reads_name && let Some(value) = self.profile_name(slot).first() {
             unwrap!(self.set(name, value));
-        }
-    }
-
-    pub(crate) fn refresh_battery_level(&self, handle: u16) {
-        let (attribute, status) = if handle == self.battery_service.level.handle {
-            (
-                self.battery_service.level,
-                crate::input_device::battery::current_battery_status(),
-            )
-        } else {
-            #[cfg(feature = "split")]
-            {
-                let Some(slot) = self
-                    .peripheral_battery_services
-                    .levels
-                    .iter()
-                    .position(|level| level.handle == handle)
-                else {
-                    return;
-                };
-                (
-                    self.peripheral_battery_services.levels[slot],
-                    crate::split::driver::current_peripheral_battery_status(crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot])
-                        .unwrap_or(BatteryStatus::Unavailable),
-                )
-            }
-            #[cfg(not(feature = "split"))]
-            return;
-        };
-        if let BatteryStatus::Available { level: Some(level), .. } = status
-            && let Err(e) = self.set(&attribute, &level)
-        {
-            warn!("Failed to refresh battery level: {:?}", e);
         }
     }
 }
