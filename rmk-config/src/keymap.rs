@@ -837,6 +837,37 @@ mod tests {
         assert_eq!(cfg.keymap().unwrap().num_encoder, 1);
     }
 
+    /// Two named layers, one encoder; `encoders_line` sets layer 0's encoder actions.
+    fn named_layer_encoder_config(encoders_line: &str) -> KeyboardTomlConfig {
+        config(&format!(
+            "[layout]\nrows = 1\ncols = 1\nmap = \"(0,0)\"\n\
+             [[keymap.layer]]\nname = \"base\"\nkeys = \"TO(nav)\"\n{encoders_line}\n\
+             [[keymap.layer]]\nname = \"nav\"\nkeys = \"B\"\n\
+             [[input_device.encoder]]\npin_a = \"a0\"\npin_b = \"b0\"\n"
+        ))
+    }
+
+    #[test]
+    fn encoder_layer_names_resolve_like_keys() {
+        let keymap = named_layer_encoder_config("encoders = [[\"TO(nav)\", \"MO(base)\"]]")
+            .keymap()
+            .unwrap();
+        assert_eq!(keymap.keymap[0][0][0], "TO(1)");
+        assert_eq!(keymap.encoder_map[0], vec![["TO(1)".to_string(), "MO(0)".to_string()]]);
+    }
+
+    #[test]
+    fn encoder_layer_references_are_validated_like_keys() {
+        let Err(err) = named_layer_encoder_config("encoders = [[\"TO(2)\", \"A\"]]").keymap() else {
+            panic!("out-of-range encoder layer must be rejected");
+        };
+        assert!(err.contains("out of range"), "{err}");
+        let Err(err) = named_layer_encoder_config("encoders = [[\"A\", \"MO(missing)\"]]").keymap() else {
+            panic!("unknown encoder layer name must be rejected");
+        };
+        assert!(err.contains("Invalid layer name: missing"), "{err}");
+    }
+
     #[test]
     fn numeric_layer_reference_must_be_in_range() {
         let aliases = HashMap::new();
