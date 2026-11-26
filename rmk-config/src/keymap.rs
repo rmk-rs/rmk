@@ -78,12 +78,13 @@ impl KeyboardTomlConfig {
             );
         }
 
+        let layer_names = Self::collect_layer_names(layers)?;
+
         // Defined layers need `[layout].map`; explicitly reserved layers are transparent.
         let mut keymap = Vec::with_capacity(num_layers as usize);
         let key_info = match layout.map.as_deref() {
             Some(map) => {
                 let (sequence_to_grid, key_info) = Self::build_key_grid(map, layout.rows, layout.cols)?;
-                let layer_names = Self::collect_layer_names(layers)?;
                 let context = LayerBuildContext {
                     sequence_to_grid: &sequence_to_grid,
                     aliases: &aliases,
@@ -110,7 +111,7 @@ impl KeyboardTomlConfig {
             keymap.push(vec![vec!["_".to_string(); layout.cols as usize]; layout.rows as usize]);
         }
 
-        let encoder_map = Self::resolve_encoders(layers, &aliases)?;
+        let encoder_map = Self::resolve_encoders(layers, &aliases, &layer_names, num_layers)?;
 
         Ok((
             KeymapConfig {
@@ -185,17 +186,24 @@ impl KeyboardTomlConfig {
         Ok(grid)
     }
 
-    /// Resolve `[[keymap.layer]].encoders` (alias-expanded), one entry per layer.
+    /// Resolve `[[keymap.layer]].encoders` through the same parser as keys, one entry per layer.
     fn resolve_encoders(
         layers: &[LayerTomlConfig],
         aliases: &HashMap<String, String>,
+        layer_names: &HashMap<String, u32>,
+        num_layers: u8,
     ) -> Result<Vec<Vec<[String; 2]>>, String> {
         let mut encoder_map = Vec::with_capacity(layers.len());
-        for layer in layers {
+        for (index, layer) in layers.iter().enumerate() {
             let mut encoders = layer.encoders.clone().unwrap_or_default();
-            for [cw, ccw] in &mut encoders {
-                *cw = Self::alias_resolver(cw, aliases)?;
-                *ccw = Self::alias_resolver(ccw, aliases)?;
+            for action in encoders.iter_mut().flatten() {
+                let parsed = Self::keymap_parser(action, aliases, layer_names, num_layers).and_then(|parsed| {
+                    <[String; 1]>::try_from(parsed)
+                        .map_err(|parsed| format!("expected one action per encoder direction, got {}", parsed.len()))
+                });
+                let [resolved] = parsed
+                    .map_err(|e| format!("keyboard.toml: Error in `[[keymap.layer]]` layer {index} encoders: {e}"))?;
+                *action = resolved;
             }
             encoder_map.push(encoders);
         }
