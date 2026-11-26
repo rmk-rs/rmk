@@ -103,15 +103,11 @@ fn expand_morse_actions(
     }
 }
 
+/// Statements filling `behavior_config.morse` in place.
 fn expand_morse(morse: &Option<Morse>) -> proc_macro2::TokenStream {
     if let Some(config) = morse {
         let enable_flow_tap = config.enable_flow_tap;
-        let enable_flow_tap_token = quote! { enable_flow_tap: #enable_flow_tap, };
-
         let prior_idle_time_ms = config.prior_idle_time_ms;
-        let prior_idle_time_token =
-            quote! { prior_idle_time: ::embassy_time::Duration::from_millis(#prior_idle_time_ms), };
-
         let default_profile = expand_profile(&config.default_profile);
 
         let profiles_ref = if config.profiles.is_empty() {
@@ -124,85 +120,59 @@ fn expand_morse(morse: &Option<Morse>) -> proc_macro2::TokenStream {
         // Interned morse profile table, in the same sorted-name order used by
         // `morse_profile` when it emits per-key indices. The pushes can't overflow:
         // the profile count is validated against the capacity in `behavior()`.
-        let profile_names = sorted_profile_names(&profiles_ref);
-        let profiles_token = if profile_names.is_empty() {
-            quote! {}
-        } else {
-            let profile_tokens = profile_names.into_iter().map(|name| {
-                let profile = profiles_ref
-                    .as_ref()
-                    .and_then(|m| m.get(&name))
-                    .expect("name from same map");
-                expand_profile(profile)
-            });
-            quote! {
-                profiles: {
-                    let mut v = ::rmk::heapless::Vec::new();
-                    #( let _ = v.push(#profile_tokens); )*
-                    v
-                },
-            }
-        };
+        let profile_tokens = sorted_profile_names(&profiles_ref).into_iter().map(|name| {
+            let profile = profiles_ref
+                .as_ref()
+                .and_then(|m| m.get(&name))
+                .expect("name from same map");
+            expand_profile(profile)
+        });
 
         quote! {
-            ::rmk::config::MorsesConfig {
-                #enable_flow_tap_token
-                #prior_idle_time_token
-                default_profile: #default_profile,
-                #profiles_token
-                #morses
-                ..Default::default()
-            }
+            behavior_config.morse.enable_flow_tap = #enable_flow_tap;
+            behavior_config.morse.prior_idle_time = ::embassy_time::Duration::from_millis(#prior_idle_time_ms);
+            behavior_config.morse.default_profile = #default_profile;
+            #( let _ = behavior_config.morse.profiles.push(#profile_tokens); )*
+            #morses
         }
     } else {
-        quote! { ::rmk::config::MorsesConfig::default() }
+        quote! {}
     }
 }
 
+/// Statements filling `behavior_config.combo` in place.
 fn expand_combos(
     combos: &Option<Combos>,
     profiles: &Option<HashMap<String, MorseProfile>>,
 ) -> proc_macro2::TokenStream {
-    let default = quote! { ::core::default::Default::default() };
-    match combos {
-        Some(combos) => {
-            let timeout = match &combos.timeout_ms {
-                Some(millis) => {
-                    quote! { timeout: ::embassy_time::Duration::from_millis(#millis), }
-                }
-                None => quote! {},
-            };
-
-            let prior_idle_time = match &combos.prior_idle_time_ms {
-                Some(millis) => {
-                    quote! { prior_idle_time: ::core::option::Option::Some(::embassy_time::Duration::from_millis(#millis)), }
-                }
-                None => quote! {},
-            };
-
-            let combos_def = combos.combos.iter().map(|combo| {
-                let actions = combo.actions.iter().map(|a| parse_key(a.to_owned(), profiles));
-                let output = parse_key(combo.output.to_owned(), profiles);
-                let layer = match combo.layer {
-                    Some(layer) => quote! { ::core::option::Option::Some(#layer) },
-                    None => quote! { ::core::option::Option::None },
-                };
-                quote! { ::rmk::keyboard::combo::Combo::new(::rmk::keyboard::combo::ComboConfig::new([#(#actions),*], #output, #layer)) }
-            });
-
-            quote! {
-                ::rmk::config::CombosConfig {
-                    combos: {
-                        let v: &[::rmk::keyboard::combo::Combo] = &[#(#combos_def),*];
-                        core::array::from_fn(|i| v.get(i).cloned())
-                    },
-                    #timeout
-                    #prior_idle_time
-                    ..Default::default()
-                }
-            }
+    let Some(combos) = combos else {
+        return quote! {};
+    };
+    let timeout = combos.timeout_ms.map(|millis| {
+        quote! { behavior_config.combo.timeout = ::embassy_time::Duration::from_millis(#millis); }
+    });
+    let prior_idle_time = combos.prior_idle_time_ms.map(|millis| {
+        quote! {
+            behavior_config.combo.prior_idle_time =
+                ::core::option::Option::Some(::embassy_time::Duration::from_millis(#millis));
         }
-        None => default,
+    });
+    let combos_def = combos.combos.iter().map(|combo| {
+        let actions = combo.actions.iter().map(|a| parse_key(a.to_owned(), profiles));
+        let output = parse_key(combo.output.to_owned(), profiles);
+        let layer = match combo.layer {
+            Some(layer) => quote! { ::core::option::Option::Some(#layer) },
+            None => quote! { ::core::option::Option::None },
+        };
+        quote! { ::rmk::keyboard::combo::Combo::new(::rmk::keyboard::combo::ComboConfig::new([#(#actions),*], #output, #layer)) }
+    });
+
+    quote! {
+        #timeout
+        #prior_idle_time
+        for (slot, combo) in behavior_config.combo.combos.iter_mut().zip([#(#combos_def),*]) {
+            *slot = ::core::option::Option::Some(combo);
+        }
     }
 }
 
@@ -333,7 +303,7 @@ fn expand_morses(
         }
     });
 
-    quote! { morses: ::rmk::heapless::Vec::from_iter([#(#morses_def),*]), }
+    quote! { behavior_config.morse.morses.extend([#(#morses_def),*]); }
 }
 
 #[derive(PartialEq, Eq, Default)]
@@ -433,11 +403,11 @@ fn parse_state_combination(states_str: &str) -> StateBitsMacro {
     parse_name_list(states_str, "state", "fork state", STATES, |w| w)
 }
 
+/// Statements filling `behavior_config.fork` in place.
 fn expand_forks(
     forks: &Option<Forks>,
     profiles: &Option<HashMap<String, MorseProfile>>,
 ) -> proc_macro2::TokenStream {
-    let default = quote! { ::core::default::Default::default() };
     match forks {
         Some(forks) => {
             let forks_def = forks.forks.iter().map(|fork| {
@@ -465,14 +435,9 @@ fn expand_forks(
                 }
             });
 
-            quote! {
-                ::rmk::config::ForksConfig {
-                    forks: ::rmk::heapless::Vec::from_iter([#(#forks_def),*]),
-                    ..Default::default()
-                }
-            }
+            quote! { behavior_config.fork.forks.extend([#(#forks_def),*]); }
         }
-        None => default,
+        None => quote! {},
     }
 }
 
@@ -533,21 +498,18 @@ pub(crate) fn expand_behavior_config(behavior: &Behavior) -> proc_macro2::TokenS
     let morse = expand_morse(&behavior.morse);
     let auto_mouse_layer = expand_auto_mouse_layer(&behavior.auto_mouse_layer);
 
+    // Filled in place: a struct literal with `..Default::default()` builds the whole
+    // config, combo table included, as stack temporaries in the main task's poll frame.
     quote! {
-        #[allow(clippy::needless_update)]
-        let mut behavior_config = ::rmk::config::BehaviorConfig {
-            tri_layer: #tri_layer,
-            one_shot: #one_shot,
-            one_shot_modifiers: #one_shot_modifiers,
-            combo: #combos,
-            fork: #forks,
-            morse: #morse,
-            keyboard_macros: #macros,
-            mouse_key: ::rmk::config::MouseKeyConfig::default(),
-            tap: ::rmk::config::TapConfig::default(),
-            auto_mouse_layer: #auto_mouse_layer,
-            ..Default::default()
-        };
+        let mut behavior_config = ::rmk::config::BehaviorConfig::default();
+        behavior_config.tri_layer = #tri_layer;
+        behavior_config.one_shot = #one_shot;
+        behavior_config.one_shot_modifiers = #one_shot_modifiers;
+        behavior_config.keyboard_macros = #macros;
+        behavior_config.auto_mouse_layer = #auto_mouse_layer;
+        #combos
+        #forks
+        #morse
     }
 }
 
