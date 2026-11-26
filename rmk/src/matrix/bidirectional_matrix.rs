@@ -52,7 +52,7 @@ impl<Pin: FlexPin, D: DebouncerTrait<ROW, COL>, const PIN_NUM: usize, const ROW:
 {
     async fn read_keyboard_event(&mut self) -> KeyboardEvent {
         loop {
-            let (scan_x_start, scan_y_start) = self.scan_pos;
+            let (scan_y_start, scan_x_start) = self.scan_pos;
 
             // Scan following the scan map and send report
             // Loop through rows.
