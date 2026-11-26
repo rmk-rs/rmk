@@ -234,3 +234,146 @@ impl<BUS: SpiBus, CS: OutputPin> NorFlash for W25qNorFlash<BUS, CS> {
 }
 
 impl<BUS: SpiBus, CS: OutputPin> MultiwriteNorFlash for W25qNorFlash<BUS, CS> {}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::vec::Vec;
+
+    use embedded_storage_async::nor_flash::{NorFlash, ReadNorFlash};
+
+    use super::*;
+    use crate::test_support::test_block_on;
+
+    /// Fake 25-series chip behind a buffered `SpiBus`: `write` only queues
+    /// bytes, so they are guaranteed on the wire only after `flush` or a
+    /// subsequent `read`.
+    #[derive(Default)]
+    struct Chip {
+        frame: Vec<u8>,
+        frames: Vec<Vec<u8>>,
+        status: u8,
+        unflushed: bool,
+        cs_released_unflushed: usize,
+    }
+
+    struct Bus(Rc<RefCell<Chip>>);
+    struct Cs(Rc<RefCell<Chip>>);
+
+    impl embedded_hal::spi::ErrorType for Bus {
+        type Error = core::convert::Infallible;
+    }
+
+    impl SpiBus for Bus {
+        async fn read(&mut self, buf: &mut [u8]) -> Result<(), Self::Error> {
+            let mut chip = self.0.borrow_mut();
+            chip.unflushed = false;
+            if chip.frame == [CMD_READ_STATUS] {
+                buf.fill(chip.status);
+                chip.status &= !0x01;
+            } else {
+                buf.fill(0xFF);
+            }
+            Ok(())
+        }
+
+        async fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
+            let mut chip = self.0.borrow_mut();
+            chip.frame.extend_from_slice(buf);
+            chip.unflushed = true;
+            Ok(())
+        }
+
+        async fn transfer(&mut self, _: &mut [u8], _: &[u8]) -> Result<(), Self::Error> {
+            unimplemented!()
+        }
+
+        async fn transfer_in_place(&mut self, _: &mut [u8]) -> Result<(), Self::Error> {
+            unimplemented!()
+        }
+
+        async fn flush(&mut self) -> Result<(), Self::Error> {
+            self.0.borrow_mut().unflushed = false;
+            Ok(())
+        }
+    }
+
+    impl embedded_hal::digital::ErrorType for Cs {
+        type Error = core::convert::Infallible;
+    }
+
+    impl OutputPin for Cs {
+        fn set_low(&mut self) -> Result<(), Self::Error> {
+            self.0.borrow_mut().frame.clear();
+            Ok(())
+        }
+
+        fn set_high(&mut self) -> Result<(), Self::Error> {
+            let mut chip = self.0.borrow_mut();
+            if chip.unflushed {
+                chip.cs_released_unflushed += 1;
+            }
+            let frame = core::mem::take(&mut chip.frame);
+            match frame.first() {
+                Some(&CMD_WRITE_ENABLE) => chip.status |= 0x02,
+                Some(&(CMD_PAGE_PROGRAM | CMD_SECTOR_ERASE | CMD_BLOCK_ERASE_64K | CMD_WRITE_STATUS)) => {
+                    chip.status = 0x01
+                }
+                _ => {}
+            }
+            if !frame.is_empty() {
+                chip.frames.push(frame);
+            }
+            Ok(())
+        }
+    }
+
+    fn flash(capacity: u32) -> (W25qNorFlash<Bus, Cs>, Rc<RefCell<Chip>>) {
+        let chip = Rc::new(RefCell::new(Chip::default()));
+        let flash = W25qNorFlash::new(Bus(chip.clone()), Cs(chip.clone()), capacity);
+        (flash, chip)
+    }
+
+    #[test]
+    fn w25q_32mib_part_addresses_offsets_beyond_16mib_distinctly() {
+        test_block_on(async {
+            let (mut flash, chip) = flash(32 << 20);
+            assert_eq!(flash.capacity(), 32 << 20);
+
+            let mut buf = [0u8; 1];
+            flash.read(0, &mut buf).await.unwrap();
+            let low = core::mem::take(&mut chip.borrow_mut().frames);
+            flash.read(16 << 20, &mut buf).await.unwrap();
+            let high = core::mem::take(&mut chip.borrow_mut().frames);
+
+            assert_ne!(
+                low, high,
+                "reads from two distinct advertised offsets put identical frames on the bus"
+            );
+        });
+    }
+
+    #[test]
+    fn w25q_completes_spi_transfer_before_releasing_chip_select() {
+        test_block_on(async {
+            let (mut flash, chip) = flash(1 << 20);
+
+            flash.write(0x100, &[0xA5; 4]).await.unwrap();
+            flash.erase(0, SECTOR_SIZE).await.unwrap();
+            flash.clear_block_protection().await.unwrap();
+
+            let chip = chip.borrow();
+            assert!(
+                chip.frames
+                    .contains(&std::vec![CMD_PAGE_PROGRAM, 0, 1, 0, 0xA5, 0xA5, 0xA5, 0xA5])
+            );
+            assert!(chip.frames.contains(&std::vec![CMD_SECTOR_ERASE, 0, 0, 0]));
+            assert!(chip.frames.contains(&std::vec![CMD_WRITE_STATUS, 0x00]));
+            assert_eq!(
+                chip.cs_released_unflushed, 0,
+                "chip select deasserted while buffered SPI writes were still pending"
+            );
+        });
+    }
+}
