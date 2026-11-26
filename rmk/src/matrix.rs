@@ -366,13 +366,10 @@ where
 
             // Scan matrix and send report
             for out_idx in out_idx_start..Self::OUTPUT_PIN_NUM {
-                // Pull up output pin, wait 1us ensuring the change comes into effect
+                // Select the matrix output before sampling its inputs.
                 if let Some(out_pin) = self.get_output_pins_mut().get_mut(out_idx) {
                     out_pin.set_high().ok();
                 }
-                // This may take >1ms on some platforms if other tasks are running!
-                Timer::after_micros(1).await;
-
                 let in_start = if out_idx == out_idx_start { in_idx_start } else { 0 };
 
                 for in_idx in in_start..Self::INPUT_PIN_NUM {
@@ -425,11 +422,19 @@ where
 
             #[cfg(feature = "async_matrix")]
             {
+                if self.rescan_needed {
+                    // Bound active polling while retaining GPIO-only wake when idle.
+                    Timer::after_micros(u64::from(crate::MATRIX_SCAN_INTERVAL_US)).await;
+                }
                 if !self.rescan_needed {
                     self.wait_for_key().await;
+                    // A spurious level or immediate I/O error must still yield.
+                    embassy_futures::yield_now().await;
                 }
                 self.rescan_needed = false;
             }
+            #[cfg(not(feature = "async_matrix"))]
+            Timer::after_micros(u64::from(crate::MATRIX_SCAN_INTERVAL_US)).await;
             self.scan_pos = (0, 0);
         }
     }
