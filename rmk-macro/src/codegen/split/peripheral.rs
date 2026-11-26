@@ -3,7 +3,7 @@ use quote::{format_ident, quote};
 use rmk_config::SplitConnection;
 use rmk_config::resolved::Hardware;
 use rmk_config::resolved::hardware::{
-    BoardConfig, ChipModel, ChipSeries, DfuConfig, InputDeviceConfig, MatrixType, SplitBoardConfig,
+    BoardConfig, ChipModel, ChipSeries, InputDeviceConfig, MatrixType, SplitBoardConfig,
     SplitConfig,
 };
 use syn::ItemMod;
@@ -62,22 +62,9 @@ pub(crate) fn parse_split_peripheral_mod(
         .expect("failed to resolve split-side dfu config");
     hardware.dfu = dfu;
 
-    let main_function = expand_split_peripheral(
-        id,
-        &identity,
-        &hardware,
-        item_mod,
-        &rmk_features,
-        hardware.dfu.as_ref(),
-    );
+    let main_function = expand_split_peripheral(id, &identity, &hardware, item_mod, &rmk_features);
 
-    let bind_interrupts = expand_bind_interrupt_for_split_peripheral(
-        &hardware.chip,
-        &hardware,
-        id,
-        &rmk_features,
-        hardware.dfu.as_ref(),
-    );
+    let bind_interrupts = expand_bind_interrupt_for_split_peripheral(&hardware, id, &rmk_features);
 
     let chip = &hardware.chip;
     let main_function_sig = if chip.series == ChipSeries::Esp32 {
@@ -108,12 +95,12 @@ pub(crate) fn parse_split_peripheral_mod(
 }
 
 fn expand_bind_interrupt_for_split_peripheral(
-    chip: &ChipModel,
     hardware: &Hardware,
     peripheral_id: usize,
     rmk_features: &Option<Vec<String>>,
-    dfu: Option<&DfuConfig>,
 ) -> TokenStream2 {
+    let chip = &hardware.chip;
+    let dfu = hardware.dfu.as_ref();
     let communication = &hardware.communication;
 
     // External DFU flash SPI interrupt for nRF52 — the peripheral's DFU
@@ -348,8 +335,8 @@ fn expand_split_peripheral(
     hardware: &Hardware,
     item_mod: ItemMod,
     rmk_features: &Option<Vec<String>>,
-    dfu: Option<&DfuConfig>,
 ) -> TokenStream2 {
+    let dfu = hardware.dfu.as_ref();
     // Check whether keyboard.toml contains split section
     let split_config = match &hardware.board {
         BoardConfig::Split(split) => split,
@@ -787,15 +774,9 @@ mod tests {
         let mut hardware = rmk_config::KeyboardTomlConfig::new_from_toml_path(&path)
             .hardware()
             .unwrap();
+        hardware.dfu = None;
         let features = Some(vec!["usb_log".into()]);
-        let ble = expand_bind_interrupt_for_split_peripheral(
-            &hardware.chip,
-            &hardware,
-            0,
-            &features,
-            None,
-        )
-        .to_string();
+        let ble = expand_bind_interrupt_for_split_peripheral(&hardware, 0, &features).to_string();
         assert!(ble.contains("build_sdc"));
 
         // we test serial peripheral case
@@ -812,14 +793,8 @@ mod tests {
                     hardware.communication.get_usb_info().unwrap(),
                 );
             }
-            let irqs = expand_bind_interrupt_for_split_peripheral(
-                &hardware.chip,
-                &hardware,
-                0,
-                &features,
-                None,
-            )
-            .to_string();
+            let irqs =
+                expand_bind_interrupt_for_split_peripheral(&hardware, 0, &features).to_string();
             assert!(irqs.contains("USBD"));
             assert!(irqs.contains("vbus_detect"));
             let init =
@@ -854,15 +829,16 @@ charge_led = {{ pin = "PIN_21", low_active = false }}
         .unwrap();
         let config = rmk_config::KeyboardTomlConfig::new_from_toml_path(&path);
         std::fs::remove_file(path).unwrap();
+        let mut hardware = config.hardware().unwrap();
+        hardware.dfu = None;
         let generated = expand_split_peripheral(
             0,
             &config.identity().unwrap(),
-            &config.hardware().unwrap(),
+            &hardware,
             syn::parse_quote!(
                 mod keyboard {}
             ),
             &Some(vec!["split".into()]),
-            None,
         )
         .to_string();
         assert!(generated.contains("BatteryProcessor :: charging_only"));
