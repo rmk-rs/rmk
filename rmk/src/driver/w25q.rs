@@ -13,10 +13,16 @@ const CMD_WRITE_STATUS: u8 = 0x01;
 const CMD_SECTOR_ERASE: u8 = 0x20;
 const CMD_BLOCK_ERASE_64K: u8 = 0xD8;
 const CMD_JEDEC_ID: u8 = 0x9F;
+const CMD_READ_4B: u8 = 0x13;
+const CMD_PAGE_PROGRAM_4B: u8 = 0x12;
+const CMD_SECTOR_ERASE_4B: u8 = 0x21;
+const CMD_BLOCK_ERASE_64K_4B: u8 = 0xDC;
 
 const PAGE_SIZE: u32 = 256;
 const SECTOR_SIZE: u32 = 4096;
 const BLOCK64_SIZE: u32 = 65536;
+/// Largest part reachable with 3-byte addresses.
+const MAX_3B_ADDR_SIZE: u32 = 1 << 24;
 
 /// [`NorFlash`] implementation for W25Q and compatible 25-series SPI NOR flash
 /// chips. Uses standard JEDEC commands valid across Winbond, Macronix, ISSI,
@@ -31,6 +37,17 @@ impl<BUS: SpiBus, CS: OutputPin> W25qNorFlash<BUS, CS> {
     pub fn new(bus: BUS, mut cs: CS, flash_size: u32) -> Self {
         cs.set_high().ok();
         Self { bus, cs, flash_size }
+    }
+
+    /// Build an opcode + address header, using the stateless 4-byte-address
+    /// opcode on parts larger than 16 MiB. Returns the buffer and its length.
+    fn address_header(&self, opcode: u8, opcode_4b: u8, addr: u32) -> ([u8; 5], usize) {
+        let [a3, a2, a1, a0] = addr.to_be_bytes();
+        if self.flash_size > MAX_3B_ADDR_SIZE {
+            ([opcode_4b, a3, a2, a1, a0], 5)
+        } else {
+            ([opcode, a2, a1, a0, 0], 4)
+        }
     }
 
     /// Wait until the write-in-progress bit clears. Datasheet worst case for
@@ -114,9 +131,9 @@ impl<BUS: SpiBus, CS: OutputPin> W25qNorFlash<BUS, CS> {
 
     async fn read_data(&mut self, addr: u32, buf: &mut [u8]) -> Result<(), W25qError<BUS::Error>> {
         self.wait_wip().await?;
-        let cmd = [CMD_READ, (addr >> 16) as u8, (addr >> 8) as u8, addr as u8];
+        let (cmd, cmd_len) = self.address_header(CMD_READ, CMD_READ_4B, addr);
         self.cs.set_low().ok();
-        if let Err(e) = self.bus.write(&cmd).await {
+        if let Err(e) = self.bus.write(&cmd[..cmd_len]).await {
             self.cs.set_high().ok();
             return Err(W25qError::Spi(e));
         }
@@ -127,13 +144,10 @@ impl<BUS: SpiBus, CS: OutputPin> W25qNorFlash<BUS, CS> {
 
     async fn page_program(&mut self, addr: u32, data: &[u8]) -> Result<(), W25qError<BUS::Error>> {
         self.write_enable().await?;
-        let header_len = 4;
+        let (header, header_len) = self.address_header(CMD_PAGE_PROGRAM, CMD_PAGE_PROGRAM_4B, addr);
         let total = header_len + data.len();
-        let mut tx_buf = [0u8; 4 + PAGE_SIZE as usize];
-        tx_buf[0] = CMD_PAGE_PROGRAM;
-        tx_buf[1] = (addr >> 16) as u8;
-        tx_buf[2] = (addr >> 8) as u8;
-        tx_buf[3] = addr as u8;
+        let mut tx_buf = [0u8; 5 + PAGE_SIZE as usize];
+        tx_buf[..header_len].copy_from_slice(&header[..header_len]);
         tx_buf[header_len..total].copy_from_slice(data);
         self.cs.set_low().ok();
         let res = self.bus.write(&tx_buf[..total]).await.map_err(W25qError::Spi);
@@ -203,15 +217,15 @@ impl<BUS: SpiBus, CS: OutputPin> NorFlash for W25qNorFlash<BUS, CS> {
     async fn erase(&mut self, mut from: u32, to: u32) -> Result<(), Self::Error> {
         while from < to {
             let remaining = to - from;
-            let (opcode, size) = if remaining >= BLOCK64_SIZE && from.is_multiple_of(BLOCK64_SIZE) {
-                (CMD_BLOCK_ERASE_64K, BLOCK64_SIZE)
+            let (opcode, opcode_4b, size) = if remaining >= BLOCK64_SIZE && from.is_multiple_of(BLOCK64_SIZE) {
+                (CMD_BLOCK_ERASE_64K, CMD_BLOCK_ERASE_64K_4B, BLOCK64_SIZE)
             } else {
-                (CMD_SECTOR_ERASE, SECTOR_SIZE)
+                (CMD_SECTOR_ERASE, CMD_SECTOR_ERASE_4B, SECTOR_SIZE)
             };
             self.write_enable().await?;
-            let cmd = [opcode, (from >> 16) as u8, (from >> 8) as u8, from as u8];
+            let (cmd, cmd_len) = self.address_header(opcode, opcode_4b, from);
             self.cs.set_low().ok();
-            let res = self.bus.write(&cmd).await.map_err(W25qError::Spi);
+            let res = self.bus.write(&cmd[..cmd_len]).await.map_err(W25qError::Spi);
             self.cs.set_high().ok();
             res?;
             self.verify_wip_set().await?;
