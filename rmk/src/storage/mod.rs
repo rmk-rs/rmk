@@ -445,10 +445,20 @@ impl<F: AsyncNorFlash> Storage<F> {
             clear_layout: false,
         };
 
-        let stored = storage.fetch(StorageKey::StorageConfig).await;
-        if storage_config.clear_storage
-            || !matches!(stored, Ok(Some(StorageValue::StorageConfig(schema_hash))) if schema_hash == SCHEMA_HASH)
+        let schema_matches = match storage
+            .flash
+            .fetch_item(&mut storage.buffer, &StorageKey::StorageConfig)
+            .await
         {
+            Ok(Some(StorageValue::StorageConfig(schema_hash))) => schema_hash == SCHEMA_HASH,
+            // A failed read says nothing about the schema, so it must not erase valid data.
+            Err(e @ SSError::Storage { .. }) => {
+                print_storage_error::<F>(e);
+                true
+            }
+            _ => false,
+        };
+        if storage_config.clear_storage || !schema_matches {
             debug!("Clearing storage!");
             // An erase never invalidates the cache the probing `fetch` filled, so rebuild the map
             // with a fresh one. Nothing else is written back: reads now miss and the RAM defaults stand.
