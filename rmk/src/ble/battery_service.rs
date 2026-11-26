@@ -141,7 +141,7 @@ impl BatteryServices {
         for (battery, &id) in self.levels[1..].iter().zip(ids) {
             if let Some(BatteryStatus::Available { level: Some(level), .. }) =
                 crate::split::driver::current_peripheral_battery_status(id)
-                && let Err(e) = battery.value.notify(conn, &level, false).await
+                && let Err(e) = battery.value.to_raw().notify_raw(conn, &[level], false).await
             {
                 error!("Failed to notify initial peripheral {} battery level: {:?}", id, e);
             }
@@ -152,7 +152,11 @@ impl BatteryServices {
             if let Some(slot) = ids.iter().position(|&peripheral_id| peripheral_id == id)
                 && let Some(BatteryStatus::Available { level: Some(level), .. }) =
                     crate::split::driver::current_peripheral_battery_status(id)
-                && let Err(e) = self.levels[slot + 1].value.notify(conn, &level, false).await
+                && let Err(e) = self.levels[slot + 1]
+                    .value
+                    .to_raw()
+                    .notify_raw(conn, &[level], false)
+                    .await
             {
                 error!("Failed to notify peripheral {} battery level: {:?}", id, e);
             }
@@ -161,7 +165,8 @@ impl BatteryServices {
 }
 
 pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
-    battery_level: Characteristic<u8>,
+    /// Raw, so its notifications share the HID reports' `notify_raw` instance.
+    battery_level: Characteristic<[u8]>,
     conn: &'conn GattConnection<'stack, 'server, P>,
     sub: <BatteryStatusEvent as SubscribableEvent>::Subscriber,
 }
@@ -169,7 +174,7 @@ pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
 impl<'stack, 'server, 'conn, P: PacketPool> BleBatteryServer<'stack, 'server, 'conn, P> {
     pub(crate) fn new(server: &Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
         Self {
-            battery_level: server.batteries.levels[0].value,
+            battery_level: server.batteries.levels[0].value.to_raw(),
             conn,
             sub: BatteryStatusEvent::subscriber(),
         }
@@ -195,7 +200,7 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
         let first_report = async {
             if let BatteryStatus::Available { level: Some(level), .. } =
                 crate::input_device::battery::current_battery_status()
-                && self.battery_level.notify(self.conn, &level, false).await.is_ok()
+                && self.battery_level.notify_raw(self.conn, &[level], false).await.is_ok()
             {
                 return;
             }
@@ -205,7 +210,7 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
                     state = newer;
                 }
                 if let BatteryStatus::Available { level: Some(level), .. } = state.0 {
-                    if let Err(e) = self.battery_level.notify(self.conn, &level, false).await {
+                    if let Err(e) = self.battery_level.notify_raw(self.conn, &[level], false).await {
                         error!("Failed to notify battery level: {:?}", e);
                     } else {
                         // The first report is sent, return to continue
@@ -241,7 +246,7 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
             while self.sub.try_next_message_pure().is_some() {}
             if let BatteryStatus::Available { level: Some(level), .. } =
                 crate::input_device::battery::current_battery_status()
-                && let Err(e) = self.battery_level.notify(self.conn, &level, false).await
+                && let Err(e) = self.battery_level.notify_raw(self.conn, &[level], false).await
             {
                 error!("Failed to notify battery level: {:?}", e);
             }
