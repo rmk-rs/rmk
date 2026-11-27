@@ -1,9 +1,10 @@
 use embassy_time::Duration;
 use embedded_storage_async::nor_flash::NorFlash as AsyncNorFlash;
 use rmk_types::constants::MACRO_CHUNK_SIZE;
+use sequential_storage::Error as SSError;
 
 use crate::keyboard::combo::Combo;
-use crate::storage::{Storage, StorageKey, StorageValue, print_storage_error};
+use crate::storage::{Storage, StorageKey, StorageValue};
 
 impl<F: AsyncNorFlash> Storage<F> {
     pub(crate) async fn read_layout<
@@ -16,20 +17,12 @@ impl<F: AsyncNorFlash> Storage<F> {
         &mut self,
         data: &mut crate::keymap::KeymapData<ROW, COL, NUM_LAYER, NUM_ENCODER, NUM_TOUCHPAD>,
         behavior: &mut crate::config::BehaviorConfig,
-    ) -> Result<(), ()> {
+    ) -> Result<(), SSError<F::Error>> {
         // Use fetch_all_items to speed up the keymap reading
-        let mut key_iterator = self
-            .flash
-            .fetch_all_items(&mut self.buffer)
-            .await
-            .map_err(|e| print_storage_error::<F>(e))?;
+        let mut key_iterator = self.flash.fetch_all_items(&mut self.buffer).await?;
 
         // Read all keymap keys and encoder configs
-        while let Some((key, value)) = key_iterator
-            .next::<StorageValue>(&mut self.buffer)
-            .await
-            .map_err(|e| print_storage_error::<F>(e))?
-        {
+        while let Some((key, value)) = key_iterator.next::<StorageValue>(&mut self.buffer).await? {
             match (key, value) {
                 (StorageKey::Keymap { layer, row, col }, StorageValue::KeyAction(action)) => {
                     let layer = layer as usize;

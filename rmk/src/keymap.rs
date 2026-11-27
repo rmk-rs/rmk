@@ -6,8 +6,12 @@ use rmk_types::fork::Fork;
 use rmk_types::morse::{Morse, MorseProfile};
 #[cfg(all(feature = "storage", feature = "host"))]
 use {
-    crate::{boot::reboot_keyboard, storage::Storage},
+    crate::{
+        boot::reboot_keyboard,
+        storage::{Storage, print_storage_error},
+    },
     embedded_storage_async::nor_flash::NorFlash,
+    sequential_storage::Error as SSError,
 };
 
 use crate::config::{BehaviorConfig, Hand, MouseKeyConfig, OneShotModifiersConfig, PositionalConfig};
@@ -501,13 +505,18 @@ impl<'a> KeyMap<'a> {
             if storage.clear_layout {
                 debug!("`clear_layout` is set, rewriting the items the compiled-in layout owns.");
                 crate::poll_separately(core::pin::pin!(storage.write_layout(data, behavior))).await;
-            } else if crate::poll_separately(core::pin::pin!(storage.read_layout(data, behavior)))
-                .await
-                .is_err()
-            {
-                error!("Failed to read from storage, clearing...");
-                storage.flash.erase_all().await.ok();
-                reboot_keyboard();
+            } else {
+                let read = crate::poll_separately(core::pin::pin!(storage.read_layout(data, behavior))).await;
+                if let Err(e) = read {
+                    // A flash read error leaves the stored layout intact; only bad content is erased.
+                    let read_failed = matches!(e, SSError::Storage { .. });
+                    print_storage_error::<F>(e);
+                    if !read_failed {
+                        error!("Stored layout is unreadable, clearing...");
+                        storage.flash.erase_all().await.ok();
+                    }
+                    reboot_keyboard();
+                }
             }
         }
 

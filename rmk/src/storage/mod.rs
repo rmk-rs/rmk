@@ -445,10 +445,20 @@ impl<F: AsyncNorFlash> Storage<F> {
             clear_layout: false,
         };
 
-        let stored = storage.fetch(StorageKey::StorageConfig).await;
-        if storage_config.clear_storage
-            || !matches!(stored, Ok(Some(StorageValue::StorageConfig(schema_hash))) if schema_hash == SCHEMA_HASH)
+        let schema_matches = match storage
+            .flash
+            .fetch_item(&mut storage.buffer, &StorageKey::StorageConfig)
+            .await
         {
+            Ok(Some(StorageValue::StorageConfig(schema_hash))) => schema_hash == SCHEMA_HASH,
+            // A failed read says nothing about the schema, so it must not erase valid data.
+            Err(e @ SSError::Storage { .. }) => {
+                print_storage_error::<F>(e);
+                true
+            }
+            _ => false,
+        };
+        if storage_config.clear_storage || !schema_matches {
             debug!("Clearing storage!");
             // An erase never invalidates the cache the probing `fetch` filled, so rebuild the map
             // with a fresh one. Nothing else is written back: reads now miss and the RAM defaults stand.
@@ -866,6 +876,83 @@ mod tests {
             .await;
             let mut storage = new_storage(flash).await;
             assert!(matches!(storage.fetch(StorageKey::ConnectionType).await, Ok(None)));
+        });
+    }
+
+    /// A read that fails says nothing about the schema, so it must not erase like a mismatch does.
+    #[test]
+    fn read_error_while_checking_the_schema_keeps_storage() {
+        let part = Part::new();
+        block_on(async {
+            let mut storage = new_storage(async_flash_wrapper(part.clone())).await;
+            storage
+                .put(StorageItem::ConnectionType(ConnectionType::Ble))
+                .await
+                .unwrap();
+            drop(storage);
+
+            let mut storage = new_storage(async_flash_wrapper(part.clone())).await;
+            assert!(matches!(
+                storage.fetch(StorageKey::ConnectionType).await,
+                Ok(Some(StorageValue::ConnectionType(ConnectionType::Ble)))
+            ));
+            drop(storage);
+
+            part.fail_next_read();
+            drop(new_storage(async_flash_wrapper(part.clone())).await);
+
+            let mut storage = new_storage(async_flash_wrapper(part)).await;
+            assert!(
+                matches!(
+                    storage.fetch(StorageKey::ConnectionType).await,
+                    Ok(Some(StorageValue::ConnectionType(ConnectionType::Ble)))
+                ),
+                "one failed read at boot erased the stored settings"
+            );
+        });
+    }
+
+    /// Same for the layout restore: a read error must leave the stored keymap for the next boot.
+    #[cfg(feature = "host")]
+    #[test]
+    fn read_error_while_restoring_the_layout_keeps_storage() {
+        use rmk_types::action::Action;
+        use rmk_types::keycode::{HidKeyCode, KeyCode};
+
+        use crate::config::PositionalConfig;
+        use crate::keymap::{KeyMap, KeymapData};
+
+        let a = KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A)));
+        let positional = PositionalConfig::<1, 1>::default();
+        let part = Part::new();
+
+        block_on(async {
+            let mut storage = new_storage(async_flash_wrapper(part.clone())).await;
+            storage
+                .put(StorageItem::Keymap {
+                    layer: 0,
+                    row: 0,
+                    col: 0,
+                    action: a,
+                })
+                .await
+                .unwrap();
+            drop(storage);
+
+            let boot = async |fail_read: bool| {
+                let mut storage = new_storage(async_flash_wrapper(part.clone())).await;
+                if fail_read {
+                    part.fail_next_read();
+                }
+                let mut data = KeymapData::new([[[KeyAction::No]]]);
+                let mut behavior = RuntimeBehaviorConfig::default();
+                let keymap = KeyMap::new_from_storage(&mut data, Some(&mut storage), &mut behavior, &positional).await;
+                keymap.action_at_pos(0, 0, 0)
+            };
+
+            assert_eq!(boot(false).await, a);
+            boot(true).await;
+            assert_eq!(boot(false).await, a, "one failed read at boot erased the stored keymap");
         });
     }
 
