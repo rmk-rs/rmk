@@ -35,9 +35,9 @@
 
 ## Real-World Implementations
 
-| [rmk-ble-keyboard](https://github.com/rmk-rs/rmk-ble-keyboard) | [dactyl-lynx-rmk](https://github.com/whitelynx/dactyl-lynx-rmk) | [sessile](https://github.com/willpuckett/sessile) |
-| --- | --- | --- |
-| <img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/rmk_ble_keyboard.jpg" width="300"> | <img src="https://raw.githubusercontent.com/whitelynx/dactyl-lynx-keyboard/refs/heads/main/resources/skeleton-prototype.jpg" width="300"> | <img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/sessile.png" width="300"> |
+| [rmk-ble-keyboard](https://github.com/HaoboGu/rmk-ble-keyboard) | [sessile](https://github.com/willpuckett/sessile) |
+| --- | --- |
+| <img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/rmk_ble_keyboard.jpg" width="300"> | <img src="https://raw.githubusercontent.com/rmk-rs/rmk/refs/heads/main/docs/docs/main/images/sessile.png" width="300"> |
 
 | [moonlander-rmk-1](https://github.com/MrFixThis/moonlander-rmk-1) | [rmk-zsa-planck-ez](https://github.com/atvari-eu/rmk-zsa-planck-ez) | [rmk-zsa-voyager](https://github.com/jpds/rmk-zsa-voyager) |
 | --- | --- | --- |
