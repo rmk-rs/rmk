@@ -7,8 +7,9 @@ use rmk_types::battery::BatteryStatus;
 use rmk_types::ble::BleStatus;
 use rmk_types::connection::{ConnectionStatus, ConnectionType, UsbState};
 use rmk_types::protocol::rynk::{
-    GetComboBulkResponse, GetKeymapBulkResponse, GetMorseBulkResponse, PeripheralStatus, ProtocolVersion,
-    SetComboBulkRequest, SetKeymapBulkRequest, SetMorseBulkRequest,
+    GetComboBulkResponse, GetComboDefinitionBulkResponse, GetKeymapBulkResponse, GetMorseBulkResponse,
+    PeripheralStatus, ProtocolVersion, SetComboBulkRequest, SetComboDefinitionBulkRequest, SetKeymapBulkRequest,
+    SetMorseBulkRequest,
 };
 use tokio::time::timeout;
 
@@ -522,6 +523,10 @@ async fn bulk_methods_gate_without_wire_send() {
         start_index: 0,
         configs: Default::default(),
     };
+    let combo_definition_req = SetComboDefinitionBulkRequest {
+        start_index: 0,
+        definitions: Default::default(),
+    };
     let morse_req = SetMorseBulkRequest {
         start_index: 0,
         configs: Default::default(),
@@ -542,6 +547,14 @@ async fn bulk_methods_gate_without_wire_send() {
     assert!(matches!(
         client.set_combo_bulk(combo_req).await,
         Err(RynkHostError::Unsupported(Cmd::SetComboBulk, _))
+    ));
+    assert!(matches!(
+        client.get_combo_definition_bulk(0).await,
+        Err(RynkHostError::Unsupported(Cmd::GetComboDefinitionBulk, _))
+    ));
+    assert!(matches!(
+        client.set_combo_definition_bulk(combo_definition_req).await,
+        Err(RynkHostError::Unsupported(Cmd::SetComboDefinitionBulk, _))
     ));
     assert!(matches!(
         client.get_morse_bulk(0).await,
@@ -565,6 +578,9 @@ async fn bulk_methods_round_trip_when_supported() {
     let combo_resp = GetComboBulkResponse {
         configs: Default::default(),
     };
+    let combo_definition_resp = GetComboDefinitionBulkResponse {
+        definitions: Default::default(),
+    };
     let morse_resp = GetMorseBulkResponse {
         configs: Default::default(),
     };
@@ -580,9 +596,13 @@ async fn bulk_methods_round_trip_when_supported() {
             Step::AwaitWrites(6),
             Step::Chunk(reply(Cmd::GetComboBulk, 6, combo_resp.clone())),
             Step::AwaitWrites(7),
-            Step::Chunk(reply(Cmd::SetMorseBulk, 7, ())),
+            Step::Chunk(reply(Cmd::SetComboDefinitionBulk, 7, ())),
             Step::AwaitWrites(8),
-            Step::Chunk(reply(Cmd::GetMorseBulk, 8, morse_resp.clone())),
+            Step::Chunk(reply(Cmd::GetComboDefinitionBulk, 8, combo_definition_resp.clone())),
+            Step::AwaitWrites(9),
+            Step::Chunk(reply(Cmd::SetMorseBulk, 9, ())),
+            Step::AwaitWrites(10),
+            Step::Chunk(reply(Cmd::GetMorseBulk, 10, morse_resp.clone())),
             Step::Hang,
         ],
     )
@@ -608,6 +628,18 @@ async fn bulk_methods_round_trip_when_supported() {
             .await
             .unwrap();
         assert_eq!(client.get_combo_bulk(0).await.unwrap(), combo_resp);
+
+        client
+            .set_combo_definition_bulk(SetComboDefinitionBulkRequest {
+                start_index: 0,
+                definitions: Default::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            client.get_combo_definition_bulk(0).await.unwrap(),
+            combo_definition_resp
+        );
 
         client
             .set_morse_bulk(SetMorseBulkRequest {

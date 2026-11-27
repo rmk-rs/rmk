@@ -3,7 +3,7 @@
 use postcard::experimental::max_size::MaxSize;
 use serde::{Deserialize, Serialize};
 
-use crate::combo::Combo;
+use crate::combo::{Combo, ComboDefinition};
 #[cfg(not(feature = "host"))]
 use crate::protocol::rynk::payload::bulk_capacity::MAX_BULK_ITEMS;
 
@@ -12,6 +12,11 @@ use crate::protocol::rynk::payload::bulk_capacity::MAX_BULK_ITEMS;
 type BulkCombos = heapless::Vec<Combo, MAX_BULK_ITEMS>;
 #[cfg(feature = "host")]
 type BulkCombos = alloc::vec::Vec<Combo>;
+
+#[cfg(not(feature = "host"))]
+type BulkComboDefinitions = heapless::Vec<ComboDefinition, MAX_BULK_ITEMS>;
+#[cfg(feature = "host")]
+type BulkComboDefinitions = alloc::vec::Vec<ComboDefinition>;
 
 /// Request payload for `SetCombo`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
@@ -58,6 +63,44 @@ pub struct GetComboBulkResponse {
     pub configs: BulkCombos,
 }
 
+/// Request payload for the additive `SetComboDefinition` endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct SetComboDefinitionRequest {
+    pub index: u8,
+    pub definition: ComboDefinition,
+}
+
+/// Bulk write of versioned combo definitions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct SetComboDefinitionBulkRequest {
+    pub start_index: u8,
+    #[cfg_attr(feature = "wasm", tsify(type = "ComboDefinition[]"))]
+    pub definitions: BulkComboDefinitions,
+}
+
+#[cfg(not(feature = "host"))]
+impl MaxSize for SetComboDefinitionBulkRequest {
+    const POSTCARD_MAX_SIZE: usize = crate::protocol::rynk::RYNK_MAX_PAYLOAD_SIZE;
+}
+
+/// Bulk response containing action- or position-based combo definitions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
+#[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
+pub struct GetComboDefinitionBulkResponse {
+    #[cfg_attr(feature = "wasm", tsify(type = "ComboDefinition[]"))]
+    pub definitions: BulkComboDefinitions,
+}
+
+#[cfg(not(feature = "host"))]
+impl MaxSize for GetComboDefinitionBulkResponse {
+    const POSTCARD_MAX_SIZE: usize = crate::heapless_vec_max_size::<ComboDefinition, MAX_BULK_ITEMS>();
+}
+
 #[cfg(not(feature = "host"))]
 impl MaxSize for GetComboBulkResponse {
     const POSTCARD_MAX_SIZE: usize = crate::heapless_vec_max_size::<Combo, MAX_BULK_ITEMS>();
@@ -67,6 +110,7 @@ impl MaxSize for GetComboBulkResponse {
 mod tests {
     use super::*;
     use crate::action::KeyAction;
+    use crate::combo::{ComboDefinition, MatrixPosition, PositionCombo};
     use crate::constants::COMBO_SIZE;
     use crate::protocol::rynk::tests::{assert_max_size_bound, round_trip};
 
@@ -80,6 +124,17 @@ mod tests {
             COMBO_SIZE,
         );
         Combo::new(actions, KeyAction::No, Some(u8::MAX))
+    }
+
+    fn full_position_definition() -> ComboDefinition {
+        ComboDefinition::Positions(PositionCombo::new(
+            (0..COMBO_SIZE).map(|i| MatrixPosition {
+                row: u8::MAX,
+                col: i as u8,
+            }),
+            KeyAction::No,
+            Some(u8::MAX),
+        ))
     }
 
     #[test]
@@ -104,14 +159,22 @@ mod tests {
         assert_max_size_bound(&c);
     }
 
+    #[test]
+    fn round_trip_combo_definition() {
+        let definition = full_position_definition();
+        round_trip(&definition);
+        assert_max_size_bound(&definition);
+        round_trip(&SetComboDefinitionRequest { index: 3, definition });
+    }
+
     // Firmware-only: exercises heapless bulk capacity.
     #[cfg(not(feature = "host"))]
     mod bulk {
         use heapless::Vec;
 
         use super::super::*;
-        use super::full_combo;
-        use crate::combo::Combo;
+        use super::{full_combo, full_position_definition};
+        use crate::combo::{Combo, ComboDefinition};
         use crate::protocol::rynk::payload::bulk_capacity::MAX_BULK_ITEMS;
         use crate::protocol::rynk::tests::{assert_max_size_bound, round_trip};
 
@@ -138,6 +201,24 @@ mod tests {
             let resp = GetComboBulkResponse { configs };
             round_trip(&resp);
             assert_max_size_bound(&resp);
+        }
+
+        #[test]
+        fn round_trip_combo_definition_bulk_max_capacity() {
+            let mut definitions: Vec<ComboDefinition, MAX_BULK_ITEMS> = Vec::new();
+            for _ in 0..MAX_BULK_ITEMS {
+                definitions.push(full_position_definition()).unwrap();
+            }
+            let request = SetComboDefinitionBulkRequest {
+                start_index: u8::MAX,
+                definitions: definitions.clone(),
+            };
+            round_trip(&request);
+            assert_max_size_bound(&request);
+
+            let response = GetComboDefinitionBulkResponse { definitions };
+            round_trip(&response);
+            assert_max_size_bound(&response);
         }
     }
 }

@@ -15,16 +15,16 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use rynk::rmk_types::action::{EncoderAction, KeyAction};
 use rynk::rmk_types::battery::BatteryStatus;
-use rynk::rmk_types::combo::Combo;
+use rynk::rmk_types::combo::{Combo, ComboDefinition};
 use rynk::rmk_types::connection::{ConnectionStatus, ConnectionType};
 use rynk::rmk_types::fork::Fork;
 use rynk::rmk_types::keyboard_macros::{Macro, MacroOp};
 use rynk::rmk_types::led_indicator::LedIndicator;
 use rynk::rmk_types::morse::Morse;
 use rynk::rmk_types::protocol::rynk::{
-    BehaviorConfig, DeviceCapabilities, DeviceInfo, GetComboBulkResponse, GetKeymapBulkResponse, GetMorseBulkResponse,
-    LockStatus, MatrixState, PeripheralStatus, ProtocolVersion, SetComboBulkRequest, SetKeymapBulkRequest,
-    SetMorseBulkRequest, StorageResetMode,
+    BehaviorConfig, DeviceCapabilities, DeviceInfo, GetComboBulkResponse, GetComboDefinitionBulkResponse,
+    GetKeymapBulkResponse, GetMorseBulkResponse, LockStatus, MatrixState, PeripheralStatus, ProtocolVersion,
+    SetComboBulkRequest, SetComboDefinitionBulkRequest, SetKeymapBulkRequest, SetMorseBulkRequest, StorageResetMode,
 };
 use rynk::{Client, Driver, LayoutInfo, RynkDevice, RynkHostError, TopicEvent};
 use wasm_bindgen::prelude::*;
@@ -151,6 +151,8 @@ endpoints! {
     write_all_keymap(actions: Vec<KeyAction>) -> (),
     read_all_combos() -> Vec<Combo>,
     write_all_combos(configs: Vec<Combo>) -> (),
+    read_all_combo_definitions() -> Vec<ComboDefinition>,
+    write_all_combo_definitions(definitions: Vec<ComboDefinition>) -> (),
     read_all_morses() -> Vec<Morse>,
     write_all_morses(configs: Vec<Morse>) -> (),
     get_layout() -> LayoutInfo,
@@ -159,6 +161,10 @@ endpoints! {
     set_combo(index: u8, config: Combo) -> (),
     get_combo_bulk(start_index: u8) -> GetComboBulkResponse,
     set_combo_bulk(request: SetComboBulkRequest) -> (),
+    get_combo_definition(index: u8) -> ComboDefinition,
+    set_combo_definition(index: u8, definition: ComboDefinition) -> (),
+    get_combo_definition_bulk(start_index: u8) -> GetComboDefinitionBulkResponse,
+    set_combo_definition_bulk(request: SetComboDefinitionBulkRequest) -> (),
     get_fork(index: u8) -> Fork,
     set_fork(index: u8, config: Fork) -> (),
     get_morse(index: u8) -> Morse,

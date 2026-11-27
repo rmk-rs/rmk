@@ -528,3 +528,56 @@ steps = [
   { release = [1, 1] },
 ]
 expect = [["LShift"], ["LShift", "A"], ["LShift"], []]
+
+# The two physical keys both resolve to A on layer 0. An action combo cannot
+# distinguish this chord because both presses map to the same state bit;
+# position matching records each matrix coordinate independently.
+[[test]]
+name = "position_combo_supports_duplicate_resolved_actions"
+behavior.combo = {
+  timeout = "50ms",
+  combos = [{ positions = [[0, 2], [0, 11]], output = "Z" }]
+}
+steps = [
+  { press = [0, 2] },
+  { press = [0, 11] },
+  { release = [0, 2] },
+  { release = [0, 11] },
+]
+expect = [["Z"], []]
+
+# MO(1) changes both resolved actions (A -> C and A -> B), but an unscoped
+# position combo continues to identify the same physical keys.
+[[test]]
+name = "position_combo_survives_active_layer_changes"
+behavior.combo = {
+  timeout = "50ms",
+  combos = [{ positions = [[0, 2], [0, 11]], output = "Z" }]
+}
+steps = [
+  { press = [3, 0] },
+  { press = [0, 2] },
+  { press = [0, 11] },
+  { release = [0, 2] },
+  { release = [0, 11] },
+  { release = [3, 0] },
+]
+expect = [["Z"], []]
+
+# `layer` remains an optional activation scope. Here the same physical chord
+# is disabled while layer 1 is active, so its layer-1 C/B actions pass through.
+[[test]]
+name = "position_combo_layer_scope_is_respected"
+behavior.combo = {
+  timeout = "50ms",
+  combos = [{ positions = [[0, 2], [0, 11]], output = "Z", layer = 0 }]
+}
+steps = [
+  { press = [3, 0] },
+  { press = [0, 2] },
+  { press = [0, 11] },
+  { release = [0, 2] },
+  { release = [0, 11] },
+  { release = [3, 0] },
+]
+expect = [["C"], ["B", "C"], ["B"], []]

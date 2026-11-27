@@ -185,6 +185,14 @@ Config _reads_ stay open, so anything that can reach the protocol can read your
 stored macros. Don't put passwords or other secrets in a macro.
 :::
 
+Rynk protocol 0.2 adds `Get/SetComboDefinition` and bulk counterparts. Their
+`ComboDefinition` payload is either `Actions(Combo)` or
+`Positions(PositionCombo)`. The original `Get/SetCombo` commands and their
+bytes are unchanged for older action-based clients. Host tools should use the
+definition endpoints when they need to preserve or edit position combos; the
+legacy getter returns `Invalid` for a position slot because it cannot represent
+that trigger without losing information.
+
 ::: tip Two different `unlock_keys`
 `[host].unlock_keys` guards this Rynk lock gate. A separate `[dfu].unlock_keys`
 guards the firmware _download_ once the device is already in the bootloader (the

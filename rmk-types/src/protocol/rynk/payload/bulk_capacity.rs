@@ -5,7 +5,7 @@
 use postcard::experimental::max_size::MaxSize;
 
 use crate::action::KeyAction;
-use crate::combo::Combo;
+use crate::combo::{Combo, ComboDefinition};
 use crate::constants::RYNK_BUFFER_SIZE;
 use crate::morse::Morse;
 use crate::protocol::rynk::message::{RYNK_HEADER_SIZE, max_frame_size};
@@ -30,14 +30,17 @@ const fn calculate_item_capacity(physical: usize, item_size: usize, fixed: usize
 
 /// Calculate the number of Combos/morses one bulk frame can carry;
 /// `physical` is the buffer size the frame must COBS-encode into.
-/// Sized by the larger of `Combo`/`Morse` so both bulk endpoints fit;
+/// Sized by the largest of `ComboDefinition`/`Combo`/`Morse` so every behavior
+/// bulk endpoint fits;
 /// the one fixed byte is `start_index` on the request / the `Result` tag on the response.
 pub const fn bulk_item_capacity(physical: usize) -> usize {
-    let item = if Combo::POSTCARD_MAX_SIZE > Morse::POSTCARD_MAX_SIZE {
-        Combo::POSTCARD_MAX_SIZE
-    } else {
-        Morse::POSTCARD_MAX_SIZE
-    };
+    let mut item = Combo::POSTCARD_MAX_SIZE;
+    if ComboDefinition::POSTCARD_MAX_SIZE > item {
+        item = ComboDefinition::POSTCARD_MAX_SIZE;
+    }
+    if Morse::POSTCARD_MAX_SIZE > item {
+        item = Morse::POSTCARD_MAX_SIZE;
+    }
     calculate_item_capacity(physical, item, 1)
 }
 
@@ -70,7 +73,7 @@ mod tests {
 
     use super::{bulk_item_capacity, bulk_key_capacity};
     use crate::action::KeyAction;
-    use crate::combo::Combo;
+    use crate::combo::{Combo, ComboDefinition};
     use crate::morse::Morse;
     use crate::protocol::rynk::message::{RYNK_HEADER_SIZE, max_frame_size};
     use crate::varint_max_size;
@@ -82,7 +85,9 @@ mod tests {
     #[test]
     fn bulk_counts_derive_from_buffer_and_fit() {
         const U8_MAX: usize = u8::MAX as usize;
-        let combo_item = Combo::POSTCARD_MAX_SIZE.max(Morse::POSTCARD_MAX_SIZE);
+        let combo_item = Combo::POSTCARD_MAX_SIZE
+            .max(ComboDefinition::POSTCARD_MAX_SIZE)
+            .max(Morse::POSTCARD_MAX_SIZE);
 
         // Clamp to the u8 report width once the buffer holds 255 of the item
         // (plus slack for framing); 0 for a buffer too small to hold even one

@@ -355,7 +355,9 @@ impl<'a> Keyboard<'a> {
                         combos
                             .iter_mut()
                             .flatten()
-                            .filter(|combo| !combo.is_triggered() && combo.config.contains(&key.action))
+                            .filter(|combo| {
+                                !combo.is_triggered() && combo.contains_input(&key.action, key.event.source)
+                            })
                             .for_each(Combo::reset);
                     });
                     self.process_key_action(&key.action, key.event, key.press_time).await;
@@ -1020,7 +1022,8 @@ impl<'a> Keyboard<'a> {
                 .enumerate()
                 .filter_map(|(i, c)| {
                     let c = c.as_ref()?;
-                    (c.is_pending() && (event.pressed || c.config.contains(key_action))).then_some((c.size(), i))
+                    (c.is_pending() && (event.pressed || c.contains_input(key_action, event.source)))
+                        .then_some((c.size(), i))
                 })
                 .max_by_key(|&(size, _)| size)
                 .map(|(_, i)| i)
@@ -1037,15 +1040,26 @@ impl<'a> Keyboard<'a> {
     async fn fire_combo(&mut self, idx: usize, at: Instant) {
         let Some((output, chord)) = self
             .keymap
-            .with_combos_mut(|combos| combos[idx].as_mut().map(|c| (c.trigger(), c.config.actions.clone())))
+            .with_combos_mut(|combos| combos[idx].as_mut().map(|c| (c.trigger(), c.definition())))
         else {
             return;
         };
         debug!("[Combo] {:?} triggered", output);
-        self.held_buffer
+        let trigger_inputs: Vec<(KeyAction, KeyboardEventSource), 16> = self
+            .held_buffer
             .keys
-            .retain(|item| item.state != KeyState::WaitingCombo || !chord.contains(&item.action));
-        self.reset_shadowed_combos(&chord);
+            .iter()
+            .filter(|item| {
+                item.state == KeyState::WaitingCombo
+                    && Combo::definition_contains_input(&chord, &item.action, item.event.source)
+            })
+            .map(|item| (item.action, item.event.source))
+            .collect();
+        self.held_buffer.keys.retain(|item| {
+            item.state != KeyState::WaitingCombo
+                || !Combo::definition_contains_input(&chord, &item.action, item.event.source)
+        });
+        self.reset_shadowed_combos(&trigger_inputs);
         self.process_key_action(&output, KeyboardEvent::combo(idx as u8, true), at)
             .await;
     }
@@ -1053,10 +1067,14 @@ impl<'a> Keyboard<'a> {
     // Reset combos shadowed by a just-triggered combo: any *other* combo that is
     // fully pressed but not yet triggered and shares at least one key with the
     // triggered combo.
-    fn reset_shadowed_combos(&mut self, triggered_actions: &[KeyAction]) {
+    fn reset_shadowed_combos(&mut self, triggered_inputs: &[(KeyAction, KeyboardEventSource)]) {
         self.keymap.with_combos_mut(|combos| {
             combos.iter_mut().filter_map(|c| c.as_mut()).for_each(|c| {
-                if c.is_pending() && c.config.actions.iter().any(|a| triggered_actions.contains(a)) {
+                if c.is_pending()
+                    && triggered_inputs
+                        .iter()
+                        .any(|(action, pos)| c.contains_input(action, *pos))
+                {
                     info!("Resetting shadowed combo: {:?}", c,);
                     c.reset();
                 }
@@ -1083,7 +1101,7 @@ impl<'a> Keyboard<'a> {
             let reasserted = self.keymap.with_combos_mut(|combos| {
                 let mut any = false;
                 for combo in combos.iter_mut().filter_map(|c| c.as_mut()) {
-                    if combo.reassert_if_triggered(key_action) {
+                    if combo.reassert_if_triggered(key_action, event.source) {
                         any = true;
                     }
                 }
@@ -1159,15 +1177,15 @@ impl<'a> Keyboard<'a> {
                 self.keymap.with_combos_mut(|combos| {
                     for (i, combo) in combos.iter_mut().enumerate() {
                         let Some(combo) = combo else { continue };
-                        if combo.config.contains(key_action) {
+                        if combo.contains_input(key_action, event.source) {
                             // Releasing a combo key in triggered combo
                             releasing_triggered_combo |= combo.is_triggered();
                             info!("[Combo] releasing: {:?}", combo);
 
                             // Release the combo key, check whether the combo is fully released
-                            if combo.update_released(key_action) {
-                                debug!("[Combo] {:?} is released", combo.config.output);
-                                let _ = combo_outputs.push((i as u8, combo.config.output));
+                            if combo.update_released(key_action, event.source) {
+                                debug!("[Combo] {:?} is released", combo.output());
+                                let _ = combo_outputs.push((i as u8, combo.output()));
                             }
                         }
                     }

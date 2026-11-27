@@ -3,6 +3,13 @@ use crate::BehaviorConfig;
 impl crate::KeyboardTomlConfig {
     pub(crate) fn get_behavior_config(&self) -> Result<BehaviorConfig, String> {
         let num_layers = self.num_layers();
+        let matrix_dimensions = self
+            .behavior
+            .as_ref()
+            .and_then(|behavior| behavior.combo.as_ref())
+            .is_some_and(|combo| combo.combos.iter().any(|combo| !combo.positions.is_empty()))
+            .then(|| self.get_keymap_config().map(|(keymap, _)| (keymap.rows, keymap.cols)))
+            .transpose()?;
         match self.behavior.clone() {
             Some(behavior) => {
                 if let Some(tri_layer) = &behavior.tri_layer {
@@ -22,11 +29,37 @@ impl crate::KeyboardTomlConfig {
                         );
                     }
                     for (i, c) in combo.combos.iter().enumerate() {
-                        if c.actions.len() > self.rmk.max_combo_keys {
+                        if !c.actions.is_empty() && !c.positions.is_empty() {
+                            return Err(format!(
+                                "keyboard.toml: combo #{} must define either actions or positions, not both",
+                                i
+                            ));
+                        }
+                        let trigger_len = if c.positions.is_empty() {
+                            c.actions.len()
+                        } else {
+                            c.positions.len()
+                        };
+                        if trigger_len > self.rmk.max_combo_keys {
                             return Err(format!(
                                 "keyboard.toml: number of keys in combo #{} is greater than max_combo_keys configured under [rmk] section",
                                 i
                             ));
+                        }
+                        for (position_idx, [row, col]) in c.positions.iter().copied().enumerate() {
+                            let (rows, cols) = matrix_dimensions.expect("position combos require matrix dimensions");
+                            if row >= rows || col >= cols {
+                                return Err(format!(
+                                    "keyboard.toml: position #{} ({}, {}) in combo #{} is outside the {}x{} matrix",
+                                    position_idx, row, col, i, rows, cols
+                                ));
+                            }
+                            if c.positions[..position_idx].contains(&[row, col]) {
+                                return Err(format!(
+                                    "keyboard.toml: position ({}, {}) is duplicated in combo #{}",
+                                    row, col, i
+                                ));
+                            }
                         }
                         if let Some(layer) = c.layer
                             && layer >= num_layers
