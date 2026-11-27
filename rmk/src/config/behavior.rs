@@ -7,9 +7,21 @@ use rmk_types::morse::{Morse, MorseMode, MorseProfile};
 
 use crate::keyboard::combo::Combo;
 use crate::{
-    MAX_AUTO_MOUSE_LAYERS, MAX_COMBOS, MAX_FORKS, MAX_MORSE_PROFILES, MAX_MORSES, MOUSE_KEY_INTERVAL,
-    MOUSE_WHEEL_INTERVAL,
+    MAX_AUTO_MOUSE_LAYERS, MAX_COMBOS, MAX_FORKS, MAX_HOLD_TRIGGER_KEY_POSITIONS, MAX_MORSE_PROFILES, MAX_MORSES,
+    MOUSE_KEY_INTERVAL, MOUSE_WHEEL_INTERVAL,
 };
+
+/// Profile index standing for the default profile in [`HoldTriggerPositions`].
+pub const HOLD_TRIGGER_DEFAULT_PROFILE: u8 = u8::MAX;
+
+/// The key positions allowed to trigger a hold, as `(profile_idx, row, col)` triples across
+/// every profile. A profile with no entry here places no positional restriction on its hold.
+///
+/// One flat table rather than a list per profile: the positional restriction is opt-in and
+/// usually set on one or two profiles, so sizing a list for every profile would spend most of
+/// the capacity on empty lists. Capacity comes from `[rmk] max_hold_trigger_key_positions`
+/// and is raised automatically to fit the entries in `keyboard.toml`.
+pub type HoldTriggerPositions = Vec<(u8, u8, u8), MAX_HOLD_TRIGGER_KEY_POSITIONS>;
 
 /// Config for configurable action behavior
 #[derive(Debug, Default)]
@@ -137,6 +149,9 @@ pub struct MorsesConfig {
     /// default profile.
     pub profiles: Vec<MorseProfile, MAX_MORSE_PROFILES>,
 
+    /// Key positions allowed to trigger the hold, keyed by profile index.
+    pub hold_trigger_positions: HoldTriggerPositions,
+
     pub morses: Vec<Morse, MAX_MORSES>,
 }
 
@@ -147,6 +162,7 @@ impl Default for MorsesConfig {
             prior_idle_time: Duration::from_millis(120),
             default_profile: MorseProfile::new(Some(false), Some(MorseMode::Normal), Some(250u16), Some(250u16)),
             profiles: Vec::new(),
+            hold_trigger_positions: Vec::new(),
             morses: Vec::new(),
         }
     }
