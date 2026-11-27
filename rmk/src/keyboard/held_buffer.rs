@@ -22,8 +22,9 @@ impl HeldBuffer {
 
     /// Push a new held key into the buffer
     pub fn push(&mut self, key: HeldKey) {
+        // The event names the key; a whole `HeldKey` would link its formatter just for this error.
         if let Err(e) = self.keys.push(key) {
-            error!("Held buffer overflowed, cannot save: {:?}", e);
+            error!("Held buffer overflowed, cannot save: {:?}", e.event);
         }
     }
 
@@ -68,6 +69,20 @@ impl HeldBuffer {
 
     pub fn is_empty(&self) -> bool {
         self.keys.is_empty()
+    }
+
+    /// Sort keys by press time, keeping the order of keys pressed at the same instant.
+    ///
+    /// `sort_unstable_by_key` runs this same insertion sort on slices this short, but
+    /// still links a full quicksort for every call site.
+    pub fn sort_by_press_time(&mut self) {
+        for i in 1..self.keys.len() {
+            let mut j = i;
+            while j > 0 && self.keys[j - 1].press_time > self.keys[j].press_time {
+                self.keys.swap(j - 1, j);
+                j -= 1;
+            }
+        }
     }
 }
 

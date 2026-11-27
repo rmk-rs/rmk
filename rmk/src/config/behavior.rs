@@ -186,6 +186,9 @@ pub struct CombosConfig {
 }
 
 impl Default for CombosConfig {
+    // Not inlined: the combo table is built on this frame's stack before it is returned,
+    // and inlined into an async fn that copy would stay in the task's poll frame.
+    #[inline(never)]
     fn default() -> Self {
         Self {
             timeout: Duration::from_millis(50),

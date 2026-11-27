@@ -89,11 +89,12 @@ impl<P: PacketPool> Write for VialBleTx<'_, '_, '_, P> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         // The GATT input_data characteristic is fixed-size [u8; 32]; expect
         // exactly 32 bytes per write call.
-        let arr: &[u8; 32] = buf.try_into().map_err(|_| {
+        if buf.len() != 32 {
             error!("Vial reply must be exactly 32 bytes, got {}", buf.len());
-            HostTransportError
-        })?;
-        if let Err(e) = self.hid.input_data.notify(self.conn, arr, true).await {
+            return Err(HostTransportError);
+        }
+        // Raw, so it shares the HID reports' `notify_raw` instance.
+        if let Err(e) = self.hid.input_data.to_raw().notify_raw(self.conn, buf, true).await {
             error!("Failed to notify Vial reply: {:?}", e);
             return Err(HostTransportError);
         }

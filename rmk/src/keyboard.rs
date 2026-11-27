@@ -716,7 +716,7 @@ impl<'a> Keyboard<'a> {
 
         if check_held_buffer {
             // First, sort by press time
-            self.held_buffer.keys.sort_unstable_by_key(|k| k.press_time);
+            self.held_buffer.sort_by_press_time();
 
             // Check all unresolved held keys, calculate their decision one-by-one
             for held_key in self

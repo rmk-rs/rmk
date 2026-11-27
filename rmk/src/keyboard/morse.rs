@@ -262,7 +262,7 @@ impl<'a> Keyboard<'a> {
     }
 
     pub(crate) async fn fire_held_non_morse_keys(&mut self) {
-        self.held_buffer.keys.sort_unstable_by_key(|k| k.press_time);
+        self.held_buffer.sort_by_press_time();
 
         // Trigger all non morse keys in the buffer
         while let Some(key) = self.held_buffer.remove_if(|k| !k.action.is_morse()) {

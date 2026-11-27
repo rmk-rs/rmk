@@ -5,7 +5,7 @@ use embassy_embedded_hal::adapter::BlockingAsync;
 use embassy_sync::channel::{Channel, TrySendError};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::signal::Signal;
-use embedded_storage::nor_flash::NorFlash;
+use embedded_storage::nor_flash::{NorFlash, NorFlashError, NorFlashErrorKind};
 use embedded_storage_async::nor_flash::NorFlash as AsyncNorFlash;
 use rmk_types::connection::ConnectionType;
 use rmk_types::morse::MorseProfile;
@@ -1320,10 +1320,12 @@ impl<F: AsyncNorFlash> crate::core_traits::Runnable for Storage<F> {
 
 pub(crate) fn print_storage_error<F: AsyncNorFlash>(e: SSError<F::Error>) {
     match e {
-        #[cfg(feature = "defmt")]
-        SSError::Storage { value: e } => error!("Flash error: {:?}", defmt::Debug2Format(&e)),
-        #[cfg(not(feature = "defmt"))]
-        SSError::Storage { value: _e } => error!("Flash error"),
+        // The kind, not the driver's error: `Debug2Format` would link `core::fmt` for every flash driver.
+        SSError::Storage { value: e } => match e.kind() {
+            NorFlashErrorKind::NotAligned => error!("Flash error: not aligned"),
+            NorFlashErrorKind::OutOfBounds => error!("Flash error: out of bounds"),
+            _ => error!("Flash error"),
+        },
         SSError::FullStorage => error!("Storage is full"),
         SSError::Corrupted {} => error!("Storage is corrupted"),
         SSError::BufferTooBig => error!("Buffer too big"),

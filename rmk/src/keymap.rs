@@ -504,8 +504,11 @@ impl<'a> KeyMap<'a> {
         if let Some(storage) = storage {
             if storage.clear_layout {
                 debug!("`clear_layout` is set, rewriting the items the compiled-in layout owns.");
-                storage.write_layout(data, behavior).await;
-            } else if storage.read_layout(data, behavior).await.is_err() {
+                crate::poll_separately(core::pin::pin!(storage.write_layout(data, behavior))).await;
+            } else if crate::poll_separately(core::pin::pin!(storage.read_layout(data, behavior)))
+                .await
+                .is_err()
+            {
                 error!("Failed to read from storage, clearing...");
                 storage.flash.erase_all().await.ok();
                 reboot_keyboard();
