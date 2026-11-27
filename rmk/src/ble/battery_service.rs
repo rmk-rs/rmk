@@ -1,5 +1,4 @@
 use core::cell::Cell;
-use core::sync::atomic::Ordering;
 
 use embassy_futures::select::select;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
@@ -13,7 +12,6 @@ use crate::core_traits::Runnable;
 use crate::event::PeripheralBatteryEvent;
 use crate::event::{BatteryStatusEvent, SubscribableEvent};
 use crate::keyboard::LAST_KEY_TIMESTAMP;
-use crate::sleep::SLEEPING_STATE;
 
 const PERIPHERAL_BATTERY_SERVICE_UUID: u128 = 0x061686b6_6a06_4d02_8a8f_c514225bbdb3;
 const PERIPHERAL_BATTERY_LEVEL_UUID: u128 = 0xcd3259e5_a755_4bf0_9f36_690cddccdb51;
@@ -236,7 +234,7 @@ impl<P: PacketPool> Runnable for BleBatteryServer<'_, '_, '_, P> {
                     let retry_secs = (2 * u64::from(crate::SPLIT_CENTRAL_SLEEP_TIMEOUT_SECONDS)).max(1800);
                     loop {
                         Timer::after_secs(retry_secs).await;
-                        if !SLEEPING_STATE.load(Ordering::Acquire) {
+                        if !crate::state::current_sleeping() {
                             break;
                         }
                     }

@@ -62,6 +62,8 @@ pub struct BuildConstants {
     pub ble_use_2m_phy: bool,
     pub ble_profile_name_suffix: bool,
     pub split_central_sleep_timeout_seconds: u32,
+    pub split_central_max_latency_powered: u16,
+    pub split_central_max_latency_battery: u16,
     pub max_auto_mouse_layers: usize,
     /// Rynk RX/TX buffer size (bytes).
     pub rynk_buffer_size: usize,
@@ -183,8 +185,12 @@ impl crate::KeyboardTomlConfig {
                 &mut event_config.connection_status_change,
                 &mut event_config.sleep_state,
                 &mut event_config.led_indicator,
+                &mut event_config.modifier,
             ] {
                 event.subs += num_host_links;
+            }
+            if active_features.contains(&"lighting") {
+                event_config.lighting_changed.subs += num_host_links;
             }
         }
 
@@ -227,6 +233,7 @@ impl crate::KeyboardTomlConfig {
             wpm_update,
             led_indicator,
             sleep_state,
+            lighting_changed,
             battery_status,
             battery_adc,
             charging_state,
@@ -338,6 +345,8 @@ impl crate::KeyboardTomlConfig {
             ble_use_2m_phy: self.ble.as_ref().and_then(|ble| ble.use_2m_phy).unwrap_or(true),
             ble_profile_name_suffix,
             split_central_sleep_timeout_seconds: rmk.split_central_sleep_timeout_seconds,
+            split_central_max_latency_powered: rmk.split_central_max_latency_powered,
+            split_central_max_latency_battery: rmk.split_central_max_latency_battery,
             max_auto_mouse_layers,
             rynk_buffer_size: rmk.rynk_buffer_size,
             dongle_pairing_window_secs: rmk.dongle_pairing_window_secs,
@@ -429,9 +438,14 @@ mod tests {
     #[test]
     fn reserves_led_subscribers_for_display_split_and_dual_rynk_sessions() {
         let config: KeyboardTomlConfig = toml::from_str("").unwrap();
-        let constants = config.build_constants(&["display", "split", "rynk", "_ble"]).unwrap();
-        // Three indicator processors, the display, two split peripherals, and USB/BLE Rynk sessions.
-        assert_eq!(subscriber_count(&constants, "led_indicator"), 8);
+        let constants = config
+            .build_constants(&["display", "split", "rynk", "lighting", "_ble"])
+            .unwrap();
+        // Three indicator processors, the display, two split peripherals,
+        // USB/BLE Rynk sessions, and the lighting processor.
+        assert_eq!(subscriber_count(&constants, "led_indicator"), 9);
+        // One public subscriber plus USB and BLE Rynk sessions.
+        assert_eq!(subscriber_count(&constants, "lighting_changed"), 3);
     }
 
     #[test]

@@ -60,6 +60,8 @@ RMK_FEATURESETS=(
     "dongle,rynk,_ble,storage"
     "dongle,vial,split,_ble,storage"
     "dongle,vial,_ble,storage"
+    "rynk,lighting"
+    "rynk,storage,lighting"
 )
 
 # Behavioral coverage only; RMK_FEATURESETS remains the compile/clippy matrix.
@@ -74,6 +76,7 @@ RMK_TEST_FEATURESETS=(
     "dongle,vial,_ble,ext_adv,storage,custom_message"
     "dongle,_ble,storage,custom_message"
     "dongle,vial,_ble,storage,custom_message"
+    "rynk,storage,lighting"
 )
 
 # Examples auto-discovery skiplist. Reasons:

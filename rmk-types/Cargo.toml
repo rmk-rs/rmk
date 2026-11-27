@@ -19,7 +19,7 @@ rynk = ["dep:cobs"]
 # Enable custom message and emit MAX_CUSTOM_MESSAGE_SIZE.
 custom_message = []
 # Host tool
-host = ["rynk", "_ble", "split", "steno", "serde/alloc"]
+host = ["rynk", "_ble", "split", "steno", "lighting", "serde/alloc"]
 # TypeScript type + wasm ABI export for the web client. Enabled by a codegen/wasm
 # build, never by firmware.
 wasm = ["dep:tsify", "dep:wasm-bindgen", "dep:serde-wasm-bindgen", "host"]
@@ -29,6 +29,7 @@ _ext_adv = []
 dongle = []
 split = []
 display = []
+lighting = []
 passkey_entry = []
 # DFU firmware update support
 _dfu = []

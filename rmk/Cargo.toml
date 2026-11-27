@@ -94,7 +94,11 @@ log = ["dep:log", "trouble-host?/log"]
 std = ["embassy-time/mock-driver", "embassy-time/generic-queue-128"]
 
 ## Enable display support (traits + processor)
-display = ["dep:embedded-graphics", "rmk-types/display"]
+display = ["dep:embedded-graphics", "rmk-types/display", "_render_state"]
+## Enable topology-aware composable lighting support.
+lighting = ["rmk-types/lighting", "_render_state"]
+## Shared authoritative state needed by display and lighting renderers.
+_render_state = []
 ## Enable SSD1306 OLED driver
 ssd1306 = [
     "display",

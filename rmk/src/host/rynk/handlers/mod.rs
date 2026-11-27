@@ -10,6 +10,8 @@ mod connection;
 mod fork;
 mod keymap;
 mod layout;
+#[cfg(feature = "lighting")]
+pub(super) mod lighting;
 mod macros;
 mod morse;
 mod status;

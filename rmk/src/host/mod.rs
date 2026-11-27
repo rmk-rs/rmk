@@ -7,11 +7,12 @@ pub(crate) mod lock;
 pub(crate) mod rynk;
 #[cfg(feature = "storage")]
 pub(crate) mod storage;
-// Shared transport-adapter error, used by the USB/BLE Vial and BLE Rynk
+// Shared transport-adapter error, used by the USB/BLE Vial and USB/BLE Rynk
 // adapters. Gated to exactly the feature combos that compile an adapter.
 #[cfg(any(
     all(feature = "vial", not(feature = "_no_usb")),
     all(feature = "vial", feature = "_ble"),
+    all(feature = "rynk", not(feature = "_no_usb")),
     all(feature = "rynk", feature = "_ble"),
 ))]
 pub(crate) mod transport;
@@ -23,5 +24,15 @@ pub(crate) mod via;
 /// two are mutually exclusive).
 #[cfg(feature = "rynk")]
 pub use rynk::RynkService as HostService;
+#[cfg(all(feature = "rynk", feature = "lighting"))]
+pub use rynk::{
+    LightingReplicationStatus, PeripheralReplicaStatus, RYNK_LIGHTING_TRANSACTION_CAPACITY, RemoteFrame,
+    RemoteFramePort, RemoteFrameRequest, ReplicaDigests, ReplicationHealth, ReplicationMachineState,
+    RynkLightingController, RynkLightingDescriptor, RynkLightingMailbox, RynkLightingReadback,
+    StandardRynkLightingAdapter, install_lighting_runtime_conditional_scenes, install_lighting_scenes,
+};
+/// RMK's semantic version, available to downstream firmware build labels.
+#[cfg(feature = "rynk")]
+pub use rynk::{RMK_VERSION, RMK_VERSION_STRING};
 #[cfg(feature = "vial")]
 pub use via::VialService as HostService;
