@@ -127,6 +127,11 @@ st7735 = ["lcd_async"]
 st7789 = ["lcd_async"]
 st7796 = ["lcd_async"]
 
+## Declare a HID Resolution Multiplier on the mouse wheel and pan, over USB and BLE.
+## Hosts that enable it receive scrolling in 1/120 detent steps; others still get whole detents.
+## Changes the report descriptor, so bonded BLE hosts may need to re-pair.
+hires_scroll = []
+
 ## Enable async matrix scanning
 async_matrix = []
 
@@ -320,7 +325,7 @@ futures = { version = "0.3", default-features = false, features = [
 heapless = "0.9"
 sequential-storage = { version = "8.0.1", features = ["postcard"] }
 static_cell = "2"
-usbd-hid = "0.10"
+usbd-hid = "0.10.2"
 
 byteorder = { version = "1", default-features = false, optional = true }
 defmt = { version = "1", optional = true }

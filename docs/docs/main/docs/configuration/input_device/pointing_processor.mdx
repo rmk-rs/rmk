@@ -63,6 +63,14 @@ Scroll mode keeps motion between samples. It computes `total = remainder + delta
 | 2      | 5     | 5+5=10 | 1                | 10−1×8=2  |
 | 3      | 5     | 2+5=7  | 0                | 7         |
 
+#### High-resolution scrolling
+
+Enable the `hires_scroll` Cargo feature on `rmk` to advertise a HID Resolution Multiplier for the wheel and pan. A host can enable each axis independently. For example, with a divisor of 8, one sensor count produces 15 of the 120 units in a detent on an enabled axis. An axis in whole-detent mode accumulates eight counts before sending one step.
+
+Wheel keys keep their configured detent size. An RMK dongle also relays whole detents from the keyboard and converts them to the units requested by its USB host. Custom mouse-report producers can obtain the active host's wheel and pan units per detent from `rmk::hid::scroll_resolution()`.
+
+The feature changes the USB and BLE report descriptors. Bonded BLE hosts that cache the old descriptor may need to pair again.
+
 ### Sniper
 
 Maps X/Y to cursor at reduced sensitivity for precision aiming.

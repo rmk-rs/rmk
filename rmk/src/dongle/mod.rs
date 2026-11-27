@@ -748,12 +748,14 @@ impl KeyboardCharacteristics {
                 keycodes: data[2..8].try_into().unwrap(),
             }))
         } else if handle == self.mouse.handle && data.len() >= MOUSE_REPORT_SIZE {
+            // The keyboard scrolls in detents, as the dongle never enables its multipliers.
+            let (wheel_units, pan_units) = crate::hid::scroll_resolution();
             Some(Report::MouseReport(MouseReport {
                 buttons: data[0],
                 x: i16::from_le_bytes([data[1], data[2]]),
                 y: i16::from_le_bytes([data[3], data[4]]),
-                wheel: i16::from_le_bytes([data[5], data[6]]),
-                pan: i16::from_le_bytes([data[7], data[8]]),
+                wheel: i16::from_le_bytes([data[5], data[6]]).saturating_mul(wheel_units),
+                pan: i16::from_le_bytes([data[7], data[8]]).saturating_mul(pan_units),
             }))
         } else if handle == self.media.handle && data.len() >= 2 {
             Some(Report::MediaKeyboardReport(MediaKeyboardReport {

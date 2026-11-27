@@ -426,14 +426,14 @@ impl Default for SniperConfig {
 
 /// `d * multiplier / divisor`, saturating, with `remainder` carrying the fraction
 /// to the next call. A divisor of 0 disables the axis.
-fn scale_motion(d: i16, multiplier: u8, divisor: u8, remainder: &mut i16) -> i16 {
+fn scale_motion(d: i16, multiplier: i32, divisor: i32, remainder: &mut i16) -> i16 {
     if divisor == 0 {
         *remainder = 0;
         return 0;
     }
-    let total = i32::from(d) * i32::from(multiplier) + i32::from(*remainder);
-    let out = total / i32::from(divisor);
-    *remainder = (total - out * i32::from(divisor)) as i16;
+    let total = i32::from(d) * multiplier + i32::from(*remainder);
+    let out = total / divisor;
+    *remainder = (total % divisor) as i16;
     out.clamp(i16::MIN.into(), i16::MAX.into()) as i16
 }
 
@@ -535,8 +535,8 @@ pub struct PointerAcceleration {
 /// and for the H/V scrolling a device reports itself.
 ///
 /// The motion is accelerated with `acceleration` over the given milliseconds, carrying
-/// fractions in `rest`, then scaled by `config` with the remainder in `accumulator`.
-/// Motion +Y scrolls up (negative wheel) unless the wheel is inverted.
+/// fractions in `rest`, then scaled by `config` and the host's scroll resolution with the
+/// remainder in `accumulator`. Motion +Y scrolls up (negative wheel) unless the wheel is inverted.
 fn calculate_scroll_delta(
     motion: (i16, i16),
     config: &ScrollConfig,
@@ -549,7 +549,16 @@ fn calculate_scroll_delta(
         (x, y) = accelerate(x, y, dt_ms, accel, rest);
     }
     let (pan, wheel) = (&config.pan, &config.wheel);
-    let (sx, sy) = accumulator.accumulate(x, y, (pan.multiplier, pan.divisor), (wheel.multiplier, wheel.divisor));
+    let (wheel_units, pan_units) = crate::hid::scroll_resolution();
+    // Keep the remainder in the same units when the host changes resolution.
+    // Even the coarsest divisor (255 * 120) leaves a remainder that fits in i16.
+    let scale = |delta, axis: &ScrollAxis, units, rest: &mut i16| {
+        let precision = i32::from(crate::hid::RESOLUTION_MULTIPLIER);
+        let divisor = i32::from(axis.divisor) * if units == 1 { precision } else { 1 };
+        scale_motion(delta, i32::from(axis.multiplier) * precision, divisor, rest)
+    };
+    let sx = scale(x, pan, pan_units, &mut accumulator.remainder_x);
+    let sy = scale(y, wheel, wheel_units, &mut accumulator.remainder_y);
     (
         if wheel.invert { sy } else { sy.saturating_neg() },
         if pan.invert { sx.saturating_neg() } else { sx },
@@ -744,14 +753,14 @@ impl<'a> PointingProcessor<'a> {
                         let accumulator = &mut self.accumulator;
                         let out_x = scale_motion(
                             x,
-                            cursor_config.multiplier_x,
-                            cursor_config.divisor_x,
+                            cursor_config.multiplier_x.into(),
+                            cursor_config.divisor_x.into(),
                             &mut accumulator.remainder_x,
                         );
                         let out_y = scale_motion(
                             y,
-                            cursor_config.multiplier_y,
-                            cursor_config.divisor_y,
+                            cursor_config.multiplier_y.into(),
+                            cursor_config.divisor_y.into(),
                             &mut accumulator.remainder_y,
                         );
                         // Motion too small to move the cursor yet, as in sniper mode.
@@ -1657,6 +1666,68 @@ mod tests {
     }
 
     // === Device scrolling ===
+
+    #[cfg(all(feature = "hires_scroll", not(feature = "_no_usb")))]
+    #[test]
+    fn test_scroll_follows_the_host_resolution_per_axis() {
+        use rmk_types::action::KeyAction;
+        use rmk_types::connection::UsbState;
+
+        use crate::channel::USB_REPORT_CHANNEL;
+        use crate::config::{BehaviorConfig, PositionalConfig};
+        use crate::keymap::KeymapData;
+
+        let scroll = |h, v| PointingEvent {
+            device_id: 0,
+            axes: [
+                AxisEvent {
+                    typ: AxisValType::Rel,
+                    axis: Axis::H,
+                    value: h,
+                },
+                AxisEvent {
+                    typ: AxisValType::Rel,
+                    axis: Axis::V,
+                    value: v,
+                },
+                AxisEvent {
+                    typ: AxisValType::Rel,
+                    axis: Axis::Z,
+                    value: 0,
+                },
+            ],
+        };
+        let wheel_and_pan = |report| match report {
+            Report::MouseReport(m) => (m.wheel, m.pan),
+            _ => panic!("expected a mouse report"),
+        };
+
+        block_on(async {
+            crate::state::set_usb_state(UsbState::Configured);
+            USB_REPORT_CHANNEL.clear();
+            // The host enabled the wheel's multiplier only.
+            assert!(crate::hid::USB_SCROLL_MULTIPLIERS.set([1, 0]));
+            let mut behavior = BehaviorConfig::default();
+            let positional: PositionalConfig<1, 1> = PositionalConfig::default();
+            let mut data: KeymapData<1, 1, 1, 0> = KeymapData::new([[[KeyAction::No]]]);
+            let keymap = KeyMap::new(&mut data, &mut behavior, &positional).await;
+            let mut processor = PointingProcessor::new(&keymap, PointingProcessorConfig::default());
+
+            // 1 / 8 of a detent is 15 hi-res units; the pan still waits for a whole detent.
+            processor.on_pointing_event(scroll(1, 1)).await;
+            assert_eq!(wheel_and_pan(USB_REPORT_CHANNEL.try_receive().unwrap()), (-15, 0));
+            processor.on_pointing_event(scroll(7, 0)).await;
+            assert_eq!(wheel_and_pan(USB_REPORT_CHANNEL.try_receive().unwrap()), (0, 1));
+
+            processor.on_pointing_event(scroll(1, 0)).await;
+            assert!(USB_REPORT_CHANNEL.try_receive().is_err());
+            assert!(crate::hid::USB_SCROLL_MULTIPLIERS.set([0, 1]));
+            processor.on_pointing_event(scroll(1, 0)).await;
+            assert_eq!(wheel_and_pan(USB_REPORT_CHANNEL.try_receive().unwrap()), (0, 30));
+
+            crate::hid::USB_SCROLL_MULTIPLIERS.reset();
+        });
+    }
 
     #[cfg(not(feature = "_no_usb"))]
     #[test]

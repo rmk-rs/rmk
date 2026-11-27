@@ -738,6 +738,16 @@ async fn gatt_events_task(
                             Some(AttErrorCode::INSUFFICIENT_ENCRYPTION)
                         }
                     }
+                    #[cfg(feature = "hires_scroll")]
+                    GattEvent::Write(event) if event.handle() == server.hid_service.resolution_multipliers.handle => {
+                        let multipliers = &crate::hid::BLE_SCROLL_MULTIPLIERS[profile_id as usize];
+                        event.with_data(|offset, data| match (offset, data) {
+                            (0, &[wheel, pan]) if multipliers.set([wheel, pan]) => None,
+                            (0, [_, _]) => Some(AttErrorCode::VALUE_NOT_ALLOWED),
+                            (0, _) => Some(AttErrorCode::INVALID_ATTRIBUTE_VALUE_LENGTH),
+                            _ => Some(AttErrorCode::INVALID_OFFSET),
+                        })
+                    }
                     GattEvent::Write(event) => {
                         #[cfg(all(feature = "dongle", feature = "custom_message"))]
                         let is_custom_message = event.handle() == server.dongle_event_service.custom_to_keyboard.handle;
@@ -758,7 +768,6 @@ async fn gatt_events_task(
                         });
                         let data = &data_buf[..data_len.min(data_buf.len())];
                         let mut control_point_write = false;
-
                         if event.handle() == output_keyboard.handle {
                             if data_len == 1 {
                                 let led_indicator = LedIndicator::from_bits(data[0]);
@@ -840,7 +849,7 @@ async fn gatt_events_task(
                 let result = if let Some(code) = result {
                     gatt_event.reject(code)
                 } else {
-                    server.prepare_name_read(&gatt_event, profile_id);
+                    server.prepare_profile_read(&gatt_event, profile_id);
                     gatt_event.accept()
                 };
                 // Update CCCD table after processing the event
@@ -1043,6 +1052,8 @@ async fn serve_keyboard_connection<
         update_ble_phy(stack, conn.raw(), host_phy).await;
     };
 
+    #[cfg(feature = "hires_scroll")]
+    crate::hid::BLE_SCROLL_MULTIPLIERS[profile_id as usize].reset();
     let writer_task = async {
         loop {
             wait_for_connection_status(|s| s.selected == profile_id).await;
@@ -1546,6 +1557,57 @@ mod tests {
                 67
             );
             assert!(hci.notifications(1, level).is_empty());
+        });
+    }
+
+    #[cfg(feature = "hires_scroll")]
+    #[test]
+    fn ble_host_discovers_reads_and_writes_scroll_resolution() {
+        use crate::hid::scroll_resolution;
+
+        let hci = FakeController::default();
+        with_keyboard(hci.clone(), &[bond(0, HOST_A)], async {
+            reconnect(&hci, 1, HOST_A).await;
+            // Read the Report Reference descriptors (0x2908) until we find Feature report 5.
+            let mut start = 1u16;
+            let feature = 'discover: loop {
+                let reply = hci
+                    .read_by_type(1, start, trouble_host::prelude::descriptors::REPORT_REFERENCE.into())
+                    .await;
+                let [4, entries @ ..] = reply.as_slice() else {
+                    panic!("missing Feature report reference: {reply:?}");
+                };
+                for &[lo, hi, id, kind] in entries.as_chunks::<4>().0 {
+                    let handle = u16::from_le_bytes([lo, hi]);
+                    if [id, kind] == [5, 3] {
+                        break 'discover handle - 1;
+                    }
+                    start = handle + 1;
+                }
+            };
+            let [lo, hi] = feature.to_le_bytes();
+            assert_eq!(hci.att_exchange(1, &[0x0a, lo, hi], 0x0b).await, [0, 0]);
+            assert!(hci.att_exchange(1, &[0x12, lo, hi, 0, 1], 0x13).await.is_empty());
+            assert_eq!(scroll_resolution(), (1, 120));
+            assert_eq!(hci.att_exchange(1, &[0x0a, lo, hi], 0x0b).await, [0, 1]);
+            assert_eq!(
+                hci.att_exchange(1, &[0x12, lo, hi, 1], 0x01).await,
+                [0x12, lo, hi, 0x0d]
+            );
+            assert_eq!(
+                hci.att_exchange(1, &[0x12, lo, hi, 2, 0], 0x01).await,
+                [0x12, lo, hi, 0x13]
+            );
+            assert_eq!(scroll_resolution(), (1, 120));
+
+            if super::TOTAL_BLE_PROFILES > 1 {
+                // Producers can run immediately on selection, before the new writer has been polled.
+                crate::state::set_ble_state(1, BleState::Connected);
+                crate::state::select_ble_profile(1);
+                assert_eq!(scroll_resolution(), (1, 1));
+                crate::state::select_ble_profile(0);
+                assert_eq!(scroll_resolution(), (1, 120));
+            }
         });
     }
 
