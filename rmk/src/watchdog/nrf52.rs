@@ -23,7 +23,10 @@ impl Nrf52Watchdog {
         config.timeout_ticks = 327680; // 10s at 32768 Hz
         config.action_during_debug_halt = wdt::HaltConfig::Pause;
         config.action_during_sleep = wdt::SleepConfig::Run;
-        let (_driver, [handle]) = wdt::Watchdog::try_new(wdt, config).expect("WDT already active");
+        // `let else`, not `expect`: the error is the WDT peripheral, and formatting it pulls in `core::fmt`.
+        let Ok((_driver, [handle])) = wdt::Watchdog::try_new(wdt, config) else {
+            panic!("WDT already active");
+        };
         WatchdogRunner::new(Self::new(handle), Duration::from_secs(5))
     }
 }

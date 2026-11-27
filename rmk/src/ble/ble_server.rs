@@ -22,7 +22,7 @@ use crate::dongle::event::{DONGLE_EVENT_CHAR_UUID, DONGLE_EVENT_MAX, DONGLE_EVEN
 use crate::hid::RynkHidReport;
 #[cfg(feature = "vial")]
 use crate::hid::ViaReport;
-use crate::hid::{BLE_REPORT_MAP_SIZE, BleCompositeReport, CompositeReportType, MOUSE_REPORT_SIZE, Report};
+use crate::hid::{BleCompositeReport, CompositeReportType, MOUSE_REPORT_SIZE, Report};
 
 // Used for saving the client attribute (CCCD) table. Tracks the trouble-host
 // per-connection client-specific attribute buffer size.
@@ -86,6 +86,9 @@ struct GapService {
 struct GenericAttributeService {}
 
 impl Server<'_> {
+    // Not inlined, so the by-value attribute table it builds leaves the stack before the
+    // BLE tasks are polled; the returned server is written straight into the caller's future.
+    #[inline(never)]
     pub(super) fn new_keyboard(product_name: &'static str) -> Result<Self, &'static str> {
         if BLE_PROFILE_NAME_SUFFIX {
             let mut server = Self::new(AttributeTable::new());
@@ -203,8 +206,8 @@ pub(crate) struct RynkGattService {
 pub(crate) struct RynkHidService {
     #[characteristic(uuid = "2a4a", read, value = [0x01, 0x01, 0x00, 0x03])]
     pub(crate) hid_info: [u8; 4],
-    #[characteristic(uuid = "2a4b", read, value = RynkHidReport::desc().try_into().expect("Failed to convert RynkHidReport to [u8; 27]"))]
-    pub(crate) report_map: [u8; 27],
+    #[characteristic(uuid = "2a4b", read, value = RynkHidReport::desc())]
+    pub(crate) report_map: &'static [u8],
     #[characteristic(uuid = "2a4c", write_without_response)]
     pub(crate) hid_control_point: u8,
     #[characteristic(uuid = "2a4e", read, write_without_response, value = 1)]
@@ -227,8 +230,8 @@ pub(crate) struct RynkHidService {
 pub(crate) struct VialGattService {
     #[characteristic(uuid = "2a4a", read, value = [0x01, 0x01, 0x00, 0x03])]
     pub(crate) hid_info: [u8; 4],
-    #[characteristic(uuid = "2a4b", read, value = ViaReport::desc().try_into().expect("Failed to convert ViaReport to [u8; 27]"))]
-    pub(crate) report_map: [u8; 27],
+    #[characteristic(uuid = "2a4b", read, value = ViaReport::desc())]
+    pub(crate) report_map: &'static [u8],
     #[characteristic(uuid = "2a4c", write_without_response)]
     pub(crate) hid_control_point: u8,
     #[characteristic(uuid = "2a4e", read, write_without_response, value = 1)]
@@ -253,8 +256,9 @@ macro_rules! hid_service {
         pub(crate) struct HidService {
             #[characteristic(uuid = "2a4a", read, value = [0x01, 0x01, 0x00, 0x03])]
             pub(crate) hid_info: [u8; 4],
-            #[characteristic(uuid = "2a4b", read, value = BleCompositeReport::desc().try_into().expect("BLE_REPORT_MAP_SIZE does not match BleCompositeReport"))]
-            pub(crate) report_map: [u8; BLE_REPORT_MAP_SIZE],
+            // A `&'static` read-only value is served from flash instead of a RAM copy.
+            #[characteristic(uuid = "2a4b", read, value = BleCompositeReport::desc())]
+            pub(crate) report_map: &'static [u8],
             #[characteristic(uuid = "2a4c", write_without_response)]
             pub(crate) hid_control_point: u8,
             #[characteristic(uuid = "2a4e", read, write_without_response, value = 1)]
@@ -304,32 +308,30 @@ pub(super) struct HidConnection<'stack, 'server, 'conn> {
 }
 
 impl HidConnection<'_, '_, '_> {
-    async fn notify_report<R: AsInputReport, const N: usize>(
-        &self,
-        characteristic: &Characteristic<[u8; N]>,
-        report: &R,
-    ) -> Result<(), trouble_host::Error> {
-        let mut buf = [0u8; N];
-        report
-            .serialize(&mut buf)
-            .map_err(|_| trouble_host::Error::InvalidValue)?;
-        characteristic.notify(self.conn, &buf, true).await
-    }
-
     /// Callers decide whether a failure is worth logging.
     pub(super) async fn write_report(&self, report: &Report) -> Result<(), trouble_host::Error> {
-        match report {
-            Report::KeyboardReport(r) => self.notify_report(&self.service.input_keyboard, r).await,
-            Report::MouseReport(r) => self.notify_report(&self.service.mouse_report, r).await,
-            Report::MediaKeyboardReport(r) => self.notify_report(&self.service.media_report, r).await,
-            Report::SystemControlReport(r) => self.notify_report(&self.service.system_report, r).await,
+        // Every report goes through one `notify_raw`: a typed `notify` would be instantiated
+        // and inlined once per characteristic value type.
+        fn raw<const N: usize>(characteristic: &Characteristic<[u8; N]>) -> (Characteristic<[u8]>, usize) {
+            (characteristic.to_raw(), N)
+        }
+        let (characteristic, len) = match report {
+            Report::KeyboardReport(_) => raw(&self.service.input_keyboard),
+            Report::MouseReport(_) => raw(&self.service.mouse_report),
+            Report::MediaKeyboardReport(_) => raw(&self.service.media_report),
+            Report::SystemControlReport(_) => raw(&self.service.system_report),
             // Plover HID over BLE is not supported: the stock HID-over-GATT service
             // has no stenography characteristic. Drop silently at the writer.
             #[cfg(feature = "steno")]
             Report::StenoReport(_) => {
                 debug!("Steno chord dropped: Plover HID over BLE is not supported");
-                Ok(())
+                return Ok(());
             }
-        }
+        };
+        // The mouse report is the longest one.
+        let mut buf = [0u8; MOUSE_REPORT_SIZE];
+        let buf = &mut buf[..len];
+        report.serialize(buf).map_err(|_| trouble_host::Error::InvalidValue)?;
+        characteristic.notify_raw(self.conn, buf, true).await
     }
 }

@@ -5,7 +5,6 @@ use core::cell::Cell;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::pipe::Pipe;
 use embedded_io_async::{ErrorType, Write};
-use heapless::Vec;
 use rmk_types::protocol::rynk::{RYNK_BLE_CHUNK_SIZE, RYNK_HID_REPORT_SIZE};
 use trouble_host::prelude::*;
 
@@ -80,11 +79,13 @@ impl<P: PacketPool> ErrorType for RynkBleTx<'_, '_, '_, P> {
 
 impl<P: PacketPool> Write for RynkBleTx<'_, '_, '_, P> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        // Raw characteristics, so replies share the HID reports' `notify_raw` instance.
         if self.host.reply_over_hid.get() {
+            let input = self.host.hid.input_data.to_raw();
             for chunk in buf.chunks(RYNK_HID_REPORT_SIZE) {
                 let mut report = [0u8; RYNK_HID_REPORT_SIZE];
                 report[..chunk.len()].copy_from_slice(chunk);
-                if let Err(e) = self.host.hid.input_data.notify(self.conn, &report, true).await {
+                if let Err(e) = input.notify_raw(self.conn, &report, true).await {
                     error!("Failed to notify Rynk HID reply: {:?}", e);
                     return Err(HostTransportError);
                 }
@@ -92,10 +93,9 @@ impl<P: PacketPool> Write for RynkBleTx<'_, '_, '_, P> {
         } else {
             // ATT notifications have a three-byte header. Larger payloads would be truncated.
             let chunk_size = RYNK_BLE_CHUNK_SIZE.min(usize::from(self.conn.raw().att_mtu()) - 3);
+            let input = self.host.custom.input_data.clone().to_raw();
             for chunk in buf.chunks(chunk_size) {
-                let payload =
-                    Vec::<u8, RYNK_BLE_CHUNK_SIZE>::from_slice(chunk).expect("chunk size <= RYNK_BLE_CHUNK_SIZE");
-                if let Err(e) = self.host.custom.input_data.notify(self.conn, &payload, true).await {
+                if let Err(e) = input.notify_raw(self.conn, chunk, true).await {
                     error!("Failed to notify Rynk reply: {:?}", e);
                     return Err(HostTransportError);
                 }
@@ -112,6 +112,7 @@ impl<P: PacketPool> Write for RynkBleTx<'_, '_, '_, P> {
 #[cfg(test)]
 mod tests {
     use embassy_sync::pipe::Pipe;
+    use heapless::Vec;
     use rmk_types::protocol::rynk::{Cmd, Deframer, RYNK_HEADER_SIZE, RynkHeader, encode_frame};
 
     use super::*;

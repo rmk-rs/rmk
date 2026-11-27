@@ -229,12 +229,6 @@ impl AsInputReport for MouseReport {
     }
 }
 
-/// Length of `BleCompositeReport::desc()`, which `ble_server::HidService` declares.
-#[cfg(all(feature = "_ble", not(feature = "hires_scroll")))]
-pub(crate) const BLE_REPORT_MAP_SIZE: usize = 177;
-#[cfg(all(feature = "_ble", feature = "hires_scroll"))]
-pub(crate) const BLE_REPORT_MAP_SIZE: usize = 258;
-
 /// Defines `CompositeReport` and the BLE report map around one mouse pointer
 /// collection, so the two transports always describe the mouse the same way.
 macro_rules! composite_reports {
@@ -597,15 +591,13 @@ mod ble_report_map_tests {
 
     use super::BleCompositeReport;
 
-    /// Pins the report map: `ble_server::HidService` hardcodes its length, and
-    /// the report ids must match `CompositeReportType`.
+    /// Pins the report map: the report ids must match `CompositeReportType`.
     #[test]
     fn ble_report_map_matches_service_definition() {
         let desc = BleCompositeReport::desc();
         fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
             haystack.windows(needle.len()).position(|w| w == needle)
         }
-        assert_eq!(desc.len(), super::BLE_REPORT_MAP_SIZE);
         let keyboard = find(desc, &[0x09, 0x06]).expect("missing Usage Keyboard");
         for report_id in 1u8..=4 {
             let id = find(desc, &[0x85, report_id]).unwrap_or_else(|| panic!("missing ReportID {report_id}"));
