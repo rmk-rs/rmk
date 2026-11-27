@@ -27,7 +27,6 @@ use rmk_types::led_indicator::LedIndicator;
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{MediaKeyboardReport, SystemControlReport};
 
-use crate::TOTAL_BLE_PROFILES;
 use crate::ble::adv::{Adv, advertise};
 use crate::ble::battery_service::BleBatteryServer;
 use crate::ble::ble_server::{HidConnection, Server};
@@ -50,6 +49,7 @@ use crate::split::PeripheralMatrixConfig;
 #[cfg(feature = "split")]
 use crate::split::ble::central::{run_peripheral_sessions, scan_and_connect_peripherals};
 use crate::state::{set_ble_state, wait_for_connection_status};
+use crate::{TOTAL_BLE_PROFILES, poll_separately};
 
 pub(crate) mod adv;
 mod battery_service;
@@ -222,16 +222,6 @@ pub(crate) fn array_from_fn<T, const N: usize>(f: impl FnMut(usize) -> T) -> [T;
     core::array::from_fn(f)
 }
 
-// A wrapper of `poll` to make the `poll` never inlined, it reduces the stack usage.
-fn poll_separately<F: Future>(mut future: Pin<&mut F>) -> impl Future<Output = F::Output> {
-    #[inline(never)]
-    fn poll<F: Future>(future: Pin<&mut F>, cx: &mut core::task::Context<'_>) -> core::task::Poll<F::Output> {
-        future.poll(cx)
-    }
-
-    core::future::poll_fn(move |cx| poll(future.as_mut(), cx))
-}
-
 /// BLE transport. Owns the whole BLE stack.
 ///
 /// On a split build the transport is the BLE split central:
@@ -388,7 +378,7 @@ async fn run_ble_keyboard<
     let accepted_connections: Channel<NoopRawMutex, (GattConnection<'_, '_, DefaultPacketPool>, u8), 1> =
         Channel::new();
     let completed: Channel<NoopRawMutex, u8, NUM_HOST_LINKS> = Channel::new();
-    let workers = pin!(array_from_fn::<_, NUM_HOST_LINKS>(|_| async {
+    let mut workers = array_from_fn::<_, NUM_HOST_LINKS>(|_| async {
         loop {
             let (conn, profile_id) = accepted_connections.receive().await;
             let session = serve_keyboard_connection(
@@ -405,7 +395,10 @@ async fn run_ble_keyboard<
             drop(conn);
             completed.send(profile_id).await;
         }
-    }));
+    });
+    // Pinned in place: `pin!` would build the array in a poll-frame temporary and copy it.
+    // SAFETY: shadowed, so the array is never moved again.
+    let workers = unsafe { Pin::new_unchecked(&mut workers) };
 
     // The connection loop advertises and connects to a host, then handles the connection to workers via `accepted_connections` channel.
     let connection_loop = async {

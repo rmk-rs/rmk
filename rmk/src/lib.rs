@@ -140,6 +140,22 @@ pub mod watchdog;
 #[doc(hidden)]
 pub mod test_support;
 
+/// Await `future` through a poll that is never inlined, so its temporaries live in their
+/// own stack frame instead of the caller's, which stays on the stack under every later poll.
+pub(crate) fn poll_separately<F: core::future::Future>(
+    mut future: core::pin::Pin<&mut F>,
+) -> impl core::future::Future<Output = F::Output> {
+    #[inline(never)]
+    fn poll<F: core::future::Future>(
+        future: core::pin::Pin<&mut F>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<F::Output> {
+        future.poll(cx)
+    }
+
+    core::future::poll_fn(move |cx| poll(future.as_mut(), cx))
+}
+
 pub async fn initialize_keymap<
     'a,
     const ROW: usize,

@@ -1,4 +1,4 @@
-use core::pin::pin;
+use core::pin::Pin;
 
 #[cfg(feature = "subrating")]
 use bt_hci::cmd::le::LeSubrateRequest;
@@ -225,9 +225,8 @@ pub(crate) async fn run_peripheral_sessions<
     matrix_configs: &[PeripheralMatrixConfig; crate::NUM_SPLIT_PERIPHERALS],
 ) -> ! {
     trace!("SPLIT_MESSAGE_MAX_SIZE: {}", SPLIT_MESSAGE_MAX_SIZE);
-    // Pinned in place, like the host workers in `run_ble_keyboard`.
-    let sessions = pin!(crate::ble::array_from_fn::<_, { crate::NUM_SPLIT_PERIPHERALS }>(
-        |id| async move {
+    let mut sessions = crate::ble::array_from_fn::<_, { crate::NUM_SPLIT_PERIPHERALS }>(|id| {
+        async move {
             loop {
                 let conn = conns[id].receive().await;
                 set_peripheral_connected(id, true);
@@ -243,7 +242,10 @@ pub(crate) async fn run_peripheral_sessions<
                 ended.send(id).await;
             }
         }
-    ));
+    });
+    // Pinned in place, like the host workers in `run_ble_keyboard`.
+    // SAFETY: shadowed, so the array is never moved again.
+    let sessions = unsafe { Pin::new_unchecked(&mut sessions) };
     select_slice(sessions).await;
     unreachable!("peripheral sessions run forever")
 }
