@@ -25,7 +25,7 @@ steps = [
   { rynk = { cmd = "SetCombo", payload = { index = 0, config = { actions = [
     { Single = { Key = { Hid = "A" } } },
     { Single = { Key = { Hid = "B" } } },
-  ], output = { Single = { Key = { Hid = "C" } } } } } } },
+  ], output = { Single = { Key = { Hid = "C" } } }, layers = 0xFFFFFFFF } } } },
   { rynk = { cmd = "SetBehaviorConfig", payload = { combo_timeout_ms = 80, oneshot_timeout_ms = 1000, tap_interval_ms = 200, tap_capslock_interval_ms = 250, morse_default_profile = {}, morse_prior_idle_time_ms = 120 } } },
   # One combo key alone stays silent until the written timeout expires, which is
   # what proves the timeout came from the wire and not the compiled default.
@@ -50,17 +50,17 @@ steps = [
   { rynk = { cmd = "SetCombo", payload = { index = 1, config = { actions = [
     { Single = { Key = { Hid = "A" } } },
     { Single = { Key = { Hid = "B" } } },
-  ], output = { Single = { Key = { Hid = "C" } } }, layer = 0 } } } },
+  ], output = { Single = { Key = { Hid = "C" } } }, layers = 1 } } } },
   { rynk = { cmd = "GetCombo", payload = 1, reply = { actions = [
     { Single = { Key = { Hid = "A" } } },
     { Single = { Key = { Hid = "B" } } },
-  ], output = { Single = { Key = { Hid = "C" } } }, layer = 0 } } },
+  ], output = { Single = { Key = { Hid = "C" } } }, layers = 1 } } },
   { rynk = { cmd = "SetCombo", payload = { index = 1, config = { actions = [
     { Single = { Key = { Hid = "B" } } },
-  ], output = { Single = { Key = { Hid = "D" } } }, layer = 1 } } } },
+  ], output = { Single = { Key = { Hid = "D" } } }, layers = 2 } } } },
   { rynk = { cmd = "GetCombo", payload = 1, reply = { actions = [
     { Single = { Key = { Hid = "B" } } },
-  ], output = { Single = { Key = { Hid = "D" } } }, layer = 1 } } },
+  ], output = { Single = { Key = { Hid = "D" } } }, layers = 2 } } },
 ]
 
 # An untouched slot reads as the empty config rather than erroring — that is what
@@ -68,7 +68,7 @@ steps = [
 [[test]]
 name = "untouched_combo_slot_reads_as_empty"
 steps = [
-  { rynk = { cmd = "GetCombo", payload = 3, reply = { actions = [], output = "No" } } },
+  { rynk = { cmd = "GetCombo", payload = 3, reply = { actions = [], output = "No", layers = 0xFFFFFFFF } } },
 ]
 
 # Writing an empty config removes the combo, so the chord it used to fire goes
@@ -79,12 +79,12 @@ steps = [
   { rynk = { cmd = "SetCombo", payload = { index = 0, config = { actions = [
     { Single = { Key = { Hid = "A" } } },
     { Single = { Key = { Hid = "B" } } },
-  ], output = { Single = { Key = { Hid = "C" } } } } } } },
+  ], output = { Single = { Key = { Hid = "C" } } }, layers = 0xFFFFFFFF } } } },
   { press = [0, 0] },
   { press = [0, 1] },
   { release = [0, 0] },
   { release = [0, 1] },
-  { rynk = { cmd = "SetCombo", payload = { index = 0, config = { actions = [], output = "No" } } } },
+  { rynk = { cmd = "SetCombo", payload = { index = 0, config = { actions = [], output = "No", layers = 0xFFFFFFFF } } } },
   { press = [0, 0] },
   { press = [0, 1] },
   { release = [0, 0] },
@@ -196,12 +196,12 @@ steps = [
 name = "combo_bulk_reads_back_a_bulk_write"
 steps = [
   { rynk = { cmd = "SetComboBulk", payload = { start_index = 6, configs = [
-    { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "C" } } }, layer = 0 },
-    { actions = [{ Single = { Key = { Hid = "B" } } }], output = { Single = { Key = { Hid = "D" } } }, layer = 1 },
+    { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "C" } } }, layers = 1 },
+    { actions = [{ Single = { Key = { Hid = "B" } } }], output = { Single = { Key = { Hid = "D" } } }, layers = 2 },
   ] } } },
   { rynk = { cmd = "GetComboBulk", payload = { start_index = 6 }, reply = { configs = [
-    { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "C" } } }, layer = 0 },
-    { actions = [{ Single = { Key = { Hid = "B" } } }], output = { Single = { Key = { Hid = "D" } } }, layer = 1 },
+    { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "C" } } }, layers = 1 },
+    { actions = [{ Single = { Key = { Hid = "B" } } }], output = { Single = { Key = { Hid = "D" } } }, layers = 2 },
   ] } } },
 ]
 
@@ -222,10 +222,10 @@ steps = [
 name = "combo_bulk_round_trips"
 steps = [
   { rynk = { cmd = "SetComboBulk", payload = { start_index = 0, configs = [
-    { actions = [{ Single = { Key = { Hid = "A" } } }, { Single = { Key = { Hid = "B" } } }], output = { Single = { Key = { Hid = "C" } } }, layer = 0 },
-    { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "D" } } }, layer = 0 },
+    { actions = [{ Single = { Key = { Hid = "A" } } }, { Single = { Key = { Hid = "B" } } }], output = { Single = { Key = { Hid = "C" } } }, layers = 1 },
+    { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "D" } } }, layers = 1 },
   ] } } },
-  { rynk = { cmd = "GetCombo", payload = 1, reply = { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "D" } } }, layer = 0 } } },
+  { rynk = { cmd = "GetCombo", payload = 1, reply = { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "D" } } }, layers = 1 } } },
 ]
 
 [[test]]
@@ -244,7 +244,7 @@ steps = [
 name = "out_of_range_slots_are_refused"
 steps = [
   { rynk = { cmd = "GetCombo", payload = 8, error = "Invalid" } },
-  { rynk = { cmd = "SetCombo", payload = { index = 8, config = { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "C" } } } } }, error = "Invalid" } },
+  { rynk = { cmd = "SetCombo", payload = { index = 8, config = { actions = [{ Single = { Key = { Hid = "A" } } }], output = { Single = { Key = { Hid = "C" } } }, layers = 0xFFFFFFFF } }, error = "Invalid" } },
   { rynk = { cmd = "GetMorse", payload = 8, error = "Invalid" } },
   { rynk = { cmd = "SetMorse", payload = { index = 8, config = { profile = { mode = "Normal", hold_timeout_ms = 80, gap_timeout_ms = 80 }, actions = [[2, { Key = { Hid = "A" } }]] } }, error = "Invalid" } },
   { rynk = { cmd = "GetFork", payload = 8, error = "Invalid" } },
@@ -259,16 +259,16 @@ name = "bulk_writes_out_of_bounds_change_nothing"
 steps = [
   { rynk = { cmd = "SetCombo", payload = { index = 7, config = { actions = [
     { Single = { Key = { Hid = "A" } } },
-  ], output = { Single = { Key = { Hid = "C" } } }, layer = 0 } } } },
+  ], output = { Single = { Key = { Hid = "C" } } }, layers = 1 } } } },
   { rynk = { cmd = "SetComboBulk", payload = { start_index = 7, configs = [] }, error = "Invalid" } },
   # Two configs from slot 7 need slots 7 and 8; the table ends at 7.
   { rynk = { cmd = "SetComboBulk", payload = { start_index = 7, configs = [
-    { actions = [{ Single = { Key = { Hid = "B" } } }], output = { Single = { Key = { Hid = "D" } } }, layer = 0 },
-    { actions = [{ Single = { Key = { Hid = "B" } } }], output = { Single = { Key = { Hid = "E" } } }, layer = 0 },
+    { actions = [{ Single = { Key = { Hid = "B" } } }], output = { Single = { Key = { Hid = "D" } } }, layers = 1 },
+    { actions = [{ Single = { Key = { Hid = "B" } } }], output = { Single = { Key = { Hid = "E" } } }, layers = 1 },
   ] }, error = "Invalid" } },
   { rynk = { cmd = "GetCombo", payload = 7, reply = { actions = [
     { Single = { Key = { Hid = "A" } } },
-  ], output = { Single = { Key = { Hid = "C" } } }, layer = 0 } } },
+  ], output = { Single = { Key = { Hid = "C" } } }, layers = 1 } } },
 ]
 
 # A read that starts past the end is an empty page, not an error: that is how a

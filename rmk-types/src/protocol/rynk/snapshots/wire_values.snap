@@ -36,7 +36,7 @@ BleStatus{Connected,bonded}                      01 01
 ChargeState::Charging                            00
 ChargeState::Discharging                         01
 ChargeState::Unknown                             02
-Combo{[Single(A)],Morse(1),L2}                   01 02 01 00 04 05 01 01 02
+Combo{[Single(A)],Morse(1),L2}                   01 02 01 00 04 05 01 04
 ConnectionStatus{Configured,[Conn,Adv],s=1,Ble}  02 02 01 01 00 01 01 01
 ConnectionType::Ble                              01
 ConnectionType::Usb                              00
@@ -83,7 +83,7 @@ RynkError::NotReady                              01
 RynkError::StorageFault                          02
 RynkError::Unimplemented                         04
 RynkError::UnknownCmd                            06
-SetComboRequest{3,combo}                         03 01 02 01 00 04 05 01 01 02
+SetComboRequest{3,combo}                         03 01 02 01 00 04 05 01 04
 SetEncoderRequest{1,2,{Morse(3),No}}             01 02 05 03 00
 SetForkRequest{2,fork}                           02 02 01 00 04 00 05 02 01 02 01 00 00 00 02 01 ff ff ff ff 0f
 SetKeyRequest{{0,5,13},Morse(7)}                 00 05 0d 05 07

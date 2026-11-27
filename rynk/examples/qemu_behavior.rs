@@ -224,7 +224,7 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     let changed_combo = Combo::new(
         [key(HidKeyCode::Kp1), key(HidKeyCode::Kp4)],
         key(HidKeyCode::Kp1),
-        Some(1),
+        1 << 1,
     );
     client.set_combo(0, changed_combo.clone()).await?;
     assert_eq!(client.get_combo(0).await?, changed_combo);
@@ -356,7 +356,7 @@ async fn script(client: &Client) -> Result<(), Box<dyn std::error::Error>> {
     mutated_combos[0] = Combo::new(
         [key(HidKeyCode::Kp1), key(HidKeyCode::Kp4)],
         key(HidKeyCode::Kp1),
-        Some(1),
+        1 << 1,
     );
     client.write_all_combos(mutated_combos.clone()).await?;
     assert_eq!(client.read_all_combos().await?, mutated_combos);

@@ -301,7 +301,7 @@ fn exemplars() -> Exemplars {
     let combo = Combo::new(
         [KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A)))],
         KeyAction::Morse(1),
-        Some(2),
+        1 << 2,
     );
     let fork = Fork::new(
         KeyAction::Single(Action::Key(KeyCode::Hid(HidKeyCode::A))),

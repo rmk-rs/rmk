@@ -279,7 +279,7 @@ async fn run_all(client: &Client, over_ble: bool) -> Result<(), Box<dyn std::err
                     let changed = Combo {
                         actions,
                         output: k0,
-                        layer: Some(1),
+                        layers: 1 << 1,
                     };
                     ack(
                         &mut fails,

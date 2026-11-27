@@ -115,8 +115,8 @@ const _: () = assert!(validate_default_macros(MACROS));
 
 // `combos` is a `[Option<Combo>; MAX_COMBOS]` array; unused slots stay `None`.
 let mut combo_config = CombosConfig::default();
-combo_config.combos[0] = Some(Combo::new(ComboConfig::new([k!(T), k!(Y)], macros!(0), Some(1))));
-combo_config.combos[1] = Some(Combo::new(ComboConfig::new([k!(G)], macros!(1), Some(1))));
+combo_config.combos[0] = Some(Combo::new(ComboConfig::new([k!(T), k!(Y)], macros!(0), 1 << 1)));
+combo_config.combos[1] = Some(Combo::new(ComboConfig::new([k!(G)], macros!(1), 1 << 1)));
 ```
 
 ### Capitalize with Shift
