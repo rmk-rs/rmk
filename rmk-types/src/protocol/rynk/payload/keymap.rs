@@ -49,18 +49,12 @@ pub struct GetKeymapBulkRequest {
 
 /// Bulk response for getting multiple key actions at once.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(not(feature = "host"), derive(MaxSize))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct GetKeymapBulkResponse {
     #[cfg_attr(feature = "wasm", tsify(type = "KeyAction[]"))]
     pub actions: BulkActions,
-}
-
-// Firmware sizes its fixed buffer from this exact bound; host builds leave
-// the field unbounded and never need `MaxSize`.
-#[cfg(not(feature = "host"))]
-impl MaxSize for GetKeymapBulkResponse {
-    const POSTCARD_MAX_SIZE: usize = crate::heapless_vec_max_size::<KeyAction, MAX_BULK_KEYS>();
 }
 
 /// Request payload for `SetKeymapBulk` endpoint.

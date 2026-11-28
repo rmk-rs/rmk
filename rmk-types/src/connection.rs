@@ -36,7 +36,7 @@ pub enum UsbState {
 /// Unified connection status: the single source of truth for transport
 /// availability and routing. The active transport is derived on demand via
 /// [`Self::decide_active`] from the input fields below.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
@@ -49,13 +49,6 @@ pub struct ConnectionStatus {
     pub selected: u8,
     /// Tiebreaker when both transports are ready.
     pub preferred: ConnectionType,
-}
-
-impl MaxSize for ConnectionStatus {
-    const POSTCARD_MAX_SIZE: usize = UsbState::POSTCARD_MAX_SIZE
-        + crate::heapless_vec_max_size::<BleStatus, TOTAL_BLE_PROFILES>()
-        + u8::POSTCARD_MAX_SIZE
-        + ConnectionType::POSTCARD_MAX_SIZE;
 }
 
 impl ConnectionStatus {

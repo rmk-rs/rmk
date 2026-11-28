@@ -362,7 +362,7 @@ checksum = "2fc328bf943af66b80b98755db9106bf7e7471b0cf47dc8559cd9a6be504cc9c"
 [[package]]
 name = "embassy-executor-timer-queue"
 version = "0.1.1"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 dependencies = [
  "unitrait",
 ]
@@ -370,14 +370,13 @@ dependencies = [
 [[package]]
 name = "embassy-futures"
 version = "0.1.2"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 
 [[package]]
 name = "embassy-net-driver-channel"
 version = "0.4.0"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 dependencies = [
- "embassy-futures",
  "embassy-sync",
  "xarxa-driver",
 ]
@@ -385,22 +384,20 @@ dependencies = [
 [[package]]
 name = "embassy-sync"
 version = "0.8.0"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 dependencies = [
- "cfg-if",
  "critical-section",
- "embedded-io-async 0.7.0",
+ "embedded-io-async",
  "futures-core",
  "futures-sink",
- "heapless 0.9.3",
+ "heapless 0.9.4",
 ]
 
 [[package]]
 name = "embassy-time"
 version = "0.5.1"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 dependencies = [
- "cfg-if",
  "critical-section",
  "document-features",
  "embassy-time-driver",
@@ -414,7 +411,7 @@ dependencies = [
 [[package]]
 name = "embassy-time-driver"
 version = "0.2.2"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 dependencies = [
  "document-features",
 ]
@@ -422,16 +419,16 @@ dependencies = [
 [[package]]
 name = "embassy-time-queue-utils"
 version = "0.3.2"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 dependencies = [
  "embassy-executor-timer-queue 0.1.1",
- "heapless 0.9.3",
+ "heapless 0.9.4",
 ]
 
 [[package]]
 name = "embassy-usb"
 version = "0.6.0"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 dependencies = [
  "aligned",
  "bitflags",
@@ -440,20 +437,15 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embassy-usb-driver",
- "embedded-io-async 0.7.0",
- "heapless 0.9.3",
+ "embedded-io-async",
+ "heapless 0.9.4",
  "portable-atomic",
- "usbd-hid",
 ]
 
 [[package]]
 name = "embassy-usb-driver"
-version = "0.2.2"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
-dependencies = [
- "embedded-io-async 0.6.1",
- "embedded-io-async 0.7.0",
-]
+version = "0.3.0"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 
 [[package]]
 name = "embedded-hal"
@@ -497,15 +489,6 @@ name = "embedded-io"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9eb1aa714776b75c7e67e1da744b81a129b3ff919c8712b5e1b32252c1f07cc7"
-
-[[package]]
-name = "embedded-io-async"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ff09972d4073aa8c299395be75161d582e7629cd663171d62af73c8d50dba3f"
-dependencies = [
- "embedded-io 0.6.1",
-]
 
 [[package]]
 name = "embedded-io-async"
@@ -747,9 +730,9 @@ dependencies = [
 
 [[package]]
 name = "heapless"
-version = "0.9.3"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
+checksum = "411fdef4df93751117bd9ef8caa0e7f99c65dafec5bd84313eb8e2fdd75e32f2"
 dependencies = [
  "hash32 0.3.1",
  "serde_core",
@@ -985,14 +968,15 @@ checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "postcard"
-version = "1.1.3"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6764c3b5dd454e283a30e6dfe78e9b31096d9e32036b5d1eaac7a6119ccb9a24"
+checksum = "5431b3dcfdf6d1985c87d11f267a171c0dec0a8cd544c6727b747d36365f1fca"
 dependencies = [
  "cobs",
  "embedded-io 0.4.0",
  "embedded-io 0.6.1",
  "heapless 0.7.17",
+ "heapless 0.9.4",
  "postcard-derive",
  "serde",
 ]
@@ -1104,9 +1088,9 @@ dependencies = [
  "embassy-usb",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
- "embedded-io-async 0.7.0",
+ "embedded-io-async",
  "futures",
- "heapless 0.9.3",
+ "heapless 0.9.4",
  "paste",
  "postcard",
  "rmk-macro",
@@ -1155,7 +1139,7 @@ dependencies = [
  "embassy-executor",
  "embassy-futures",
  "embassy-time",
- "embedded-io-async 0.7.0",
+ "embedded-io-async",
  "panic-halt",
  "riscv",
  "riscv-rt",
@@ -1171,7 +1155,7 @@ version = "0.4.0"
 dependencies = [
  "bitfield-struct",
  "cobs",
- "heapless 0.9.3",
+ "heapless 0.9.4",
  "postcard",
  "rmk-config",
  "serde",
@@ -1752,7 +1736,7 @@ dependencies = [
 [[package]]
 name = "xarxa-driver"
 version = "0.1.0"
-source = "git+https://github.com/embassy-rs/xarxa?rev=93228f1ec64720122016be52be4671e413fa92a9#93228f1ec64720122016be52be4671e413fa92a9"
+source = "git+https://github.com/embassy-rs/xarxa?rev=b13f21360587d4e021c9798a49e7a0d36468f693#b13f21360587d4e021c9798a49e7a0d36468f693"
 dependencies = [
  "document-features",
 ]
@@ -1777,34 +1761,34 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[patch.unused]]
 name = "embassy-boot"
 version = "0.7.0"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 
 [[patch.unused]]
 name = "embassy-boot-rp"
 version = "0.10.0"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 
 [[patch.unused]]
 name = "embassy-embedded-hal"
 version = "0.6.0"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 
 [[patch.unused]]
 name = "embassy-hal-internal"
 version = "0.5.0"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 
 [[patch.unused]]
 name = "embassy-nrf"
 version = "0.11.0"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 
 [[patch.unused]]
 name = "embassy-rp"
 version = "0.10.0"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"
 
 [[patch.unused]]
 name = "embassy-usb-logger"
 version = "0.6.0"
-source = "git+https://github.com/embassy-rs/embassy?rev=12b84e3dd8d6b31f045649b84250292c34e024d4#12b84e3dd8d6b31f045649b84250292c34e024d4"
+source = "git+https://github.com/embassy-rs/embassy?rev=153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3#153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3"

@@ -54,8 +54,9 @@ pub(crate) fn expand_iqs5xx_device(
             (Some(rdy_pin), ChipSeries::Nrf52) => {
                 let rdy_pin_ident = format_ident!("{}", rdy_pin);
                 quote! {
-                    let #rdy_ident = Some(::embassy_nrf::gpio::Input::new(
+                    let #rdy_ident = Some(::embassy_nrf::gpio::Input::new_async(
                         p.#rdy_pin_ident,
+                        Irqs,
                         ::embassy_nrf::gpio::Pull::None,
                     ));
                 }
@@ -63,17 +64,18 @@ pub(crate) fn expand_iqs5xx_device(
             (Some(rdy_pin), ChipSeries::Rp2040) => {
                 let rdy_pin_ident = format_ident!("{}", rdy_pin);
                 quote! {
-                    let #rdy_ident = Some(::embassy_rp::gpio::Input::new(
+                    let #rdy_ident = Some(::embassy_rp::gpio::Input::new_async(
                         p.#rdy_pin_ident,
+                        Irqs,
                         ::embassy_rp::gpio::Pull::None,
                     ));
                 }
             }
             (None, ChipSeries::Nrf52) => quote! {
-                let #rdy_ident: Option<::embassy_nrf::gpio::Input<'static>> = None;
+                let #rdy_ident: Option<::embassy_nrf::gpio::Input<'static, ::embassy_nrf::mode::Async>> = None;
             },
             (None, ChipSeries::Rp2040) => quote! {
-                let #rdy_ident: Option<::embassy_rp::gpio::Input<'static>> = None;
+                let #rdy_ident: Option<::embassy_rp::gpio::Input<'static, ::embassy_rp::mode::Async>> = None;
             },
             _ => unreachable!(),
         };

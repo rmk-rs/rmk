@@ -22,21 +22,21 @@ mod keyboard {
                 // freq: Hertz(8_000_000),
                 mode: HseMode::Oscillator,
             });
-            config.rcc.pll_src = PllSource::HSE;
+            config.rcc.pll_src = PllSource::Hse;
             config.rcc.pll = Some(Pll {
-                prediv: PllPreDiv::DIV25,
-                // prediv: PllPreDiv::DIV8,
-                mul: PllMul::MUL192,
-                divp: Some(PllPDiv::DIV2), // 25mhz / 25 * 192 / 2 = 96Mhz.
-                divq: Some(PllQDiv::DIV4), // 25mhz / 25 * 192 / 4 = 48Mhz.
+                prediv: PllPreDiv::Div25,
+                // prediv: PllPreDiv::Div8,
+                mul: PllMul::Mul192,
+                divp: Some(PllPDiv::Div2), // 25mhz / 25 * 192 / 2 = 96Mhz.
+                divq: Some(PllQDiv::Div4), // 25mhz / 25 * 192 / 4 = 48Mhz.
                 divr: None,
             });
-            config.rcc.ahb_pre = AHBPrescaler::DIV1;
-            config.rcc.apb1_pre = APBPrescaler::DIV2;
-            config.rcc.apb2_pre = APBPrescaler::DIV1;
-            // config.rcc.apb1_pre = APBPrescaler::DIV4;
-            // config.rcc.apb2_pre = APBPrescaler::DIV2;
-            config.rcc.sys = Sysclk::PLL1_P;
+            config.rcc.ahb_pre = AHBPrescaler::Div1;
+            config.rcc.apb1_pre = APBPrescaler::Div2;
+            config.rcc.apb2_pre = APBPrescaler::Div1;
+            // config.rcc.apb1_pre = APBPrescaler::Div4;
+            // config.rcc.apb2_pre = APBPrescaler::Div2;
+            config.rcc.sys = Sysclk::Pll1P;
         }
         config
     }

@@ -134,10 +134,10 @@ pub(crate) fn expand_pmw33xx_device(
             let motion_ident = format_ident!("{}", motion_pin);
             match chip.series {
                 ChipSeries::Nrf52 => quote! {
-                    Some(::embassy_nrf::gpio::Input::new(p.#motion_ident, ::embassy_nrf::gpio::Pull::Up))
+                    Some(::embassy_nrf::gpio::Input::new_async(p.#motion_ident, Irqs, ::embassy_nrf::gpio::Pull::Up))
                 },
                 ChipSeries::Rp2040 => quote! {
-                    Some(::embassy_rp::gpio::Input::new(p.#motion_ident, ::embassy_rp::gpio::Pull::Up))
+                    Some(::embassy_rp::gpio::Input::new_async(p.#motion_ident, Irqs, ::embassy_rp::gpio::Pull::Up))
                 },
                 ChipSeries::Stm32 => quote! {
                     None::<::embassy_stm32::exti::ExtiInput<'static, ::embassy_stm32::mode::Async>>
@@ -147,10 +147,10 @@ pub(crate) fn expand_pmw33xx_device(
         } else {
             match chip.series {
                 ChipSeries::Nrf52 => quote! {
-                    None::<::embassy_nrf::gpio::Input<'static>>
+                    None::<::embassy_nrf::gpio::Input<'static, ::embassy_nrf::mode::Async>>
                 },
                 ChipSeries::Rp2040 => quote! {
-                    None::<::embassy_rp::gpio::Input<'static>>
+                    None::<::embassy_rp::gpio::Input<'static, ::embassy_rp::mode::Async>>
                 },
                 ChipSeries::Stm32 => quote! {
                     None::<::embassy_stm32::exti::ExtiInput<'static, ::embassy_stm32::mode::Async>>

@@ -19,7 +19,6 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_time::{Duration, Timer};
 use embedded_io_async::{ErrorType, Read, Write};
-use fixed::traits::ToFixed;
 
 #[derive(Clone, Copy)]
 pub struct IrqBinding;
@@ -227,8 +226,7 @@ impl<'a, PIO: Instance + UartPioAccess> BufferedUart<'a, PIO> {
         let mut cfg = Config::default();
         cfg.use_program(&self.common.load_program(&prg.program), &[pin_tx]);
         cfg.set_out_pins(&[pin_tx]);
-        let div = clk_sys_freq() / (BAUD_RATE as u32 * 8u32);
-        cfg.clock_divider = div.to_fixed();
+        cfg.clock_divider_x256 = (clk_sys_freq() / (BAUD_RATE * 8)) * 256;
         cfg.shift_out.auto_fill = false;
         cfg.shift_out.direction = ShiftDirection::Right;
         cfg.shift_out.threshold = 32;
@@ -273,8 +271,7 @@ impl<'a, PIO: Instance + UartPioAccess> BufferedUart<'a, PIO> {
         cfg.use_program(&self.common.load_program(&prg.program), &[]);
         cfg.set_in_pins(&[&self.pin_rx]);
         cfg.set_jmp_pin(&self.pin_rx);
-        let div = clk_sys_freq() / (BAUD_RATE as u32 * 8u32);
-        cfg.clock_divider = div.to_fixed();
+        cfg.clock_divider_x256 = (clk_sys_freq() / (BAUD_RATE * 8)) * 256;
         cfg.shift_in.auto_fill = false;
         cfg.shift_in.direction = ShiftDirection::Right;
         cfg.shift_in.threshold = 32;

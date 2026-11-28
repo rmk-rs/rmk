@@ -37,7 +37,6 @@ bind_interrupts!(struct Irqs {
 async fn main(_spawner: Spawner) {
     info!("RMK start!");
     let mut config = embassy_nrf::config::Config::default();
-    config.gpiote_interrupt_priority = embassy_nrf::interrupt::Priority::P3;
     config.time_interrupt_priority = embassy_nrf::interrupt::Priority::P3;
     embassy_nrf::interrupt::USBD.set_priority(embassy_nrf::interrupt::Priority::P2);
     embassy_nrf::interrupt::CLOCK_POWER.set_priority(embassy_nrf::interrupt::Priority::P2);

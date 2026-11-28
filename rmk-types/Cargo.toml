@@ -43,8 +43,8 @@ vial = []
 defmt = { version = "1", optional = true }
 
 cobs = { version = "0.3", default-features = false, optional = true }
-heapless = { version = "0.9", default-features = false, features = ["serde"] }
-postcard = { version = "1", default-features = false, features = ["experimental-derive"] }
+heapless = { version = "0.9.4", default-features = false, features = ["serde"] }
+postcard = { version = "1.2", default-features = false, features = ["experimental-derive", "heapless-v0_9"] }
 serde = { version = "1", default-features = false, features = ["derive"] }
 strum = { version = "0.28", default-features = false, features = ["derive"] }
 

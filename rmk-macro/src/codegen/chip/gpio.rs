@@ -54,8 +54,20 @@ pub(crate) fn get_input_pin_type(chip: &ChipModel, async_matrix: bool) -> proc_m
                 quote! {::embassy_stm32::gpio::Input}
             }
         }
-        ChipSeries::Nrf52 => quote! { ::embassy_nrf::gpio::Input },
-        ChipSeries::Rp2040 => quote! { ::embassy_rp::gpio::Input },
+        ChipSeries::Nrf52 => {
+            if async_matrix {
+                quote! { ::embassy_nrf::gpio::Input<'static, ::embassy_nrf::mode::Async> }
+            } else {
+                quote! { ::embassy_nrf::gpio::Input }
+            }
+        }
+        ChipSeries::Rp2040 => {
+            if async_matrix {
+                quote! { ::embassy_rp::gpio::Input<'static, ::embassy_rp::mode::Async> }
+            } else {
+                quote! { ::embassy_rp::gpio::Input }
+            }
+        }
         ChipSeries::Esp32 => quote! { ::esp_hal::gpio::Input },
     }
 }
@@ -174,7 +186,7 @@ pub(crate) fn convert_gpio_str_to_input_pin(
                     Some(pin_num) => {
                         let pin_num_ident = format_ident!("EXTI{}", pin_num);
                         quote! {
-                            ::embassy_stm32::exti::ExtiInput::new(p.#gpio_ident, p.#pin_num_ident, ::embassy_stm32::gpio::Pull::#default_pull_ident, Irqs)
+                            ::embassy_stm32::exti::ExtiInput::new_async(p.#gpio_ident, p.#pin_num_ident, ::embassy_stm32::gpio::Pull::#default_pull_ident, Irqs)
                         }
                     }
                     None => {
@@ -188,13 +200,25 @@ pub(crate) fn convert_gpio_str_to_input_pin(
             }
         }
         ChipSeries::Nrf52 => {
-            quote! {
-                ::embassy_nrf::gpio::Input::new(p.#gpio_ident, ::embassy_nrf::gpio::Pull::#default_pull_ident)
+            if async_matrix {
+                quote! {
+                    ::embassy_nrf::gpio::Input::new_async(p.#gpio_ident, Irqs, ::embassy_nrf::gpio::Pull::#default_pull_ident)
+                }
+            } else {
+                quote! {
+                    ::embassy_nrf::gpio::Input::new(p.#gpio_ident, ::embassy_nrf::gpio::Pull::#default_pull_ident)
+                }
             }
         }
         ChipSeries::Rp2040 => {
-            quote! {
-                ::embassy_rp::gpio::Input::new(p.#gpio_ident, ::embassy_rp::gpio::Pull::#default_pull_ident)
+            if async_matrix {
+                quote! {
+                    ::embassy_rp::gpio::Input::new_async(p.#gpio_ident, Irqs, ::embassy_rp::gpio::Pull::#default_pull_ident)
+                }
+            } else {
+                quote! {
+                    ::embassy_rp::gpio::Input::new(p.#gpio_ident, ::embassy_rp::gpio::Pull::#default_pull_ident)
+                }
             }
         }
         ChipSeries::Esp32 => {

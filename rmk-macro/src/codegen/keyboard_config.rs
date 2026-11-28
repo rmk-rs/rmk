@@ -41,7 +41,7 @@ pub(crate) fn expand_device_config(
             quote! { ::rmk::config::rp2040_serial_number(p.FLASH.reborrow()) }
         }
         (None, ChipSeries::Stm32) => {
-            quote! { ::rmk::config::build_serial_number(&::embassy_stm32::uid::uid()) }
+            quote! { ::rmk::config::build_serial_number(::embassy_stm32::uid::uid()) }
         }
     };
 

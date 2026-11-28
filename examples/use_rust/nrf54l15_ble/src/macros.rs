@@ -22,6 +22,10 @@ macro_rules! config_matrix_pin_nrf {
     };
 
     (@pin $p:ident, $pin:ident) => {
-        Some(embassy_nrf::gpio::Input::new($p.$pin, embassy_nrf::gpio::Pull::Up))
+        Some(embassy_nrf::gpio::Input::new_async(
+            $p.$pin,
+            Irqs,
+            embassy_nrf::gpio::Pull::Up,
+        ))
     };
 }

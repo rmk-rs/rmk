@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::event::{EventSubscriber, SubscribableEvent, publish_event};
 
 /// Target receiver of a custom message.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum CustomMessageTarget {
     Dongle,
@@ -22,7 +22,7 @@ pub enum CustomMessageTarget {
     pubs = crate::CUSTOM_MESSAGE_EVENT_PUB_SIZE,
     subs = crate::CUSTOM_MESSAGE_EVENT_SUB_SIZE
 )]
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, MaxSize)]
 pub struct CustomMessage {
     pub data: heapless::Vec<u8, { crate::MAX_CUSTOM_MESSAGE_SIZE }>,
     pub target: CustomMessageTarget,
@@ -36,10 +36,6 @@ impl CustomMessage {
             target,
         })
     }
-}
-
-impl MaxSize for CustomMessage {
-    const POSTCARD_MAX_SIZE: usize = crate::MAX_CUSTOM_MESSAGE_SIZE + 3;
 }
 
 /// A custom message on its way out.

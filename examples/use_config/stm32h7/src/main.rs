@@ -23,8 +23,10 @@ mod my_keyboard {
     fn bind_interrupt() {
         embassy_stm32::bind_interrupts!(struct Irqs {
             OTG_HS => embassy_stm32::usb::InterruptHandler<embassy_stm32::peripherals::USB_OTG_HS>;
-            EXTI9_5 => embassy_stm32::exti::InterruptHandler<embassy_stm32::interrupt::typelevel::EXTI9_5>;
-            EXTI15_10 => embassy_stm32::exti::InterruptHandler<embassy_stm32::interrupt::typelevel::EXTI15_10>;
+            EXTI9_5 => embassy_stm32::exti::InterruptHandler<embassy_stm32::peripherals::EXTI9>,
+                embassy_stm32::exti::InterruptHandler<embassy_stm32::peripherals::EXTI8>;
+            EXTI15_10 => embassy_stm32::exti::InterruptHandler<embassy_stm32::peripherals::EXTI13>,
+                embassy_stm32::exti::InterruptHandler<embassy_stm32::peripherals::EXTI12>;
         });
     }
 
@@ -34,7 +36,7 @@ mod my_keyboard {
         let mut config = Config::default();
         {
             use embassy_stm32::rcc::{mux, *};
-            config.rcc.hsi = Some(HSIPrescaler::DIV1);
+            config.rcc.hsi = Some(HSIPrescaler::Div1);
             config.rcc.csi = true;
             // Needed for USB
             config.rcc.hsi48 = Some(Hsi48Config { sync_from_usb: true });
@@ -44,23 +46,24 @@ mod my_keyboard {
                 mode: HseMode::Oscillator,
             });
             config.rcc.pll1 = Some(Pll {
-                source: PllSource::HSE,
-                prediv: PllPreDiv::DIV5,
-                mul: PllMul::MUL112,
-                divp: Some(PllDiv::DIV2),
-                divq: Some(PllDiv::DIV2),
-                divr: Some(PllDiv::DIV2),
+                source: PllSource::Hse,
+                prediv: PllPreDiv::Div5,
+                mul: PllMul::Mul112,
+                fracn: None,
+                divp: Some(PllDiv::Div2),
+                divq: Some(PllDiv::Div2),
+                divr: Some(PllDiv::Div2),
             });
-            config.rcc.sys = Sysclk::PLL1_P;
-            config.rcc.ahb_pre = AHBPrescaler::DIV2;
-            config.rcc.apb1_pre = APBPrescaler::DIV2;
-            config.rcc.apb2_pre = APBPrescaler::DIV2;
-            config.rcc.apb3_pre = APBPrescaler::DIV2;
-            config.rcc.apb4_pre = APBPrescaler::DIV2;
+            config.rcc.sys = Sysclk::Pll1P;
+            config.rcc.ahb_pre = AHBPrescaler::Div2;
+            config.rcc.apb1_pre = APBPrescaler::Div2;
+            config.rcc.apb2_pre = APBPrescaler::Div2;
+            config.rcc.apb3_pre = APBPrescaler::Div2;
+            config.rcc.apb4_pre = APBPrescaler::Div2;
             config.rcc.voltage_scale = VoltageScale::Scale0;
             // Configure USB clock mux to use HSI48 (internal 48MHz oscillator)
             // HSI48 is internal, no external crystal needed for USB - better compatibility
-            config.rcc.mux.usbsel = mux::Usbsel::HSI48;
+            config.rcc.mux.usbsel = mux::Usbsel::Hsi48;
         }
         config
     }
@@ -74,9 +77,9 @@ mod my_keyboard {
 
         Driver::new_fs(
             p.USB_OTG_HS,
-            Irqs,
             p.PA12,
             p.PA11,
+            Irqs,
             &mut EP_OUT_BUFFER.init([0; 1024])[..],
             usb_config,
         )

@@ -9,7 +9,9 @@ use rmk_config::resolved::hardware::{
 use syn::ItemMod;
 
 use super::central::expand_serial_init;
-use crate::codegen::chip::bind_interrupt::expand_external_flash_interrupt;
+use crate::codegen::chip::bind_interrupt::{
+    expand_external_flash_interrupt, expand_gpio_interrupts,
+};
 use crate::codegen::chip::chip_init::expand_chip_init;
 use crate::codegen::chip::comm::expand_usb_init;
 use crate::codegen::chip::flash::{expand_dfu_interface, expand_flash_init};
@@ -132,6 +134,16 @@ fn expand_bind_interrupt_for_split_peripheral(
     let dfu_enabled = cfg!(feature = "_dfu");
     let usb_log_enabled = is_feature_enabled(rmk_features, "usb_log");
     let usb_enabled = dfu_enabled || usb_log_enabled;
+    let BoardConfig::Split(split_config) = &hardware.board else {
+        unreachable!("Expected split configuration");
+    };
+    let peripheral = &split_config.peripheral[peripheral_id];
+    let gpio_interrupts = expand_gpio_interrupts(
+        chip,
+        &peripheral.matrix,
+        peripheral.input_device.as_ref(),
+        is_feature_enabled(rmk_features, "async_matrix"),
+    );
 
     match chip.series {
         ChipSeries::Nrf52 => {
@@ -193,6 +205,7 @@ fn expand_bind_interrupt_for_split_peripheral(
                     #spim_import
                     ::embassy_nrf::bind_interrupts!(struct Irqs {
                         #usb_interrupt
+                        #gpio_interrupts
                         #clock_power_handler
                         #pmw33xx_spi_interrupts
                         #ext_flash_spi_interrupt
@@ -236,6 +249,7 @@ fn expand_bind_interrupt_for_split_peripheral(
                 bind_interrupts!(struct Irqs {
                     #clock_power_handler
                     #usb_interrupt
+                    #gpio_interrupts
                     RNG => ::embassy_nrf::rng::InterruptHandler<::embassy_nrf::peripherals::RNG>;
                     EGU0_SWI0 => ::nrf_sdc::mpsl::LowPrioInterruptHandler;
                     RADIO => ::nrf_sdc::mpsl::HighPrioInterruptHandler;
@@ -284,6 +298,7 @@ fn expand_bind_interrupt_for_split_peripheral(
                     use ::embassy_rp::bind_interrupts;
                     bind_interrupts!(struct Irqs {
                         #usb_int
+                        #gpio_interrupts
                         PIO0_IRQ_0 => ::embassy_rp::pio::InterruptHandler<::embassy_rp::peripherals::PIO0>;
                         DMA_IRQ_0 => ::embassy_rp::dma::InterruptHandler<::embassy_rp::peripherals::DMA_CH0>, ::embassy_rp::dma::InterruptHandler<::embassy_rp::peripherals::DMA_CH1>, ::embassy_rp::dma::InterruptHandler<::embassy_rp::peripherals::DMA_CH2>;
                         #iqs5xx_interrupt
@@ -294,7 +309,11 @@ fn expand_bind_interrupt_for_split_peripheral(
                         runner.run().await
                     }
                 }
-            } else if !display_interrupt.is_empty() || !iqs5xx_interrupt.is_empty() || dfu_enabled {
+            } else if !gpio_interrupts.is_empty()
+                || !display_interrupt.is_empty()
+                || !iqs5xx_interrupt.is_empty()
+                || dfu_enabled
+            {
                 // DFU external SPI flash DMA channels
                 let dfu_dma_channels = dfu
                     .and_then(|d| d.external_flash.as_ref())
@@ -316,6 +335,7 @@ fn expand_bind_interrupt_for_split_peripheral(
                     use ::embassy_rp::bind_interrupts;
                     bind_interrupts!(struct Irqs {
                         #usb_int
+                        #gpio_interrupts
                         #dfu_dma_channels
                         #iqs5xx_interrupt
                         #display_interrupt
