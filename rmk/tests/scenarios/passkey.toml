@@ -49,7 +49,7 @@ steps = [
   { passkey = "end" },
   { tap = { pos = [2, 4], duration = 50 } },
 ]
-expect = [["A"], ["B"], []]
+expect = [["A"], [], ["B"], []]
 
 [[test]]
 name = "release_during_pairing_preserves_other_holders"
@@ -62,4 +62,4 @@ steps = [
   { tap = { pos = [0, 2], duration = 50 } },
   { release = [2, 6] },
 ]
-expect = [["D"], ["LGui", "D", "B"], ["D", "A"], ["D"], []]
+expect = [["D"], ["LGui", "D", "B"], ["D"], ["D", "A"], ["D"], []]
