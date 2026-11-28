@@ -132,8 +132,8 @@ struct KeyMapInner<'a> {
     num_touchpad: usize,
     /// Flat layer data: num_layer * row * col
     layers: &'a mut [KeyAction],
-    /// Flat encoder data: num_layer * num_encoder (None if no encoders)
-    encoders: Option<&'a mut [EncoderAction]>,
+    /// Flat encoder data: num_layer * num_encoder
+    encoders: &'a mut [EncoderAction],
     /// Flat touchpad data: num_layer * num_touchpad
     touchpads: &'a mut [TouchAction],
     /// Per-layer activation state
@@ -230,11 +230,9 @@ impl KeyMapInner<'_> {
                 self.layers[self.layer_index(layer_num, row, col)]
             }
             KeyboardEventSource::RotaryEncoder(encoder_pos) => {
-                if let Some(encoders) = &self.encoders
-                    && encoder_pos.direction != Direction::None
-                {
+                if encoder_pos.direction != Direction::None {
                     let idx = self.encoder_index(layer_num, encoder_pos.id as usize);
-                    if let Some(encoder_action) = encoders.get(idx) {
+                    if let Some(encoder_action) = self.encoders.get(idx) {
                         return match encoder_pos.direction {
                             Direction::Clockwise => encoder_action.clockwise,
                             Direction::CounterClockwise => encoder_action.counter_clockwise,
@@ -272,9 +270,7 @@ impl KeyMapInner<'_> {
             }
             KeyboardEventSource::RotaryEncoder(encoder_pos) => {
                 let idx = self.encoder_index(layer_num, encoder_pos.id as usize);
-                if let Some(encoders) = &mut self.encoders
-                    && let Some(encoder_action) = encoders.get_mut(idx)
-                {
+                if let Some(encoder_action) = self.encoders.get_mut(idx) {
                     match encoder_pos.direction {
                         Direction::Clockwise => encoder_action.clockwise = action,
                         Direction::CounterClockwise => encoder_action.counter_clockwise = action,
@@ -421,11 +417,7 @@ impl<'a> KeyMap<'a> {
         positional_config: &'a PositionalConfig<ROW, COL>,
     ) -> Self {
         let layers = data.keymap.as_mut_slice().as_flattened_mut().as_flattened_mut();
-        let encoders = if NUM_ENCODER > 0 {
-            Some(data.encoder_map.as_mut_slice().as_flattened_mut())
-        } else {
-            None
-        };
+        let encoders = data.encoder_map.as_mut_slice().as_flattened_mut();
         let layer_state = &mut data.layer_state;
         let layer_cache = data.layer_cache.as_mut_slice().as_flattened_mut();
         let encoder_layer_cache = data.encoder_layer_cache.as_mut_slice().as_flattened_mut();
@@ -817,10 +809,8 @@ impl<'a> KeyMap<'a> {
 
     pub(crate) fn get_encoder_action(&self, layer: usize, id: usize) -> Option<EncoderAction> {
         let inner = self.inner.borrow();
-        inner.encoders.as_ref().and_then(|encoders| {
-            let idx = inner.encoder_index(layer, id);
-            encoders.get(idx).copied()
-        })
+        let idx = inner.encoder_index(layer, id);
+        inner.encoders.get(idx).copied()
     }
 
     pub(crate) fn set_encoder_direction(
@@ -832,9 +822,7 @@ impl<'a> KeyMap<'a> {
     ) -> Option<EncoderAction> {
         let mut inner = self.inner.borrow_mut();
         let idx = inner.encoder_index(layer, id);
-        if let Some(encoders) = &mut inner.encoders
-            && let Some(encoder_action) = encoders.get_mut(idx)
-        {
+        if let Some(encoder_action) = inner.encoders.get_mut(idx) {
             if clockwise {
                 encoder_action.clockwise = action;
             } else {
@@ -850,9 +838,7 @@ impl<'a> KeyMap<'a> {
     pub(crate) fn set_encoder(&self, layer: usize, id: usize, action: EncoderAction) -> bool {
         let mut inner = self.inner.borrow_mut();
         let idx = inner.encoder_index(layer, id);
-        if let Some(encoders) = &mut inner.encoders
-            && let Some(slot) = encoders.get_mut(idx)
-        {
+        if let Some(slot) = inner.encoders.get_mut(idx) {
             *slot = action;
             return true;
         }
