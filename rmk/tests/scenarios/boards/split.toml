@@ -41,7 +41,7 @@ OSM(LShift)    OSL(1)         A            TH(B, C)  OSM(LCtrl)  WM(B, LGui)   M
 A              MT(B, LShift)  TD(0)        W         E           R             T                  MT(C, LGui)        LT(1, D)      MT(E, LAlt)  Y          U      I              O
 TH(A, LShift)  TH(S, LGui)    TH(Z, LAlt)  V         B           N             D                  M                  Comma         Dot          L          X      C              F
 MO(1)          No             A            A         Space       LT(1, D, p0)  MT(B, LShift, p0)  MT(B, LShift, p1)  TD(1)         Enter        Backspace  TD(2)  No             No
-Kc1            Kc2            Kc3          Kc4       Kc5         Kc6           Escape             Enter              Kc7           Kc8          Kc9        Kc0    Backspace      No
+Kc1            Kc2            Kc3          Kc4       Kc5         Kc6           Escape             Enter              Kc7           Kc8          Kc9        Kc0    Backspace      MouseBtn1
 """
 encoders = [["Right", "Left"], ["Down", "Up"]]
 
