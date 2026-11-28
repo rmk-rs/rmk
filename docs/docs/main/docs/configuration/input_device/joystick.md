@@ -38,7 +38,7 @@ Match the dimensions of `bias` and `transform` to the number of configured axes.
 
 ## Sampling
 
-RMK reads the configured axes in one ADC scan. After 1.2 seconds without significant changes between consecutive joystick samples, it uses the idle interval. Battery voltage changes do not trigger fast joystick sampling. When battery measurement shares the ADC with a joystick, battery voltage is reported at most once every 30 seconds.
+RMK reads the configured axes in one ADC scan. It treats the first scan as the joystick's resting position. After the joystick has been still and near that position for 1.2 seconds, it uses the idle interval; holding the joystick deflected keeps active sampling. Battery voltage changes do not trigger fast joystick sampling. When battery measurement shares the ADC with a joystick, battery voltage is reported at most once every 30 seconds.
 
 ## Rust configuration
 

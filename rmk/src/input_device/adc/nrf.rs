@@ -22,6 +22,8 @@ pub struct NrfAdc<'a, const PIN_NUM: usize, const EVENT_NUM: usize> {
     light_sleep: Option<Duration>,
     sample: [i16; PIN_NUM],
     previous_sample: [i16; PIN_NUM],
+    /// First scan, taken as the joystick's resting position.
+    center: [i16; PIN_NUM],
     event_type: [AnalogEventType; EVENT_NUM],
     /// Pointing device ID for each event; battery entries are unused.
     event_device_ids: [u8; EVENT_NUM],
@@ -60,6 +62,7 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
             light_sleep,
             sample: [0; PIN_NUM],
             previous_sample: [0; PIN_NUM],
+            center: [0; PIN_NUM],
             event_index: EVENT_NUM as u8,
             channel_index: 0,
             last_activity: None,
@@ -94,6 +97,7 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                 if !self.has_sample {
                     // Establish a baseline without treating startup readings as movement.
                     self.previous_sample = self.sample;
+                    self.center = self.sample;
                     self.has_sample = true;
                 }
                 self.channel_index = 0;
@@ -115,7 +119,10 @@ impl<'a, const PIN_NUM: usize, const EVENT_NUM: usize> NrfAdc<'a, PIN_NUM, EVENT
                     for axis in &mut axes[..usize::from(axis_count)] {
                         let channel = self.channel_index as usize;
                         let value = self.sample[channel];
-                        if (i32::from(value) - i32::from(self.previous_sample[channel])).abs() > 150 {
+                        // Moving, or held outside a 1/8-range (12-bit) deadzone around rest.
+                        if (i32::from(value) - i32::from(self.previous_sample[channel])).abs() > 150
+                            || (i32::from(value) - i32::from(self.center[channel])).abs() > 512
+                        {
                             self.last_activity = Some(Instant::now());
                         }
                         axis.value = (value + i16::MIN / 2).saturating_mul(2);
@@ -200,6 +207,53 @@ mod tests {
             assert_eq!(event.axes[1].value, -30168);
             assert_eq!(Instant::now() - first, Duration::from_secs(30));
             assert!(adc.saadc.samples.is_empty());
+        });
+    }
+
+    #[test]
+    fn held_joystick_deflection_keeps_fast_polling_until_recentered() {
+        crate::test_support::test_block_on(async {
+            const CENTER: [i16; 2] = [2048, 2048];
+            const DEFLECTED: [i16; 2] = [3500, 2048];
+            const HELD_SCANS: usize = 100;
+            const CENTERED_SCANS: usize = 70;
+            let mut samples = VecDeque::from([CENTER]);
+            samples.extend([DEFLECTED; HELD_SCANS]);
+            samples.extend([CENTER; CENTERED_SCANS]);
+            let mut adc = NrfAdc::new(
+                Saadc { samples: &mut samples },
+                [AnalogEventType::Joystick(2)],
+                [0],
+                Duration::from_millis(20),
+                Some(Duration::from_millis(350)),
+            );
+            let mut scans = std::vec::Vec::new();
+            for _ in 0..1 + HELD_SCANS + CENTERED_SCANS {
+                let NrfAdcEvent::Pointing(event) = adc.read_nrf_adc_event().await else {
+                    panic!("joystick event")
+                };
+                scans.push((Instant::now(), event.axes[0].value));
+            }
+            let intervals: std::vec::Vec<u64> = scans.windows(2).map(|w| (w[1].0 - w[0].0).as_millis()).collect();
+
+            // Every sample during the hold commands the same nonzero displacement from center.
+            assert!(
+                scans[1..=HELD_SCANS]
+                    .iter()
+                    .all(|&(_, x)| x == scans[1].1 && x != scans[0].1)
+            );
+            // Startup is idle, so the first deflected scan arrives after the light-sleep interval.
+            assert_eq!(intervals[0], 350);
+            let held = &intervals[1..HELD_SCANS];
+            assert!(
+                held.iter().all(|&ms| ms == 20),
+                "held deflection slowed after {} ms: intervals {:?}",
+                held.iter().take_while(|&&ms| ms == 20).sum::<u64>(),
+                held
+            );
+
+            // Once recentered, idle polling resumes 1.2 s after the last movement.
+            assert_eq!(intervals.last(), Some(&350), "centered stick never returned to idle");
         });
     }
 
