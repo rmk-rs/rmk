@@ -184,3 +184,115 @@ endpoints! {
     clear_ble_profile(slot: u8) -> (),
     disconnect_ble_profile(slot: u8) -> (),
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    use js_sys::{Function, Promise, Uint8Array};
+    use rynk::rmk_types::protocol::rynk::command::Cmd;
+    use rynk::rmk_types::protocol::rynk::{RynkError, RynkHeader, encode_frame};
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    use super::*;
+
+    #[derive(Default)]
+    struct LinkState {
+        /// CMDs of the frames handed to `send`, in order.
+        sent: Vec<Cmd>,
+        inbox: VecDeque<Vec<u8>>,
+        parked_recv: Option<Function>,
+    }
+
+    /// A firmware stand-in that answers only the connect handshake, like a
+    /// keyboard that resets on `Reboot`/`BootloaderJump` and never replies.
+    #[wasm_bindgen]
+    struct HandshakeOnlyLink {
+        state: Rc<RefCell<LinkState>>,
+    }
+
+    #[wasm_bindgen]
+    impl HandshakeOnlyLink {
+        #[wasm_bindgen(getter)]
+        pub fn label(&self) -> String {
+            "handshake-only".into()
+        }
+
+        pub fn send(&self, frame: Uint8Array) -> Promise {
+            let frame = frame.to_vec();
+            let mut state = self.state.borrow_mut();
+            if let Some(header) = RynkHeader::peek(&frame) {
+                state.sent.push(header.cmd);
+                let mut answer = vec![0u8; 256];
+                let len = if header.cmd == Cmd::GetVersion {
+                    Some(encode_frame(
+                        &mut answer,
+                        header,
+                        &Ok::<_, RynkError>(ProtocolVersion::CURRENT),
+                    ))
+                } else if header.cmd == Cmd::GetCapabilities {
+                    let caps = DeviceCapabilities {
+                        max_payload_size: 64,
+                        ..Default::default()
+                    };
+                    Some(encode_frame(&mut answer, header, &Ok::<_, RynkError>(caps)))
+                } else {
+                    None
+                };
+                if let Some(len) = len {
+                    answer.truncate(len.unwrap());
+                    match state.parked_recv.take() {
+                        Some(resolve) => {
+                            resolve.call1(&JsValue::NULL, &Uint8Array::from(&answer[..])).unwrap();
+                        }
+                        None => state.inbox.push_back(answer),
+                    }
+                }
+            }
+            Promise::resolve(&JsValue::UNDEFINED)
+        }
+
+        pub fn recv(&self) -> Promise {
+            if let Some(chunk) = self.state.borrow_mut().inbox.pop_front() {
+                return Promise::resolve(&JsValue::from(Uint8Array::from(&chunk[..])));
+            }
+            let state = self.state.clone();
+            Promise::new(&mut |resolve, _| state.borrow_mut().parked_recv = Some(resolve))
+        }
+    }
+
+    async fn connected() -> (RynkClient, Rc<RefCell<LinkState>>) {
+        let state = Rc::new(RefCell::new(LinkState::default()));
+        let link: JsByteLink = JsValue::from(HandshakeOnlyLink { state: state.clone() }).unchecked_into();
+        let client = connect(link).await.unwrap();
+        (client, state)
+    }
+
+    /// With no parked `next_topic` or other call to pump the driver, the
+    /// resolving call is the only pump: once it returns, nothing will write a
+    /// frame still queued behind it, and the keyboard never resets.
+    #[wasm_bindgen_test]
+    async fn standalone_reboot_is_written_before_it_resolves() {
+        let (client, state) = connected().await;
+        client.reboot().await.unwrap();
+        assert!(
+            state.borrow().sent.contains(&Cmd::Reboot),
+            "reboot resolved without its frame reaching the link; sent: {:?}",
+            state.borrow().sent
+        );
+    }
+
+    #[wasm_bindgen_test]
+    async fn standalone_bootloader_jump_is_written_before_it_resolves() {
+        let (client, state) = connected().await;
+        client.bootloader_jump().await.unwrap();
+        assert!(
+            state.borrow().sent.contains(&Cmd::BootloaderJump),
+            "bootloader_jump resolved without its frame reaching the link; sent: {:?}",
+            state.borrow().sent
+        );
+    }
+}
