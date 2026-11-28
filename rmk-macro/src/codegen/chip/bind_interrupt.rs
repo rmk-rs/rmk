@@ -1,13 +1,14 @@
 //! Add `bind_interrupts!` boilerplate of RMK, including USB or BLE
 //!
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use rmk_config::resolved::Hardware;
 use rmk_config::resolved::hardware::{
-    BoardConfig, ChipSeries, DfuConfig, InputDeviceConfig, UniBodyConfig,
+    BoardConfig, ChipModel, ChipSeries, DfuConfig, InputDeviceConfig, MatrixConfig, MatrixType,
+    UniBodyConfig,
 };
 use syn::{ItemFn, ItemMod};
 
@@ -112,6 +113,14 @@ pub(crate) fn bind_interrupt_default(
     let chip = &hardware.chip;
     let board = &hardware.board;
     let communication = &hardware.communication;
+    let (matrix, input_devices) = match board {
+        BoardConfig::UniBody(config) => (&config.matrix, Some(&config.input_device)),
+        BoardConfig::Split(config) => {
+            (&config.central.matrix, config.central.input_device.as_ref())
+        }
+    };
+    let async_matrix = is_feature_enabled(&get_rmk_features(), "async_matrix");
+    let gpio_interrupts = expand_gpio_interrupts(chip, matrix, input_devices, async_matrix);
 
     let display_config = match board {
         BoardConfig::UniBody(_) => hardware.display.as_ref(),
@@ -143,17 +152,6 @@ pub(crate) fn bind_interrupt_default(
 
     match chip.series {
         rmk_config::resolved::hardware::ChipSeries::Stm32 => {
-            // For stm32, bind USB interrupt and EXTI interrupts (if async_matrix is enabled)
-            let rmk_features = get_rmk_features();
-            let async_matrix = is_feature_enabled(&rmk_features, "async_matrix");
-
-            // Generate EXTI interrupt bindings for async_matrix
-            let exti_interrupts = if async_matrix {
-                generate_stm32_exti_interrupts(board)
-            } else {
-                quote! {}
-            };
-
             if let Some(usb_info) = communication.get_usb_info() {
                 let interrupt_name = format_ident!("{}", usb_info.interrupt_name);
                 let peripheral_name = format_ident!("{}", usb_info.peripheral_name);
@@ -161,7 +159,7 @@ pub(crate) fn bind_interrupt_default(
                     use ::embassy_stm32::bind_interrupts;
                     bind_interrupts!(struct Irqs {
                         #interrupt_name => ::embassy_stm32::usb::InterruptHandler<::embassy_stm32::peripherals::#peripheral_name>;
-                        #exti_interrupts
+                        #gpio_interrupts
                         #display_interrupt
                         #extern_irqs
                     });
@@ -170,7 +168,7 @@ pub(crate) fn bind_interrupt_default(
                 quote! {
                     use ::embassy_stm32::bind_interrupts;
                     bind_interrupts!(struct Irqs {
-                        #exti_interrupts
+                        #gpio_interrupts
                         #display_interrupt
                         #extern_irqs
                     });
@@ -235,6 +233,7 @@ pub(crate) fn bind_interrupt_default(
                 return quote! {
                     ::embassy_nrf::bind_interrupts!(struct Irqs {
                         #usb_interrupts
+                        #gpio_interrupts
                         #pmw33xx_spi_interrupts
                         #ext_flash_spi_interrupt
                         #iqs5xx_interrupt
@@ -331,6 +330,7 @@ pub(crate) fn bind_interrupt_default(
                 use ::embassy_nrf::bind_interrupts;
                 bind_interrupts!(struct Irqs {
                     #usb_and_clock_interrupt
+                    #gpio_interrupts
                     RNG => ::embassy_nrf::rng::InterruptHandler<::embassy_nrf::peripherals::RNG>;
                     EGU0_SWI0 => ::nrf_sdc::mpsl::LowPrioInterruptHandler;
                     RADIO => ::nrf_sdc::mpsl::HighPrioInterruptHandler;
@@ -419,6 +419,7 @@ pub(crate) fn bind_interrupt_default(
                     #interrupt_name => ::embassy_rp::usb::InterruptHandler<::embassy_rp::peripherals::#peripheral_name>;
                     #dma_irq_0
                     #pio0_irq_0
+                    #gpio_interrupts
                     #iqs5xx_interrupt
                     #display_interrupt
                 });
@@ -429,63 +430,124 @@ pub(crate) fn bind_interrupt_default(
     }
 }
 
-/// Generate STM32 EXTI interrupt bindings based on row pins
-/// STM32 EXTI lines:
-/// - EXTI0 - EXTI4: each has its own interrupt
-/// - EXTI5 - EXTI9: share EXTI9_5 interrupt
-/// - EXTI10 - EXTI15: share EXTI15_10 interrupt
-fn generate_stm32_exti_interrupts(board: &BoardConfig) -> TokenStream2 {
-    // Collect all row pins from the matrix configuration
-    let row_pins: Vec<String> = match board {
-        BoardConfig::UniBody(unibody) => unibody.matrix.row_pins.clone().unwrap_or_default(),
-        BoardConfig::Split(split) => split.central.matrix.row_pins.clone().unwrap_or_default(),
-    };
+/// Bind the per-pin handlers needed by the active matrix and input devices.
+pub(crate) fn expand_gpio_interrupts(
+    chip: &ChipModel,
+    matrix: &MatrixConfig,
+    devices: Option<&InputDeviceConfig>,
+    async_matrix: bool,
+) -> TokenStream2 {
+    if chip.series == ChipSeries::Esp32 {
+        return TokenStream2::new();
+    }
 
-    // Extract pin numbers and determine required EXTI interrupts
-    let mut required_interrupts: HashSet<String> = HashSet::new();
-
-    for pin in &row_pins {
-        if let Some(pin_num_str) = get_pin_num_stm32(pin)
-            && let Ok(pin_num) = pin_num_str.parse::<u8>()
-        {
-            let interrupt_name = match pin_num {
-                0 => "EXTI0",
-                1 => "EXTI1",
-                2 => "EXTI2",
-                3 => "EXTI3",
-                4 => "EXTI4",
-                5..=9 => "EXTI9_5",
-                10..=15 => "EXTI15_10",
-                _ => continue,
-            };
-            required_interrupts.insert(interrupt_name.to_string());
+    let mut pins = BTreeSet::new();
+    if async_matrix {
+        match matrix.matrix_type {
+            MatrixType::Normal => {
+                let inputs = if matrix.row2col {
+                    &matrix.col_pins
+                } else {
+                    &matrix.row_pins
+                };
+                pins.extend(inputs.iter().flatten().map(String::as_str));
+            }
+            MatrixType::DirectPin => {
+                pins.extend(
+                    matrix
+                        .direct_pins
+                        .iter()
+                        .flatten()
+                        .flatten()
+                        .map(String::as_str)
+                        .filter(|pin| *pin != "_" && !pin.eq_ignore_ascii_case("trns")),
+                );
+            }
+        }
+        if let Some(devices) = devices {
+            for encoder in devices.encoder.iter().flatten() {
+                pins.extend([encoder.pin_a.as_str(), encoder.pin_b.as_str()]);
+            }
         }
     }
+    if let Some(devices) = devices
+        && matches!(chip.series, ChipSeries::Nrf52 | ChipSeries::Rp2040)
+    {
+        pins.extend(
+            devices
+                .pmw3610
+                .iter()
+                .flatten()
+                .filter_map(|sensor| sensor.motion.as_deref()),
+        );
+        pins.extend(
+            devices
+                .pmw33xx
+                .iter()
+                .flatten()
+                .filter_map(|sensor| sensor.motion.as_deref()),
+        );
+        pins.extend(
+            devices
+                .iqs5xx
+                .iter()
+                .flatten()
+                .filter_map(|sensor| sensor.rdy.as_deref()),
+        );
+    }
 
-    // Generate interrupt bindings
-    let interrupt_bindings: Vec<TokenStream2> = required_interrupts
-        .iter()
-        .map(|irq_name| {
-            let irq_ident = format_ident!("{}", irq_name);
+    let mut interrupts = BTreeMap::<_, Vec<_>>::new();
+    for pin in pins {
+        let pin_ident = format_ident!("{pin}");
+        let (interrupt, handler) = match chip.series {
+            ChipSeries::Nrf52 => {
+                let interrupt = if chip.chip.starts_with("nrf54") {
+                    if pin.starts_with("P0_") {
+                        "GPIOTE30_0"
+                    } else {
+                        "GPIOTE20_0"
+                    }
+                } else {
+                    "GPIOTE"
+                };
+                (
+                    format_ident!("{interrupt}"),
+                    quote! { ::embassy_nrf::gpio::InterruptHandler<::embassy_nrf::peripherals::#pin_ident> },
+                )
+            }
+            ChipSeries::Rp2040 => (
+                format_ident!("IO_IRQ_BANK0"),
+                quote! { ::embassy_rp::gpio::InterruptHandler<::embassy_rp::peripherals::#pin_ident> },
+            ),
+            ChipSeries::Stm32 => {
+                let line = pin
+                    .get(2..)
+                    .and_then(|number| number.parse::<u8>().ok())
+                    .expect("Invalid STM32 EXTI pin");
+                let interrupt = match line {
+                    0..=4 => format_ident!("EXTI{line}"),
+                    5..=9 => format_ident!("EXTI9_5"),
+                    10..=15 => format_ident!("EXTI15_10"),
+                    _ => panic!("Invalid STM32 EXTI pin {pin}"),
+                };
+                let channel = format_ident!("EXTI{line}");
+                (
+                    interrupt,
+                    quote! { ::embassy_stm32::exti::InterruptHandler<::embassy_stm32::peripherals::#channel> },
+                )
+            }
+            ChipSeries::Esp32 => unreachable!(),
+        };
+        interrupts.entry(interrupt).or_default().push(handler);
+    }
+    interrupts
+        .into_iter()
+        .map(|(interrupt, handlers)| {
             quote! {
-                #irq_ident => ::embassy_stm32::exti::InterruptHandler<::embassy_stm32::interrupt::typelevel::#irq_ident>;
+                #interrupt => #(#handlers),*;
             }
         })
-        .collect();
-
-    quote! {
-        #(#interrupt_bindings)*
-    }
-}
-
-/// Get pin number from pin str.
-/// For example, if the pin str is "PD13", this function will return "13".
-fn get_pin_num_stm32(gpio_name: &str) -> Option<String> {
-    if gpio_name.len() < 3 {
-        None
-    } else {
-        Some(gpio_name[2..].to_string())
-    }
+        .collect()
 }
 
 #[cfg(test)]

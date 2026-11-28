@@ -198,7 +198,7 @@ pub(crate) fn chip_init_default(hardware: &Hardware, peripheral_id: Option<usize
                     let state = STATE.init(::cyw43::State::new());
                     let (_net_device, bt_device, mut control, runner) = ::cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw, nvram).await;
                     spawner.spawn(cyw43_task(runner).unwrap());
-                    control.init(clm).await;
+                    control.init(clm, ::cyw43::Config::default()).await;
 
                     let ble_controller: ::bt_hci::controller::ExternalController<_, 10> = ::bt_hci::controller::ExternalController::new(bt_device);
                     let ble_addr = #ble_addr;

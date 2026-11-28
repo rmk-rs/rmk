@@ -151,7 +151,6 @@ rp2040 = [
     "embassy-rp/unstable-pac",
     "dep:embassy-hal-internal",
     "dep:pio",
-    "dep:fixed",
 ]
 
 ## Enable feature if you're using Adafruit nRF52 bootloader and want bootloader jumping key
@@ -317,7 +316,7 @@ futures = { version = "0.3", default-features = false, features = [
     "async-await",
 ] }
 
-heapless = "0.9"
+heapless = "0.9.4"
 sequential-storage = { version = "8.0.1", features = ["postcard"] }
 static_cell = "2"
 usbd-hid = "0.10"
@@ -325,7 +324,7 @@ usbd-hid = "0.10"
 byteorder = { version = "1", default-features = false, optional = true }
 defmt = { version = "1", optional = true }
 log = { version = "0.4", optional = true }
-postcard = { version = "1", features = ["experimental-derive"] }
+postcard = { version = "1.2", default-features = false, features = ["experimental-derive", "heapless-v0_9"] }
 serde = { version = "1", default-features = false, features = ["derive"] }
 
 # Used in macro
@@ -366,7 +365,6 @@ embassy-boot = { version = "0.7", optional = true, default-features = false }
 embassy-boot-rp = { version = "0.10.0", optional = true }
 embassy-hal-internal = { version = "0.5.0", optional = true }
 embassy-rp = { version = "0.10", optional = true }
-fixed = { version = "1.31.0", optional = true }
 pio = { version = "0.4.0", optional = true }
 
 # ESP32 dependencies
@@ -395,22 +393,21 @@ rmk-macro = { path = "../rmk-macro", features = ["_simulator"] }
 # without a `StdError` impl.
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
-# embassy main reorganized its USB classes (`class::<name>::device`) and renamed nRF `WatchdogHandle::pet`
-# to `feed` without a version bump, so RMK builds against main until the next embassy release.
+# RMK uses the USB class layout and watchdog API added after the Embassy releases.
 # Dependents need the same patch (patches only apply in the root workspace).
 [patch.crates-io]
-embassy-boot                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-boot-rp              = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-embedded-hal         = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-futures              = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-hal-internal         = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-nrf                  = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-rp                   = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-sync                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-time                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-time-driver          = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-time-queue-utils     = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-usb                  = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-usb-driver           = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-usb-logger           = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-executor-timer-queue = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+embassy-boot                 = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-boot-rp              = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-embedded-hal         = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-futures              = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-hal-internal         = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-nrf                  = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-rp                   = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-sync                 = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-time                 = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-time-driver          = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-time-queue-utils     = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-usb                  = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-usb-driver           = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-usb-logger           = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-executor-timer-queue = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }

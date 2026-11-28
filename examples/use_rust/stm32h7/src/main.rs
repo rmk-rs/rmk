@@ -42,7 +42,7 @@ async fn main(_spawner: Spawner) {
     let mut config = Config::default();
     {
         use embassy_stm32::rcc::{mux, *};
-        config.rcc.hsi = Some(HSIPrescaler::DIV1);
+        config.rcc.hsi = Some(HSIPrescaler::Div1);
         config.rcc.csi = true;
         // Needed for USB
         config.rcc.hsi48 = Some(Hsi48Config { sync_from_usb: true });
@@ -52,23 +52,24 @@ async fn main(_spawner: Spawner) {
             mode: HseMode::Oscillator,
         });
         config.rcc.pll1 = Some(Pll {
-            source: PllSource::HSE,
-            prediv: PllPreDiv::DIV5,
-            mul: PllMul::MUL112,
-            divp: Some(PllDiv::DIV2),
-            divq: Some(PllDiv::DIV2),
-            divr: Some(PllDiv::DIV2),
+            source: PllSource::Hse,
+            prediv: PllPreDiv::Div5,
+            mul: PllMul::Mul112,
+            fracn: None,
+            divp: Some(PllDiv::Div2),
+            divq: Some(PllDiv::Div2),
+            divr: Some(PllDiv::Div2),
         });
-        config.rcc.sys = Sysclk::PLL1_P;
-        config.rcc.ahb_pre = AHBPrescaler::DIV2;
-        config.rcc.apb1_pre = APBPrescaler::DIV2;
-        config.rcc.apb2_pre = APBPrescaler::DIV2;
-        config.rcc.apb3_pre = APBPrescaler::DIV2;
-        config.rcc.apb4_pre = APBPrescaler::DIV2;
+        config.rcc.sys = Sysclk::Pll1P;
+        config.rcc.ahb_pre = AHBPrescaler::Div2;
+        config.rcc.apb1_pre = APBPrescaler::Div2;
+        config.rcc.apb2_pre = APBPrescaler::Div2;
+        config.rcc.apb3_pre = APBPrescaler::Div2;
+        config.rcc.apb4_pre = APBPrescaler::Div2;
         config.rcc.voltage_scale = VoltageScale::Scale0;
         // Configure USB clock mux to use HSI48 (internal 48MHz oscillator)
         // HSI48 is internal, no external crystal needed for USB - better compatibility
-        config.rcc.mux.usbsel = mux::Usbsel::HSI48;
+        config.rcc.mux.usbsel = mux::Usbsel::Hsi48;
     }
 
     // Initialize peripherals
@@ -80,9 +81,9 @@ async fn main(_spawner: Spawner) {
     usb_config.vbus_detection = false;
     let driver = Driver::new_fs(
         p.USB_OTG_HS,
-        Irqs,
         p.PA12,
         p.PA11,
+        Irqs,
         &mut EP_OUT_BUFFER.init([0; 1024])[..],
         usb_config,
     );
@@ -93,20 +94,20 @@ async fn main(_spawner: Spawner) {
 
     // Pin config when using async_matrix feature
     // let output_pins = config_output_pins_stm32!(peripherals: p, output: [PE13, PE14, PE15]);
-    // let pd9 = ExtiInput::new(p.PD9, p.EXTI9, Pull::Down);
-    // let pd8 = ExtiInput::new(p.PD8, p.EXTI8, Pull::Down);
-    // let pb13 = ExtiInput::new(p.PB13, p.EXTI13, Pull::Down);
-    // let pb12 = ExtiInput::new(p.PB12, p.EXTI12, Pull::Down);
+    // let pd9 = ExtiInput::new_async(p.PD9, p.EXTI9, Pull::Down, Irqs);
+    // let pd8 = ExtiInput::new_async(p.PD8, p.EXTI8, Pull::Down, Irqs);
+    // let pb13 = ExtiInput::new_async(p.PB13, p.EXTI13, Pull::Down, Irqs);
+    // let pb12 = ExtiInput::new_async(p.PB12, p.EXTI12, Pull::Down, Irqs);
     // let row_pins = [pd9, pd8, pb13, pb12];
 
     // Use internal flash to emulate eeprom
-    let flash = async_flash_wrapper(Flash::new_blocking(p.FLASH));
+    let flash = async_flash_wrapper(Flash::new_blocking(p.FLASH, Default::default()));
 
     let vial_config = VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(0, 0), (1, 1)]);
 
     let rmk_config = RmkConfig {
         device_config: rmk::config::DeviceConfig {
-            serial_number: rmk::config::build_serial_number(&embassy_stm32::uid::uid()),
+            serial_number: rmk::config::build_serial_number(embassy_stm32::uid::uid()),
             ..Default::default()
         },
         vial_config,

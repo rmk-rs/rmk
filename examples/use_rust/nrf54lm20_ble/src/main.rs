@@ -9,13 +9,13 @@ use defmt::{info, unwrap};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nrf::config::{ClockSpeed, Config as NrfConfig, HfclkSource, LfclkSource};
+use embassy_nrf::crypto::rng::Rng;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::mode::Blocking;
 use embassy_nrf::peripherals::{SERIAL22, USBHS};
 use embassy_nrf::spim::{self, Spim};
 use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
 use embassy_nrf::usb::{self, Driver};
-use embassy_nrf::crypto::rng::Rng;
 use embassy_nrf::{bind_interrupts, pac};
 use keymap::{COL, ROW, SIZE};
 use nrf_mpsl::Flash;
@@ -38,6 +38,11 @@ use static_cell::StaticCell;
 type RandomSource = Rng<'static, Blocking>;
 
 bind_interrupts!(struct Irqs {
+    GPIOTE20_0 => embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_08>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_09>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_18>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_26>;
+    GPIOTE30_0 => embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_05>;
     USBHS => usb::InterruptHandler<USBHS>;
     VREGUSB => usb::vbus_detect::InterruptHandler;
     SWI00 => nrf_sdc::mpsl::LowPrioInterruptHandler;
@@ -258,7 +263,7 @@ async fn main(spawner: Spawner) {
     );
 
     let trackball_cs = Output::new(p.P1_15, Level::High, OutputDrive::Standard);
-    let trackball_motion = Some(Input::new(p.P1_18, Pull::Up));
+    let trackball_motion = Some(Input::new_async(p.P1_18, Irqs, Pull::Up));
     let trackball_config = Pmw3610Config {
         res_cpi: 800,
         smart_mode: true,

@@ -95,7 +95,7 @@ pub struct FirmwareVersion {
 ///
 /// Complements [`DeviceCapabilities`]: capabilities answer "what can you do"
 /// for feature gating, identity answers "which device is this".
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct DeviceInfo {
@@ -110,20 +110,9 @@ pub struct DeviceInfo {
     pub serial_number: String<DEVICE_INFO_STRING_MAX_LEN>,
 }
 
-impl MaxSize for DeviceInfo {
-    // A str encodes as varint length + UTF-8 bytes — the same wire shape as
-    // `Vec<u8, N>`, so the Vec bound covers each string field.
-    const POSTCARD_MAX_SIZE: usize = FirmwareVersion::POSTCARD_MAX_SIZE
-        + 2 * u16::POSTCARD_MAX_SIZE
-        + 3 * crate::heapless_vec_max_size::<u8, DEVICE_INFO_STRING_MAX_LEN>();
-}
-
 /// Current lock/unlock state of this Rynk session, returned by `GetLockStatus`
 /// and `UnlockPoll`. The `Lock` endpoint returns `()`.
-///
-/// Loses `Copy` and derived `MaxSize` (both forbidden by the `heapless::Vec`
-/// field): handlers return it by value, and the bound is hand-written below.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct LockStatus {
@@ -137,13 +126,6 @@ pub struct LockStatus {
     /// while `locked` ⇒ permanently locked (no `unlock_keys` configured).
     #[cfg_attr(feature = "wasm", tsify(type = "[number, number][]"))]
     pub key_positions: Vec<(u8, u8), 4>,
-}
-
-// `#[derive(MaxSize)]` doesn't support `heapless::Vec` (see `crate` root), so
-// hand-write the bound: two bools + one u8 + the key-position vec.
-impl MaxSize for LockStatus {
-    const POSTCARD_MAX_SIZE: usize =
-        2 * bool::POSTCARD_MAX_SIZE + u8::POSTCARD_MAX_SIZE + crate::heapless_vec_max_size::<(u8, u8), 4>();
 }
 
 /// Storage reset mode for the `StorageReset` endpoint.

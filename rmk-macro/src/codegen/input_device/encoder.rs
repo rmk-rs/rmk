@@ -4,6 +4,7 @@ use rmk_config::resolved::hardware::{ChipModel, EncoderConfig, EncoderResolution
 
 use super::Initializer;
 use crate::codegen::chip::gpio::convert_gpio_str_to_input_pin;
+use crate::codegen::feature::{get_rmk_features, is_feature_enabled};
 
 /// Expand encoder device, this function returns the (device_initializer, processor_initializer)
 ///
@@ -18,6 +19,7 @@ pub(crate) fn expand_encoder_device(
     }
 
     let mut device_initializer = vec![];
+    let async_matrix = is_feature_enabled(&get_rmk_features(), "async_matrix");
 
     // Create rotary encoders
     for (idx, encoder) in encoder_config.iter().enumerate() {
@@ -30,8 +32,8 @@ pub(crate) fn expand_encoder_device(
         };
 
         // Initialize pins
-        let pin_a = convert_gpio_str_to_input_pin(chip, encoder.pin_a.clone(), false, pull);
-        let pin_b = convert_gpio_str_to_input_pin(chip, encoder.pin_b.clone(), false, pull);
+        let pin_a = convert_gpio_str_to_input_pin(chip, encoder.pin_a.clone(), async_matrix, pull);
+        let pin_b = convert_gpio_str_to_input_pin(chip, encoder.pin_b.clone(), async_matrix, pull);
 
         let encoder_name = format_ident!("encoder_{}", encoder_id);
         // encoder_names.push(encoder_name.clone());

@@ -11,17 +11,13 @@ pub const MATRIX_BITMAP_SIZE: usize = 32;
 /// Current matrix key-press state as a bitmap.
 /// Bit ordering: row-major, bit 0 = col 0, bit 1 = col 1, etc.
 /// Total meaningful bytes = num_rows * ceil(num_cols / 8).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct MatrixState {
     #[cfg_attr(feature = "wasm", tsify(type = "number[]"))]
     pub pressed_bitmap: heapless::Vec<u8, MATRIX_BITMAP_SIZE>,
-}
-
-impl MaxSize for MatrixState {
-    const POSTCARD_MAX_SIZE: usize = crate::heapless_vec_max_size::<u8, MATRIX_BITMAP_SIZE>();
 }
 
 /// Status of a single split peripheral. Peripherals without battery reporting

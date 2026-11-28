@@ -44,7 +44,7 @@ pub(crate) fn expand_flash_init(hardware: &Hardware, dfu: Option<&DfuConfig>) ->
         ChipSeries::Stm32 => {
             hardware.storage.as_ref().map(|_| {
                 quote! {
-                    let storage_partition = ::rmk::storage::async_flash_wrapper(::embassy_stm32::flash::Flash::new_blocking(p.FLASH));
+                    let storage_partition = ::rmk::storage::async_flash_wrapper(::embassy_stm32::flash::Flash::new_blocking(p.FLASH, Default::default()));
                 }
             })
         }

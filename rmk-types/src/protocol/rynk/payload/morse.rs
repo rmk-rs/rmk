@@ -51,16 +51,12 @@ impl MaxSize for SetMorseBulkRequest {
 
 /// Bulk response for getting multiple morse configs at once.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(not(feature = "host"), derive(MaxSize))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct GetMorseBulkResponse {
     #[cfg_attr(feature = "wasm", tsify(type = "Morse[]"))]
     pub configs: BulkMorses,
-}
-
-#[cfg(not(feature = "host"))]
-impl MaxSize for GetMorseBulkResponse {
-    const POSTCARD_MAX_SIZE: usize = crate::heapless_vec_max_size::<Morse, MAX_BULK_ITEMS>();
 }
 
 #[cfg(test)]

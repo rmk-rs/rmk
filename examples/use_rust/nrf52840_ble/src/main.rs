@@ -41,6 +41,13 @@ use static_cell::StaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
 bind_interrupts!(struct Irqs {
+    GPIOTE => embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_27>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_29>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_30>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_31>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_04>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_06>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_13>;
     USBD => usb::InterruptHandler<USBD>;
     SAADC => saadc::InterruptHandler;
     RNG => rng::InterruptHandler<RNG>;
@@ -204,8 +211,8 @@ async fn main(spawner: Spawner) {
     let host_service = HostService::new(&keymap, &rmk_config);
 
     // Initialize the encoder
-    let pin_a = Input::new(p.P1_06, embassy_nrf::gpio::Pull::None);
-    let pin_b = Input::new(p.P1_04, embassy_nrf::gpio::Pull::None);
+    let pin_a = Input::new_async(p.P1_06, Irqs, embassy_nrf::gpio::Pull::None);
+    let pin_b = Input::new_async(p.P1_04, Irqs, embassy_nrf::gpio::Pull::None);
     let mut encoder = RotaryEncoder::with_phase(pin_a, pin_b, DefaultPhase, 0);
 
     let mut adc_device = NrfAdc::new(

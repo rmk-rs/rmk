@@ -22,18 +22,13 @@ use super::super::RYNK_BLE_CHUNK_SIZE;
 ///
 /// `total_len` is the whole compressed blob length, so the host knows when it
 /// has collected every page; `bytes` is one page (≤ one BLE frame).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct LayoutChunk {
     /// Total length of the whole compressed blob.
     pub total_len: u32,
     /// This page's bytes.
     pub bytes: Vec<u8, RYNK_BLE_CHUNK_SIZE>,
-}
-
-impl MaxSize for LayoutChunk {
-    const POSTCARD_MAX_SIZE: usize =
-        <u32 as MaxSize>::POSTCARD_MAX_SIZE + crate::heapless_vec_max_size::<u8, RYNK_BLE_CHUNK_SIZE>();
 }
 
 #[cfg(test)]

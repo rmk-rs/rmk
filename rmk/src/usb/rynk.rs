@@ -1,8 +1,10 @@
 //! Rynk over a vendor-specific USB bulk interface.
 
-use embassy_usb::driver::{Driver, Endpoint, EndpointError, EndpointIn, EndpointOut};
+#[cfg(not(any(feature = "esp32s3", feature = "esp32s31")))]
+use embassy_usb::EndpointOptions;
+use embassy_usb::driver::{Driver, Endpoint, EndpointIn, EndpointOut};
 use embassy_usb::{Builder, msos};
-use embedded_io_async::{ErrorType, Read, Write};
+use embedded_io_async::{ErrorKind, ErrorType, Read, Write};
 use rmk_types::protocol::rynk::{RYNK_USB_INTERFACE_CLASS, RYNK_USB_INTERFACE_PROTOCOL, RYNK_USB_INTERFACE_SUBCLASS};
 
 use super::HostSession;
@@ -64,8 +66,12 @@ pub(crate) fn build_host_usb<D: Driver<'static>>(
         RYNK_USB_INTERFACE_PROTOCOL,
         None,
     );
-    let ep_out = alt.endpoint_bulk_out(None, RYNK_USB_MAX_PACKET_SIZE as u16);
-    let ep_in = alt.endpoint_bulk_in(None, RYNK_USB_MAX_PACKET_SIZE as u16);
+    #[cfg(not(any(feature = "esp32s3", feature = "esp32s31")))]
+    let options = EndpointOptions::new();
+    #[cfg(any(feature = "esp32s3", feature = "esp32s31"))]
+    let options = RYNK_USB_MAX_PACKET_SIZE as u16;
+    let ep_out = alt.endpoint_bulk_out(None, options);
+    let ep_in = alt.endpoint_bulk_in(None, options);
     (
         HostUsbReader {
             ep: ep_out,
@@ -93,7 +99,7 @@ pub(crate) async fn run_host_usb<D: Driver<'static>, S: HostSession>(
 }
 
 impl<D: Driver<'static>> ErrorType for HostUsbReader<D> {
-    type Error = EndpointError;
+    type Error = ErrorKind;
 }
 
 impl<D: Driver<'static>> Read for HostUsbReader<D> {
@@ -110,21 +116,30 @@ impl<D: Driver<'static>> Read for HostUsbReader<D> {
             }
             // Zero-length packets are transfer delimiters, not data — and not
             // EOF, which is what returning `Ok(0)` would mean. Read on.
-            if buf.len() >= RYNK_USB_MAX_PACKET_SIZE {
-                let n = self.ep.read(buf).await?;
+            let packet_size = usize::from(self.ep.info().max_packet_size);
+            if buf.len() >= packet_size {
+                let n = self
+                    .ep
+                    .read_transfer(&mut buf[..packet_size])
+                    .await
+                    .map_err(|_| ErrorKind::Other)?;
                 if n > 0 {
                     return Ok(n);
                 }
             } else {
                 self.pos = 0;
-                self.len = self.ep.read(&mut self.buf).await?;
+                self.len = self
+                    .ep
+                    .read_transfer(&mut self.buf[..packet_size])
+                    .await
+                    .map_err(|_| ErrorKind::Other)?;
             }
         }
     }
 }
 
 impl<D: Driver<'static>> ErrorType for HostUsbWriter<D> {
-    type Error = EndpointError;
+    type Error = ErrorKind;
 }
 
 /// A bulk-IN transfer completes on the host only at a short packet, so a write
@@ -132,11 +147,8 @@ impl<D: Driver<'static>> ErrorType for HostUsbWriter<D> {
 /// packet — otherwise the host read hangs (hit at Full-Speed's 64 bytes).
 impl<D: Driver<'static>> Write for HostUsbWriter<D> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        for packet in buf.chunks(RYNK_USB_MAX_PACKET_SIZE) {
-            self.ep.write(packet).await?;
-        }
-        if !buf.is_empty() && buf.len().is_multiple_of(RYNK_USB_MAX_PACKET_SIZE) {
-            self.ep.write(&[]).await?;
+        if !buf.is_empty() {
+            self.ep.write_transfer(buf, true).await.map_err(|_| ErrorKind::Other)?;
         }
         Ok(buf.len())
     }

@@ -22,7 +22,7 @@ pest = "2.8"
 pest_derive = "2.8"
 # Build-time only (rmk-config never ships in the firmware binary): serialize +
 # compress the layout blob. The host inflates with the same codec.
-postcard = { version = "1", default-features = false, features = ["alloc"] }
+postcard = { version = "1.2", default-features = false, features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
 serde-inline-default = "1"
 toml = "1"

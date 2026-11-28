@@ -51,16 +51,12 @@ impl MaxSize for SetComboBulkRequest {
 
 /// Bulk response for getting multiple combos at once.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(not(feature = "host"), derive(MaxSize))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
 pub struct GetComboBulkResponse {
     #[cfg_attr(feature = "wasm", tsify(type = "Combo[]"))]
     pub configs: BulkCombos,
-}
-
-#[cfg(not(feature = "host"))]
-impl MaxSize for GetComboBulkResponse {
-    const POSTCARD_MAX_SIZE: usize = crate::heapless_vec_max_size::<Combo, MAX_BULK_ITEMS>();
 }
 
 #[cfg(test)]

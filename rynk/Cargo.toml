@@ -66,10 +66,10 @@ critical-section = { version = "1.2", features = ["std"], optional = true }
 embassy-futures = "0.1"
 embassy-sync.workspace = true
 embedded-io-async.workspace = true
-heapless = { version = "0.9", default-features = false, features = ["serde"] }
+heapless = { version = "0.9.4", default-features = false, features = ["serde"] }
 js-sys = { version = "0.3", optional = true }
 log.workspace = true
-postcard = { version = "1.1", default-features = false }
+postcard = { version = "1.2", default-features = false }
 serde.workspace = true
 thiserror = { version = "2.0", default-features = false }
 tsify = { version = "0.5", optional = true, default-features = false, features = ["js"] }
@@ -100,21 +100,21 @@ tokio = { version = "1.47", features = ["test-util", "macros", "net", "rt", "rt-
 
 [patch.crates-io]
 # bluest 0.6.9 pins bluer 0.16.1, which no longer compiles on Rust 1.100 (never
-# type fallback change). Upstream main uses bluer 0.17.4 but 0.6.10 is unreleased;
+# type fallback change). Upstream main uses bluer 0.17.4, but 0.6.10 is unreleased;
 # drop this patch once bluest 0.6.10 is on crates.io.
-bluest                       = { git = "https://github.com/alexmoon/bluest", rev = "64bb4df8143defd30a4aa441ab1520816cd3b8eb" }
-embassy-boot                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-boot-rp              = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-embedded-hal         = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-futures              = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-hal-internal         = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-nrf                  = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-rp                   = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-sync                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-time                 = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-time-driver          = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-time-queue-utils     = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-usb                  = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-usb-driver           = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-usb-logger           = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
-embassy-executor-timer-queue = { git = "https://github.com/embassy-rs/embassy", rev = "12b84e3dd8d6b31f045649b84250292c34e024d4" }
+bluest                       = { git = "https://github.com/alexmoon/bluest", rev = "de787d02a45dbc93ef9bbff6e387dc31651ec882" }
+embassy-boot                 = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-boot-rp              = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-embedded-hal         = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-futures              = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-hal-internal         = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-nrf                  = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-rp                   = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-sync                 = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-time                 = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-time-driver          = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-time-queue-utils     = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-usb                  = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-usb-driver           = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-usb-logger           = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }
+embassy-executor-timer-queue = { git = "https://github.com/embassy-rs/embassy", rev = "153b9b2cb44f7bdc4ea3b3af85eb31b8950624f3" }

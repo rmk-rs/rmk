@@ -31,6 +31,10 @@ use static_cell::StaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
 bind_interrupts!(struct Irqs {
+    GPIOTE => embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_27>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_29>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_30>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_31>;
     RNG => rng::InterruptHandler<RNG>;
     EGU0_SWI0 => nrf_sdc::mpsl::LowPrioInterruptHandler;
     CLOCK_POWER => nrf_sdc::mpsl::ClockInterruptHandler;

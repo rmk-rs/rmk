@@ -96,7 +96,7 @@ async fn main(spawner: Spawner) {
     let (_net_device, bt_device, mut control, runner) =
         cyw43::new_with_bluetooth(state, pwr, spi, fw, btfw, nvram).await;
     spawner.spawn(cyw43_task(runner).unwrap());
-    control.init(clm).await;
+    control.init(clm, cyw43::Config::default()).await;
 
     let controller: ExternalController<_, 10> = ExternalController::new(bt_device);
 

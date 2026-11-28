@@ -42,7 +42,7 @@ async fn main(_spawner: Spawner) {
         Timer::after_millis(10).await;
     }
     // Usb driver
-    let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
+    let driver = Driver::new(p.USB, p.PA12, p.PA11, Irqs);
 
     // Pin config
     let (row_pins, col_pins) =
@@ -51,7 +51,7 @@ async fn main(_spawner: Spawner) {
     // Keyboard config
     let rmk_config = RmkConfig {
         device_config: rmk::config::DeviceConfig {
-            serial_number: rmk::config::build_serial_number(&embassy_stm32::uid::uid()),
+            serial_number: rmk::config::build_serial_number(embassy_stm32::uid::uid()),
             ..Default::default()
         },
         ..Default::default()

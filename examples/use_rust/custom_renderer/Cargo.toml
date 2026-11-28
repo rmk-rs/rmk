@@ -11,4 +11,4 @@ split = ["rmk/split"]
 rmk = { path = "../../../rmk", features = ["display"], default-features = false }
 
 embedded-graphics = "0.8"
-heapless = "0.9"
+heapless = "0.9.4"

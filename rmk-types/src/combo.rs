@@ -16,7 +16,7 @@ use crate::constants::COMBO_SIZE;
 ///
 /// Note: `COMBO_SIZE` is a **wire-format** capacity — on firmware it equals
 /// `MAX_COMBO_KEYS` (from `keyboard.toml`), on host it's a fixed upper bound.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, MaxSize)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[cfg_attr(feature = "wasm", derive(tsify::Tsify))]
 #[cfg_attr(feature = "wasm", tsify(into_wasm_abi, from_wasm_abi))]
@@ -25,12 +25,6 @@ pub struct Combo {
     pub actions: Vec<KeyAction, COMBO_SIZE>,
     pub output: KeyAction,
     pub layer: Option<u8>,
-}
-
-impl MaxSize for Combo {
-    const POSTCARD_MAX_SIZE: usize = crate::heapless_vec_max_size::<KeyAction, COMBO_SIZE>()
-        + KeyAction::POSTCARD_MAX_SIZE
-        + Option::<u8>::POSTCARD_MAX_SIZE;
 }
 
 impl Combo {

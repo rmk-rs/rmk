@@ -32,6 +32,10 @@ use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 type RandomSource = Rng<'static, Blocking>;
 
 bind_interrupts!(struct Irqs {
+    GPIOTE20_0 => embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_08>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_09>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_13>;
+    GPIOTE30_0 => embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_04>;
     SWI00 => nrf_sdc::mpsl::LowPrioInterruptHandler;
     CLOCK_POWER => nrf_sdc::mpsl::ClockInterruptHandler;
     RADIO_0 => nrf_sdc::mpsl::HighPrioInterruptHandler;

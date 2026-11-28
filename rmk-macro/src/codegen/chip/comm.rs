@@ -42,9 +42,9 @@ pub(crate) fn usb_config_default(hardware: &Hardware) -> TokenStream2 {
                         usb_config.vbus_detection = false;
                         let driver = ::embassy_stm32::usb::Driver::new_fs(
                             p.#peripheral_name,
-                            Irqs,
                             p.#dp,
                             p.#dm,
+                            Irqs,
                             &mut EP_OUT_BUFFER.init([0; 1024])[..],
                             usb_config,
                         );
@@ -56,7 +56,7 @@ pub(crate) fn usb_config_default(hardware: &Hardware) -> TokenStream2 {
                             ::embassy_time::Timer::after_millis(10).await;
                         }
                         // Usb driver
-                        let driver = ::embassy_stm32::usb::Driver::new(p.#peripheral_name, Irqs, p.#dp, p.#dm);
+                        let driver = ::embassy_stm32::usb::Driver::new(p.#peripheral_name, p.#dp, p.#dm, Irqs);
                     }
                 }
             }

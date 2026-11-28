@@ -72,21 +72,9 @@ pub(crate) const fn varint_max_size(max_n: usize) -> usize {
     roundup_bits / BITS_PER_VARINT_BYTE
 }
 
-/// Worst-case postcard-encoded size of `heapless::Vec<T, N>`:
-/// every element at its own max, plus the widest varint for the length prefix.
-///
-/// Use this in manual `MaxSize` impls for structs whose fields contain
-/// `heapless::Vec<T, N>`, since `#[derive(MaxSize)]` doesn't support `heapless::Vec`.
-/// TODO: Use derived `MaxSize` after postcard updates its heapless version.
-pub(crate) const fn heapless_vec_max_size<T: postcard::experimental::max_size::MaxSize, const N: usize>() -> usize {
-    T::POSTCARD_MAX_SIZE * N + varint_max_size(N)
-}
-
 #[cfg(test)]
 mod tests {
-    use heapless::Vec;
-
-    use super::{heapless_vec_max_size, varint_max_size};
+    use super::varint_max_size;
 
     /// Validate varint_max_size against known postcard varint encoding sizes
     /// and cross-check with actual postcard serialization.
@@ -112,27 +100,5 @@ mod tests {
                 bytes.len()
             );
         }
-    }
-
-    /// Worst-case `Vec<u32, 8>` (every element at `u32::MAX`, max-width varint
-    /// length prefix) must encode to exactly `heapless_vec_max_size::<u32, 8>()`.
-    #[test]
-    fn heapless_vec_max_size_matches_postcard() {
-        let mut v: Vec<u32, 8> = Vec::new();
-        for _ in 0..8 {
-            v.push(u32::MAX).unwrap();
-        }
-        let mut buf = [0u8; 64];
-        let bytes = postcard::to_slice(&v, &mut buf).unwrap();
-        assert_eq!(
-            bytes.len(),
-            heapless_vec_max_size::<u32, 8>(),
-            "tight bound: 8 × u32::MAX + varint(8)",
-        );
-
-        // Empty Vec is below the bound (loose check).
-        let empty: Vec<u32, 8> = Vec::new();
-        let bytes = postcard::to_slice(&empty, &mut buf).unwrap();
-        assert!(bytes.len() <= heapless_vec_max_size::<u32, 8>());
     }
 }

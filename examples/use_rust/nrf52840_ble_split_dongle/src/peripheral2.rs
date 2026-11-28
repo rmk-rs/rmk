@@ -30,6 +30,12 @@ use rmk::watchdog::Nrf52Watchdog;
 use static_cell::StaticCell;
 
 bind_interrupts!(struct Irqs {
+    GPIOTE => embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_03>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_28>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_04>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_06>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_09>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_10>;
     USBD => usb::InterruptHandler<USBD>;
     SAADC => saadc::InterruptHandler;
     RNG => rng::InterruptHandler<RNG>;
@@ -143,8 +149,8 @@ async fn main(spawner: Spawner) {
     let mut matrix = Matrix::<_, _, _, 4, 7, true>::new(row_pins, col_pins, debouncer);
     // let mut matrix = rmk::matrix::TestMatrix::<4, 7>::new();
 
-    let pin_a = Input::new(p.P1_06, embassy_nrf::gpio::Pull::None);
-    let pin_b = Input::new(p.P1_04, embassy_nrf::gpio::Pull::None);
+    let pin_a = Input::new_async(p.P1_06, Irqs, embassy_nrf::gpio::Pull::None);
+    let pin_b = Input::new_async(p.P1_04, Irqs, embassy_nrf::gpio::Pull::None);
     let mut encoder = RotaryEncoder::with_resolution(pin_a, pin_b, 4, true, 1);
 
     let mut watchdog_runner = Nrf52Watchdog::default_runner(p.WDT);

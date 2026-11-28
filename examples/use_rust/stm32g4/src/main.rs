@@ -39,12 +39,12 @@ async fn main(_spawner: Spawner) {
         config_matrix_pins_stm32!(peripherals: p, input: [PB9, PB8, PB13, PB12], output: [PA8, PA9, PA10]);
 
     // Usb driver
-    let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
+    let driver = Driver::new(p.USB, p.PA12, p.PA11, Irqs);
 
     // Keyboard config
     let rmk_config = RmkConfig {
         device_config: rmk::config::DeviceConfig {
-            serial_number: rmk::config::build_serial_number(&embassy_stm32::uid::uid()),
+            serial_number: rmk::config::build_serial_number(embassy_stm32::uid::uid()),
             ..Default::default()
         },
         ..Default::default()

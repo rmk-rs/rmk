@@ -44,6 +44,13 @@ use static_cell::StaticCell;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
 bind_interrupts!(struct Irqs {
+    GPIOTE => embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_02>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_29>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_30>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P0_31>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_04>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_06>,
+        embassy_nrf::gpio::InterruptHandler<embassy_nrf::peripherals::P1_08>;
     USBD => usb::InterruptHandler<USBD>;
     SAADC => saadc::InterruptHandler;
     RNG => rng::InterruptHandler<RNG>;
@@ -193,8 +200,8 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    let pin_a = Input::new(p.P1_06, embassy_nrf::gpio::Pull::None);
-    let pin_b = Input::new(p.P1_04, embassy_nrf::gpio::Pull::None);
+    let pin_a = Input::new_async(p.P1_06, Irqs, embassy_nrf::gpio::Pull::None);
+    let pin_b = Input::new_async(p.P1_04, Irqs, embassy_nrf::gpio::Pull::None);
     let mut encoder = RotaryEncoder::with_resolution(pin_a, pin_b, 4, true, 0);
 
     // Initialize the matrix and keyboard
@@ -221,7 +228,7 @@ async fn main(spawner: Spawner) {
         embassy_nrf::gpio::Level::High,
         embassy_nrf::gpio::OutputDrive::Standard,
     );
-    let pmw3610_motion = Some(Input::new(p.P1_08, embassy_nrf::gpio::Pull::Up));
+    let pmw3610_motion = Some(Input::new_async(p.P1_08, Irqs, embassy_nrf::gpio::Pull::Up));
     let pmw3610_spi = BitBangSpiBus::new(pmw3610_sck, pmw3610_sdio);
     let mut pmw3610_device =
         PointingDevice::<Pmw3610<_, _, _>>::new(0, pmw3610_spi, pmw3610_cs, pmw3610_motion, pmw3610_config);

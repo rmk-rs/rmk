@@ -47,20 +47,20 @@ async fn main(_spawner: Spawner) {
         freq: Hertz(25_000_000),
         mode: rcc::HseMode::Oscillator,
     });
-    config.rcc.pll_src = rcc::PllSource::HSE;
+    config.rcc.pll_src = rcc::PllSource::Hse;
     config.rcc.pll = Some(rcc::Pll {
         // Adjust the following multiplier and divisor so divp and divq end up being 48Mhz
-        prediv: rcc::PllPreDiv::DIV25,  // divide 25Mhz by 25 => 1Mhz
-        mul: rcc::PllMul::MUL192,       // 1Mhz * 192 = 192Mhz
-        divp: Some(rcc::PllPDiv::DIV4), // 192Mhz / 4 = 48Mhz
-        divq: Some(rcc::PllQDiv::DIV4), // 192Mhz / 4 = 48Mhz
+        prediv: rcc::PllPreDiv::Div25,  // divide 25Mhz by 25 => 1Mhz
+        mul: rcc::PllMul::Mul192,       // 1Mhz * 192 = 192Mhz
+        divp: Some(rcc::PllPDiv::Div4), // 192Mhz / 4 = 48Mhz
+        divq: Some(rcc::PllQDiv::Div4), // 192Mhz / 4 = 48Mhz
         divr: None,
     });
-    config.rcc.sys = rcc::Sysclk::PLL1_P;
-    config.rcc.ahb_pre = rcc::AHBPrescaler::DIV1;
-    config.rcc.apb1_pre = rcc::APBPrescaler::DIV4;
-    config.rcc.apb2_pre = rcc::APBPrescaler::DIV2;
-    config.rcc.mux.clk48sel = mux::Clk48sel::PLL1_Q;
+    config.rcc.sys = rcc::Sysclk::Pll1P;
+    config.rcc.ahb_pre = rcc::AHBPrescaler::Div1;
+    config.rcc.apb1_pre = rcc::APBPrescaler::Div4;
+    config.rcc.apb2_pre = rcc::APBPrescaler::Div2;
+    config.rcc.mux.clk48sel = mux::Clk48sel::Pll1Q;
     // Initialize peripherals
     let p = embassy_stm32::init(config);
 
@@ -70,9 +70,9 @@ async fn main(_spawner: Spawner) {
     usb_config.vbus_detection = false;
     let driver = Driver::new_fs(
         p.USB_OTG_FS,
-        Irqs,
         p.PA12,
         p.PA11,
+        Irqs,
         &mut EP_OUT_BUFFER.init([0; 1024])[..],
         usb_config,
     );
@@ -82,12 +82,12 @@ async fn main(_spawner: Spawner) {
         config_matrix_pins_stm32!(peripherals: p, input: [PA15, PB3, PB4, PB5], output: [PB12, PB13, PB14]);
 
     // Use internal flash to emulate eeprom
-    let flash = async_flash_wrapper(Flash::new_blocking(p.FLASH));
+    let flash = async_flash_wrapper(Flash::new_blocking(p.FLASH, Default::default()));
 
     // Keyboard config
     let rmk_config = RmkConfig {
         device_config: rmk::config::DeviceConfig {
-            serial_number: rmk::config::build_serial_number(&embassy_stm32::uid::uid()),
+            serial_number: rmk::config::build_serial_number(embassy_stm32::uid::uid()),
             ..Default::default()
         },
         vial_config: VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(0, 0), (1, 1)]),

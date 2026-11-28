@@ -127,7 +127,7 @@ impl<'d, D: Driver<'d>> UsbKeyboardWriter<'_, 'd, D> {
         self.other_writer
             .write(&buf[0..n + 1])
             .await
-            .map_err(HidError::UsbEndpointError)?;
+            .map_err(|error| HidError::UsbEndpointError(error.into()))?;
         Ok(n)
     }
 }
@@ -145,7 +145,7 @@ impl<'d, D: Driver<'d>> HidWriterTrait for UsbKeyboardWriter<'_, 'd, D> {
                 self.keyboard_writer
                     .write(&buf[0..n])
                     .await
-                    .map_err(HidError::UsbEndpointError)?;
+                    .map_err(|error| HidError::UsbEndpointError(error.into()))?;
                 Ok(n)
             }
             Report::MouseReport(r) => self.write_composite(CompositeReportType::Mouse, r).await,
@@ -169,7 +169,7 @@ impl<'d, D: Driver<'d>> HidWriterTrait for UsbKeyboardWriter<'_, 'd, D> {
                 .await
                 {
                     Ok(Ok(())) => {}
-                    Ok(Err(e)) => return Err(HidError::UsbEndpointError(e)),
+                    Ok(Err(e)) => return Err(HidError::UsbEndpointError(e.into())),
                     Err(_) => {} // Plover not reading; drop this report and continue
                 }
                 Ok(n)
@@ -218,6 +218,10 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(
 
     // Required for windows compatibility.
     usb_config.max_packet_size_0 = 64;
+    #[cfg(all(feature = "_usb_high_speed", not(any(feature = "esp32s3", feature = "esp32s31"))))]
+    {
+        usb_config.max_speed = embassy_usb::UsbDeviceSpeed::High;
+    }
     usb_config.device_class = 0xEF;
     usb_config.device_sub_class = 0x02;
     usb_config.device_protocol = 0x01;
@@ -251,6 +255,12 @@ pub(crate) fn new_usb_builder<'d, D: Driver<'d>>(
         &mut MSOS_DESC.init([0; MSOS_BUF_SIZE])[..],
         &mut CONTROL_BUF.init([0; CONTROL_BUF_SIZE])[..],
     );
+
+    #[cfg(all(feature = "_usb_high_speed", not(any(feature = "esp32s3", feature = "esp32s31"))))]
+    {
+        static OTHER_SPEED_DESC: StaticCell<[u8; DEFAULT_CONFIG_DESC_SIZE]> = StaticCell::new();
+        builder.other_speed_config_descriptor(OTHER_SPEED_DESC.init([0; DEFAULT_CONFIG_DESC_SIZE]));
+    }
 
     static device_handler: StaticCell<UsbDeviceHandler> = StaticCell::new();
     builder.handler(device_handler.init(UsbDeviceHandler::new()));
@@ -306,9 +316,15 @@ impl<'a, D: Driver<'static>> UsbTransport<'a, D> {
     ///
     /// ```rust,ignore
     /// let mut builder = UsbTransport::builder(driver, device_config);
-    /// let mut cdc = CdcAcmClass::new(builder.usb_builder(), CDC_STATE.init(State::new()), 64);
+    /// let mut cdc = CdcAcmClass::new(
+    ///     builder.usb_builder(),
+    ///     CDC_STATE.init(State::new()),
+    ///     Default::default(),
+    /// );
     /// let mut usb_transport = builder.build().with_host_service(&host_service);
     /// ```
+    ///
+    /// On ESP32-S3 and ESP32-S31, the third argument is a packet size such as `64`.
     pub fn builder(driver: D, device_config: DeviceConfig<'static>) -> UsbTransportBuilder<D> {
         // A CDC ACM function costs ~66 descriptor bytes, an extra HID interface ~40.
         const SIZE: usize = DEFAULT_CONFIG_DESC_SIZE + 256;
@@ -573,7 +589,11 @@ macro_rules! add_usb_logger {
         // The usb logger can be only initialized once, so just use a fixed name for the state
         static LOGGER_STATE: StaticCell<State> = StaticCell::new();
         let state = LOGGER_STATE.init(State::new());
-        CdcAcmClass::new($usb_builder, state, embassy_usb_logger::MAX_PACKET_SIZE as u16)
+        #[cfg(any(feature = "esp32s3", feature = "esp32s31"))]
+        let config = embassy_usb_logger::MAX_PACKET_SIZE as u16;
+        #[cfg(not(any(feature = "esp32s3", feature = "esp32s31")))]
+        let config = Default::default();
+        CdcAcmClass::new($usb_builder, state, config)
     }};
 }
 
@@ -600,6 +620,8 @@ macro_rules! usb_hid_state_and_config {
             max_packet_size: $max_packet,
             hid_subclass: $subclass,
             hid_boot_protocol: $protocol,
+            #[cfg(not(any(feature = "esp32s3", feature = "esp32s31")))]
+            interface_name: None,
         };
         (state, hid_config)
     }};
