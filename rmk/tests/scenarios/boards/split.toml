@@ -47,10 +47,10 @@ encoders = [["Right", "Left"], ["Down", "Up"]]
 
 [[keymap.layer]]
 keys = """
-OSM(LShift | LCtrl)  No   C    D   E   F   No  No   No   No   No  B   No  No
-Kp1                  Kp2  Kp5  No  No  No  No  Kp3  Kp4  Kp5  No  No  No  No
-No                   No   No   No  No  No  No  No   No   No   No  No  No  No
-_                    B    _    No  No  _   No  Kp1  No   No   No  No  No  No
-No                   No   No   No  No  No  No  No   No   No   No  No  No  No
+OSM(LShift | LCtrl)  No   C    D               E   F   No  No   No   No   No  B   No  No
+Kp1                  Kp2  Kp5  MT(Kp6, LCtrl)  No  No  No  Kp3  Kp4  Kp5  No  No  No  No
+No                   No   No   No              No  No  No  No   No   No   No  No  No  No
+_                    B    _    No              No  _   No  Kp1  No   No   No  No  No  No
+No                   No   No   No              No  No  No  No   No   No   No  No  No  No
 """
 encoders = [["PageDown", "PageUp"], ["End", "Home"]]

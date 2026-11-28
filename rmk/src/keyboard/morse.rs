@@ -275,6 +275,17 @@ impl<'a> Keyboard<'a> {
             match action {
                 KeyAction::Single(action) => self.process_key_action_normal(action, key.event).await,
                 KeyAction::Tap(action) => self.process_key_action_tap(action, key.event).await,
+                // Became a morse key on the new layer: it starts undecided, and the keys pressed after it wait for it
+                KeyAction::TapHold(..) | KeyAction::Morse(_) => {
+                    self.held_buffer.push(HeldKey::new(
+                        key.event,
+                        action,
+                        KeyState::Pressed(MorsePattern::default()),
+                        key.press_time,
+                        key.press_time + Self::morse_timeout(self.keymap, &action, true),
+                    ));
+                    break;
+                }
                 _ => (),
             }
         }
