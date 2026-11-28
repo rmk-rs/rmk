@@ -87,9 +87,9 @@ impl<
             // Scan matrix and send report
             for row_idx in row_idx_start..self.direct_pins.len() {
                 let pins_row = self.direct_pins.get_mut(row_idx).unwrap();
-                for col_idx in col_idx_start..pins_row.len() {
+                let col_start = if row_idx == row_idx_start { col_idx_start } else { 0 };
+                for col_idx in col_start..pins_row.len() {
                     let direct_pin = pins_row.get_mut(col_idx).unwrap();
-                    // for (col_idx, direct_pin) in pins_row.iter_mut().enumerate() {
                     if let Some(direct_pin) = direct_pin {
                         let pin_state = if self.low_active {
                             direct_pin.is_low().ok().unwrap_or_default()
@@ -173,5 +173,89 @@ impl<
         });
         let _ = select_array(futs).await;
         self.scan_start = Some(Instant::now());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::cell::Cell;
+    use core::convert::Infallible;
+    use std::rc::Rc;
+
+    use embedded_hal::digital::ErrorType;
+
+    use super::*;
+    use crate::test_support::test_block_on;
+
+    #[derive(Clone, Default)]
+    struct FakePin(Rc<Cell<bool>>);
+
+    impl ErrorType for FakePin {
+        type Error = Infallible;
+    }
+
+    impl InputPin for FakePin {
+        fn is_high(&mut self) -> Result<bool, Infallible> {
+            Ok(self.0.get())
+        }
+
+        fn is_low(&mut self) -> Result<bool, Infallible> {
+            Ok(!self.0.get())
+        }
+    }
+
+    #[cfg(feature = "async_matrix")]
+    impl Wait for FakePin {
+        async fn wait_for_high(&mut self) -> Result<(), Infallible> {
+            Ok(())
+        }
+        async fn wait_for_low(&mut self) -> Result<(), Infallible> {
+            Ok(())
+        }
+        async fn wait_for_rising_edge(&mut self) -> Result<(), Infallible> {
+            Ok(())
+        }
+        async fn wait_for_falling_edge(&mut self) -> Result<(), Infallible> {
+            Ok(())
+        }
+        async fn wait_for_any_edge(&mut self) -> Result<(), Infallible> {
+            Ok(())
+        }
+    }
+
+    struct ImmediateDebouncer;
+
+    impl<const ROW: usize, const COL: usize> DebouncerTrait<ROW, COL> for ImmediateDebouncer {
+        fn detect_change_with_debounce(&mut self, _: usize, _: usize, active: bool, state: &KeyState) -> DebounceState {
+            if active != state.pressed {
+                DebounceState::Debounced
+            } else {
+                DebounceState::Ignored
+            }
+        }
+    }
+
+    #[test]
+    fn simultaneous_presses_on_later_rows_are_reported_in_scan_order() {
+        let levels: [[FakePin; 3]; 2] = Default::default();
+        let pins = levels.clone().map(|row| row.map(Some));
+        let mut matrix: DirectPinMatrix<_, _, 2, 3, 6> = DirectPinMatrix::new(pins, ImmediateDebouncer, false);
+
+        let keys = [(0, 1), (0, 2), (1, 0), (1, 2)];
+        for &(row, col) in &keys {
+            levels[row][col].0.set(true);
+        }
+        let events = test_block_on(async {
+            let mut events = Vec::new();
+            for _ in 0..keys.len() {
+                events.push(matrix.read_keyboard_event().await);
+            }
+            events
+        });
+        let expected: Vec<_> = keys
+            .iter()
+            .map(|&(row, col)| KeyboardEvent::key(row as u8, col as u8, true))
+            .collect();
+        assert_eq!(events, expected);
     }
 }
