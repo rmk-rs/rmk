@@ -127,7 +127,7 @@ impl<'d, D: Driver<'d>> UsbKeyboardWriter<'_, 'd, D> {
         self.other_writer
             .write(&buf[0..n + 1])
             .await
-            .map_err(|error| HidError::UsbEndpointError(error.into()))?;
+            .map_err(HidError::UsbEndpointError)?;
         Ok(n)
     }
 }
@@ -145,7 +145,7 @@ impl<'d, D: Driver<'d>> HidWriterTrait for UsbKeyboardWriter<'_, 'd, D> {
                 self.keyboard_writer
                     .write(&buf[0..n])
                     .await
-                    .map_err(|error| HidError::UsbEndpointError(error.into()))?;
+                    .map_err(HidError::UsbEndpointError)?;
                 Ok(n)
             }
             Report::MouseReport(r) => self.write_composite(CompositeReportType::Mouse, r).await,
@@ -169,7 +169,7 @@ impl<'d, D: Driver<'d>> HidWriterTrait for UsbKeyboardWriter<'_, 'd, D> {
                 .await
                 {
                     Ok(Ok(())) => {}
-                    Ok(Err(e)) => return Err(HidError::UsbEndpointError(e.into())),
+                    Ok(Err(e)) => return Err(HidError::UsbEndpointError(e)),
                     Err(_) => {} // Plover not reading; drop this report and continue
                 }
                 Ok(n)
