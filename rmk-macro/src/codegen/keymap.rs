@@ -89,3 +89,44 @@ pub(crate) fn expand_encoder_layer(
         quote! { [#(#encoders), *] }
     }
 }
+
+#[cfg(all(test, feature = "_simulator"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn named_layer_actions_expand_on_keys_and_encoders() {
+        let cfg: rmk_config::KeyboardTomlConfig = toml::from_str(
+            r#"
+[layout]
+rows = 1
+cols = 1
+map = "(0,0)"
+
+[[keymap.layer]]
+name = "base"
+keys = "TO(nav)"
+encoders = [["TO(nav)", "MO(base)"]]
+
+[[keymap.layer]]
+name = "nav"
+keys = "B"
+
+[[input_device.encoder]]
+pin_a = "a"
+pin_b = "b"
+"#,
+        )
+        .unwrap();
+        let keymap = cfg.keymap().unwrap();
+
+        let key = expand_layer(keymap.keymap[0].clone(), &None).to_string();
+        assert!(key.contains("LayerToggleOnly (1u8)"), "{key}");
+
+        let encoder =
+            expand_encoder_layer(keymap.encoder_map[0].clone(), keymap.num_encoder, &None)
+                .to_string();
+        assert!(encoder.contains("LayerToggleOnly (1u8)"), "{encoder}");
+        assert!(encoder.contains("LayerOn (0u8)"), "{encoder}");
+    }
+}
