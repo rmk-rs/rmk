@@ -576,3 +576,82 @@ fn high_layer_momentary_write_activates_the_requested_layer() {
         keyboard.run().await;
     });
 }
+
+/// VIA uploads a keymap as big-endian keycodes in 28-byte pages at byte offsets.
+#[test]
+fn keymap_buffer_upload_reads_back() {
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[k!(A); 8]; 2]]).build().await;
+        let a = to_via_keycode(k!(A)).to_be_bytes();
+        let b = to_via_keycode(k!(B)).to_be_bytes();
+        // Keys 1..=14 become B.
+        keyboard.echo(macro_buffer(ViaCommand::DynamicKeymapSetBuffer, 2, &b.repeat(14)));
+        let get = ViaCommand::DynamicKeymapGetBuffer;
+        let page = [a.to_vec(), b.repeat(13)].concat();
+        keyboard.host_exchange(macro_buffer(get, 0, &[0; 28]), macro_buffer(get, 0, &page));
+        keyboard.host_exchange(macro_buffer(get, 28, &[0; 4]), macro_buffer(get, 28, &[b, a].concat()));
+        for (row, col, key) in [
+            (0, 0, HidKeyCode::A),
+            (0, 1, HidKeyCode::B),
+            (1, 6, HidKeyCode::B),
+            (1, 7, HidKeyCode::A),
+        ] {
+            keyboard.tap(row, col, 10).expect_keys([key]).expect_keys([]);
+        }
+        keyboard.run().await;
+    });
+}
+
+/// A write changes only the bytes it covers, even halfway through a keycode,
+/// and drops what falls past the keymap.
+#[test]
+fn keymap_buffer_write_changes_only_its_bytes() {
+    use HidKeyCode::{A, B, C, D, Z};
+    for (offset, payload, keys) in [
+        (3, &[0x1d][..], [A, Z, C, D]),
+        (3, &[0x1d, 0x00], [A, Z, C, D]),
+        (6, &[0x00, 0x1d, 0x00, 0x1d], [A, B, C, Z]),
+        (8, &[0x00, 0x1d], [A, B, C, D]),
+        (3, &[], [A, B, C, D]),
+    ] {
+        test_block_on(async {
+            let mut keyboard = SimKeyboard::builder([[[k!(A), k!(B), k!(C), k!(D)]]]).build().await;
+            keyboard.echo(macro_buffer(ViaCommand::DynamicKeymapSetBuffer, offset, payload));
+            for (col, key) in keys.into_iter().enumerate() {
+                keyboard.tap(0, col as u8, 10).expect_keys([key]).expect_keys([]);
+            }
+            keyboard.run().await;
+        });
+    }
+}
+
+/// A read returns the bytes it covers, zeros past the keymap.
+#[test]
+fn keymap_buffer_read_returns_its_bytes() {
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[k!(A), k!(B), k!(C), k!(D)]]]).build().await;
+        let get = ViaCommand::DynamicKeymapGetBuffer;
+        for (offset, bytes) in [(1, &[0x04, 0x00, 0x05][..]), (6, &[0x00, 0x07, 0x00, 0x00])] {
+            let request = macro_buffer(get, offset, &vec![0; bytes.len()]);
+            keyboard.host_exchange(request, macro_buffer(get, offset, bytes));
+        }
+        keyboard.run().await;
+    });
+}
+
+/// A payload past the 32-byte report is rejected, not read or written.
+#[test]
+fn keymap_buffer_rejects_oversized_payload() {
+    test_block_on(async {
+        let mut keyboard = SimKeyboard::builder([[[k!(A)]]]).build().await;
+        for cmd in [ViaCommand::DynamicKeymapGetBuffer, ViaCommand::DynamicKeymapSetBuffer] {
+            let mut request = via(cmd);
+            request[3] = 29;
+            let mut reply = request;
+            reply[0] = 0xFF;
+            keyboard.host_exchange(request, reply);
+        }
+        keyboard.tap(0, 0, 10).expect_keys([HidKeyCode::A]).expect_keys([]);
+        keyboard.run().await;
+    });
+}
