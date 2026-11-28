@@ -47,7 +47,11 @@ impl<F: AsyncNorFlash> Storage<F> {
                     }
                 }
                 // Restore the default (base) layer set via a `PDF` key
-                (StorageKey::DefaultLayer, StorageValue::DefaultLayer(layer)) => behavior.default_layer = layer,
+                (StorageKey::DefaultLayer, StorageValue::DefaultLayer(layer)) => {
+                    if (layer as usize) < NUM_LAYER {
+                        behavior.default_layer = layer;
+                    }
+                }
                 // Restore the VIA/Vial layout options selection
                 (StorageKey::LayoutOption, StorageValue::LayoutOption(option)) => data.layout_option = option,
                 (StorageKey::MacroChunk(idx), StorageValue::MacroChunk(bytes)) => {
