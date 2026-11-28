@@ -74,6 +74,10 @@ pub(crate) struct Macros<'a> {
     /// Whether flash has the macros yet. If not, the next save writes all of them.
     #[cfg(all(feature = "host", feature = "storage"))]
     stored: bool,
+    /// Whether a save failed, leaving flash anywhere between its old bytes and
+    /// the buffer. If so, the next save writes every chunk.
+    #[cfg(all(feature = "host", feature = "storage"))]
+    unsaved: bool,
     queue: Deque<Cursor, 4>,
 }
 
@@ -90,6 +94,8 @@ impl<'a> Macros<'a> {
             buf,
             #[cfg(all(feature = "host", feature = "storage"))]
             stored,
+            #[cfg(all(feature = "host", feature = "storage"))]
+            unsaved: false,
             queue: Deque::new(),
         }
     }
@@ -243,10 +249,10 @@ pub(crate) fn encode_defaults(buf: &mut [u8], defaults: &[&[MacroOp]]) {
 /// what is in flash, so the first save writes the whole buffer.
 #[cfg(all(feature = "host", feature = "storage"))]
 pub(crate) async fn persist(keymap: &crate::keymap::KeyMap<'_>, changed: Range<usize>) -> Result<(), ()> {
-    let stored = keymap.macros(|m| m.stored);
-    // If macros have been stored in flash, persist changed range only.
+    let (stored, unsaved) = keymap.macros(|m| (m.stored, m.unsaved));
+    // If flash has the macros and no save failed since, persist changed range only.
     // Otherwise persist the full macro space.
-    let chunks = if stored {
+    let chunks = if stored && !unsaved {
         changed
     } else {
         0..crate::MACRO_SPACE_SIZE / MACRO_CHUNK_SIZE
@@ -255,12 +261,21 @@ pub(crate) async fn persist(keymap: &crate::keymap::KeyMap<'_>, changed: Range<u
         let bytes = keymap.macros(|m| m.buf.as_chunks::<MACRO_CHUNK_SIZE>().0[idx]);
         // A chunk missing from flash boots as zeros, so skip empty ones. But write
         // chunk 0 anyway, or clearing every macro would bring the defaults back.
-        if !stored && idx > 0 && bytes == [0; MACRO_CHUNK_SIZE] {
+        if !stored && !unsaved && idx > 0 && bytes == [0; MACRO_CHUNK_SIZE] {
             continue;
         }
-        crate::storage::store(crate::storage::StorageItem::MacroChunk { idx: idx as u8, bytes }).await?;
+        if crate::storage::store(crate::storage::StorageItem::MacroChunk { idx: idx as u8, bytes })
+            .await
+            .is_err()
+        {
+            keymap.macros(|m| m.unsaved = true);
+            return Err(());
+        }
     }
-    keymap.macros(|m| m.stored = true);
+    keymap.macros(|m| {
+        m.stored = true;
+        m.unsaved = false;
+    });
     Ok(())
 }
 

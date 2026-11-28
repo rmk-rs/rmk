@@ -425,6 +425,37 @@ fn the_longest_macro_vial_can_save_is_kept() {
     });
 }
 
+/// A save the flash refused is written by the next one, even when Vial retries
+/// the same bytes the buffer already holds.
+#[cfg(feature = "storage")]
+#[test]
+fn a_retried_save_writes_what_the_failed_one_did_not() {
+    test_block_on(async {
+        let flash = crate::simulator::Flash::new();
+        {
+            let mut keyboard = SimKeyboard::builder([[[macros!(0)]]])
+                .build_with_flash(flash.clone())
+                .await;
+            // `tap A`, then `tap B` twice, the first refused.
+            save_macro_buffer(&mut keyboard, &[0x01, 0x01, 0x04, 0x00]);
+            keyboard.run().await;
+            flash.fail_writes(true);
+            save_macro_buffer(&mut keyboard, &[0x01, 0x01, 0x05, 0x00]);
+            keyboard.run().await;
+            flash.fail_writes(false);
+            save_macro_buffer(&mut keyboard, &[0x01, 0x01, 0x05, 0x00]);
+            keyboard.run().await;
+        }
+        let mut keyboard = SimKeyboard::builder([[[macros!(0)]]]).build_with_flash(flash).await;
+        keyboard
+            .tap(0, 0, 10)
+            .expect_keys([HidKeyCode::B])
+            .expect_keys([])
+            .run()
+            .await;
+    });
+}
+
 #[cfg(feature = "storage")]
 #[test]
 fn behavior_write_survives_restart() {
